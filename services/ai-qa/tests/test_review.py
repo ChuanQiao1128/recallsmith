@@ -17,7 +17,7 @@ from conftest import (
 )
 
 from ai_qa import providers
-from ai_qa.prompts import SYSTEM_PROMPT
+from ai_qa.prompts import SYSTEM_PROMPT, SYSTEM_PROMPT_AUTOMATION
 from ai_qa.review import review_card
 from ai_qa.schema import CATEGORIES, CATEGORY_SEVERITY, SEVERITIES, ModelReview
 from ai_qa.settings import load_settings
@@ -324,3 +324,13 @@ def test_cost_estimate_uses_prices_and_cache_read_discount() -> None:
     item = run(llm)
     assert item["estimatedCostUsd"] == 0.035
     assert item["usage"] == {"inputTokens": 3000, "outputTokens": 500, "cacheReadInputTokens": 10000}
+
+
+def test_review_card_sends_the_given_system_prompt() -> None:
+    """B03 (K1): the automation profile's prompt reaches the model; the default is qa-v4's."""
+    llm = FakeLlm([reply(review_json()), reply(review_json())])
+    review_card(card(0), client=llm, settings=load_settings({}), review_date="2026-10-01")
+    review_card(
+        card(0), client=llm, settings=load_settings({}), review_date="2026-10-01", system_prompt=SYSTEM_PROMPT_AUTOMATION
+    )
+    assert [call["system"][0]["text"] for call in llm.calls] == [SYSTEM_PROMPT, SYSTEM_PROMPT_AUTOMATION]

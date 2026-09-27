@@ -12,6 +12,8 @@ SENT = "NotificationsSent"
 FAILURES = "NotificationFailures"
 REPORT_FAILURES = "NotifierReportFailures"
 TICK_FAILURES = "AutomationTickFailures"
+# R18B contract K5: one per tick invocation, whatever core answers (the tick-missing alarm).
+TICKS = "AutomationTicks"
 
 
 def emit(
@@ -73,3 +75,7 @@ def report_failure(namespace: str) -> None:
 
 def tick_failure(namespace: str) -> None:
     emit(namespace, TICK_FAILURES, 1, "Count")
+
+
+def tick(namespace: str) -> None:
+    emit(namespace, TICKS, 1, "Count")

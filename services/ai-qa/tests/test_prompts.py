@@ -51,3 +51,23 @@ def test_system_prompt_v4_resolves_the_code_rules() -> None:
     assert "the code, snippet or stem literally contains" not in SYSTEM_PROMPT
     assert "never make an answer_leak" in SYSTEM_PROMPT
     assert "a factual element of codeSnippet or realWorldUsage" in SYSTEM_PROMPT
+
+
+def test_automation_prompt_is_the_default_prompt_plus_an_addendum() -> None:
+    """R18B K1 (B03 ai-agent-5): the automation profile's reviewer never turns "I cannot confirm
+    this" into a minor (would-accept) finding; the default qa-v4 prompt is unchanged."""
+    from ai_qa.prompts import AUTOMATION_ADDENDUM, PROMPT_VERSION_AUTOMATION, SYSTEM_PROMPT_AUTOMATION
+
+    assert PROMPT_VERSION == "qa-v4"
+    assert PROMPT_VERSION_AUTOMATION == "qa-v4-auto"
+    assert SYSTEM_PROMPT_AUTOMATION == SYSTEM_PROMPT + AUTOMATION_ADDENDUM
+    assert AUTOMATION_ADDENDUM not in SYSTEM_PROMPT
+    for phrase in (
+        "accepted and published to learners with no human reading it",
+        "not supported by source.quote",
+        "raise source_unsupported (major)",
+        "Never downgrade an unconfirmable factual claim to minor",
+        "source is null too",
+    ):
+        assert phrase in AUTOMATION_ADDENDUM, phrase
+    assert "2026" not in SYSTEM_PROMPT_AUTOMATION and "<card>" in SYSTEM_PROMPT_AUTOMATION

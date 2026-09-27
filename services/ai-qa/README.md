@@ -27,7 +27,7 @@ integration timeout. No Bedrock VPC endpoint is needed.
 |---|---|
 | `settings.py` | `Settings` (frozen dataclass), `load_settings(env)`, `ConfigError`, SSM `load_secret` |
 | `providers.py` | `make_client(settings, *, api_key=None)`, `structured_outputs_on(settings)` |
-| `prompts.py` | `PROMPT_VERSION` (currently `"qa-v4"`; history and evidence in `evals/reports/tuning-2026-09-27/README.md`), the static `SYSTEM_PROMPT` (rubric of §7.6) |
+| `prompts.py` | `PROMPT_VERSION` (currently `"qa-v4"`; history and evidence in `evals/reports/tuning-2026-09-27/README.md`), the static `SYSTEM_PROMPT` (rubric of §7.6); `PROMPT_VERSION_AUTOMATION` (`"qa-v4-auto"`) and `SYSTEM_PROMPT_AUTOMATION` for the automation profile |
 | `schema.py` | `ModelFinding`, `ModelReview` (pydantic v2, `extra="forbid"`) |
 | `review.py` | `review_card(card, *, client, settings, review_date)` → one §7.7 item |
 | `converse_client.py` | `ConverseClient`: Bedrock Converse for non-Anthropic models (provider `bedrock-converse`), Anthropic-shaped responses |
@@ -285,7 +285,13 @@ let a model from another vendor review them. **Both are off**: `env/prod.env.jso
 `bedrock-runtime` `Converse` call (boto3, region `AI_BEDROCK_REGION`): the system blocks joined into
 one `system` text, user/assistant turns as text (an assistant turn given as content blocks is
 flattened to its text), `inferenceConfig.maxTokens = 16000`. `thinking` and `output_config.effort`
-are not sent. Structured outputs are always off for this provider (prompt-forced JSON, then the
+are not sent: no AWS document names a Converse request field for reasoning effort on these models
+(the OpenAI parameter page covers only `gpt-oss`, and the GPT-5.5 model card lists Converse as not
+supported on its endpoint), so the reviewer runs at the provider's default effort. That is recorded,
+never silent: `providers.effective_effort` answers `provider-default` for this provider (the
+configured `AI_EFFORT` otherwise); every `card_result` log line carries `effort`, the usage EMF line
+carries it as the plain property `Effort` (not a dimension), and a message reviewed this way logs
+`effort_not_sent` (info) with `configuredEffort` and `effectiveEffort`. Structured outputs are always off for this provider (prompt-forced JSON, then the
 usual validation and one repair turn); a request that carries `output_config.format` is rejected
 as `CONFIG`. Reply mapping: the first text block; `stopReason` `end_turn`/`stop_sequence` →
 `end_turn`, `max_tokens` → `MAX_TOKENS`, `content_filtered`/`guardrail_intervened` → `refusal`
@@ -383,15 +389,17 @@ the reviewer actually used.
 
 | Var | Default | Meaning |
 |---|---|---|
-| `AI_QA_AUTOMATION_PROVIDER` | empty = unset | `bedrock-converse` \| `bedrock` \| `anthropic`; anything else is `CONFIG` at load time |
+| `AI_QA_AUTOMATION_PROVIDER` | empty = unset | `bedrock-converse` \| `bedrock` \| `anthropic`; anything else is `CONFIG` for automation-profile messages only |
 | `AI_QA_AUTOMATION_MODEL` | provider default; required for `bedrock-converse` | same prefix rules as `AI_MODEL` (no `anthropic.` id for `bedrock-converse`) |
 | `AI_QA_AUTOMATION_PRICE_INPUT_PER_MTOK` | unset | USD per million input tokens for the automation estimate |
 | `AI_QA_AUTOMATION_PRICE_OUTPUT_PER_MTOK` | unset | USD per million output tokens for the automation estimate |
 
 With `AI_QA_AUTOMATION_PROVIDER` empty the other three keys are ignored. An invalid provider,
-model or price is a load-time `ConfigError` (every message answers `CONFIG`, as for any invalid
-setting); an **absent** automation price never fails loading, so human runs and the evals (which
-load `env/prod.env.json`) are unaffected.
+model or price never fails loading (R18B, B03): `load_settings` records the reason in
+`Settings.automation_config_error`, and `settings_for(cfg, "automation")` raises it, so only
+automation-profile messages answer `CONFIG`; default-profile (human) card QA keeps running. An
+**absent** automation price never fails loading either, so human runs and the evals (which load
+`env/prod.env.json`) are unaffected.
 
 **`settings_for(cfg, profile)`** derives the reviewer for one message: `default` returns the loaded
 settings unchanged; `automation` returns them with the automation provider, model and both prices,
@@ -399,6 +407,7 @@ and the second reviewer switched off. It raises `ConfigError` (logged `profile_c
 `runId`, `chunk`, `profile` and the key names; every card reported `error` / `CONFIG`, no model
 call, message acked) when:
 
+- an `AI_QA_AUTOMATION_*` key is invalid (`automation_config_error`);
 - `AI_QA_AUTOMATION_PROVIDER` or `AI_QA_AUTOMATION_MODEL` is unset;
 - either `AI_QA_AUTOMATION_PRICE_*` key is unset: a zero estimate would disable the daily USD cap
   (`AI_QA_DAILY_USD_CAP`, enforced by core from the reported estimates) for drafts;
@@ -408,6 +417,18 @@ In that case the report's `provider` / `model` are the automation keys' values (
 the default Claude reviewer's names, which would mislabel the draft decision. The order of outcomes
 is unchanged: invalid settings ⇒ `CONFIG`; `AI_QA_ENABLED` off ⇒ every card `skipped` / `DISABLED`
 (for every profile); then the profile check; then the client.
+
+**Prompt version `qa-v4-auto`** (R18B contract K1, `src/ai_qa/prompts.py`). The default profile
+keeps `PROMPT_VERSION = "qa-v4"` and `SYSTEM_PROMPT` byte for byte. The automation profile reviews
+with `SYSTEM_PROMPT_AUTOMATION = SYSTEM_PROMPT + AUTOMATION_ADDENDUM`, version
+`PROMPT_VERSION_AUTOMATION = "qa-v4-auto"`: under this profile a minor finding lets the card be
+accepted and published with no human reading it, so a factual claim (answer, options, code or
+usage) that `source.quote` does not support and that cannot be confirmed as well-established fact
+is `source_unsupported` (major), never downgraded to minor (the qa-v4 Currency rule stays in force
+for human runs). `profiles.prompt_version_for(profile)` / `system_prompt_for(profile)` pick them; a
+message's `promptVersion` is checked against its profile's version (`prompt_version_mismatch`, warn,
+with `profile`), and the report echoes the version that actually ran. The per-container
+reported-cards key carries that version too.
 
 **Second opinion.** Never for the automation profile: `settings_for` clears the second reviewer and
 the handler runs it only for `default`. A default message on the same Lambda still gets it when

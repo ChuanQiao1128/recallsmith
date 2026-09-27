@@ -9,13 +9,15 @@ class TestEmf:
         emf.failure("DeveloperCards", "MessageRejected")
         emf.report_failure("DeveloperCards")
         emf.tick_failure("DeveloperCards")
+        emf.tick("DeveloperCards")
         lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-        assert len(lines) == 4
+        assert len(lines) == 5
         expected = [
             ("NotificationsSent", [["Service", "Kind"]]),
             ("NotificationFailures", [["Service"], ["Service", "ErrorCode"]]),
             ("NotifierReportFailures", [["Service"]]),
             ("AutomationTickFailures", [["Service"]]),
+            ("AutomationTicks", [["Service"]]),
         ]
         for line, (name, dimensions) in zip(lines, expected):
             directive = line["_aws"]["CloudWatchMetrics"][0]

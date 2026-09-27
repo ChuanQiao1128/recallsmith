@@ -206,8 +206,9 @@ class TestHandler:
         env.stub.add_response("send_email", {"MessageId": "ses-1"}, expected_params())
         result = handler.lambda_handler(sqs(record(message())), Context())
         assert result == {"batchItemFailures": []}  # acked: the email is not resent
-        assert len(env.core.reports()) == 3  # first try + pauses (1.0, 3.0)
-        assert env.sleeps == [1.0, 3.0]
+        assert len(env.core.reports()) == 3  # first try + two jittered pauses (R18B K6)
+        assert len(env.sleeps) == 2
+        assert all(low <= pause <= high for pause, (low, high) in zip(env.sleeps, handler.REPORT_RETRY_PAUSES))
         out = capsys.readouterr().out
         assert metric_names(out) == ["NotificationsSent", "NotifierReportFailures"]
         assert "report_failed" in [line.get("event") for line in log_lines(out)]
@@ -260,7 +261,12 @@ class TestHandler:
             assert set(body) == {"v", "tickId", "job"}
             assert body["v"] == 1 and body["job"] == job
             assert str(uuid.UUID(body["tickId"])) == body["tickId"]
-            assert result == {"tickId": body["tickId"], "skipped": None, "actions": env.core.tick_data["actions"]}
+            assert result == {
+                "tickId": body["tickId"],
+                "skipped": None,
+                "actions": env.core.tick_data["actions"],
+                "failedSteps": [],
+            }
         logged = [line for line in log_lines(capsys.readouterr().out) if line.get("event") == "tick_ok"]
         assert len(logged) == 2 and logged[0]["effectiveMode"] == "dry_run" and logged[0]["actions"]["summaries"] == 2
         # Core still holds the previous secret during a rotation: the notifier retries with it once.
@@ -279,7 +285,7 @@ class TestHandler:
             handler.lambda_handler({"job": "tick"}, Context())
         assert len(env.core.ticks()) == 1  # no retry: the next tick covers
         out = capsys.readouterr().out
-        assert metric_names(out) == ["AutomationTickFailures"]
+        assert metric_names(out) == ["AutomationTicks", "AutomationTickFailures"]  # heartbeat first (R18B K5)
         failed = [line for line in log_lines(out) if line.get("event") == "tick_failed"]
         assert failed[0]["status"] == 503
         # Missing secret: metric and raise, nothing sent.
@@ -337,3 +343,80 @@ class TestHandler:
         for report in env.core.reports():
             text = json.dumps(report)
             assert OWNER not in text and "Email address is not verified" not in text
+
+
+class TestR18bFixes:
+    """B03 (R18B contract K4, K5, K6): tick heartbeat, failed-step warnings, report retries."""
+
+    def test_every_tick_invocation_emits_one_automation_ticks_heartbeat(self, env, capsys):
+        # K5: whatever core answers, one AutomationTicks per tick invocation (the digest job is not a tick).
+        handler.lambda_handler({"job": "tick"}, Context())
+        env.core.tick_status = 503
+        with pytest.raises(RuntimeError):
+            handler.lambda_handler({"job": "tick"}, Context())
+        env.core.tick_status = 200
+        handler.lambda_handler({"job": "digest"}, Context())
+        settings.clear_secret_cache()
+        env.ssm.values.pop(SECRET_NAME)
+        with pytest.raises(RuntimeError):
+            handler.lambda_handler({"job": "tick"}, Context())
+        ticks = [line for line in emf_lines(capsys.readouterr().out) if "AutomationTicks" in line]
+        assert len(ticks) == 3
+        for line in ticks:
+            directive = line["_aws"]["CloudWatchMetrics"][0]
+            assert directive["Metrics"] == [{"Name": "AutomationTicks", "Unit": "Count"}]
+            assert directive["Dimensions"] == [["Service"]]
+            assert line["Service"] == "notifier" and line["AutomationTicks"] == 1
+
+    def test_failed_steps_are_logged_as_a_warning(self, env, capsys):
+        # K4: core lists the automation steps that failed and were swallowed.
+        env.core.tick_data = {**env.core.tick_data, "failedSteps": ["summaries", "reconcile", 7]}
+        result = handler.lambda_handler({"job": "tick"}, Context())
+        assert result["failedSteps"] == ["summaries", "reconcile"]
+        lines = log_lines(capsys.readouterr().out)
+        [warned] = [line for line in lines if line.get("event") == "tick_steps_failed"]
+        assert warned["level"] == "warn"
+        assert warned["failedSteps"] == ["summaries", "reconcile"] and warned["job"] == "tick"
+        [ok] = [line for line in lines if line.get("event") == "tick_ok"]
+        assert ok["failedSteps"] == ["summaries", "reconcile"]
+
+    def test_no_failed_steps_means_no_warning(self, env, capsys):
+        for data in ({**env.core.tick_data, "failedSteps": []}, env.core.tick_data):
+            env.core.tick_data = data
+            assert handler.lambda_handler({"job": "tick"}, Context())["failedSteps"] == []
+        events = [line.get("event") for line in log_lines(capsys.readouterr().out)]
+        assert "tick_steps_failed" not in events
+
+    def test_report_is_retried_three_times_with_jittered_backoff(self, env, capsys, monkeypatch):
+        # K6: 3 attempts, jittered pauses; NotifierReportFailures only when all of them fail.
+        drawn = []
+
+        def jitter(low, high):
+            drawn.append((low, high))
+            return (low + high) / 2
+
+        monkeypatch.setattr(handler, "jitter", jitter)
+        env.core.report_status = 503
+        env.stub.add_response("send_email", {"MessageId": "ses-1"}, expected_params())
+        assert handler.lambda_handler(sqs(record(message())), Context()) == {"batchItemFailures": []}
+        assert len(env.core.reports()) == 3
+        assert drawn == list(handler.REPORT_RETRY_PAUSES)
+        assert env.sleeps == [(low + high) / 2 for low, high in handler.REPORT_RETRY_PAUSES]
+        assert metric_names(capsys.readouterr().out) == ["NotificationsSent", "NotifierReportFailures"]
+
+    def test_real_jitter_stays_inside_each_pause_range(self, env):
+        env.core.report_status = 503
+        env.stub.add_response("send_email", {"MessageId": "ses-1"}, expected_params())
+        handler.lambda_handler(sqs(record(message())), Context())
+        assert len(env.sleeps) == len(handler.REPORT_RETRY_PAUSES) == 2
+        for pause, (low, high) in zip(env.sleeps, handler.REPORT_RETRY_PAUSES):
+            assert low <= pause <= high
+
+    def test_a_report_that_recovers_emits_no_failure_metric(self, env, capsys):
+        env.core.report_script = [503]
+        env.stub.add_response("send_email", {"MessageId": "ses-1"}, expected_params())
+        assert handler.lambda_handler(sqs(record(message())), Context()) == {"batchItemFailures": []}
+        assert len(env.core.reports()) == 2
+        out = capsys.readouterr().out
+        assert metric_names(out) == ["NotificationsSent"]
+        assert "report_failed" not in [line.get("event") for line in log_lines(out)]

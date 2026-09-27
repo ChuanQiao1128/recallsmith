@@ -97,7 +97,9 @@ def repair_text(error: Exception) -> str:
     )
 
 
-def request_kwargs(settings: Settings, messages: list[dict[str, Any]], *, structured: bool) -> dict[str, Any]:
+def request_kwargs(
+    settings: Settings, messages: list[dict[str, Any]], *, structured: bool, system_prompt: str = SYSTEM_PROMPT
+) -> dict[str, Any]:
     output_config: dict[str, Any] = {"effort": settings.effort}
     if structured:
         output_config["format"] = {"type": "json_schema", "schema": review_schema()}
@@ -106,7 +108,7 @@ def request_kwargs(settings: Settings, messages: list[dict[str, Any]], *, struct
         "max_tokens": MAX_TOKENS,
         "thinking": {"type": "adaptive"},
         "output_config": output_config,
-        "system": [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+        "system": [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
         "messages": messages,
     }
 
@@ -252,11 +254,17 @@ def _check_stop(response: Any, card_id: Any) -> None:
 
 
 def _review_once(
-    card: dict[str, Any], client: Any, settings: Settings, user_text: str, structured: bool, tally: _Tally
+    card: dict[str, Any],
+    client: Any,
+    settings: Settings,
+    user_text: str,
+    structured: bool,
+    tally: _Tally,
+    system_prompt: str,
 ) -> list[dict[str, Any]]:
     card_id = card.get("cardId")
     user = {"role": "user", "content": user_text}
-    response = _call(client, request_kwargs(settings, [user], structured=structured), tally, card_id, "review")
+    response = _call(client, request_kwargs(settings, [user], structured=structured, system_prompt=system_prompt), tally, card_id, "review")
     _check_stop(response, card_id)
     try:
         return finalize_findings(parse_review(response), card_id)
@@ -267,7 +275,7 @@ def _review_once(
             {"role": "assistant", "content": response.content},
             {"role": "user", "content": repair_text(exc)},
         ]
-    repaired = _call(client, request_kwargs(settings, messages, structured=structured), tally, card_id, "repair")
+    repaired = _call(client, request_kwargs(settings, messages, structured=structured, system_prompt=system_prompt), tally, card_id, "repair")
     _check_stop(repaired, card_id)
     try:
         return finalize_findings(parse_review(repaired), card_id)
@@ -354,16 +362,25 @@ def error_code_for(exc: Exception) -> str | None:
     return None
 
 
-def review_card(card: dict, *, client, settings: Settings, review_date: str) -> dict:
-    """Review one QaCard and return one §7.7 result item. Unmapped exceptions propagate."""
-    item, _calls = review_card_counted(card, client=client, settings=settings, review_date=review_date)
+def review_card(
+    card: dict, *, client, settings: Settings, review_date: str, system_prompt: str = SYSTEM_PROMPT
+) -> dict:
+    """Review one QaCard and return one §7.7 result item. Unmapped exceptions propagate.
+
+    system_prompt defaults to the qa-v4 prompt; the automation profile passes
+    profiles.system_prompt_for("automation") (qa-v4-auto)."""
+    item, _calls = review_card_counted(
+        card, client=client, settings=settings, review_date=review_date, system_prompt=system_prompt
+    )
     return item
 
 
 def review_card_counted(
-    card: dict[str, Any], *, client: Any, settings: Settings, review_date: str
+    card: dict[str, Any], *, client: Any, settings: Settings, review_date: str, system_prompt: str = SYSTEM_PROMPT
 ) -> tuple[dict[str, Any], int]:
-    """review_card plus the number of model calls attempted (the handler's EMF needs it)."""
+    """review_card plus the number of model calls attempted (the handler's EMF needs it).
+
+    system_prompt is the reviewing profile's prompt (profiles.system_prompt_for); default qa-v4."""
     card_id = card.get("cardId")
     tally = _Tally()
     user_text = build_user_text(card, review_date)
@@ -373,7 +390,7 @@ def review_card_counted(
     status, code, findings = "done", None, []
     while True:
         try:
-            findings = _review_once(card, client, settings, user_text, structured, tally)
+            findings = _review_once(card, client, settings, user_text, structured, tally, system_prompt)
             break
         except _Outcome as outcome:
             status, code, findings = outcome.status, outcome.code, outcome.findings

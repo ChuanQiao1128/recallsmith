@@ -38,6 +38,15 @@ RuntimeFactory = Callable[[str, Any], Any]
 # with_options variants kept per client (the handler asks for one per card).
 MAX_VARIANTS = 8
 
+# The effort this client actually runs at (providers.effective_effort). No AWS document names a
+# Converse request field for reasoning effort on these models: the OpenAI parameter page
+# (docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-openai.html) only lists gpt-oss and
+# defers other fields to additionalModelRequestFields without naming one, and the GPT-5.5 model
+# card (model-card-openai-gpt-55.html, read 2026-09-28) lists Converse as not supported on its
+# endpoint. So AI_EFFORT is not sent, and the reviewer runs at the provider's default effort,
+# recorded under this name in logs and EMF instead of being dropped silently.
+PROVIDER_DEFAULT_EFFORT = "provider-default"
+
 
 def _boto3_runtime(region: str, config: Any) -> Any:
     import boto3  # shipped with anthropic[bedrock]; also in the Lambda runtime
@@ -139,7 +148,8 @@ class _Messages:
         output_config: dict[str, Any] | None = None,
         **_: Any,
     ) -> ConverseResponse:
-        # thinking and output_config.effort have no Converse equivalent here and are ignored.
+        # thinking and output_config.effort have no documented Converse field and are not sent; the
+        # handler records the effort as PROVIDER_DEFAULT_EFFORT (see above).
         if output_config and output_config.get("format") is not None:
             raise ConfigError("structured outputs are off for bedrock-converse")
         request: dict[str, Any] = {

@@ -106,9 +106,11 @@ Each lands as `failed` in core's email log and fires the `NotificationFailures` 
   "errorCode": "…|null", "error": "…|null", "attempt": 1 }
 ```
 
-Budget: the remaining Lambda time minus 2 s; retries after 1 s and 3 s on a connection error, 5xx
-or 429. **A failed report never changes the send decision** (the email is not resent): it emits
-`NotifierReportFailures` and logs `report_failed`. Core's `sent` is sticky, so a later report of the
+Budget: the remaining Lambda time minus 2 s; three attempts (R18B contract K6): after a connection
+error, 5xx or 429 it retries after a pause drawn uniformly from 0.5-1.5 s, then from 2-4 s
+(`REPORT_RETRY_PAUSES`, jittered so containers that failed together do not retry together). **A
+failed report never changes the send decision** (the email is not resent): when every attempt
+failed it emits `NotifierReportFailures` and logs `report_failed`. Core's `sent` is sticky, so a later report of the
 same notification is harmless.
 
 ### Duplicate avoidance
@@ -116,8 +118,13 @@ same notification is harmless.
 Each container keeps an in-memory LRU of at most 1000 `notificationId → sesMessageId` for the
 emails it sent. A redelivery of a sent notification (a lost delete, a report that failed) is not
 sent again; `sent` is reported again with the remembered id. The cache lives only as long as the
-container; core's sticky `sent` and its resend rule (queued for more than 15 minutes with
-`attempts < 5`) bound the remaining window.
+container. Under R18B contract K6 core no longer re-sends a notification whose SQS send succeeded
+(SQS redelivery and the notify DLQ own retries); a row still `queued` 60 minutes after a successful
+send with no report is counted as "unconfirmed" in the status API's email health. So the only
+duplicate left is an SQS redelivery (a lost delete) that lands on another container, and the
+retried report above makes an unreported `sent` rare. During a mail incident, disable
+`developercards-automation-tick` together with the notify event source mapping, so the tick does not
+enqueue further rows while the mapping is off.
 
 ### Retries, `MAX_RECEIVES` and the DLQ
 
@@ -132,9 +139,13 @@ missing).
 `{"job": "tick"}` or `{"job": "digest"}` ⇒ `POST /api/internal/automation/tick`
 `{"v": 1, "tickId": <uuid4>, "job": "tick"|"digest"}`, one attempt with a 28 s timeout (the gateway
 allows 30 s; the next tick covers a failure). Core answers
-`{"tickId", "mode", "effectiveMode", "skipped", "actions": {…}}`; the notifier logs `tick_ok` with
-`tickId`, `mode`, `effectiveMode`, `skipped` and the integer `actions`, and returns
-`{"tickId", "skipped", "actions"}`. A failed call (or a missing internal secret) emits
+`{"tickId", "mode", "effectiveMode", "skipped", "actions": {…}, "failedSteps": [string]}`; the
+notifier logs `tick_ok` with `tickId`, `mode`, `effectiveMode`, `skipped`, the integer `actions` and
+the string `failedSteps` (`[]` when absent), and returns `{"tickId", "skipped", "actions",
+"failedSteps"}`. A non-empty `failedSteps` (R18B contract K4: automation steps core swallowed while
+still answering 200) is also logged as `tick_steps_failed` at warn level; core's own
+`AutomationStepFailures` gauge carries the alarm. Every `{"job": "tick"}` invocation first emits
+`AutomationTicks` (R18B contract K5), whatever core answers; the digest job does not. A failed call (or a missing internal secret) emits
 `AutomationTickFailures`, logs `tick_failed` and **raises**, so `AWS/Lambda Errors` counts it.
 Any other event is logged as `ignored_event` and answered `{"ignored": true}`.
 
@@ -180,10 +191,12 @@ never the subject, the body, the recipient or an SES error message.
 | `NotificationFailures` | Count | `[Service]` and `[Service, ErrorCode]` (one line) | `developercards-prod-notification-failures` reads the `Service`-only set |
 | `NotifierReportFailures` | Count | `[Service]` | — |
 | `AutomationTickFailures` | Count | `[Service]` | tick failures also raise, feeding `developercards-prod-notifier-errors` |
+| `AutomationTicks` | Count | `[Service]` | one per tick invocation; `developercards-prod-automation-tick-missing` watches it (R18B K5) |
 
 Other A10 alarms around the function: `developercards-prod-notify-dlq-nonempty` (DLQ has a
 message), `developercards-prod-notifier-errors` (`AWS/Lambda Errors`) and
-`developercards-prod-automation-tick-missing` (no invocation for two hours).
+`developercards-prod-automation-tick-missing` (no `AutomationTicks` for two hours; SQS email
+deliveries do not emit it, so they cannot keep the alarm green).
 
 ## Emergency stop
 
