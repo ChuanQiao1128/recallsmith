@@ -170,6 +170,21 @@ public class AiQaPublishSnapshotTests
   }
 
   [Fact]
+  public async Task GatedPublish_StaleBuild_EmitsAiQaStaleGauge()
+  {
+    // backend-design-20: an AI_QA_STALE refusal is a metric, not only a FAILED job and an info log.
+    var deck = await SeedReviewedDeckAsync("snapstalemetric", 2);
+    var jobId = JobId(await WithGateAsync("1", "1", () => PublishAsync(deck.DeckId)));
+    await _db.QueryAsync("update cards set explanation = 'Synthetic unreviewed edit.', updated_at = now() where id = $1", deck.CardIds[0]);
+
+    var stdout = await EmfCapture.StdoutAsync(async () =>
+      await Assert.ThrowsAsync<BusinessException>(() =>
+        new PublishJobProcessor(new JobRepository(), new CapturingUploader(), new NoopArtifacts()).ProcessAsync(jobId, 1)));
+    Assert.Equal("AiQaStale", PublishSnapshot.StaleMetric);
+    Assert.Equal(1, EmfCapture.GaugeSum(stdout, PublishSnapshot.StaleMetric));
+  }
+
+  [Fact]
   public async Task UngatedPublish_StoresNoSnapshot_AndBuildsLiveCards()
   {
     var deck = await SeedReviewedDeckAsync("snapoff", 1);
