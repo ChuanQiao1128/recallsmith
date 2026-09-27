@@ -150,20 +150,31 @@ def _host_of(url: str) -> str | None:
 
 
 def _signing_secrets(cfg: settings.Settings, subscription_id: int) -> tuple[str | None, str | None]:
-    """(current, previous) signing secrets for one subscription.
+    """(current, previous) signing secrets for one subscription; (None, None) = do not send.
 
-    A per-subscription secret ("<name>-sub-<id>"), when it exists, replaces the environment-wide
-    one, so that receiver can neither verify nor forge the others' events. Its rotation uses
-    "<name>-sub-<id>-previous", just like the environment-wide secret.
+    With WEBHOOK_SUBSCRIPTION_SECRETS on, a per-subscription secret ("<name>-sub-<id>"), when it
+    exists, replaces the environment-wide one, so that receiver can neither verify nor forge the
+    others' events. Its rotation uses "<name>-sub-<id>-previous", just like the environment-wide
+    secret. Only ParameterNotFound means "no such secret": any other read error (throttling, a
+    network error, AccessDenied) returns (None, None), so the attempt is retried
+    (SIGNING_SECRET_MISSING) instead of being signed with the wrong secret or without the previous
+    signature.
     """
-    name = settings.subscription_secret_name(cfg.signing_secret_ssm_name, subscription_id)
-    secret = settings.get_secret(name, optional=True)
-    if secret is None:
-        name = cfg.signing_secret_ssm_name
-        secret = settings.get_secret(name)
+    name = cfg.signing_secret_ssm_name
+    secret: str | None = None
+    try:
+        if cfg.subscription_secrets:
+            sub_name = settings.subscription_secret_name(name, subscription_id)
+            secret = settings.get_secret(sub_name, optional=True)
+            if secret is not None:
+                name = sub_name
         if secret is None:
-            return None, None
-    previous = settings.get_secret(settings.previous_secret_name(name), optional=True)
+            secret = settings.get_secret(name)
+            if secret is None:
+                return None, None
+        previous = settings.get_secret(settings.previous_secret_name(name), optional=True)
+    except settings.SecretUnreadable:
+        return None, None
     return secret, previous if previous != secret else None
 
 

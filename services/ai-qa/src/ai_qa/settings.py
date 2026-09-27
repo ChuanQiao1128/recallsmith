@@ -44,6 +44,13 @@ DEFAULTS: dict[str, str] = {
 }
 
 
+# Receives of one message before SQS moves it to the DLQ: the ai-qa queue's redrive maxReceiveCount
+# (infra/modules/worker/ai_qa.tf). Optional env key, not in the contract's env file; when the queue
+# changes, set AI_QA_MAX_RECEIVES to the same value in the same release.
+MAX_RECEIVES_ENV = "AI_QA_MAX_RECEIVES"
+DEFAULT_MAX_RECEIVES = 2
+
+
 class ConfigError(ValueError):
     """The configuration cannot produce a valid model call (error code CONFIG)."""
 
@@ -63,6 +70,7 @@ class Settings:
     core_api_base: str = DEFAULTS["CORE_API_BASE"]
     metrics_namespace: str = DEFAULTS["METRICS_NAMESPACE"]
     log_level: str = DEFAULTS["LOG_LEVEL"]
+    max_receives: int = DEFAULT_MAX_RECEIVES
 
 
 def is_truthy(value: str | None) -> bool:
@@ -125,7 +133,17 @@ def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
         core_api_base=get("CORE_API_BASE"),
         metrics_namespace=get("METRICS_NAMESPACE"),
         log_level=get("LOG_LEVEL").lower(),
+        max_receives=_max_receives(env.get(MAX_RECEIVES_ENV)),
     )
+
+
+def _max_receives(raw: str | None) -> int:
+    """A positive integer, else the default (a bad value must not stop QA runs)."""
+    try:
+        value = int((raw or "").strip())
+    except ValueError:
+        return DEFAULT_MAX_RECEIVES
+    return value if value >= 1 else DEFAULT_MAX_RECEIVES
 
 
 def is_unset_secret(value: Any) -> bool:
@@ -155,11 +173,27 @@ def _cached(name: str) -> str | None:
     return value
 
 
+# The only read error that means "this parameter does not exist".
+PARAMETER_NOT_FOUND = "ParameterNotFound"
+
+
+def is_parameter_not_found(exc: BaseException) -> bool:
+    """botocore's ClientError with that code, or the modeled ssm.exceptions.ParameterNotFound."""
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        error = response.get("Error")
+        if isinstance(error, dict) and error.get("Code") == PARAMETER_NOT_FOUND:
+            return True
+    return type(exc).__name__ == PARAMETER_NOT_FOUND
+
+
 def load_secret(name: str, ssm_client: Any, *, optional: bool = False) -> str | None:
     """The decrypted value of one SSM parameter, or None when unset or unreadable.
 
     optional=True is for a parameter that normally does not exist (the previous internal secret):
-    a failed read is logged at debug level and the absence is remembered for the TTL.
+    only ParameterNotFound (or an unset value) counts as absent; that is logged at debug level and
+    remembered for the TTL. Any other read error (throttling, network, AccessDenied) is logged at
+    warn level and never cached, so the next read tries SSM again.
     """
     cached = _cached(name)
     if cached is not None:
@@ -170,15 +204,16 @@ def load_secret(name: str, ssm_client: Any, *, optional: bool = False) -> str | 
         response = ssm_client.get_parameter(Name=name, WithDecryption=True)
         value = response["Parameter"]["Value"]
     except Exception as exc:
+        absent = optional and is_parameter_not_found(exc)
         # The error class only: messages may echo request details.
         log(
-            "debug" if optional else "warn",
+            "debug" if absent else "warn",
             "ai-qa",
             event="ssm_secret_unavailable",
             parameter=name,
             errorClass=type(exc).__name__,
         )
-        if optional:
+        if absent:
             _absent_cache[name] = clock() + SECRET_TTL_SECONDS
         return None
     if is_unset_secret(value):

@@ -35,6 +35,8 @@ DEFAULTS: dict[str, str] = {
 
 # Optional, off unless set (not part of the contract's env file): see Settings.presend_claim.
 PRESEND_CLAIM_ENV = "WEBHOOK_PRESEND_CLAIM"
+# Optional, off unless set: see Settings.subscription_secrets.
+SUBSCRIPTION_SECRETS_ENV = "WEBHOOK_SUBSCRIPTION_SECRETS"
 TRUTHY = ("1", "true", "yes")
 
 
@@ -48,6 +50,9 @@ class Settings:
     log_level: str
     # Ask core-vpc before each POST whether (and where) to send. Off until core serves the route.
     presend_claim: bool = False
+    # Look up "<signing name>-sub-<id>" first. Off until the role may read "-sub-*": with the
+    # flag on, a denied read fails the attempt closed instead of falling back.
+    subscription_secrets: bool = False
 
 
 def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
@@ -69,6 +74,7 @@ def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
         http_timeout_seconds=timeout,
         log_level=get("LOG_LEVEL").lower(),
         presend_claim=(env.get(PRESEND_CLAIM_ENV) or "").strip().lower() in TRUTHY,
+        subscription_secrets=(env.get(SUBSCRIPTION_SECRETS_ENV) or "").strip().lower() in TRUTHY,
     )
 
 
@@ -94,11 +100,35 @@ def _cached(name: str) -> str | None:
     return value
 
 
+class SecretUnreadable(Exception):
+    """An optional secret could not be read (throttling, a network error, AccessDenied, ...).
+
+    Unlike ParameterNotFound this says nothing about whether the secret exists, so the caller must
+    not fall back to another secret as if it were absent.
+    """
+
+
+# The only read error that means "this parameter does not exist".
+PARAMETER_NOT_FOUND = "ParameterNotFound"
+
+
+def is_parameter_not_found(exc: BaseException) -> bool:
+    """botocore's ClientError with that code, or the modeled ssm.exceptions.ParameterNotFound."""
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        error = response.get("Error")
+        if isinstance(error, dict) and error.get("Code") == PARAMETER_NOT_FOUND:
+            return True
+    return type(exc).__name__ == PARAMETER_NOT_FOUND
+
+
 def load_secret(name: str, ssm_client: Any, *, optional: bool = False) -> str | None:
     """The decrypted value of one SSM parameter, or None when unset or unreadable.
 
     optional=True is for a parameter that normally does not exist (the previous signing secret):
-    a failed read is logged at debug level and the absence is remembered for the TTL.
+    only ParameterNotFound (or an unset value) counts as absent; that is logged at debug level and
+    remembered for the TTL. Any other read error is logged, never cached, and raises
+    SecretUnreadable.
     """
     cached = _cached(name)
     if cached is not None:
@@ -109,10 +139,13 @@ def load_secret(name: str, ssm_client: Any, *, optional: bool = False) -> str | 
         response = ssm_client.get_parameter(Name=name, WithDecryption=True)
         value = response["Parameter"]["Value"]
     except Exception as exc:
+        absent = optional and is_parameter_not_found(exc)
         # The error class only: messages may echo request details.
-        log("debug" if optional else "warn", "ssm_secret_unavailable", parameter=name, errorClass=type(exc).__name__)
-        if optional:
+        log("debug" if absent else "warn", "ssm_secret_unavailable", parameter=name, errorClass=type(exc).__name__)
+        if absent:
             _absent_cache[name] = clock() + SECRET_TTL_SECONDS
+        elif optional:
+            raise SecretUnreadable(name) from None
         return None
     if not isinstance(value, str) or not value or value == PLACEHOLDER_VALUE:
         if optional:
@@ -124,7 +157,7 @@ def load_secret(name: str, ssm_client: Any, *, optional: bool = False) -> str | 
 
 
 def get_secret(name: str, *, optional: bool = False) -> str | None:
-    """load_secret with the container's lazily created SSM client."""
+    """load_secret with the container's lazily created SSM client (optional: may raise SecretUnreadable)."""
     cached = _cached(name)
     if cached is not None:
         return cached
@@ -132,6 +165,8 @@ def get_secret(name: str, *, optional: bool = False) -> str | None:
         client = ssm_client()
     except Exception as exc:
         log("warn", "ssm_client_unavailable", errorClass=type(exc).__name__)
+        if optional:
+            raise SecretUnreadable(name) from None
         return None
     return load_secret(name, client, optional=optional)
 

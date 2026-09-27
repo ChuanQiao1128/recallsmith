@@ -5,6 +5,7 @@ import time
 
 import anthropic
 import pytest
+from botocore.exceptions import ClientError
 from conftest import FakeLlm, card, finding, reply, request, review_json, status_error
 
 from ai_qa import handler, settings
@@ -36,7 +37,7 @@ class FakeSsm:
         assert WithDecryption is True
         self.calls.append(Name)
         if Name not in self.values:
-            raise RuntimeError("ParameterNotFound")
+            raise ClientError({"Error": {"Code": "ParameterNotFound", "Message": "test"}}, "GetParameter")
         return {"Parameter": {"Name": Name, "Value": self.values[Name]}}
 
 
@@ -573,3 +574,54 @@ def test_warm_container_picks_up_a_rotated_secret_after_the_ttl(core, llm, enabl
     core.requests.clear()
     assert handler.lambda_handler(event(message([card(0)])), FakeContext(600)) == {"batchItemFailures": []}
     assert len(core.requests) == 1 and len(llm.calls) == 1  # the kept item was reported, not re-reviewed
+
+
+def test_missing_internal_secret_brings_the_chunk_back_soon(core, llm, enabled, monkeypatch) -> None:
+    # cloud-security-resilience-12: not after the queue's 3600 s visibility.
+    settings.set_clients(ssm=FakeSsm({INTERNAL_NAME: "PLACEHOLDER-set-by-supervisor"}))
+    sqs = FakeSqs()
+    settings.set_clients(sqs=sqs)
+    monkeypatch.setattr(handler, "jitter", lambda lo, hi: lo)
+    assert handler.lambda_handler(sqs_record_event(message(), n=1), FakeContext(600)) == {
+        "batchItemFailures": [{"itemIdentifier": "m-0"}]
+    }
+    assert sqs.calls == [{"QueueUrl": QUEUE_URL, "ReceiptHandle": "rh-1", "VisibilityTimeout": 60}]
+    assert llm.calls == [] and core.requests == []
+
+
+@pytest.mark.parametrize(
+    "exc,code",
+    [
+        (lambda: status_error(anthropic.RateLimitError, 429), "PROVIDER_RATE_LIMITED"),
+        (lambda: status_error(anthropic.InternalServerError, 500), "PROVIDER_ERROR"),
+        (lambda: anthropic.APITimeoutError(request=request()), "PROVIDER_TIMEOUT"),
+    ],
+)
+def test_final_receive_reports_the_rest_with_the_retryable_code_and_acks(core, ssm, llm, enabled, exc, code) -> None:
+    # cloud-security-resilience-12: on the last receive before the DLQ the run gets visible errors
+    # for the unfinished cards instead of stalling 'queued' until the 2 h reap.
+    sqs = FakeSqs()
+    settings.set_clients(sqs=sqs)
+    llm.script = [reply(review_json()), exc()]
+    result = handler.lambda_handler(sqs_record_event(message(), n=2), FakeContext(600))
+    assert result == {"batchItemFailures": []}
+    assert len(llm.calls) == 2  # the third card is not tried
+    (body,) = reports(core)
+    assert [(i["cardId"], i["status"], i["errorCode"]) for i in body["items"]] == [
+        (101, "done", None),
+        (102, "error", code),
+        (103, "error", code),
+    ]
+    assert sqs.calls == []
+
+
+def test_final_receive_follows_the_configured_max_receives(core, ssm, llm, enabled, monkeypatch) -> None:
+    monkeypatch.setenv("AI_QA_MAX_RECEIVES", "3")
+    settings.set_clients(sqs=FakeSqs())
+    llm.script = [status_error(anthropic.RateLimitError, 429)]
+    assert handler.lambda_handler(sqs_record_event(message(), n=2), FakeContext(600))["batchItemFailures"]
+    assert core.requests == []
+    llm.script = [status_error(anthropic.RateLimitError, 429)]
+    assert handler.lambda_handler(sqs_record_event(message(), n=3), FakeContext(600)) == {"batchItemFailures": []}
+    (body,) = reports(core)
+    assert [i["errorCode"] for i in body["items"]] == ["PROVIDER_RATE_LIMITED"] * 3

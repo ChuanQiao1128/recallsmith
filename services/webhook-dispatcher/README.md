@@ -13,7 +13,10 @@ outbound webhook (contract §6.5):
    version is deployed. Deploy the dispatcher before the core that emits a new message version.
 2. Load the signing secret from SSM. Missing or unset ⇒ nothing is sent and the attempt is
    retryable (`SIGNING_SECRET_MISSING`), so a misconfiguration ends in the DLQ and trips the DLQ
-   alarm instead of silently dropping events.
+   alarm instead of silently dropping events. The same holds when an optional secret that may
+   exist (`-previous`, or `-sub-<id>` with `WEBHOOK_SUBSCRIPTION_SECRETS` on) cannot be read for
+   any reason other than `ParameterNotFound` (throttling, a network error, AccessDenied): the
+   attempt is never signed with a fallback secret or without the previous signature.
 3. Run the SSRF guard (below). A rejected URL is a permanent failure (`URL_REJECTED: <reason>`),
    no request is sent.
 4. POST the pre-rendered body with the §6.3 headers, pinned to the vetted address.
@@ -50,7 +53,9 @@ answers `"stop": true` (subscription disabled or deleted) a `retry` is acked ins
 report never changes the decision; it counts in `WebhookReportFailures`. The report is retried
 once after 1 s on a connection error, a 5xx or a 429 (the route's throttle); a 401/403 is resent
 once signed with `/developercards/prod/internal-shared-secret-previous` when that exists (rotation:
-services/ai-qa/README.md, "Internal shared secret rotation"). The report's `error` is at
+services/ai-qa/README.md, "Internal shared secret rotation"). The dispatcher role cannot read that
+parameter yet (infra follow-up), so today the read is denied, logged `ssm_secret_unavailable`
+(warn), not cached, and the 401/403 stands. The report's `error` is at
 most 500 characters and never contains the URL path/query or the response body.
 
 **Disabling, deleting or re-pointing a subscription does not recall messages already queued**
@@ -74,9 +79,18 @@ attempt first calls the signed route `POST /api/internal/webhooks/deliveries/cla
 - Any failure (no internal secret, non-2xx, a missing `send`): nothing is sent; the attempt is a
   `retry` with error `CLAIM_UNAVAILABLE`, reported and backed off as usual.
 
-The route is a core-vpc follow-up (it does not exist yet, and API Gateway's
-`/api/internal/webhooks/{proxy+}` already forwards it). Turn the flag on only after core serves
-it, or every delivery ends `dead`.
+**Deployed state: the flag is off, and turning it on today makes every delivery end `dead`.**
+Neither half of the route exists yet: core-vpc routes `…/deliveries/report` but has no
+`…/deliveries/claim` (`src_C/Vpc/VpcFunction.cs`), and API Gateway has exact route keys only for
+`POST /api/internal/webhooks/deliveries/report` and `POST /api/internal/ai-qa/results` (R18 X08,
+`infra/modules/api/gateway.tf`). Any other `/api/internal/*` path, the claim included, falls to
+`ANY /{proxy+}`, which carries the console JWT authorizer, so the signed claim gets a 401 and every
+attempt is `CLAIM_UNAVAILABLE`. Turn the flag on only after both follow-ups are deployed: (1) a
+core-vpc route with exact dispatch and the report route's internal HMAC check, and (2) an exact
+gateway route `POST /api/internal/webhooks/deliveries/claim` (authorization none, its own
+throttle), then set `WEBHOOK_PRESEND_CLAIM=1` in `env/prod.env.json` and deploy. Until then, to
+keep a URL from getting anything more, disable the subscription and stop the dispatcher's event
+source mapping (above, and "Emergency stop").
 
 ## What receivers see, and how to verify it (§6.3)
 
@@ -102,6 +116,13 @@ Receiver recipe:
    window of rejected deliveries.
 4. Deduplicate on the body's `eventId` (retries and multiple deliveries carry the same event).
 5. Ignore unknown JSON fields and unknown headers: new fields are added without a version bump.
+6. Check `schemaVersion` (below) and reject or park a version you do not know.
+
+The body is one JSON object with the top-level keys `data`, `environment`, `event`, `eventId`,
+`occurredAt` and `schemaVersion`, in that order. `schemaVersion` is an integer, currently `1`
+(`WebhookEvents.BodySchemaVersion`); a breaking change to the shape of `data` or of the envelope
+increments it, adding a field does not. It is part of the signed body; the signature scheme does
+not change with it.
 
 Test vector: secret `whsec-test`, timestamp `1790000000`, body `{"event":"webhook.test"}` →
 `c36d984357900ab4a8e0a6e211f9a7deb1cc72361f27cf4075e9d6f666c661ef`.
@@ -115,9 +136,12 @@ One signing secret serves the whole environment (§6.3). The dispatcher reads it
 window. With one secret the headers are byte-identical to before; while `-previous` is set, each
 attempt also carries `X-DeveloperCards-Signature-Previous`.
 
-IAM prerequisite: the dispatcher role must be allowed `ssm:GetParameter` on
-`…/webhook-signing-secret-previous` (tracked in X08). Until then the read is denied, treated as
-"no previous secret" (logged at debug level only), and only the current signature is sent.
+The dispatcher role may read `…/webhook-signing-secret-previous` (R18 X08,
+`infra/modules/identity/roles_r18.tf`). A missing parameter (`ParameterNotFound`) means "no
+rotation" (debug log, cached for the TTL). Any other read error (throttling, a network error,
+AccessDenied) is logged `ssm_secret_unavailable` at warn level, not cached, and fails the attempt
+closed: nothing is sent and it is retried (`SIGNING_SECRET_MISSING`), because a delivery without
+the `-Previous` signature would be rejected by receivers that have not switched yet.
 
 Runbook (supervisor only; values never in git or chat):
 
@@ -137,16 +161,22 @@ Runbook (supervisor only; values never in git or chat):
 ## Per-subscription secrets
 
 A receiver that holds the environment-wide secret could sign events for every other receiver. A
-subscription can instead get its own secret: when `<SIGNING_SECRET_SSM_NAME>-sub-<subscriptionId>`
-(for example `/developercards/prod/webhook-signing-secret-sub-12`) exists, it replaces the
-environment-wide secret for that subscription only, and its rotation uses
-`…-sub-12-previous` exactly like the runbook above. Its absence is cached for 5 minutes like
-`-previous`, so it costs one SSM read per subscription per container per TTL.
+subscription can instead get its own secret. **Off in the deployed dispatcher:** the lookup runs
+only with `WEBHOOK_SUBSCRIPTION_SECRETS` set to `1`/`true`/`yes` (not in `env/prod.env.json`).
+With it on, when `<SIGNING_SECRET_SSM_NAME>-sub-<subscriptionId>` (for example
+`/developercards/prod/webhook-signing-secret-sub-12`) exists, it replaces the environment-wide
+secret for that subscription only, and its rotation uses `…-sub-12-previous` exactly like the
+runbook above. Only `ParameterNotFound` means "this subscription has no own secret" (the
+environment-wide one is used, and the absence is cached for 5 minutes, so it costs one SSM read per
+subscription per container per TTL). Any other read error fails the attempt closed
+(`SIGNING_SECRET_MISSING`, retried, not cached): signing with the environment-wide secret would
+make that receiver answer 401, which is a permanent failure.
 
-Prerequisites (supervisor): the dispatcher role needs `ssm:GetParameter` on
-`…/webhook-signing-secret-sub-*` (until then the read is denied and the environment-wide secret is
-used), and core-vpc's `src_C/scripts/merge-env.sh` must skip those leaves (`SSM_NOT_ENV`), or its
-deploy fails with "unmapped SSM parameter".
+Prerequisites (supervisor), all before setting the flag: the dispatcher role needs
+`ssm:GetParameter` on `…/webhook-signing-secret-sub-*` (without it every read is AccessDenied, so
+with the flag on every delivery fails closed and ends `dead`), and core-vpc's
+`src_C/scripts/merge-env.sh` must skip those leaves (`SSM_NOT_ENV`), or its deploy fails with
+"unmapped SSM parameter".
 
 To give subscription 12 its own secret: generate 32 random bytes (hex), `put-parameter` it as
 `…/webhook-signing-secret-sub-12` (SecureString), hand it to that receiver once, wait 5 minutes.
@@ -183,12 +213,17 @@ creation):
 | `WEBHOOK_HTTP_TIMEOUT_SECONDS` | `10` |
 | `LOG_LEVEL` | `info` |
 
+Optional flags, off unless set to `1`/`true`/`yes` and not in `env/prod.env.json` (so off in the
+deployed dispatcher): `WEBHOOK_PRESEND_CLAIM` ("Pre-send claim") and
+`WEBHOOK_SUBSCRIPTION_SECRETS` ("Per-subscription secrets").
+
 The secrets are read with `ssm:GetParameter` (`WithDecryption=True`) by exact name — never by
 path — and cached per container for at most 5 minutes once loaded. Their values are never in git,
 the environment or the logs. The value `PLACEHOLDER-set-by-supervisor` (what Terraform creates)
 means "not set yet" and is treated as missing; a missing value is not cached, so setting it takes
-effect on the next invocation without a deploy. (The optional `-previous` signing secret's absence
-is cached for the same 5 minutes, so it costs one SSM read per container per TTL.)
+effect on the next invocation without a deploy. (An optional secret's absence — `ParameterNotFound`
+only — is cached for the same 5 minutes, so it costs one SSM read per container per TTL; any other
+read error is never cached.)
 
 Logs are one JSON line per attempt (`tag`, `deliveryId`, `eventId`, `event`, `subscriptionId`,
 `host`, `attempt`, `outcome`, `statusCode`, `durationMs`). They carry the URL's **host only**:
@@ -256,25 +291,34 @@ Workers never run these.
 
 ## Dead deliveries and the DLQ
 
-One procedure, the same as infra/RUNBOOK.md §7 (`webhook-delivery-dead`, `webhook-enqueue-failures`):
+Both recoveries below work with the deployed core-vpc (R18 Y01, automation-12): the report route
+lets a `delivered` report win over a `dead` row at any attempt and then records the
+webhook_notification ledger unit, so a redriven message that succeeds shows `delivered`. For each
+message pick **one** of the two, never both, or the receiver gets the event twice (it still dedupes
+on `eventId`). infra/RUNBOOK.md §7 still describes the older "Redeliver, never redrive" rule; this
+section supersedes it until that file is updated (infra follow-up, docs/delivery/r18-issues/Z02-fixes.md).
 
 - **`dead` deliveries** (five retryable failures; the message is in
-  `developercards-webhook-events-dlq`): fix the receiver, press **Redeliver** on each `dead` row in
-  the console (a new delivery id, so the receiver processes the event once), then purge the DLQ:
-  `aws sqs purge-queue --queue-url <developercards-webhook-events-dlq URL>`. Do **not** redrive the
-  DLQ back to `developercards-webhook-events` (`aws sqs start-message-move-task`): core-vpc keeps a
-  `dead` row `dead` even when the redriven attempt succeeds (automation-12), so the console shows it
-  undelivered, the webhook_notification ledger unit is lost, and a later Redeliver makes the receiver
-  process the event twice. This section changes only after the automation-12 core-vpc fix is
-  deployed.
+  `developercards-webhook-events-dlq`). Fix the receiver first, then either:
+  - **Redrive** the DLQ back to `developercards-webhook-events`
+    (`aws sqs start-message-move-task --source-arn <DLQ ARN>`): each message is retried with the same
+    delivery id (up to five more attempts; the row stays `dead` until one succeeds); or
+  - press **Redeliver** on each `dead` row in the console (a new delivery id) and then purge the DLQ
+    (`aws sqs purge-queue --queue-url <developercards-webhook-events-dlq URL>`). Purge only when the
+    DLQ holds no unsupported-version messages (next item).
 - **Unsupported-version messages** (step 1 above, `webhook_unsupported_version`): these are never
-  reported, so their rows stay `queued` with 0 attempts and are never `dead`. A DLQ that holds only
-  these may be redriven once the newer dispatcher is deployed. If the DLQ was purged under the `dead`
-  procedure, the enqueue-failure sweep below re-sends those rows (it picks up `queued` rows with 0
-  attempts untouched for 10 minutes).
+  reported, so their rows stay `queued` with 0 attempts and are never `dead`. **Redrive the DLQ
+  after deploying the dispatcher that speaks that version; never purge it.** No other path resends
+  them: the enqueue-failure sweep skips them (it takes only `enqueue_failed` rows and `queued` rows
+  that never reached SQS, `enqueued_at is null`) and the console refuses Redeliver on a `queued`
+  row. A purged unsupported-version message is lost to the dispatcher, and its row stays `queued`
+  until a core-vpc change resends it. When the DLQ also holds `dead` messages, redrive it as a
+  whole (the redrive is correct for those too).
 - **Enqueue failures** (`WebhookEnqueueFailures`: core-vpc or the worker could not `SendMessage`; the
   row is `enqueue_failed`, nothing reached this dispatcher): fix the queue or the send grants, wait
   10 minutes, then call `POST /api/v1/admin/webhooks/deliveries/sweep` (super_admin JWT, optional
   body `{"limit": 1..100}`) and repeat, 10 minutes apart, until the response's `enqueueFailures` is 0.
-  A swept row keeps its delivery id and eventId, so receivers dedupe as usual
-  (docs/delivery/r18-issues/X01-ledger-runbook.md).
+  A swept row keeps its delivery id and eventId, so receivers dedupe as usual.
+- **Automation Ledger backfill and the sweep, step by step**: the operator runbook is
+  docs/delivery/r18-issues/X01-ledger-runbook.md (moving it into infra/RUNBOOK.md is an
+  infra follow-up, Z02-fixes.md).
