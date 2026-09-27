@@ -101,14 +101,24 @@ def test_prod_env_file_matches_contract() -> None:
         "AI_PRICE_INPUT_PER_MTOK": "5",
         "AI_PRICE_OUTPUT_PER_MTOK": "25",
         "LOG_LEVEL": "info",
-        "AI_QA_AUTOMATION_PROVIDER": "bedrock-converse",  # the automation reviewer (A07)
-        "AI_QA_AUTOMATION_MODEL": "global.openai.gpt-5.5",
+        # The automation reviewer (A07), on the transport the GPT-5.5 model card lists (C03, L1),
+        # with the In-Region prices from that card (README, "Automation profile (R18A)").
+        "AI_QA_AUTOMATION_PROVIDER": "openai-mantle",
+        "AI_QA_AUTOMATION_MODEL": "openai.gpt-5.5",
+        "AI_QA_AUTOMATION_REGION": "us-east-1",
+        "AI_QA_AUTOMATION_PRICE_INPUT_PER_MTOK": "5.5",
+        "AI_QA_AUTOMATION_PRICE_OUTPUT_PER_MTOK": "33",
     }
     s = load_settings(data)
     assert s.enabled is False
-    # The committed file is the defaults plus the automation reviewer (prices pending, README).
+    # The committed file is the defaults plus the automation reviewer.
     assert s == dataclasses.replace(
-        load_settings({}), automation_provider="bedrock-converse", automation_model="global.openai.gpt-5.5"
+        load_settings({}),
+        automation_provider="openai-mantle",
+        automation_model="openai.gpt-5.5",
+        automation_region="us-east-1",
+        automation_price_input_per_mtok=5.5,
+        automation_price_output_per_mtok=33.0,
     )
 
 
