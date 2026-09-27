@@ -94,7 +94,10 @@ public static class QaGate
     return new QaGateState(changed, blockers);
   }
 
-  /// <summary>The ids among <paramref name="cardIds"/> that have a <c>done</c> item at the paired content hash.</summary>
+  /// <summary>
+  /// The ids among <paramref name="cardIds"/> that have a <c>done</c> item, or an owner-waived <c>error</c>/<c>refused</c>
+  /// item (ai-agent-16), at the paired content hash.
+  /// </summary>
   internal static async Task<HashSet<long>> ReviewedCardIdsAsync(NpgsqlConnection conn, long[] cardIds, string[] hashes, CancellationToken ct = default)
   {
     ct.ThrowIfCancellationRequested();
@@ -104,7 +107,7 @@ public static class QaGate
       from ai_qa_items i
       join unnest($1::bigint[], $2::text[]) as x(card_id, content_sha256)
         on x.card_id = i.card_id and x.content_sha256 = i.content_sha256
-      where i.status = 'done'
+      where i.status = 'done' or (i.status in ('error','refused') and i.waived_at is not null)
       """,
       [cardIds, hashes]);
     return rows.Select(r => Convert.ToInt64(r["card_id"], CultureInfo.InvariantCulture)).ToHashSet();

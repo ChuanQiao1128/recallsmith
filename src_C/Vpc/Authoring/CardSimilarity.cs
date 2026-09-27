@@ -105,8 +105,15 @@ public static class CardSimilarity
     return string.Join(" and ", where);
   }
 
-  private static async Task<List<SimilarityMatch>> PgTrgmRowsAsync(
-    NpgsqlConnection conn, string text, SimilarityQuery query, int limit, double threshold, CancellationToken ct)
+  /// <summary>
+  /// The pg_trgm query. With a positive threshold it filters with the <c>%</c> operator, which the gin_trgm_ops
+  /// index of migration 029 can serve (a <c>similarity(...) &gt;= $n</c> predicate cannot, backend-design-7), under
+  /// <c>pg_trgm.similarity_threshold</c> set to the same threshold for the transaction. <c>%</c> compares the
+  /// float4 score with the double threshold exactly as the explicit predicate kept beside it does, so the rows and
+  /// scores stay identical to the in-process fallback. A threshold of 0 matches every card, including cards that
+  /// share no trigram and so never appear in the index, and keeps the plain predicate.
+  /// </summary>
+  internal static (string Sql, List<object?> Parameters, bool UsesIndex) BuildPgTrgmQuery(string text, SimilarityQuery query, int limit, double threshold)
   {
     var parameters = new List<object?> { text };
     var where = ScopeWhere(query, parameters);
@@ -115,24 +122,47 @@ public static class CardSimilarity
     parameters.Add(limit);
     var limitParam = parameters.Count;
 
+    var usesIndex = threshold > 0;
+    var indexed = usesIndex ? "c.question % $1 and " : string.Empty;
     var sql = $"""
       select c.id, c.deck_id, d.slug, c.stable_uid, c.question, similarity(c.question, $1) as sim
       from cards c
       join decks d on d.id = c.deck_id
-      where {where} and similarity(c.question, $1) >= ${thresholdParam}
+      where {where} and {indexed}similarity(c.question, $1) >= ${thresholdParam}
       order by sim desc, c.id asc
       limit ${limitParam}
       """;
+    return (sql, parameters, usesIndex);
+  }
+
+  /// <summary>Round-trip text for <c>set_config('pg_trgm.similarity_threshold', ...)</c> (a double GUC).</summary>
+  internal static string ThresholdSetting(double threshold) => threshold.ToString("R", CultureInfo.InvariantCulture);
+
+  private static async Task<List<SimilarityMatch>> PgTrgmRowsAsync(
+    NpgsqlConnection conn, string text, SimilarityQuery query, int limit, double threshold, CancellationToken ct)
+  {
+    var (sql, parameters, usesIndex) = BuildPgTrgmQuery(text, query, limit, threshold);
 
     var matches = new List<SimilarityMatch>();
-    await using var cmd = DbUtil.CreateCommand(conn, null, sql, parameters);
-    await using var reader = await cmd.ExecuteReaderAsync(ct);
-    while (await reader.ReadAsync(ct))
+    // set_config(..., true) lasts until the end of this transaction, so the threshold never leaks into a pooled
+    // connection's next use. Neither caller holds a transaction on the connection.
+    await using var tx = await conn.BeginTransactionAsync(ct);
+    if (usesIndex)
     {
-      matches.Add(ToMatch(
-        reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2), reader.GetString(3), reader.GetString(4),
-        reader.GetFloat(5)));
+      await using var set = DbUtil.CreateCommand(conn, tx, "select set_config('pg_trgm.similarity_threshold', $1, true)", [ThresholdSetting(threshold)]);
+      await set.ExecuteScalarAsync(ct);
     }
+    await using (var cmd = DbUtil.CreateCommand(conn, tx, sql, parameters))
+    await using (var reader = await cmd.ExecuteReaderAsync(ct))
+    {
+      while (await reader.ReadAsync(ct))
+      {
+        matches.Add(ToMatch(
+          reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2), reader.GetString(3), reader.GetString(4),
+          reader.GetFloat(5)));
+      }
+    }
+    await tx.CommitAsync(ct);
     return matches;
   }
 

@@ -402,6 +402,8 @@ public static class Drafts
         $"""select {DraftColumns}, d.card, d."similar" as similar_json from ai_drafts d where d.id = $1""", [id.Value]);
       if (rows.Count == 0) return DraftNotFound(res);
       var r = rows[0];
+      // The agent client may read only the drafts its own subject submitted (AgentClientPolicy, ai-agent-6).
+      if (auth.IsAgentClient && !string.Equals(r["submitted_by_sub"] as string, auth.UserSub, StringComparison.Ordinal)) return DraftNotFound(res);
       var deckId = Long(r["deck_id"]);
 
       if (await LiveDeckAsync(conn, null, deckId) is null) return DeckNotFound(res);

@@ -54,6 +54,11 @@ create table if not exists ai_qa_items (
   constraint ck_ai_qa_items_status check (status in ('queued','done','error','refused','skipped'))
 );
 create index if not exists idx_ai_qa_items_card_hash on ai_qa_items(card_id, content_sha256, status);
+-- R18 X02 (ai-agent-16): an owner may waive an error/refused item; the publish gate then counts that card as
+-- reviewed at the item's content hash. Edited in place: 031 had not been applied anywhere.
+alter table ai_qa_items add column if not exists waived_by_sub text null;
+alter table ai_qa_items add column if not exists waived_at timestamptz null;
+alter table ai_qa_items add column if not exists waive_note text null;
 
 create table if not exists ai_qa_findings (
   id bigserial primary key,

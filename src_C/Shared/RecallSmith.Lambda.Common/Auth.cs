@@ -21,6 +21,12 @@ namespace RecallSmith.Lambda.Common;
 /// <see cref="Auth.RequireSuperAdmin"/> answer 403 "Requires a console token". Null when the
 /// binding passed or the claims never carried an admin group.
 /// </param>
+/// <param name="IsAgentClient">
+/// True when the token was minted for a local authoring-agent app client (<see cref="AuthOptions.AgentClientIds"/>,
+/// the <c>console-dev</c> client the MCP server signs in with). Such a token keeps its identity and roles, but
+/// core-vpc answers every route outside the agent allowlist with 403 <c>AGENT_CLIENT_FORBIDDEN</c> (R18 X02,
+/// ai-agent-6): agents draft, humans decide.
+/// </param>
 public sealed record AuthContext(
   IReadOnlyDictionary<string, JsonElement> Claims,
   string? UserSub,
@@ -30,7 +36,8 @@ public sealed record AuthContext(
   bool IsEditor,
   bool IsAdmin,
   string? RejectReason = null,
-  string? AdminDenyReason = null);
+  string? AdminDenyReason = null,
+  bool IsAgentClient = false);
 
 /// <summary>
 /// The two environment-driven knobs of bearer verification, parsed once per container.
@@ -52,7 +59,13 @@ public sealed record AuthContext(
 /// carry a matching <c>client_id</c> (access tokens) or <c>aud</c> (id tokens). Empty means the
 /// client check is off and only the issuer is enforced.
 /// </param>
-public sealed record AuthOptions(IReadOnlyList<string> Issuers, bool AllowUnverified, string? ConsoleIssuer = null, IReadOnlyList<string>? ConsoleClientIds = null)
+/// <param name="AgentClientIds">
+/// The app client ids whose tokens belong to a local authoring agent (AUTH_AGENT_CLIENT_IDS, defaulting to the
+/// <c>console-dev</c> client). A token carrying one of them as <c>client_id</c>/<c>aud</c> is least-authority
+/// (<see cref="AuthContext.IsAgentClient"/>). Null or empty only for a hand-built <see cref="AuthOptions"/>.
+/// </param>
+public sealed record AuthOptions(IReadOnlyList<string> Issuers, bool AllowUnverified, string? ConsoleIssuer = null, IReadOnlyList<string>? ConsoleClientIds = null,
+  IReadOnlyList<string>? AgentClientIds = null)
 {
   public const string IssuersEnv = "AUTH_ISSUERS";
   public const string AllowUnverifiedEnv = "AUTH_ALLOW_UNVERIFIED";
@@ -60,9 +73,13 @@ public sealed record AuthOptions(IReadOnlyList<string> Issuers, bool AllowUnveri
   public const string ConsoleIssuerEnv = "AUTH_CONSOLE_ISSUER";
   public const string ConsoleClientIdsEnv = "AUTH_CONSOLE_CLIENT_IDS";
   public const string DefaultConsolePool = "ap-southeast-2_4Vf8uCXKt";
+  public const string AgentClientIdsEnv = "AUTH_AGENT_CLIENT_IDS";
+  /// <summary>The console pool's <c>console-dev</c> app client (contract §10.3, infra/README.md), used by the local MCP server.</summary>
+  public const string DefaultAgentClientId = "5au94igdq00nipsst7spsqepb7";
 
   /// <summary>Pure: the whole policy as a function of its strings, so it can be tested without touching the process environment.</summary>
-  public static AuthOptions Parse(string? issuersEnv, string? allowUnverifiedEnv, string? apiEnv, string? consoleIssuerEnv = null, string? consoleClientIdsEnv = null)
+  public static AuthOptions Parse(string? issuersEnv, string? allowUnverifiedEnv, string? apiEnv, string? consoleIssuerEnv = null, string? consoleClientIdsEnv = null,
+    string? agentClientIdsEnv = null)
   {
     var issuers = CognitoJwtVerifier.ParseIssuers(issuersEnv);
     var flagOn = string.Equals(allowUnverifiedEnv?.Trim(), "1", StringComparison.Ordinal);
@@ -73,24 +90,32 @@ public sealed record AuthOptions(IReadOnlyList<string> Issuers, bool AllowUnveri
     var consoleIssuer = CognitoJwtVerifier.NormalizeIssuer(
       string.IsNullOrWhiteSpace(consoleIssuerEnv) ? DefaultConsolePool : consoleIssuerEnv);
 
-    var consoleClientIds = (consoleClientIdsEnv ?? string.Empty)
-      .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-      .Distinct(StringComparer.Ordinal)
-      .ToList();
+    var consoleClientIds = SplitIds(consoleClientIdsEnv);
+
+    // Fail closed like the console issuer: an unset or blank AUTH_AGENT_CLIENT_IDS still restricts console-dev.
+    var agentClientIds = SplitIds(agentClientIdsEnv);
+    if (agentClientIds.Count == 0) agentClientIds = [DefaultAgentClientId];
 
     return new AuthOptions(
       issuers,
       AllowUnverified: flagOn && !isProduction,
       ConsoleIssuer: consoleIssuer,
-      ConsoleClientIds: consoleClientIds);
+      ConsoleClientIds: consoleClientIds,
+      AgentClientIds: agentClientIds);
   }
+
+  private static List<string> SplitIds(string? raw) => (raw ?? string.Empty)
+    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+    .Distinct(StringComparer.Ordinal)
+    .ToList();
 
   public static AuthOptions FromEnvironment() => Parse(
     Environment.GetEnvironmentVariable(IssuersEnv),
     Environment.GetEnvironmentVariable(AllowUnverifiedEnv),
     Environment.GetEnvironmentVariable(ApiEnvEnv),
     Environment.GetEnvironmentVariable(ConsoleIssuerEnv),
-    Environment.GetEnvironmentVariable(ConsoleClientIdsEnv));
+    Environment.GetEnvironmentVariable(ConsoleClientIdsEnv),
+    Environment.GetEnvironmentVariable(AgentClientIdsEnv));
 }
 
 public readonly record struct InternalSignatureVerifyResult(bool Ok, string? Reason);
@@ -403,6 +428,9 @@ public static class Auth
       }
     }
 
+    var isAgentClient = Options.AgentClientIds is { Count: > 0 } agentIds &&
+      GetClientClaims(claims).Any(c => agentIds.Contains(c, StringComparer.Ordinal));
+
     var userSub = GetStringClaim(claims, "sub");
     var username =
       GetStringClaim(claims, "cognito:username") ??
@@ -417,7 +445,8 @@ public static class Auth
       IsEditor: isEditor,
       IsAdmin: isAdmin,
       RejectReason: rejectReason,
-      AdminDenyReason: adminDenyReason);
+      AdminDenyReason: adminDenyReason,
+      IsAgentClient: isAgentClient);
   }
 
   /// <summary>
