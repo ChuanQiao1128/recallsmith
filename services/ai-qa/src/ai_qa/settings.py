@@ -44,6 +44,14 @@ SECOND_SCOPES: dict[str, frozenset[str]] = {
     "all": frozenset(CATEGORIES),
 }
 
+# The automation reviewer (README, "Automation profile (R18A)"): used for messages with
+# "profile": "automation". Off unless AI_QA_AUTOMATION_PROVIDER is set. Its prices have no defaults;
+# an unset price is a CONFIG error for the profile (profiles.settings_for), never at load time.
+AUTOMATION_PROVIDER_ENV = "AI_QA_AUTOMATION_PROVIDER"
+AUTOMATION_MODEL_ENV = "AI_QA_AUTOMATION_MODEL"
+AUTOMATION_PRICE_INPUT_ENV = "AI_QA_AUTOMATION_PRICE_INPUT_PER_MTOK"
+AUTOMATION_PRICE_OUTPUT_ENV = "AI_QA_AUTOMATION_PRICE_OUTPUT_PER_MTOK"
+
 DEFAULTS: dict[str, str] = {
     "AI_PROVIDER": "bedrock",
     "AI_BEDROCK_REGION": "ap-southeast-2",
@@ -92,6 +100,10 @@ class Settings:
     second_scope: frozenset[str] = SECOND_SCOPES["facts"]
     second_price_input_per_mtok: float | None = None
     second_price_output_per_mtok: float | None = None
+    automation_provider: str | None = None
+    automation_model: str | None = None
+    automation_price_input_per_mtok: float | None = None
+    automation_price_output_per_mtok: float | None = None
 
 
 def is_truthy(value: str | None) -> bool:
@@ -151,6 +163,7 @@ def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
         log_level=get("LOG_LEVEL").lower(),
         max_receives=_max_receives(env.get(MAX_RECEIVES_ENV)),
         **_second_opinion(env),
+        **_automation(env),
     )
 
 
@@ -193,6 +206,21 @@ def _second_opinion(env: Mapping[str, str]) -> dict[str, Any]:
         "second_scope": scope,
         "second_price_input_per_mtok": _optional_price(env, SECOND_PRICE_INPUT_ENV),
         "second_price_output_per_mtok": _optional_price(env, SECOND_PRICE_OUTPUT_ENV),
+    }
+
+
+def _automation(env: Mapping[str, str]) -> dict[str, Any]:
+    """The automation-reviewer fields; empty (unset) unless AI_QA_AUTOMATION_PROVIDER is set."""
+    provider = (env.get(AUTOMATION_PROVIDER_ENV) or "").strip().lower()
+    if not provider:
+        return {}
+    if provider not in PROVIDERS:
+        raise ConfigError(f"{AUTOMATION_PROVIDER_ENV} must be empty or one of {', '.join(PROVIDERS)}")
+    return {
+        "automation_provider": provider,
+        "automation_model": _model(AUTOMATION_MODEL_ENV, provider, env.get(AUTOMATION_MODEL_ENV)),
+        "automation_price_input_per_mtok": _optional_price(env, AUTOMATION_PRICE_INPUT_ENV),
+        "automation_price_output_per_mtok": _optional_price(env, AUTOMATION_PRICE_OUTPUT_ENV),
     }
 
 
