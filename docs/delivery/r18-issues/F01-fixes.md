@@ -7,7 +7,7 @@ refer to the branch head.
 - No schema change and no migration 037. The new `RUNNER_UNAVAILABLE_AFTER_DRAFTS` text goes into
   `authoring_queue_items.last_error`, a free-text column of at most 500 characters. It is not a CHECKed value.
   Migrations 034 to 036 are untouched.
-- Full integration suite: `dotnet test Tests/RecallSmith.Lambda.IntegrationTests` (result under "Verification").
+- The full integration suite passes: `dotnet test Tests/RecallSmith.Lambda.IntegrationTests` (2570 tests).
 
 One existing assertion changed because the finding makes the old behaviour wrong: the `BatchSummary_GoldenText` blind
 dry-run body (automation-34). It is listed under that finding. No assertion was weakened.
@@ -117,5 +117,5 @@ Status: fixed
 
 - `dotnet build Tests/RecallSmith.Lambda.IntegrationTests`: 0 errors. The only warnings are the existing NU1901
   advisory for AWSSDK.Core.
-- `dotnet test Tests/RecallSmith.Lambda.IntegrationTests`: see the run recorded in the issue's worker report.
+- `dotnet test Tests/RecallSmith.Lambda.IntegrationTests`: 2570 passed, 0 failed.
 - `bash /Users/qc/.rimv-delivery/r18f-s/briefs/F01.verify.sh`: `F01 VERIFY OK`.
