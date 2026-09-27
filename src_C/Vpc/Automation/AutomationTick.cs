@@ -691,7 +691,7 @@ public static class AutomationTick
         select
           coalesce((select sum(estimated_cost_usd) from ai_qa_runs where created_at >= $1 and created_at < $2 and requested_by_sub <> 'automation'), 0) as human,
           coalesce((select sum(estimated_cost_usd) from ai_qa_runs where created_at >= $1 and created_at < $2 and requested_by_sub = 'automation'), 0)
-          + coalesce((select sum(estimated_cost_usd) from automation_draft_decisions where created_at >= $1 and created_at < $2), 0) as automation
+          + coalesce((select sum(estimated_cost_usd) from automation_qa_spend where spent_at >= $1 and spent_at < $2), 0) as automation
         """, [start, end]))[0];
       var pendingHuman = Long(await DbUtil.ExecuteScalarAsync(conn, null,
         """

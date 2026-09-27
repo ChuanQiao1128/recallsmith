@@ -161,8 +161,8 @@ public static class StatusRoutes
       var perCard = QaRuns.DecimalEnv(QaRuns.EstUsdPerCardEnv, QaRuns.DefaultEstUsdPerCard);
       var automationToday = await DbUtil.ExecuteScalarAsync(conn, null,
         """
-        select coalesce(sum(estimated_cost_usd), 0) from automation_draft_decisions
-        where created_at >= date_trunc('day', now(), 'UTC')
+        select coalesce(sum(estimated_cost_usd), 0) from automation_qa_spend
+        where spent_at >= date_trunc('day', now(), 'UTC')
         """, []);
       var spend = new
       {

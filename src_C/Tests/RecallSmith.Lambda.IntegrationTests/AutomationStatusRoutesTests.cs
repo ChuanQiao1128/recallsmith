@@ -229,6 +229,13 @@ public sealed class AutomationStatusRoutesTests
           {createdAt}, {createdAt}, case when $5 in ('would_accept', 'auto_accepted', 'human', 'superseded') then {createdAt} end)
         """,
         draftId, runId, deckId, mode, state, reason, qa ? Guid.NewGuid() : null, cost, acceptedCardId, humanAction);
+      // The spend, dated like the decision (R18B backend-design-4: spend is read from automation_qa_spend).
+      if (cost > 0)
+      {
+        await QueryAsync(
+          $"insert into automation_qa_spend (qa_job_id, request_key, draft_id, estimated_cost_usd, spent_at) values ($1, '', $2, $3, {createdAt})",
+          Guid.NewGuid(), draftId, cost);
+      }
       return draftId;
     }
   }
