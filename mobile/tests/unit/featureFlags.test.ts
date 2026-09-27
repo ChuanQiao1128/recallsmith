@@ -82,6 +82,7 @@ describe('feature flags', () => {
       paywall: { hidden: false },
       ceremony: { seamOfLight: true, forceFallback: false },
       mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook,
+      cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
     });
     expect(Object.isFrozen(getFeatureFlags())).toBe(true);
     expect(Object.isFrozen(getFeatureFlags().mcq)).toBe(true);
@@ -112,6 +113,7 @@ describe('feature flags', () => {
       paywall: { hidden: true },
       ceremony: DEFAULT_FEATURE_FLAGS.ceremony,
       mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook,
+      cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
     });
   });
 
@@ -121,6 +123,7 @@ describe('feature flags', () => {
       paywall: { hidden: true },
       ceremony: DEFAULT_FEATURE_FLAGS.ceremony,
       mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook,
+      cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
     });
 
     expect(applyRemoteFeatures({ features: { mcq: { maxPerRun: 0 } } })).toEqual({
@@ -133,6 +136,7 @@ describe('feature flags', () => {
       paywall: DEFAULT_FEATURE_FLAGS.paywall,
       ceremony: DEFAULT_FEATURE_FLAGS.ceremony,
       mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook,
+      cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
     });
   });
 
@@ -147,7 +151,7 @@ describe('feature flags', () => {
           },
         }),
       ),
-    ).toEqual({ mcq: DEFAULT_FEATURE_FLAGS.mcq, paywall: { hidden: true }, ceremony: DEFAULT_FEATURE_FLAGS.ceremony, mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook });
+    ).toEqual({ mcq: DEFAULT_FEATURE_FLAGS.mcq, paywall: { hidden: true }, ceremony: DEFAULT_FEATURE_FLAGS.ceremony, mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook, cardSource: DEFAULT_FEATURE_FLAGS.cardSource });
     expect(
       applyRemoteFeatures(
         asRemoteConfig({
@@ -162,6 +166,7 @@ describe('feature flags', () => {
       paywall: DEFAULT_FEATURE_FLAGS.paywall,
       ceremony: DEFAULT_FEATURE_FLAGS.ceremony,
       mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook,
+      cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
     });
 
     expect(
@@ -178,7 +183,7 @@ describe('feature flags', () => {
           },
         }),
       ),
-    ).toEqual({ mcq: DEFAULT_FEATURE_FLAGS.mcq, paywall: { hidden: true }, ceremony: DEFAULT_FEATURE_FLAGS.ceremony, mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook });
+    ).toEqual({ mcq: DEFAULT_FEATURE_FLAGS.mcq, paywall: { hidden: true }, ceremony: DEFAULT_FEATURE_FLAGS.ceremony, mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook, cardSource: DEFAULT_FEATURE_FLAGS.cardSource });
 
     for (const maxPerRun of [null, 1.5, -1, Number.NaN]) {
       expect(
@@ -240,6 +245,7 @@ describe('feature flags', () => {
       paywall: { hidden: true },
       ceremony: DEFAULT_FEATURE_FLAGS.ceremony,
       mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook,
+      cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
     });
 
     await unmount(tree);
@@ -270,6 +276,7 @@ describe('feature flags', () => {
       paywall: { hidden: true },
       ceremony: DEFAULT_FEATURE_FLAGS.ceremony,
       mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook,
+      cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
     });
 
     await unmount(tree);

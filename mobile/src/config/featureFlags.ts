@@ -19,6 +19,8 @@ export type FeatureFlags = {
   // K02: hides the Mistake Book entry points (recording continues regardless); relatedCount =
   // related cards added to a focus run, integer 0..5.
   mistakeBook: { enabled: boolean; relatedCount: number };
+  // K03: hides the Source row under an opened answer on CardDetail.
+  cardSource: { enabled: boolean };
 };
 
 export const DEFAULT_FEATURE_FLAGS: FeatureFlags = Object.freeze({
@@ -33,6 +35,7 @@ export const DEFAULT_FEATURE_FLAGS: FeatureFlags = Object.freeze({
   }),
   ceremony: Object.freeze({ seamOfLight: true, forceFallback: false }),
   mistakeBook: Object.freeze({ enabled: true, relatedCount: 3 }),
+  cardSource: Object.freeze({ enabled: true }),
 });
 
 let snapshot = DEFAULT_FEATURE_FLAGS;
@@ -53,6 +56,7 @@ function snapshotsEqual(left: FeatureFlags, right: FeatureFlags): boolean {
     && left.ceremony.forceFallback === right.ceremony.forceFallback
     && left.mistakeBook.enabled === right.mistakeBook.enabled
     && left.mistakeBook.relatedCount === right.mistakeBook.relatedCount
+    && left.cardSource.enabled === right.cardSource.enabled
   );
 }
 
@@ -77,6 +81,8 @@ export function applyRemoteFeatures(config: RemoteConfig | null | undefined): Fe
   const ceremony = isRecord(remoteCeremony) ? remoteCeremony : undefined;
   const remoteMistakeBook = features?.mistakeBook;
   const mistakeBook = isRecord(remoteMistakeBook) ? remoteMistakeBook : undefined;
+  const remoteCardSource = features?.cardSource;
+  const cardSource = isRecord(remoteCardSource) ? remoteCardSource : undefined;
 
   const maxPerRun = mcq?.maxPerRun;
   const relatedCount = mistakeBook?.relatedCount;
@@ -127,6 +133,12 @@ export function applyRemoteFeatures(config: RemoteConfig | null | undefined): Fe
           && relatedCount <= 5
           ? relatedCount
           : DEFAULT_FEATURE_FLAGS.mistakeBook.relatedCount,
+    }),
+    cardSource: Object.freeze({
+      enabled:
+        typeof cardSource?.enabled === 'boolean'
+          ? cardSource.enabled
+          : DEFAULT_FEATURE_FLAGS.cardSource.enabled,
     }),
   });
 
