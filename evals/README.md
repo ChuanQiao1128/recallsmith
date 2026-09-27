@@ -39,10 +39,12 @@ evals/
   data/authored-v1.jsonl         Q03: agent-authored cards (dc-evals author; owner's machine only)
   data/authored-v1.labels.jsonl  Q03: jury votes and labels (dc-evals jury), + .labels.summary.json
   data/authored-sources-v2.json  A15: the 60 official documentation pages of the automation gate set
-  data/authored-v2.jsonl         A15: its agent-authored cards (dc-evals author --dataset authored-v2)
+  data/authored-sources-v2-new-facts.json  B06: the 18 announcement / release-notes pages of its new-facts stratum
+  data/authored-v2.jsonl         A15: its agent-authored cards (docs: dc-evals author --dataset authored-v2;
+                                 B06 new-facts: dc-evals import-drafts from the author-runner's drafts)
   data/authored-v2.labels.jsonl  A15: its jury labels (dc-evals jury --dataset authored-v2), + .labels.summary.json
   src/dc_evals/                  cli, dataset, sources, seed, mutations, runner, score, report,
-                                 author, jury, compare, automation_gate
+                                 author, jury, compare, automation_gate, drafts_import
   reports/                       run files and reports (the owner commits them)
   tests/                         pytest with a FakeLlm; no test calls a model
 ```
@@ -278,12 +280,14 @@ uv run --python 3.12 dc-evals seed [--dataset v1|v2|v3] [--check]
 uv run --python 3.12 dc-evals run --provider bedrock|anthropic|bedrock-converse|claude-cli --model <id> \
     [--second-provider bedrock-converse|bedrock|anthropic --second-model <id> [--second-scope facts|all|<list>]] \
     [--dataset v3|v2|v1|authored-v1|authored-v2] [--reps 2] [--limit N] [--concurrency 4] [--max-cost-usd 30] \
-    [--review-date YYYY-MM-DD] [--dry-run] --out reports/
+    [--review-date YYYY-MM-DD] [--profile default|automation] [--dry-run] --out reports/
 uv run --python 3.12 dc-evals score reports/<stem>.jsonl [--gate] [--adjudications data/adjudications-v3.json]
 uv run --python 3.12 dc-evals author [--dataset authored-v1|authored-v2] [--model claude-opus-5-5] \
     [--sources data/authored-sources-v1.json] [--output data/authored-v1.jsonl] [--limit N]
 uv run --python 3.12 dc-evals jury [--dataset authored-v1|authored-v2] [--jurors provider:model,...] \
     [--input data/authored-v1.jsonl] [--output data/authored-v1.labels.jsonl] [--limit N]
+uv run --python 3.12 dc-evals import-drafts --drafts <drafts>.jsonl --deck <deckId>=<deckSlug> ... \
+    [--output data/authored-v2.jsonl]
 uv run --python 3.12 dc-evals automation-gate --seeded reports/<v3 run>.jsonl --authored reports/<authored-v2 run>.jsonl \
     [--date YYYY-MM-DD] [--out reports/]
 uv run --python 3.12 dc-evals compare reports/<run>.jsonl ... --name <name> [--date YYYY-MM-DD] [--out reports/]
@@ -476,24 +480,48 @@ so the authored-v1 figures stay independent of the labels.
 
 `AUTOMATION_MODE=live` (A00 §3.2) is effective only with a passed, recorded eval gate (A00 §15).
 The gate measures the **exact** automation reviewer: provider `bedrock-converse`, model
-`global.openai.gpt-5.5`, the current ai_qa `PROMPT_VERSION`, no second reviewer. It checks (a) its
-recall on seeded serious defects and (b) its **auto-accept precision** on agent-authored cards:
-of the cards it would accept (scored, no blocker or major finding), how many the jury labelled
-correct. `src/dc_evals/automation_gate.py`; nothing in it calls a model.
+`global.openai.gpt-5.5`, the **automation profile** (prompt version `qa-v4-auto`, R18B contract K1),
+no second reviewer. It checks (a) its recall on seeded serious defects and (b) its **auto-accept
+precision** on agent-authored cards: of the cards it would accept (scored, no blocker or major
+finding), how many the jury labelled correct, overall and on the new-facts stratum on its own.
+`src/dc_evals/automation_gate.py`; nothing in it calls a model.
+
+The automation profile (`dc-evals run --profile automation`) reviews with ai_qa
+`SYSTEM_PROMPT_AUTOMATION` under `PROMPT_VERSION_AUTOMATION` (`qa-v4-auto`): the default prompt plus
+an addendum that sends a claim neither `source.quote` supports nor the reviewer can confirm to
+`source_unsupported` (major), never to a minor finding, because under automation a minor finding
+means auto-accept. `run` swaps the system prompt of every review request (`runner.SystemPromptClient`)
+and refuses to start when ai_qa has no automation prompt of that version; it records
+`"promptVersion": "qa-v4-auto", "profile": "automation"` in the run header (a default-profile header
+is unchanged and has no `profile` key). The automation reviewer runs alone, so `--profile automation`
+refuses `--second-provider`.
 
 Datasets:
 
 - `seeded-v3` — the rollout gate dataset above, for defect recall (scored as `dc-evals score` does,
   with the committed adjudication labels).
-- `authored-v2` — cards the production skill authors through `dc-evals author --dataset authored-v2`
-  from `data/authored-sources-v2.json` (60 official documentation pages from the source pool: 30
-  `docs.aws.amazon.com` pages for `aws-saa-c03`, then 30 `platform.claude.com/docs` pages for
-  `claude-ccdv-f`, each with a `content/decks/FORMAT.md` §5 TOPIC label), labelled by the Q03 jury
-  (`dc-evals jury --dataset authored-v2`; the default jurors include no OpenAI model, so the reviewer
-  never judges its own vendor's labels). Files `data/authored-v2.jsonl`,
-  `data/authored-v2.labels.jsonl`, `data/authored-v2.labels.summary.json`; the owner's paid runs
-  create them. Scorable rows follow Q03 label rule 5: `correct` = control, `defective` with a seeded
-  class = that defect, anything else left out. The labels are model-jury labels, never human labels.
+- `authored-v2` — agent-authored cards in two strata, labelled by the Q03 jury (`dc-evals jury
+  --dataset authored-v2`; the default jurors include no OpenAI model, so the reviewer never judges
+  its own vendor's labels). Files `data/authored-v2.jsonl`, `data/authored-v2.labels.jsonl`,
+  `data/authored-v2.labels.summary.json`; the owner's paid runs create them. Scorable rows follow Q03
+  label rule 5: `correct` = control, `defective` with a seeded class = that defect, anything else
+  left out. The labels are model-jury labels, never human labels, by default (the owner's decision:
+  the gate is fully automated); see "Owner-adjudicated sample" for the optional human check.
+  - **docs** — cards `dc-evals author --dataset authored-v2` writes from `data/authored-sources-v2.json`
+    (60 established documentation pages from the source pool: 30 `docs.aws.amazon.com` pages for
+    `aws-saa-c03`, then 30 `platform.claude.com/docs` pages for `claude-ccdv-f`, each with a
+    `content/decks/FORMAT.md` §5 TOPIC label). This is **not** the production authoring path: `author`
+    is a single-shot, tool-less Claude CLI call over pre-picked chunks with the skill's rules inlined,
+    without `read_source`, `find_similar_cards`, `lint_card`, `submit_draft` or the verifier subagent.
+    Rows without a `stratum` key are docs rows.
+  - **new-facts** — drafts the production path writes (the author-runner's queue-item prompt and
+    CLAUDE args, the author-cards skill with its tools and verifier) from the 18 official
+    announcement and release-notes pages of `data/authored-sources-v2-new-facts.json` (10 AWS What's
+    New posts for `aws-saa-c03`; Claude Developer Platform release notes, model "what's new" pages,
+    feature pages the release notes link and one Anthropic announcement for `claude-ccdv-f`): the
+    post-cutoff input the runner actually sees. Imported with `dc-evals import-drafts` (below); each
+    row carries `"stratum": "new-facts"`, `"authorPath": "author-runner"` and the draft's `runId`,
+    `skillVersion`, `queueItemId` and `draftId`.
 
 Owner only (spends money; never CI, a verify or a worker session), each `run` with `--dry-run`
 first, and with `AI_PRICE_INPUT_PER_MTOK` / `AI_PRICE_OUTPUT_PER_MTOK` exported to the automation
@@ -501,17 +529,43 @@ prices so the recorded cost is real:
 
 ```
 cd evals
-uv run --python 3.12 dc-evals author --dataset authored-v2      # local Claude CLI; data/authored-v2.jsonl
-uv run --python 3.12 dc-evals jury --dataset authored-v2        # the labels + summary
+uv run --python 3.12 dc-evals author --dataset authored-v2      # docs stratum; local Claude CLI; data/authored-v2.jsonl
+# new-facts stratum: the production runner path against a sandbox deck (next section), then
+uv run --python 3.12 dc-evals import-drafts --drafts <drafts>.jsonl --deck <deckId>=aws-saa-c03 \
+    --deck <deckId>=claude-ccdv-f                                # appends the new-facts rows
+uv run --python 3.12 dc-evals jury --dataset authored-v2        # the labels + summary, both strata
 export AI_PRICE_INPUT_PER_MTOK=<automation input price> AI_PRICE_OUTPUT_PER_MTOK=<automation output price>
 for ds in v3 authored-v2; do
   uv run --python 3.12 dc-evals run --provider bedrock-converse --model global.openai.gpt-5.5 \
-      --dataset $ds --reps 2 --out reports/ --dry-run
+      --profile automation --dataset $ds --reps 2 --out reports/ --dry-run
   uv run --python 3.12 dc-evals run --provider bedrock-converse --model global.openai.gpt-5.5 \
-      --dataset $ds --reps 2 --out reports/
+      --profile automation --dataset $ds --reps 2 --out reports/
 done
 uv run --python 3.12 dc-evals automation-gate --seeded reports/<v3 run>.jsonl --authored reports/<authored-v2 run>.jsonl
 ```
+
+### New-facts stratum (owner, local)
+
+The new-facts drafts come from the same code path the automation runs, never from `dc-evals author`:
+
+1. On a **sandbox** stack (never production) with `AUTOMATION_MODE=off`, so no draft is decided or
+   published, and with the two decks present, queue every page of
+   `data/authored-sources-v2-new-facts.json` on its deck with `POST /api/v1/admin/automation/queue`
+   `{ "url", "deckId", "title" }` (the file's `title`). The admin route creates `manual` items; the
+   queue-item prompt, CLAUDE args, MCP tools, skill and verifier are the runner's own.
+2. Run the author-runner (`node tools/author-runner/dist/index.js once`, pointed at the sandbox) until
+   the queue is drained. Each run drafts with `read_source`, `find_similar_cards`, `lint_card` and
+   `submit_draft`, exactly as in production.
+3. Save each resulting draft's `GET /api/v1/authoring/drafts/:draftId` response as one line of a JSONL
+   file, and run `dc-evals import-drafts --drafts <file> --deck <deckId>=<deckSlug> ...`. It re-reads
+   each cited page with dc-ingest and keeps the chunk holding the card's quote (the jury judges the
+   card against it), leaves out and reports (exit 1) any draft without `agent.runId`, with an unmapped
+   deck or whose quote is in no chunk, replaces earlier new-facts rows and keeps every docs row.
+
+The gate needs this stratum: without new-facts rows, with a new-facts row that is not from the
+runner, with fewer than 30 distinct would-accept new-facts cards, or with new-facts precision below
+0.97, it fails closed. Add pages to the source file (or rerun with more `maxCards`) when the stratum is
+too small; never lower the minimum.
 
 `automation-gate` takes the two `.jsonl` **run files** (not their `.json` reports) and writes
 `reports/<date>-automation-gate-<model>.json` and `.md` (`-2`, `-3`, … when taken; nothing is
@@ -522,7 +576,7 @@ or is not a run file (nothing written). `--date` defaults to UTC today, `--out` 
 | Check | Threshold |
 |---|---|
 | provider | in `{"bedrock-converse"}`, equal to `AI_QA_AUTOMATION_PROVIDER` |
-| model / prompt version | `AI_QA_AUTOMATION_MODEL` / ai_qa `PROMPT_VERSION`; no second reviewer; both runs the same reviewer |
+| model / prompt version | `AI_QA_AUTOMATION_MODEL` / `qa-v4-auto` with header `profile` `automation` (and ai_qa `PROMPT_VERSION_AUTOMATION`, when installed, equal to it); no second reviewer; both runs the same reviewer |
 | prices | `AI_QA_AUTOMATION_PRICE_INPUT_PER_MTOK`, `AI_QA_AUTOMATION_PRICE_OUTPUT_PER_MTOK` set and > 0 |
 | datasets | `seeded-v3` and `authored-v2`, sha256 of the committed files, complete runs, >= 2 reps each |
 | jury | the labels summary exists and no juror shares the reviewer's vendor |
@@ -534,6 +588,9 @@ or is not a run file (nothing written). `--date` defaults to UTC today, `--out` 
 | distinct would-accept cards | >= 120 |
 | defect escape rate (defective items it would accept) | <= 0.20; no defective item at all fails |
 | authored unscored rate | <= 0.05 |
+| new-facts stratum | present, every row from the author-runner, >= 30 distinct would-accept cards, precision >= 0.97 on its own |
+| jury excluded rate (ties + all-unsure rows / labelled rows) | <= 0.10 overall and in every stratum |
+| owner sample (optional) | when `data/adjudications-authored-v2.json` exists it must be valid; its figures are information |
 
 The report JSON has exactly the keys of A00 §15.4: `v` (1), `kind` (`automation-gate`),
 `createdAt`, `passed`, `failures`, `reviewer` {`provider`, `model`, `promptVersion`,
@@ -545,6 +602,31 @@ The report JSON has exactly the keys of A00 §15.4: `v` (1), `kind` (`automation
 `autoAcceptPrecisionCi95`, `defectiveLabeled`, `defectEscaped`, `defectEscapeRate`,
 `humanRouteRate`, `unscoredRate`, `estimatedCostUsd`}. Every rate is rounded to 4 decimals from its
 counts, so the server can recompute it.
+
+R18B (B06) appends, after those keys (the server reads only the keys above): `reviewer.profile`;
+thresholds `newFactsAutoAcceptPrecision`, `minNewFactsWouldAcceptCards`, `juryExcludedRate`; and in
+`authored`:
+
+- `juryExcluded` {`labelRows`, `tie`, `allUnsure`, `excludedRows`, `excludedRate`, `notScorable`} from
+  the labels file: the rows the jury could not decide, which are not in the run, so precision says
+  nothing about them (`notScorable` = defective rows without a seeded class, also left out; information).
+- `conservativeAutoAcceptPrecision` = `wouldAcceptCorrect / (wouldAccept + excludedRows x reps)`: the
+  precision if every excluded row had been accepted and wrong in every rep (information).
+- `strata` {`docs`, `new-facts`}: per stratum, `rows` plus every `authored` metric, its `juryExcluded`
+  and its conservative precision.
+- `ownerSample`: null, or the owner-adjudicated sample scored on its own (below).
+
+### Owner-adjudicated sample (optional)
+
+By default every authored-v2 label is a model-jury label. The owner may adjudicate a sample in
+`data/adjudications-authored-v2.json`, in the adjudication file format of `labels.py`
+(`{"format": 1, "dataset": "authored-v2", "datasetSha256": <sha256 of data/authored-v2.jsonl>,
+"labelSource": "owner", "verdicts": [{"id", "verdict", "adjudicator", "date", "note"}]}`), where for
+authored-v2 `valid` means the card is correct as written and `invalid` that it is defective. The gate
+scores it separately and shows it next to the jury result: `ownerAutoAcceptPrecision` (would-accept
+items of adjudicated cards judged valid / would-accept items of adjudicated cards) and
+`juryOwnerAgreement` (adjudicated cards the jury labelled whose label matches). An invalid file fails
+the gate; a valid one never passes or fails it by itself.
 
 The gate reads the four `AI_QA_AUTOMATION_*` keys from `services/ai-qa/env/prod.env.json` directly
 (never through `ai_qa.settings`). Until A07 adds the provider and model keys and the owner adds the
