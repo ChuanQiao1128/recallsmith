@@ -84,6 +84,8 @@ def test_truthy_flags_follow_route_metrics_rule() -> None:
 
 
 def test_prod_env_file_matches_contract() -> None:
+    import dataclasses
+
     data = json.loads(PROD_ENV.read_text())
     assert data == {
         "AI_PROVIDER": "bedrock",
@@ -99,10 +101,15 @@ def test_prod_env_file_matches_contract() -> None:
         "AI_PRICE_INPUT_PER_MTOK": "5",
         "AI_PRICE_OUTPUT_PER_MTOK": "25",
         "LOG_LEVEL": "info",
+        "AI_QA_AUTOMATION_PROVIDER": "bedrock-converse",  # the automation reviewer (A07)
+        "AI_QA_AUTOMATION_MODEL": "global.openai.gpt-5.5",
     }
     s = load_settings(data)
     assert s.enabled is False
-    assert s == load_settings({})  # the committed file is exactly the defaults
+    # The committed file is the defaults plus the automation reviewer (prices pending, README).
+    assert s == dataclasses.replace(
+        load_settings({}), automation_provider="bedrock-converse", automation_model="global.openai.gpt-5.5"
+    )
 
 
 def client_error(code: str) -> ClientError:

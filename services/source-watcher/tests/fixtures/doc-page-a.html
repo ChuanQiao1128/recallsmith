@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Queues guide</title>
+<style>body { font-family: sans-serif; }</style>
+<script>window.analytics = { page: "queues-a" };</script>
+</head>
+<body>
+<header><a href="/">Sample Docs</a> <form><input name="q"><button>Search</button></form></header>
+<nav><ul><li><a href="/queues">Queues</a></li><li><a href="/topics">Topics</a></li></ul></nav>
+<main>
+<h1>Visibility timeouts</h1>
+<p>When a consumer receives a message, the queue hides it from other consumers for the
+visibility timeout.</p>
+<p>If the consumer does not delete the message before the timeout expires, the message becomes visible again &amp; another consumer can receive it.</p>
+<ul>
+<li>Default timeout: 30 seconds</li>
+<li>Maximum timeout: 12 hours</li>
+</ul>
+<pre>receive --queue orders --wait 20</pre>
+</main>
+<aside>Related: dead-letter queues</aside>
+<footer>&copy; 2026 Sample Docs. Version A.</footer>
+<script>track("a");</script>
+</body>
+</html>
