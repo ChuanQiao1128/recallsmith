@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { clientDraftKey, type DraftCard } from '../src/draftCard';
-import { draftGrounding, groundQuote, SourceStore } from '../src/grounding';
+import { groundQuote, SourceStore, sourceGrounding } from '../src/grounding';
 import {
   callTool,
   connect,
@@ -114,7 +114,7 @@ describe('submit_draft citation grounding', () => {
     await client.close();
   });
 
-  it('sends the grounding of a local-file draft as kind local so the reviewer opens the canonical url (ai-agent-24)', async () => {
+  it('marks a local-file draft as kind local in the tool result and grounds it in card.source (ai-agent-24)', async () => {
     const canonical = 'https://docs.example.com/s3/retrieval';
     const localDoc = { ...ingestDoc(canonical, { sourceId: 'sid-local', chunks: [SAMPLE_CHUNK] }), path: '/repo/sources/s3-retrieval.pdf', fetchedAt: '2026-09-26T08:00:00Z' };
     api = await startFakeServer((req, res) =>
@@ -129,26 +129,14 @@ describe('submit_draft citation grounding', () => {
     const card = withSource(canonical, quote);
     const result = await callTool(client, 'submit_draft', { deckSlug: 'aws-saa-c03', drafts: [card] });
     expect(result.isError).toBe(false);
+    expect(JSON.parse(result.text).grounding).toMatchObject([{ sourceId: 'sid-local', url: canonical, kind: 'local' }]);
     const post = api.requests.find((r) => r.method === 'POST');
     expect(JSON.parse(post?.body ?? '').drafts).toEqual([
       {
         clientDraftKey: clientDraftKey(card),
-        card,
-        grounding: {
-          sourceId: 'sid-local',
-          chunkId: 'c0001',
-          matched: true,
-          quoteChars: quote.length,
-          kind: 'local',
-          url: canonical,
-          fetchedAt: '2026-09-26T08:00:00Z',
-          chunkCharStart: 0,
-          chunkCharEnd: SAMPLE_CHUNK.length,
-        },
+        card: { ...card, source: { url: canonical, quote, grounding: { chunkId: 'c0001', sourceId: 'sid-local', matched: true, quoteChars: quote.length } } },
       },
     ]);
-    // The grounding stays out of card.source, whose keys the API validates strictly.
-    expect(Object.keys(JSON.parse(post?.body ?? '').drafts[0].card.source)).toEqual(['url', 'quote']);
     await client.close();
   });
 
@@ -192,16 +180,12 @@ describe('SourceStore', () => {
 
     const check = web && groundQuote(web, 'second\nchunk');
     if (!web || !check?.ok) throw new Error('expected a grounded quote');
-    expect(draftGrounding(web, check.chunk, ' second\nchunk ')).toEqual({
-      sourceId: 'w1',
+    // Exactly the card.source.grounding shape of the cross-wave contract (ai-agent-24).
+    expect(sourceGrounding(web, check.chunk, ' second\nchunk ')).toEqual({
       chunkId: 'c0002',
+      sourceId: 'w1',
       matched: true,
       quoteChars: 'second chunk'.length,
-      kind: 'url',
-      url: 'https://web',
-      fetchedAt: '2026-09-27T00:00:00Z',
-      chunkCharStart: 13,
-      chunkCharEnd: 13 + '  second   chunk text '.length,
     });
   });
 });

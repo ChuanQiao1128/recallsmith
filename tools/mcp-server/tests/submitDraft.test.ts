@@ -87,6 +87,7 @@ describe('submit_draft', () => {
           chunkId: 'c0002',
           chunkCharStart: 30,
           chunkCharEnd: 30 + SAMPLE_CHUNK.length,
+          kind: 'url',
         },
         {
           stableUid: 'sample-mcq-choose-two-03',
@@ -96,6 +97,7 @@ describe('submit_draft', () => {
           chunkId: 'c0001',
           chunkCharStart: 0,
           chunkCharEnd: MCQ_CHUNK.length,
+          kind: 'url',
         },
       ],
     });
@@ -108,40 +110,29 @@ describe('submit_draft', () => {
     expect(post?.method).toBe('POST');
     expect(post?.headers.authorization).toBe(`Bearer ${TEST_ACCESS_TOKEN}`);
     expect(post?.headers['content-type']).toBe('application/json');
-    // Each draft entry carries its grounding next to `card` for the reviewer (ai-agent-24).
+    // Each card carries its grounding inside card.source for the reviewer (ai-agent-24, cross-wave contract).
+    const grounded = (card: DraftCard, grounding: Record<string, unknown>) => ({ ...card, source: { ...card.source, grounding } });
     expect(JSON.parse(post?.body ?? '')).toEqual({
       deckId: 12,
       agent: { name: 'developercards-mcp', model: 'claude-opus-5-5', skillVersion: '1.0.0' },
       drafts: [
         {
           clientDraftKey: clientDraftKey(cards[0] as DraftCard),
-          card: cards[0],
-          grounding: {
-            sourceId: 'sid-retrieval',
+          card: grounded(cards[0] as DraftCard, {
             chunkId: 'c0002',
+            sourceId: 'sid-retrieval',
             matched: true,
             quoteChars: 'standard retrieval finishes in 3 to 5 hours'.length,
-            kind: 'url',
-            url: 'https://example.com/s3/retrieval-options',
-            fetchedAt: '2026-09-27T00:00:00Z',
-            chunkCharStart: 30,
-            chunkCharEnd: 30 + SAMPLE_CHUNK.length,
-          },
+          }),
         },
         {
           clientDraftKey: clientDraftKey(cards[1] as DraftCard),
-          card: cards[1],
-          grounding: {
-            sourceId: 'sid-encryption',
+          card: grounded(cards[1] as DraftCard, {
             chunkId: 'c0001',
+            sourceId: 'sid-encryption',
             matched: true,
             quoteChars: 'deny any upload that does not request SSE-KMS'.length,
-            kind: 'url',
-            url: 'https://example.com/s3/encryption',
-            fetchedAt: '2026-09-27T00:00:00Z',
-            chunkCharStart: 0,
-            chunkCharEnd: MCQ_CHUNK.length,
-          },
+          }),
         },
       ],
     });
@@ -152,9 +143,40 @@ describe('submit_draft', () => {
     expect(api.requests).toHaveLength(3);
     expect(JSON.parse(api.requests[2]?.body ?? '')).toMatchObject({
       deckId: 12,
-      drafts: [{ clientDraftKey: clientDraftKey(sampleCard()), card: sampleCard(), grounding: { chunkId: 'c0002', matched: true } }],
+      drafts: [{ clientDraftKey: clientDraftKey(sampleCard()), card: { source: { grounding: { chunkId: 'c0002', matched: true } } } }],
     });
     expect(JSON.parse(api.requests[2]?.body ?? '')).not.toHaveProperty('agent');
+    await client.close();
+  });
+
+  it('sends card.source.grounding in exactly the cross-wave contract shape and nothing next to card (ai-agent-24)', async () => {
+    const client = await setup(happy);
+    const result = await callTool(client, 'submit_draft', { deckSlug: 'aws-saa-c03', drafts: [sampleCard(), sampleMcqCard()] });
+    expect(result.isError).toBe(false);
+    const body = JSON.parse(api.requests.find((r) => r.method === 'POST')?.body ?? '') as {
+      drafts: Array<Record<string, unknown> & { card: { source: Record<string, unknown> } }>;
+    };
+    for (const entry of body.drafts) {
+      // core-vpc reads clientDraftKey and card only; grounding lives in card.source (R18 Z-wave contract).
+      expect(Object.keys(entry).sort()).toEqual(['card', 'clientDraftKey']);
+      expect(Object.keys(entry.card.source).sort()).toEqual(['grounding', 'quote', 'url']);
+      const grounding = entry.card.source.grounding as Record<string, unknown>;
+      expect(Object.keys(grounding).sort()).toEqual(['chunkId', 'matched', 'quoteChars', 'sourceId']);
+      expect(typeof grounding.chunkId).toBe('string');
+      expect(typeof grounding.sourceId).toBe('string');
+      expect(grounding.matched).toBe(true);
+      expect(Number.isInteger(grounding.quoteChars)).toBe(true);
+    }
+    await client.close();
+  });
+
+  it('refuses a card whose source already carries grounding: only the server sets it (ai-agent-24)', async () => {
+    const client = await setup(happy);
+    const card = sampleCard();
+    const forged = { ...card, source: { ...card.source, grounding: { chunkId: 'c9999', sourceId: 'forged', matched: true, quoteChars: 50 } } };
+    const result = await callTool(client, 'submit_draft', { deckSlug: 'aws-saa-c03', drafts: [forged] });
+    expect(result.isError).toBe(true);
+    expect(api.requests).toEqual([]);
     await client.close();
   });
 
