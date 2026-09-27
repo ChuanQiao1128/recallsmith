@@ -7,7 +7,10 @@
 # The only place the SSM leaf name → env var name map is written (E00 §2.6.2).
 SSM_TO_ENV='{"pg-password":"PGPASSWORD","migrate-secret":"MIGRATE_SECRET","internal-shared-secret":"INTERNAL_SHARED_SECRET","rc-webhook-auth-production":"RC_WEBHOOK_AUTH_PRODUCTION","rc-webhook-auth-development":"RC_WEBHOOK_AUTH_DEVELOPMENT","analytics-salt":"ANALYTICS_USER_SALT"}'
 # Leaves read by a Python Lambda at cold start; they never become a core-vpc/worker env var (R18-00 §14 #8).
-SSM_NOT_ENV='["webhook-signing-secret","anthropic-api-key"]'
+# webhook-signing-secret-previous exists only while a signing-secret rotation is in progress (dispatcher
+# README runbook); deploy.sh reads the whole path, so it must be skipped here or every deploy in that
+# window fails (Y01 cloud-security-resilience-10).
+SSM_NOT_ENV='["webhook-signing-secret","webhook-signing-secret-previous","anthropic-api-key"]'
 WORKER_FILE_KEYS='["PGUSER","PGSSLMODE","PG_MAX","LOG_LEVEL","WEBHOOK_EVENTS_QUEUE_URL"]'
 WORKER_SECRET_KEYS='["PGPASSWORD"]'
 
