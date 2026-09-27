@@ -196,15 +196,11 @@ public sealed class AgentClientPolicyTests : IDisposable
       draftId = doc.RootElement.GetProperty("data").GetProperty("created")[0].GetProperty("draftId").GetInt64();
     }
 
-    // Its own draft's status is readable.
+    // Y02 (ai-agent-6 cross-wave contract): the MCP server never reads a draft back, so the agent token may not
+    // either, not even its own draft (X02 allowed that; the contract now limits the agent to the MCP's calls).
     var own = await CallAsync(Event("GET", $"/api/v1/authoring/drafts/{draftId}", Token(AgentClient, sub)));
-    Assert.Equal(200, own.StatusCode);
-
-    // A draft submitted by another subject is not: 404, the same answer as a missing draft.
-    await _db.QueryAsync("update ai_drafts set submitted_by_sub = $2 where id = $1", draftId, $"it-x02-other-{Guid.NewGuid():N}");
-    var other = await CallAsync(Event("GET", $"/api/v1/authoring/drafts/{draftId}", Token(AgentClient, sub)));
-    Assert.Equal(404, other.StatusCode);
-    Assert.Equal("DRAFT_NOT_FOUND", ErrorCode(other));
+    Assert.Equal(403, own.StatusCode);
+    Assert.Equal(AgentClientPolicy.ErrorCode, ErrorCode(own));
 
     // The console reviewer still reads it.
     var spa = await CallAsync(Event("GET", $"/api/v1/authoring/drafts/{draftId}", Token(SpaClient, sub)));
@@ -267,17 +263,55 @@ public sealed class AgentClientPolicyTests : IDisposable
   [InlineData("GET", "/api/v1/admin/decks", true)]
   [InlineData("GET", "/prod/api/v1/admin/decks", true)]
   [InlineData("POST", "/api/v1/admin/decks", false)]
-  [InlineData("GET", "/api/v1/authoring/decks", true)]
+  [InlineData("GET", "/api/v1/authoring/decks", false)]
   [InlineData("POST", "/api/v1/authoring/cards/similar", true)]
   [InlineData("POST", "/api/v1/authoring/drafts", true)]
   [InlineData("GET", "/api/v1/authoring/drafts", false)]
-  [InlineData("GET", "/api/v1/authoring/drafts/12", true)]
+  [InlineData("GET", "/api/v1/authoring/drafts/12", false)]
   [InlineData("POST", "/api/v1/authoring/drafts/12/accept", false)]
   [InlineData("GET", "/api/v1/authoring/drafts/12/accept", false)]
-  [InlineData("GET", "/health", true)]
+  [InlineData("GET", "/health", false)]
   [InlineData("POST", "/api/internal/ai-qa/results", false)]
   public void Allows_Table(string method, string path, bool expected)
   {
     Assert.Equal(expected, AgentClientPolicy.Allows(method, path));
+  }
+
+  /// <summary>
+  /// Cross-wave contract (Y02, ai-agent-6): the policy's allowed routes are exactly the endpoints the MCP server
+  /// calls. Reads tools/mcp-server/src and fails when the server gains a call the policy denies, or the policy keeps
+  /// a route the server no longer calls.
+  /// </summary>
+  [Fact]
+  public void Allows_ExactlyTheMcpServerEndpoints()
+  {
+    var src = Path.Combine(RepoRoot(), "tools", "mcp-server", "src");
+    var called = new HashSet<(string, string)>();
+    foreach (var file in Directory.EnumerateFiles(src, "*.ts", SearchOption.AllDirectories))
+    {
+      var text = File.ReadAllText(file);
+      foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(
+        text, @"'(GET|POST)'\s*,\s*[`'](/api/[^`'?$]+)"))
+      {
+        called.Add((m.Groups[1].Value, m.Groups[2].Value));
+      }
+    }
+
+    Assert.Equal(
+      new HashSet<(string, string)> { ("GET", "/api/v1/admin/decks"), ("POST", "/api/v1/authoring/cards/similar"), ("POST", "/api/v1/authoring/drafts") },
+      called);
+    Assert.All(called, c => Assert.True(AgentClientPolicy.Allows(c.Item1, c.Item2), $"{c.Item1} {c.Item2} is denied"));
+    foreach (var (method, path) in new[] { ("GET", "/health"), ("GET", "/api/v1/authoring/decks"), ("GET", "/api/v1/authoring/drafts/1"),
+      ("GET", "/api/v1/authoring/drafts"), ("POST", "/api/v1/authoring/publish"), ("POST", "/api/v1/authoring/qa/runs") })
+    {
+      Assert.False(AgentClientPolicy.Allows(method, path), $"{method} {path} is allowed but the MCP server never calls it");
+    }
+  }
+
+  private static string RepoRoot()
+  {
+    var dir = new DirectoryInfo(AppContext.BaseDirectory);
+    while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, "tools", "mcp-server"))) dir = dir.Parent;
+    return dir?.FullName ?? throw new DirectoryNotFoundException("repo root (tools/mcp-server) not found above the test output");
   }
 }

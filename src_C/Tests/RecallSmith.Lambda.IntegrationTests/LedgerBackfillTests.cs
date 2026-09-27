@@ -241,8 +241,9 @@ public class LedgerBackfillTests
         deckId, $"draft-{i}", $"d{i}", 100 + i, draftMinute.AddSeconds(i).UtcDateTime), CultureInfo.InvariantCulture);
       await _db.ScalarAsync(
         """
-        insert into ai_drafts (deck_id, batch_id, client_draft_key, stable_uid, status, card, submitted_by_sub, accepted_card_id)
-        values ($1, $2, $3, $4, 'accepted', '{}'::jsonb, 'it-x01', $5)
+        insert into ai_drafts (deck_id, batch_id, client_draft_key, stable_uid, status, card, submitted_by_sub, accepted_card_id,
+          decided_at, decided_by_sub)
+        values ($1, $2, $3, $4, 'accepted', '{}'::jsonb, 'it-x01', $5, now(), 'it-x01-editor')
         """,
         deckId, batch, $"k{i}", $"draft-{i}", cardId);
     }
