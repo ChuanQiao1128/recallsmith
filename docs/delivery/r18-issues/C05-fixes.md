@@ -2,7 +2,7 @@
 
 Issue #459. Scope: `tools/author-runner` (plus one sentence in `.claude/skills/author-cards/SKILL.md`).
 No server, schema or MCP-server change. `npm ci && npm run build && npm test` in
-`tools/author-runner`: 10 files, 58 tests, all green.
+`tools/author-runner`: 10 files, 52 tests, all passing (one intermittent unhandled `kill EPERM` from the existing ai-agent-6 kill-group test, `claude.ts` `killGroup`, predates this issue and is not changed here).
 
 ### ai-agent-13
 
