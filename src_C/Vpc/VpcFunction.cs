@@ -309,6 +309,27 @@ public sealed class VpcFunction
         var qaResolve = RouteMatcher.Match("/api/v1/authoring/qa/findings/:findingId/resolve", p);
         if (qaResolve is not null) return await Vpc.Qa.QaRuns.HandleResolveFinding(req, res, auth, qaResolve["findingId"]);
       }
+      // R18A — automation
+      if (p.EndsWith("/api/v1/authoring/automation/runner/heartbeat", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Automation.RunnerRoutes.HandleHeartbeat(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/authoring/automation/runner/claim", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Automation.RunnerRoutes.HandleClaim(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/authoring/automation/runner/complete", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Automation.RunnerRoutes.HandleComplete(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/admin/automation/queue", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Automation.QueueRoutes.HandleQueue(req, res, auth);
+      }
+      if (RouteMatcher.Match("/api/v1/admin/automation/queue/:itemId/skip", p) is { } queueSkip)
+      {
+        return await Vpc.Automation.QueueRoutes.HandleSkip(req, res, auth, queueSkip["itemId"]);
+      }
       // Runtime
       if (p.EndsWith("/api/v1/me", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))
       {
