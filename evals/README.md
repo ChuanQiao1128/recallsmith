@@ -86,7 +86,7 @@ therefore the dataset; a dataset change after a committed report means a new dat
 ```
 cd evals
 uv run --python 3.12 dc-evals seed [--check]
-uv run --python 3.12 dc-evals run --provider bedrock|anthropic --model <id> \
+uv run --python 3.12 dc-evals run --provider bedrock|anthropic|claude-cli --model <id> \
     [--limit N] [--concurrency 4] [--max-cost-usd 30] [--review-date YYYY-MM-DD] [--dry-run] --out reports/
 uv run --python 3.12 dc-evals score reports/<stem>.jsonl [--gate]
 ```
@@ -105,6 +105,14 @@ uv run --python 3.12 dc-evals score reports/<stem>.jsonl [--gate]
   gate result, cost, latency, errors).
 - `dc-evals score` prints the report JSON for a run file; with `--gate` it exits 1 unless overall
   recall ≥ 0.80 and precision ≥ 0.70 (and for a run with no items).
+
+- `--provider claude-cli` (local only) sends the same request through the owner's Claude Code CLI
+  (`claude -p`, their subscription, on their machine) with `--model claude-opus-5`: same
+  `SYSTEM_PROMPT`, same user turn, structured outputs off (the Bedrock path: validated plain JSON
+  and one repair turn). `claude -p` takes one prompt, so the repair turn is sent as one user
+  message quoting the rejected reply. Use it to measure the prompt before Bedrock model access
+  exists; its report is labelled `claude-cli` and never replaces the Bedrock run the rollout below
+  requires. `src/dc_evals/claude_cli.py`; tests fake the subprocess.
 
 Rollout (contract §7.9 step 3): dry run, real run into `evals/reports/`, `score … --gate`, then
 commit the `.json` + `.md` pair. Only after that may `AI_QA_ENABLED` be switched on.

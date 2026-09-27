@@ -34,7 +34,12 @@ def _parser() -> argparse.ArgumentParser:
     seed.add_argument("--output", type=Path, default=SEEDED_PATH, help=argparse.SUPPRESS)
 
     run = sub.add_parser("run", help="review the dataset with the real model (spends money; owner only)")
-    run.add_argument("--provider", required=True, choices=("bedrock", "anthropic"))
+    run.add_argument(
+        "--provider",
+        required=True,
+        choices=("bedrock", "anthropic", "claude-cli"),
+        help="claude-cli = the owner's local Claude Code CLI (their subscription, this machine only)",
+    )
     run.add_argument("--model", required=True)
     run.add_argument("--limit", type=int, default=None, help="review only the first N rows")
     run.add_argument("--concurrency", type=int, default=4)
@@ -61,8 +66,13 @@ def _run(args: argparse.Namespace) -> int:
     from ai_qa.providers import make_client
     from ai_qa.settings import ConfigError, load_settings
 
+    local_cli = args.provider == "claude-cli"
+    env = {**os.environ, "AI_PROVIDER": "anthropic" if local_cli else args.provider, "AI_MODEL": args.model}
+    if local_cli:
+        env["AI_STRUCTURED_OUTPUTS"] = "off"  # the Bedrock path: validated plain JSON + one repair turn
+    provider_label = args.provider
     try:
-        settings = load_settings({**os.environ, "AI_PROVIDER": args.provider, "AI_MODEL": args.model})
+        settings = load_settings(env)
     except ConfigError as exc:
         print(f"dc-evals: {exc}", file=sys.stderr)
         return 2
@@ -90,7 +100,12 @@ def _run(args: argparse.Namespace) -> int:
     from .runner import run_eval
 
     try:
-        client = make_client(settings, api_key=os.environ.get("ANTHROPIC_API_KEY"))
+        if local_cli:
+            from .claude_cli import ClaudeCliClient
+
+            client = ClaudeCliClient(settings.model)
+        else:
+            client = make_client(settings, api_key=os.environ.get("ANTHROPIC_API_KEY"))
     except ConfigError as exc:
         print(f"dc-evals: {exc}", file=sys.stderr)
         return 2
@@ -107,12 +122,12 @@ def _run(args: argparse.Namespace) -> int:
     header = run_header(
         run_id=str(uuid.uuid4()),
         started_at=started.isoformat().replace("+00:00", "Z"),
-        provider=settings.provider,
+        provider=provider_label,
         model=settings.model,
         prompt_version=PROMPT_VERSION,
         n=len(records),
     )
-    stem = file_stem(started.date().isoformat(), settings.provider, settings.model, PROMPT_VERSION)
+    stem = file_stem(started.date().isoformat(), provider_label, settings.model, PROMPT_VERSION)
     paths = write_run_files(args.out, stem, header, records)
     if len(records) < len(rows):
         print(f"stopped at the ${args.max_cost_usd:.2f} cost ceiling after {len(records)} of {len(rows)} rows")
