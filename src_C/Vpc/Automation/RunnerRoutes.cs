@@ -43,6 +43,13 @@ public static class RunnerRoutes
   /// </summary>
   public const string RunnerUnavailableRepeated = "RUNNER_UNAVAILABLE_REPEATED";
 
+  /// <summary>
+  /// The <c>last_error</c> prefix of an item whose run stopped with <c>RUNNER_UNAVAILABLE</c> after it had submitted drafts
+  /// (R18F F01, ai-agent-23): the item is finished as <c>done</c> with its attempt kept, not refunded and requeued, because
+  /// the next run would author the same page again next to the pending drafts it cannot see.
+  /// </summary>
+  public const string RunnerUnavailableAfterDrafts = "RUNNER_UNAVAILABLE_AFTER_DRAFTS";
+
   /// <summary>From this many consecutive <c>RUNNER_UNAVAILABLE</c> completes of one item on, the item fails (N3).</summary>
   public const int MaxRunnerUnavailableCompletes = 3;
 
@@ -370,11 +377,25 @@ public static class RunnerRoutes
               where id = $1
               """, [itemId]);
           }
+          else if (runnerUnavailable && await RunSubmittedDraftsAsync(conn, tx, runId))
+          {
+            // The run got as far as submit_draft before it stopped (a usage limit mid-run, R18F F01 ai-agent-23): its
+            // drafts are finalised with the run and reviewed, and the item is done with the attempt kept. A requeue would
+            // author the page again, and find_similar_cards sees only live cards, not these pending drafts.
+            itemStatus = "done";
+            await DbUtil.ExecuteAsync(conn, tx,
+              """
+              update authoring_queue_items
+              set status = 'done', lease_expires_at = null, finished_at = now(), last_error = $2, updated_at = now()
+              where id = $1
+              """, [itemId, RunnerUnavailableAfterDraftsError(error)]);
+          }
           else if (runnerUnavailable)
           {
             // Not the item's failure: the claim's attempt is given back (R18D M5). The item waits 15 min × 2^(n-1), at
             // most a day, n = the item's consecutive RUNNER_UNAVAILABLE completes including this one, so the items
-            // behind it run; at n >= 3 it fails for a person instead (R18E N3, automation-31).
+            // behind it run; at n >= 3 it fails for a person instead (R18E N3, automation-31). Only a run that submitted
+            // no draft gets here (R18F F01).
             var n = await ConsecutiveRunnerUnavailableAsync(conn, tx, itemId);
             if (n >= MaxRunnerUnavailableCompletes)
             {
@@ -458,6 +479,26 @@ public static class RunnerRoutes
     var text = $"{RunnerUnavailableRepeated}: {n.ToString(CultureInfo.InvariantCulture)} runs in a row could not run; last: {error}";
     return text.Length <= 500 ? text : text[..500];
   }
+
+  /// <summary>The <c>last_error</c> of an item finished after its run submitted drafts (F01): the reason first, capped at 500.</summary>
+  internal static string RunnerUnavailableAfterDraftsError(string? error)
+  {
+    var text = $"{RunnerUnavailableAfterDrafts}: the run submitted draft(s) before it stopped, so the item is not authored again; last: {error}";
+    return text.Length <= 500 ? text : text[..500];
+  }
+
+  /// <summary>
+  /// Whether the run submitted at least one draft: an <c>ai_drafts</c> row whose <c>agent.runId</c> names it, submitted by
+  /// the run's owner (the join <see cref="DraftDecisions"/> uses for a run's drafts).
+  /// </summary>
+  private static async Task<bool> RunSubmittedDraftsAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Guid runId) =>
+    await DbUtil.ExecuteScalarAsync(conn, tx,
+      """
+      select 1 from ai_drafts a
+      join automation_runs r on r.run_id::text = lower(a.agent->>'runId') and r.owner_sub = a.submitted_by_sub
+      where r.run_id = $1
+      limit 1
+      """, [runId]) is not null;
 
   /// <summary>
   /// How many of the item's newest terminal runs, newest first and up to <see cref="MaxRunnerUnavailableCompletes"/>, are

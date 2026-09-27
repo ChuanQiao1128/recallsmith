@@ -969,6 +969,53 @@ public class AutomationTickTests
   }
 
   [Fact]
+  public async Task Tick_Digest_DryRun_LeavesOutThePublishesOfARunWithAnUndecidedDraft()
+  {
+    // R18F F01 (backend-design-23, automation-34): a dry-run publish row exists only when a draft of its run would be
+    // accepted, so the week's publish counts apply the N6 blind rule too. The blind run's would_publish and human rows
+    // are left out; the decided run's would_publish row and a row without a run are counted.
+    await using var scope = new A04Kit.Scope();
+    await InScratchAsync(scope, async sql =>
+    {
+      var deckId = await DeckAsync(sql, "blind-publish");
+      var blindRun = await A04Kit.RunAsync(sql, "sub", deckId, "completed");
+      var decidedRun = await A04Kit.RunAsync(sql, "sub", deckId, "completed");
+      async Task DraftAsync(Guid runId, string? humanAction)
+      {
+        var uid = A04Kit.Tag("blind-publish");
+        var draftId = A04Kit.Long(await sql.ScalarAsync(
+          """
+          insert into ai_drafts (deck_id, batch_id, client_draft_key, stable_uid, card, submitted_by_sub)
+          values ($1, $2, $3, $4, $5::jsonb, 'it-f01-agent') returning id
+          """, deckId, Guid.NewGuid(), Guid.NewGuid().ToString("N"), uid, JsonSerializer.Serialize(AutomationTestKit.Card(uid))));
+        await sql.QueryAsync(
+          """
+          insert into automation_draft_decisions (draft_id, run_id, deck_id, mode, state, decided_at, human_action, human_decided_at, created_at)
+          values ($1, $2, $3, 'dry_run', 'would_accept', now() - interval '2 days', $4::text,
+                  case when $4::text is null then null else now() - interval '1 day' end, now() - interval '2 days')
+          """, draftId, runId, deckId, humanAction);
+      }
+      await DraftAsync(blindRun, null);
+      await DraftAsync(decidedRun, "accepted");
+      await sql.QueryAsync(
+        """
+        insert into automation_publishes (deck_id, run_id, mode, state, reason, created_at, updated_at) values
+          ($1, $2, 'dry_run', 'would_publish', null, now() - interval '2 days', now() - interval '2 days'),
+          ($1, $2, 'dry_run', 'human', 'DECK_HAS_HUMAN_CHANGES', now() - interval '2 days', now() - interval '2 days'),
+          ($1, $3, 'dry_run', 'would_publish', null, now() - interval '2 days', now() - interval '2 days'),
+          ($1, null, 'dry_run', 'would_publish', null, now() - interval '2 days', now() - interval '2 days')
+        """, deckId, blindRun, decidedRun);
+
+      await TickDataAsync("digest");
+      var body = (string)(await NotificationAsync(sql, $"digest:{Today()}"))!["body_text"]!;
+      Assert.Contains("- 0 build(s) auto-published, 2 would be published\n", body);
+      Assert.Contains("\nPublishes by state: would_publish 2\n", body);
+      Assert.DoesNotContain("human 1", body);
+      Assert.Contains("Not counted above: 1 run(s) with a draft still waiting for your decision", body);
+    });
+  }
+
+  [Fact]
   public async Task Tick_ResendsEnqueueFailedNotifications()
   {
     await using var scope = new A04Kit.Scope();

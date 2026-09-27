@@ -272,6 +272,9 @@ public static class LedgerRoutes
     };
   }
 
+  /// <summary>The note prefix of an eval decision or eval queue item (evals drafts_import: <c>eval:new-facts</c>).</summary>
+  public const string EvalNotePrefix = "eval:";
+
   /// <summary>
   /// The AI drafting agent's own quality over the period, from ai_review_events (automation-4): how many
   /// drafts were decided, the acceptance and edited-accept rates, the share rejected for a defect reason
@@ -283,9 +286,6 @@ public static class LedgerRoutes
   /// counted apart as <c>evalRejects</c> (rejects) so an eval window neither lowers the acceptance rate nor hides.
   /// Zeros on a database without migration 030.
   /// </summary>
-  /// <summary>The note prefix of an eval decision or eval queue item (evals drafts_import: <c>eval:new-facts</c>).</summary>
-  public const string EvalNotePrefix = "eval:";
-
   private static async Task<object> AgentDraftQualityAsync(NpgsqlConnection conn, DateTime start, DateTime end)
   {
     long decided = 0, accepted = 0, edited = 0, rejected = 0, defects = 0, notMeasured = 0, evalRejects = 0;
