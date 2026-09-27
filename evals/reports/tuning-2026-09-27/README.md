@@ -78,6 +78,12 @@ dev/holdout are the baseline run re-scored on each half.
   every class >= 0.87. Every substantive gate condition passes; the gate still reports FAIL only on
   provenance (claude-cli is proxy evidence; the shipping provider is Bedrock), so `AI_QA_ENABLED`
   stays `0` until the same command runs on Bedrock.
+- qa-v4 (audit pass 3: answer-side code never makes an answer_leak; a false fact inside
+  codeSnippet / realWorldUsage is incorrect_answer) on the same seeded-v3 set
+  (`../2026-09-27-claude-cli-claude-opus-5-qa-v4-seeded-v3.md`, 452 reviews): recall 0.951
+  (0.92-0.97), precision 0.943, F1 0.947, control FP rate 0.058 (0.03-0.10). Versus qa-v3:
+  precision +0.016 and control FP rate -0.018 at the same recall. Gate status is unchanged:
+  every substantive condition passes, provenance (Bedrock) is the only open condition.
 
-Estimated cost of all runs at Bedrock list prices: ≈ $52 (seeded-v1 tuning $23, seeded-v2 $9.87, seeded-v3 $19.12) (the runs used the owner's local
+Estimated cost of all runs at Bedrock list prices: ≈ $72 (seeded-v1 tuning $23, seeded-v2 $9.87, seeded-v3 qa-v3 $19.12, seeded-v3 qa-v4 $19.41) (the runs used the owner's local
 subscription, so nothing was billed).
