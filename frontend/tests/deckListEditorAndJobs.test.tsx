@@ -133,6 +133,8 @@ describe('an editor session skips the manifest and the poll', () => {
     );
 
     await mountConsole();
+    // mountConsole resolves on the page chrome; the deck rows arrive afterwards.
+    await screen.findByText('C# Async');
 
     // The published signal is liveBuildId, not a manifest entry: no manifest was
     // fetched at all.
