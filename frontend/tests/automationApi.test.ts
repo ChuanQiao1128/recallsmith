@@ -200,10 +200,13 @@ describe('src/api/automation', () => {
     });
 
     const res = await api.recordEvalGate(pasted);
+    // B07 frontend-console-3: an identity transformRequest, so axios cannot parse and trim the body.
     expect(httpMock.post).toHaveBeenCalledWith('/api/v1/admin/automation/eval-gate', pasted, {
       headers: { 'Content-Type': 'application/json' },
+      transformRequest: [expect.any(Function)],
     });
     expect(httpMock.post.mock.calls[0][1]).toBe(pasted);
+    expect(httpMock.post.mock.calls[0][2].transformRequest[0](pasted)).toBe(pasted);
     expect(res.data?.gateId).toBe(4);
     expect(res.data).not.toHaveProperty('report');
 

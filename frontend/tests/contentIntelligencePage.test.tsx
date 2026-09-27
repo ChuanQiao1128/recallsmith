@@ -596,12 +596,14 @@ describe('what the header offers each role', () => {
     // X06 (frontend-console-7): every page passes the same section set, so the
     // header now also offers the HITL sections; ConsoleShell's order. Z06
     // (frontend-console-27) groups it: authoring, the ledger, then super_admin.
+    // B07 (frontend-console-12): Automation is in the shared set, after the ledger.
     expect(names).toEqual([
       'Decks',
       'Review queue',
       'AI QA',
       'Content Intelligence',
       'Automation ledger',
+      'Automation',
       'Webhooks',
       'Admin Management',
     ]);
