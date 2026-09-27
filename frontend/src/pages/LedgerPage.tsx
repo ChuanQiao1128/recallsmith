@@ -11,7 +11,9 @@ import {
   fetchAutomationBaselines,
   fetchAutomationEvents,
   fetchAutomationLedger,
+  runAutomationBackfill,
   updateAutomationBaseline,
+  type AutomationBackfillResult,
   type AutomationBaseline,
   type AutomationEventRow,
   type LedgerGranularity,
@@ -21,16 +23,16 @@ import { isSuperAdmin, readSessionUser } from '../auth/sessionUser';
 import { ConsoleShell } from '../components/console/ConsoleShell';
 import { consoleNav } from '../components/console/consoleNav';
 import { Badge } from '../components/ui/Badge';
+import { Button } from '../components/ui/Button';
 import { Callout } from '../components/ui/Callout';
 import {
-  BUTTON_CLASS,
   CARD_CLASS,
+  FIELD_ERROR_CLASS,
   H1_CLASS,
   H2_CLASS,
   INPUT_CLASS,
   INPUT_INVALID_CLASS,
   LABEL_CLASS,
-  PRIMARY_BUTTON_CLASS,
   TD_CLASS,
   TH_CLASS,
 } from '../components/console/consoleStyles';
@@ -44,13 +46,16 @@ import {
   buildLedgerBars,
   formatHours,
   formatPercent,
+  ledgerAxisLabel,
+  ledgerLabelEvery,
   ledgerRangeProblem,
 } from '../lib/ledgerView';
 import type { ApiError } from '../types/api';
 
 type LoadError = { code: string; message: string };
 
-type LedgerState = { loading: boolean; error: LoadError | null; data: LedgerReport | null };
+/** `forKey` is the request the data answers; a mismatch with the current key means a refetch is in flight. */
+type LedgerState = { forKey: string | null; error: LoadError | null; data: LedgerReport | null };
 type BaselinesState = { loading: boolean; error: LoadError | null; items: AutomationBaseline[] };
 type EventsState = {
   loading: boolean;
@@ -62,6 +67,16 @@ type EventsState = {
 };
 
 type AppliedRange = { from: string; to: string; granularity: LedgerGranularity };
+
+type BackfillState = {
+  running: 'dry' | 'apply' | null;
+  /** The last dry run's counts; Apply is offered only after one. */
+  preview: AutomationBackfillResult | null;
+  applied: AutomationBackfillResult | null;
+  error: string | null;
+};
+
+type Tile = { key: string; label: string; value: string; details?: string[] };
 
 type BaselineForm = {
   automation: string;
@@ -80,6 +95,9 @@ const BAR_WIDTH = 28;
 const PLOT_HEIGHT = 160;
 const AXIS_LABEL_HEIGHT = 20;
 const AXIS_FONT_SIZE = 10;
+// Axis labels are MM-DD (5 characters); the full date is in each bar's title
+// and in the data table. labelEvery keeps neighbouring labels from overlapping.
+const AXIS_LABEL_CHARS = 5;
 const CHART_TABLE_ID = 'ledger-chart-data';
 
 function toLoadError(error: ApiError | null, fallback: string): LoadError {
@@ -106,6 +124,12 @@ function sourceBadge(source: string) {
   );
 }
 
+function backfillCounts(result: AutomationBackfillResult, key: 'inserted' | 'skipped'): string {
+  return LEDGER_AUTOMATIONS.filter(a => a in result[key])
+    .map(a => `${labelFor(a)} ${formatNumber(result[key][a])}`)
+    .join(', ');
+}
+
 function orDash(value: string | number | null | undefined): string {
   return value === null || value === undefined || value === '' ? '—' : String(value);
 }
@@ -126,7 +150,8 @@ export function LedgerPage() {
   const [applyNonce, setApplyNonce] = useState(0);
   const [baselineNonce, setBaselineNonce] = useState(0);
 
-  const [ledger, setLedger] = useState<LedgerState>({ loading: true, error: null, data: null });
+  const [ledger, setLedger] = useState<LedgerState>({ forKey: null, error: null, data: null });
+  const [backfill, setBackfill] = useState<BackfillState>({ running: null, preview: null, applied: null, error: null });
   const [baselines, setBaselines] = useState<BaselinesState>({ loading: true, error: null, items: [] });
   const [events, setEvents] = useState<EventsState>({
     loading: true,
@@ -145,8 +170,13 @@ export function LedgerPage() {
   const [editProblem, setEditProblem] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // The request the ledger on screen should answer. Apply and a saved baseline
+  // change it, so the old totals are marked busy until the new ones land.
+  const ledgerKey = `${applied.from}|${applied.to}|${applied.granularity}|${applyNonce}|${baselineNonce}`;
+
   useEffect(() => {
     let cancelled = false;
+    const key = `${applied.from}|${applied.to}|${applied.granularity}|${applyNonce}|${baselineNonce}`;
     async function run() {
       const res = await fetchAutomationLedger({
         from: applied.from || undefined,
@@ -155,10 +185,10 @@ export function LedgerPage() {
       });
       if (cancelled) return;
       if (!res.success || !res.data) {
-        setLedger({ loading: false, error: toLoadError(res.error, 'Failed to load the automation ledger.'), data: null });
+        setLedger({ forKey: key, error: toLoadError(res.error, 'Failed to load the automation ledger.'), data: null });
         return;
       }
-      setLedger({ loading: false, error: null, data: res.data });
+      setLedger({ forKey: key, error: null, data: res.data });
     }
     void run();
     return () => {
@@ -254,6 +284,28 @@ export function LedgerPage() {
     );
   }
 
+  async function onBackfill(dryRun: boolean) {
+    if (backfill.running) return;
+    setBackfill(prev => ({ ...prev, running: dryRun ? 'dry' : 'apply', error: null }));
+    const res = await runAutomationBackfill(dryRun);
+    if (!res.success || !res.data) {
+      const message = res.error?.message ?? 'The backfill failed.';
+      setBackfill(prev => ({ ...prev, running: null, error: message }));
+      setAnnouncement(`Backfill failed: ${message}`);
+      return;
+    }
+    const result = res.data;
+    if (dryRun) {
+      setBackfill({ running: null, preview: result, applied: null, error: null });
+      setAnnouncement(`Dry run: would insert ${backfillCounts(result, 'inserted')}.`);
+      return;
+    }
+    // Applied: the preview is spent, and the ledger now holds the inferred rows.
+    setBackfill({ running: null, preview: null, applied: result, error: null });
+    setAnnouncement(`Backfill applied: inserted ${backfillCounts(result, 'inserted')}.`);
+    setApplyNonce(n => n + 1);
+  }
+
   function beginEdit(row: AutomationBaseline) {
     setEditProblem(null);
     setEditing({
@@ -289,22 +341,53 @@ export function LedgerPage() {
   const report = ledger.data;
   const bars = useMemo(() => buildLedgerBars(report?.series ?? []), [report]);
   const maxSaved = bars.reduce((max, bar) => Math.max(max, bar.minutesSaved), 0);
-  const labelEvery = bars.length <= 12 ? 1 : 4;
+  const labelEvery = ledgerLabelEvery(BAR_SLOT, AXIS_LABEL_CHARS, AXIS_FONT_SIZE);
   const chartWidth = Math.max(bars.length * BAR_SLOT, BAR_SLOT);
 
   const notReady = isNotReady(ledger.error) || isNotReady(baselines.error) || isNotReady(events.error);
   const validationError = ledger.error?.code === 'VALIDATION_ERROR' ? ledger.error : null;
   const otherLedgerError = ledger.error && !isNotReady(ledger.error) && !validationError ? ledger.error : null;
 
+  const ledgerLoading = ledger.forKey === null;
+  // Old figures stay on screen, dimmed and busy, while a new range loads.
+  const ledgerRefetching = !ledgerLoading && ledger.forKey !== ledgerKey;
+
   const totals = report?.totals;
-  const tiles: Array<{ key: string; label: string; value: string }> = totals
+  const hoursDetails: string[] = [];
+  if (totals?.bySource) {
+    hoursDetails.push(`Live (measured): ${formatHours(totals.bySource.live.minutesSaved)}`);
+    hoursDetails.push(`of which inferred from history: ${formatHours(totals.bySource.backfill.minutesSaved)}`);
+  }
+  if (totals?.byBaselineSource) {
+    hoursDetails.push(
+      `On measured baselines: ${formatHours(totals.byBaselineSource.measured)} · on default baselines: ${formatHours(totals.byBaselineSource.default)}`,
+    );
+  }
+  const agent = report?.agentDrafts ?? null;
+  const agentTile: Tile | null = agent
+    ? agent.decided === 0
+      ? { key: 'agentDrafts', label: 'AI draft quality', value: '—', details: ['No AI drafts decided in this range.'] }
+      : {
+          key: 'agentDrafts',
+          label: 'AI draft quality',
+          value: `${formatPercent(agent.acceptanceRate)} accepted`,
+          details: [
+            `${formatNumber(agent.decided)} decided: ${formatNumber(agent.accepted)} accepted, ${formatNumber(agent.rejected)} rejected`,
+            `Edited-accept rate: ${formatPercent(agent.editedAcceptRate)}`,
+            `Defect rate: ${formatPercent(agent.defectRate)} (${formatNumber(agent.defectRejects)} rejected for a defect)`,
+            `Average review: ${agent.avgReviewMinutes === null ? '—' : `${formatNumber(agent.avgReviewMinutes)} min`}`,
+          ],
+        }
+    : null;
+  const tiles: Tile[] = totals
     ? [
-        { key: 'hoursSaved', label: 'Hours saved', value: formatHours(totals.minutesSaved) },
+        { key: 'hoursSaved', label: 'Hours saved', value: formatHours(totals.minutesSaved), details: hoursDetails },
         { key: 'runs', label: 'Runs', value: formatNumber(totals.runs) },
         { key: 'units', label: 'Units', value: formatNumber(totals.units) },
         { key: 'defectsCaught', label: 'Defects caught before publish', value: formatNumber(totals.defectsCaught) },
         { key: 'qaFalsePositives', label: 'QA false positives', value: formatNumber(totals.qaFalsePositives) },
         { key: 'actualMinutes', label: 'Actual minutes', value: formatNumber(totals.actualMinutes) },
+        ...(agentTile ? [agentTile] : []),
       ]
     : [];
 
@@ -374,17 +457,17 @@ export function LedgerPage() {
               ))}
             </select>
           </div>
-          <button type="button" className={PRIMARY_BUTTON_CLASS} onClick={onApply}>
+          <Button variant="primary" size="xs" onClick={onApply}>
             Apply
-          </button>
+          </Button>
         </div>
         {rangeProblem ? (
-          <p id="ledger-range-problem" role="alert" className="mt-2 text-sm text-red-800" data-testid="ledger-range-problem">
+          <p id="ledger-range-problem" role="alert" className={`mt-2 ${FIELD_ERROR_CLASS}`} data-testid="ledger-range-problem">
             {rangeProblem}
           </p>
         ) : null}
         {validationError ? (
-          <p role="alert" className="mt-2 text-sm text-red-800" data-testid="ledger-validation-error">
+          <p role="alert" className={`mt-2 ${FIELD_ERROR_CLASS}`} data-testid="ledger-validation-error">
             {validationError.message}
           </p>
         ) : null}
@@ -404,23 +487,36 @@ export function LedgerPage() {
         </Callout>
       ) : null}
 
-      <section className={CARD_CLASS}>
+      <section className={CARD_CLASS} aria-busy={ledgerRefetching ? true : undefined} data-testid="ledger-totals">
         <h2 className={H2_CLASS}>Totals</h2>
-        {ledger.loading ? (
+        {ledgerRefetching ? (
+          <p className="mt-2 text-sm text-slate-500" data-testid="ledger-refetching">
+            Loading the new range…
+          </p>
+        ) : null}
+        {ledgerLoading ? (
           <p className="mt-3 text-sm text-slate-600">Loading…</p>
         ) : (
-          <div className="mt-3 grid grid-cols-2 md:grid-cols-3 gap-3">
+          <div className={`mt-3 grid grid-cols-2 md:grid-cols-3 gap-3 ${ledgerRefetching ? 'opacity-50' : ''}`}>
             {tiles.map(tile => (
               <div key={tile.key} className="border border-slate-200 rounded-lg p-3" data-testid={`ledger-total-${tile.key}`}>
                 <div className="text-xs text-slate-500">{tile.label}</div>
                 <div className="text-lg font-semibold text-slate-900">{tile.value}</div>
+                {tile.details?.map(line => (
+                  <div key={line} className="text-xs text-slate-600">
+                    {line}
+                  </div>
+                ))}
               </div>
             ))}
           </div>
         )}
       </section>
 
-      <section className={CARD_CLASS}>
+      <section
+        className={`${CARD_CLASS} ${ledgerRefetching ? 'opacity-50' : ''}`}
+        aria-busy={ledgerRefetching ? true : undefined}
+      >
         <h2 className={H2_CLASS}>By automation</h2>
         <div className="mt-3 overflow-x-auto">
           <table className="min-w-full text-sm" data-testid="ledger-automations-table">
@@ -462,9 +558,13 @@ export function LedgerPage() {
         </div>
       </section>
 
-      <section className={CARD_CLASS}>
+      <section
+        className={`${CARD_CLASS} ${ledgerRefetching ? 'opacity-50' : ''}`}
+        aria-busy={ledgerRefetching ? true : undefined}
+        data-testid="ledger-chart-section"
+      >
         <h2 className={H2_CLASS}>Minutes saved per period</h2>
-        {ledger.loading ? (
+        {ledgerLoading ? (
           <p className="mt-3 text-sm text-slate-600">Loading…</p>
         ) : bars.length === 0 ? (
           <p className="mt-3 text-sm text-slate-500">No automation runs in this range.</p>
@@ -505,7 +605,7 @@ export function LedgerPage() {
                           fontSize={AXIS_FONT_SIZE}
                           fill="currentColor"
                         >
-                          {bar.periodStart}
+                          {ledgerAxisLabel(bar.periodStart)}
                         </text>
                       ) : null}
                     </g>
@@ -577,15 +677,15 @@ export function LedgerPage() {
                   <td className={TD_CLASS}>{orDash(row.updatedAt)}</td>
                   {superAdmin ? (
                     <td className={TD_CLASS}>
-                      <button
-                        type="button"
-                        className={BUTTON_CLASS}
+                      <Button
+                        variant="outline"
+                        size="xs"
                         aria-label={`Edit baseline ${labelFor(row.automation)}`}
                         disabled={saving}
                         onClick={() => beginEdit(row)}
                       >
                         Edit
-                      </button>
+                      </Button>
                     </td>
                   ) : null}
                 </tr>
@@ -646,17 +746,17 @@ export function LedgerPage() {
               />
             </div>
             {editProblem ? (
-              <p id="ledger-baseline-problem" role="alert" className="text-sm text-red-800" data-testid="ledger-baseline-problem">
+              <p id="ledger-baseline-problem" role="alert" className={FIELD_ERROR_CLASS} data-testid="ledger-baseline-problem">
                 {editProblem}
               </p>
             ) : null}
             <div className="flex items-center gap-2">
-              <button type="submit" className={PRIMARY_BUTTON_CLASS} disabled={saving}>
+              <Button type="submit" variant="primary" size="xs" disabled={saving}>
                 Save baseline
-              </button>
-              <button
-                type="button"
-                className={BUTTON_CLASS}
+              </Button>
+              <Button
+                variant="outline"
+                size="xs"
                 disabled={saving}
                 onClick={() => {
                   setEditing(null);
@@ -664,9 +764,57 @@ export function LedgerPage() {
                 }}
               >
                 Cancel
-              </button>
+              </Button>
             </div>
           </form>
+        ) : null}
+
+        {superAdmin ? (
+          <div className="mt-6 border-t border-slate-200 pt-4 space-y-2" data-testid="ledger-backfill">
+            <h3 className="text-sm font-semibold text-slate-900">Backfill history</h3>
+            <p className="text-sm text-slate-600">
+              Infers ledger rows from past publishes and bulk imports (runs of 5 or more cards created in the same
+              minute). The rows are marked as inferred from history and shown apart from live data. Run a dry run
+              first; applying inserts only what the dry run counted as new, and running it again skips rows already
+              present. The runbook is docs/delivery/r18-issues/X01-ledger-runbook.md.
+            </p>
+            {backfill.error ? (
+              <Callout tone="danger" title="Backfill failed" role="alert">
+                {backfill.error}
+              </Callout>
+            ) : null}
+            {backfill.preview ? (
+              <p className="text-sm text-slate-700" data-testid="ledger-backfill-preview">
+                Dry run: would insert {backfillCounts(backfill.preview, 'inserted')}; already present{' '}
+                {backfillCounts(backfill.preview, 'skipped')}.
+              </p>
+            ) : null}
+            {backfill.applied ? (
+              <p className="text-sm text-slate-700" data-testid="ledger-backfill-applied">
+                Applied: inserted {backfillCounts(backfill.applied, 'inserted')}; skipped{' '}
+                {backfillCounts(backfill.applied, 'skipped')}.
+              </p>
+            ) : null}
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="xs"
+                disabled={backfill.running !== null}
+                onClick={() => void onBackfill(true)}
+              >
+                {backfill.running === 'dry' ? 'Counting…' : 'Dry run'}
+              </Button>
+              <Button
+                variant="primary"
+                size="xs"
+                disabled={backfill.running !== null || backfill.preview === null}
+                title={backfill.preview === null ? 'Run a dry run first.' : undefined}
+                onClick={() => void onBackfill(false)}
+              >
+                {backfill.running === 'apply' ? 'Applying…' : 'Apply backfill'}
+              </Button>
+            </div>
+          </div>
         ) : null}
       </section>
 
@@ -754,14 +902,14 @@ export function LedgerPage() {
         </div>
         {events.nextCursor ? (
           <div className="mt-3">
-            <button
-              type="button"
-              className={BUTTON_CLASS}
+            <Button
+              variant="outline"
+              size="xs"
               disabled={loadingMore || eventsRefetching}
               onClick={() => void onLoadMore()}
             >
               Load more
-            </button>
+            </Button>
           </div>
         ) : null}
       </section>

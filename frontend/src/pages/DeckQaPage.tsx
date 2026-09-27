@@ -25,14 +25,13 @@ import type { QaFinding, QaRun, QaRunDetail, QaScope, QaStatus } from '../api/qa
 import { ConsoleShell } from '../components/console/ConsoleShell';
 import { consoleNav } from '../components/console/consoleNav';
 import { Badge } from '../components/ui/Badge';
+import { Button } from '../components/ui/Button';
 import { Callout } from '../components/ui/Callout';
 import {
-  BUTTON_CLASS,
   CARD_CLASS,
   H1_CLASS,
   H2_CLASS,
   INPUT_CLASS,
-  PRIMARY_BUTTON_CLASS,
 } from '../components/console/consoleStyles';
 import { CONSOLE_NAME } from '../lib/brand';
 import { parseDeckId } from '../lib/parseDeckId';
@@ -430,8 +429,10 @@ export function DeckQaPage() {
         <section className={CARD_CLASS} aria-label="Decks">
           <p className="text-sm text-slate-700">Choose a deck to review with AI QA.</p>
           {decks.error && !isNotReady(decks.error) ? (
-            <div role="alert" className="text-sm text-red-700 mt-2">
-              {decks.error.message}
+            <div className="mt-2">
+              <Callout tone="danger" role="alert">
+                {decks.error.message}
+              </Callout>
             </div>
           ) : null}
           {!decks.loaded ? <p className="text-sm text-slate-500 mt-2">Loading decks…</p> : null}
@@ -448,9 +449,9 @@ export function DeckQaPage() {
       ) : (
         <>
           {deckError ? (
-            <div role="alert" className="text-sm text-red-700">
+            <Callout tone="danger" role="alert">
               {deckError.message}
-            </div>
+            </Callout>
           ) : null}
 
           {/* ---------------- Publish gate ---------------- */}
@@ -460,9 +461,9 @@ export function DeckQaPage() {
             </h2>
             <div data-testid="qa-gate-status" className="mt-2 space-y-2">
               {statusError && !isNotReady(statusError) ? (
-                <div role="alert" className="text-sm text-red-700">
+                <Callout tone="danger" role="alert">
                   {statusError.message}
-                </div>
+                </Callout>
               ) : null}
               {!status && !statusError ? <p className="text-sm text-slate-500">Loading the publish gate…</p> : null}
               {status ? (
@@ -551,9 +552,9 @@ export function DeckQaPage() {
               <fieldset className="mt-2 max-h-64 overflow-y-auto border border-slate-200 rounded p-2">
                 <legend className="text-xs text-slate-500 px-1">Cards to review</legend>
                 {cardsState.forDeckId === deckId && cardsState.error ? (
-                  <div role="alert" className="text-sm text-red-700">
+                  <Callout tone="danger" role="alert">
                     {cardsState.error.message}
-                  </div>
+                  </Callout>
                 ) : null}
                 {cards.map(card => (
                   <label key={card.id} className="flex items-start gap-2 text-sm text-slate-700 py-0.5">
@@ -595,15 +596,17 @@ export function DeckQaPage() {
             ) : null}
 
             {startError && !isNotReady(startError) ? (
-              <div role="alert" className="mt-2 bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm">
-                {qaStartErrorMessage(startError.code, startError.message, limits)}
+              <div className="mt-2">
+                <Callout tone="danger" role="alert">
+                  {qaStartErrorMessage(startError.code, startError.message, limits)}
+                </Callout>
               </div>
             ) : null}
 
             <div className="mt-3">
-              <button type="button" className={PRIMARY_BUTTON_CLASS} disabled={startDisabled} onClick={() => void onStart()}>
+              <Button variant="primary" size="xs" disabled={startDisabled} onClick={() => void onStart()}>
                 Start AI QA
-              </button>
+              </Button>
             </div>
           </section>
 
@@ -618,17 +621,19 @@ export function DeckQaPage() {
               </p>
             ) : null}
             {detailError && !isNotReady(detailError) && !pollStopped ? (
-              <div role="alert" className="mt-2 text-sm text-red-700">
-                {detailError.message}
+              <div className="mt-2">
+                <Callout tone="danger" role="alert">
+                  {detailError.message}
+                </Callout>
               </div>
             ) : null}
             {pollStopped ? (
               <div data-testid="qa-poll-stopped" className="mt-2">
                 <Callout tone="warning">
                   Progress is not refreshing.{' '}
-                  <button type="button" className={BUTTON_CLASS} onClick={() => setDetailNonce(n => n + 1)}>
+                  <Button variant="outline" size="xs" onClick={() => setDetailNonce(n => n + 1)}>
                     Refresh progress
-                  </button>
+                  </Button>
                 </Callout>
               </div>
             ) : null}
@@ -746,24 +751,24 @@ export function DeckQaPage() {
                                   }
                                 />
                               </div>
-                              <button
-                                type="button"
-                                className={BUTTON_CLASS}
+                              <Button
+                                variant="outline"
+                                size="xs"
                                 aria-label={`Mark finding ${finding.findingId} fixed`}
                                 disabled={busy}
                                 onClick={() => void onResolve(finding, 'fixed')}
                               >
                                 Mark fixed
-                              </button>
-                              <button
-                                type="button"
-                                className={BUTTON_CLASS}
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="xs"
                                 aria-label={`Dismiss finding ${finding.findingId}`}
                                 disabled={busy}
                                 onClick={() => void onResolve(finding, 'dismissed')}
                               >
                                 Dismiss
-                              </button>
+                              </Button>
                             </div>
                           ) : finding.resolutionNote ? (
                             <p className="mt-1 text-xs text-slate-500">Note: {finding.resolutionNote}</p>
@@ -783,8 +788,10 @@ export function DeckQaPage() {
               Past runs
             </h2>
             {runsError && !isNotReady(runsError) ? (
-              <div role="alert" className="mt-2 text-sm text-red-700">
-                {runsError.message}
+              <div className="mt-2">
+                <Callout tone="danger" role="alert">
+                  {runsError.message}
+                </Callout>
               </div>
             ) : null}
             {runsReady && runs.length === 0 && !runsError ? (
@@ -820,14 +827,14 @@ export function DeckQaPage() {
                         </td>
                         <td className="py-1 pr-3">{formatUsd(run.estimatedCostUsd)}</td>
                         <td className="py-1">
-                          <button
-                            type="button"
-                            className={BUTTON_CLASS}
+                          <Button
+                            variant="outline"
+                            size="xs"
                             aria-label={`View run ${run.runId}`}
                             onClick={() => showRun(run.runId)}
                           >
                             View
-                          </button>
+                          </Button>
                         </td>
                       </tr>
                     ))}
@@ -837,9 +844,9 @@ export function DeckQaPage() {
             ) : null}
             {runsState.nextCursor && runsReady ? (
               <div className="mt-2">
-                <button type="button" className={BUTTON_CLASS} disabled={loadingMore} onClick={() => void onLoadMore()}>
+                <Button variant="outline" size="xs" disabled={loadingMore} onClick={() => void onLoadMore()}>
                   Load more
-                </button>
+                </Button>
               </div>
             ) : null}
           </section>

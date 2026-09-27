@@ -17,17 +17,17 @@ import type { CardFormValues } from '../components/CardForm';
 import { ConsoleShell } from '../components/console/ConsoleShell';
 import { consoleNav } from '../components/console/consoleNav';
 import { Badge } from '../components/ui/Badge';
+import { Button } from '../components/ui/Button';
 import { Callout } from '../components/ui/Callout';
 import { useConfirm } from '../components/ui/ConfirmDialogContext';
 import {
-  BUTTON_CLASS,
   CARD_CLASS,
+  FIELD_ERROR_CLASS,
   H1_CLASS,
   H2_CLASS,
   INPUT_CLASS,
   INPUT_INVALID_CLASS,
   LABEL_CLASS,
-  PRIMARY_BUTTON_CLASS,
 } from '../components/console/consoleStyles';
 import { CONSOLE_NAME } from '../lib/brand';
 import {
@@ -73,6 +73,10 @@ const STATUS_OPTIONS: Array<{ value: StatusFilter; label: string }> = [
 ];
 const PAGE_SIZE = 50;
 
+
+// A draft row is a selectable list item, not an action, so it keeps its own
+// look; it takes the same focus-visible ring ui/Button carries.
+const LIST_ITEM_FOCUS = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2';
 function pageIsVisible(): boolean {
   return typeof document === 'undefined' || document.visibilityState !== 'hidden';
 }
@@ -429,8 +433,10 @@ export function ReviewQueuePage() {
         <section className={CARD_CLASS} aria-label="Decks">
           <p className="text-sm text-slate-700">Choose a deck to review its AI drafts.</p>
           {decks.error && !isNotReady(decks.error) ? (
-            <div role="alert" className="text-sm text-red-700 mt-2">
-              {decks.error.message}
+            <div className="mt-2">
+              <Callout tone="danger" role="alert">
+                {decks.error.message}
+              </Callout>
             </div>
           ) : null}
           {!decks.loaded ? <p className="text-sm text-slate-500 mt-2">Loading decks…</p> : null}
@@ -447,9 +453,9 @@ export function ReviewQueuePage() {
       ) : (
         <>
           {deckError && !isNotReady(deckError) ? (
-            <div role="alert" className="text-sm text-red-700">
+            <Callout tone="danger" role="alert">
               {deckError.message}
-            </div>
+            </Callout>
           ) : null}
 
           {outcome ? (
@@ -470,9 +476,9 @@ export function ReviewQueuePage() {
           ) : null}
 
           {decisionError ? (
-            <div role="alert" className="bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm">
+            <Callout tone="danger" role="alert">
               {decisionError}
-            </div>
+            </Callout>
           ) : null}
 
           <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
@@ -497,9 +503,9 @@ export function ReviewQueuePage() {
 
               {!listReady ? <p className="text-sm text-slate-500">Loading drafts…</p> : null}
               {listReady && list.error && !isNotReady(list.error) ? (
-                <div role="alert" className="text-sm text-red-700">
+                <Callout tone="danger" role="alert">
                   {list.error.message}
-                </div>
+                </Callout>
               ) : null}
               {listReady && !list.error && listItems.length === 0 ? (
                 <p className="text-sm text-slate-500">No drafts waiting for review.</p>
@@ -512,7 +518,7 @@ export function ReviewQueuePage() {
                       type="button"
                       onClick={() => void openDraft(item.draftId)}
                       aria-current={item.draftId === selectedId ? 'true' : undefined}
-                      className={`w-full text-left rounded border px-3 py-2 text-sm hover:bg-slate-50 ${
+                      className={`w-full text-left rounded border px-3 py-2 text-sm hover:bg-slate-50 ${LIST_ITEM_FOCUS} ${
                         item.draftId === selectedId ? 'border-indigo-400 bg-indigo-50' : 'border-slate-200'
                       }`}
                     >
@@ -525,17 +531,17 @@ export function ReviewQueuePage() {
               </ul>
 
               {listReady && list.nextCursor ? (
-                <button type="button" className={BUTTON_CLASS} disabled={loadingMore} onClick={() => void onLoadMore()}>
+                <Button variant="outline" size="xs" disabled={loadingMore} onClick={() => void onLoadMore()}>
                   Load more
-                </button>
+                </Button>
               ) : null}
             </section>
 
             <div className="space-y-4">
               {detailError && !isNotReady(detailError) ? (
-                <div role="alert" className="text-sm text-red-700">
+                <Callout tone="danger" role="alert">
                   {detailError.message}
-                </div>
+                </Callout>
               ) : null}
 
               {selectedId !== null && !draft && !detailError ? (
@@ -667,30 +673,30 @@ export function ReviewQueuePage() {
                     editingId === draft.draftId ? null : (
                       <section className={`${CARD_CLASS} space-y-3`} aria-label="Decision">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <button
-                            type="button"
-                            className={PRIMARY_BUTTON_CLASS}
+                          <Button
+                            variant="primary"
+                            size="xs"
                             disabled={deciding || !lint.ok}
                             onClick={() => onAccept(draft)}
                           >
                             Accept
-                          </button>
-                          <button
-                            type="button"
-                            className={BUTTON_CLASS}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="xs"
                             disabled={deciding}
                             onClick={() => setEditingId(draft.draftId)}
                           >
                             Edit
-                          </button>
-                          <button
-                            type="button"
-                            className={BUTTON_CLASS}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="xs"
                             disabled={deciding}
                             onClick={() => beginReject(draft.draftId)}
                           >
                             Reject
-                          </button>
+                          </Button>
                         </div>
                         {!lint.ok ? (
                           <p className="text-sm text-slate-600">Fix the lint issues with Edit, then Accept with edits.</p>
@@ -735,27 +741,27 @@ export function ReviewQueuePage() {
                               />
                             </div>
                             {rejectProblem ? (
-                              <p id="review-reject-problem" role="alert" className="text-sm text-red-700">
+                              <p id="review-reject-problem" role="alert" className={FIELD_ERROR_CLASS}>
                                 {rejectProblem}
                               </p>
                             ) : null}
                             <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                className={PRIMARY_BUTTON_CLASS}
+                              <Button
+                                variant="primary"
+                                size="xs"
                                 disabled={deciding || !reason}
                                 onClick={() => onConfirmReject(draft)}
                               >
                                 Confirm reject
-                              </button>
-                              <button
-                                type="button"
-                                className={BUTTON_CLASS}
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="xs"
                                 disabled={deciding}
                                 onClick={() => setRejectingId(null)}
                               >
                                 Cancel
-                              </button>
+                              </Button>
                             </div>
                           </div>
                         ) : null}

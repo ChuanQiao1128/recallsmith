@@ -27,6 +27,7 @@ const api = vi.hoisted(() => ({
   fetchAutomationEvents: vi.fn(),
   fetchAutomationBaselines: vi.fn(),
   updateAutomationBaseline: vi.fn(),
+  runAutomationBackfill: vi.fn(),
 }));
 
 vi.mock('../src/api/ledger', async importOriginal => {
@@ -54,6 +55,11 @@ function report(overrides: Partial<LedgerReport> = {}): LedgerReport {
       hoursSaved: 14.25,
       defectsCaught: 6,
       qaFalsePositives: 2,
+      bySource: {
+        live: { runs: 10, units: 200, minutesSaved: 675, hoursSaved: 11.25 },
+        backfill: { runs: 4, units: 120, minutesSaved: 180, hoursSaved: 3 },
+      },
+      byBaselineSource: { measured: 255, default: 600 },
     },
     automations: [
       {
@@ -90,6 +96,17 @@ function report(overrides: Partial<LedgerReport> = {}): LedgerReport {
       series('2026-09-14', 'publish_pipeline', 300),
       series('2026-09-21', 'ai_qa_review', 255, 6),
     ],
+    agentDrafts: {
+      decided: 20,
+      accepted: 15,
+      editedAccepted: 6,
+      rejected: 5,
+      defectRejects: 3,
+      acceptanceRate: 0.75,
+      editedAcceptRate: 0.4,
+      defectRate: 0.15,
+      avgReviewMinutes: 2.5,
+    },
     ...overrides,
   };
 }
@@ -488,12 +505,20 @@ describe('LedgerPage', () => {
       'Baseline minutes',
       'Actual minutes',
       'Minutes saved',
+      'Live and inferred from history',
       'Defects caught before publish',
       'QA false positives',
+      'AI draft quality',
       'Failure rate',
       'Default baselines',
     ]);
-    expect(document.querySelectorAll('dl dd')).toHaveLength(9);
+    expect(document.querySelectorAll('dl dd')).toHaveLength(11);
+    // automation-4: the printed rules are the ones the server computes.
+    const text = Array.from(document.querySelectorAll('dl dd')).map(dd => dd.textContent ?? '').join('\n');
+    expect(text).toContain('Per automation and source');
+    expect(text).toContain('actual minutes include review time on rejected drafts');
+    expect(text).not.toContain('an AI draft rejected as incorrect');
+    expect(text).toContain('A rejected AI draft is not a defect caught');
   });
 
   it('names the route Automation ledger and links it from the shell', () => {
@@ -517,5 +542,148 @@ describe('LedgerPage', () => {
 
     shell(undefined);
     expect(screen.queryByRole('link', { name: 'Automation ledger' })).toBeNull();
+  });
+
+  it('splits hours saved into live and inferred history, and measured and default baselines (automation-11)', async () => {
+    await mountLoaded();
+    const hours = screen.getByTestId('ledger-total-hoursSaved');
+    expect(hours.textContent).toContain('14.3 h');
+    expect(hours.textContent).toContain('Live (measured): 11.3 h');
+    expect(hours.textContent).toContain('of which inferred from history: 3.0 h');
+    expect(hours.textContent).toContain('On measured baselines: 4.3 h · on default baselines: 10.0 h');
+  });
+
+  it('leaves the split out when the server does not send it', async () => {
+    const base = report();
+    api.fetchAutomationLedger.mockResolvedValue(
+      ok(report({ totals: { ...base.totals, bySource: null, byBaselineSource: null }, agentDrafts: null })),
+    );
+    await mountLoaded();
+    expect(screen.getByTestId('ledger-total-hoursSaved').textContent).not.toContain('inferred');
+    expect(screen.queryByTestId('ledger-total-agentDrafts')).toBeNull();
+  });
+
+  it('shows the AI draft quality tile from agentDrafts (automation-4)', async () => {
+    await mountLoaded();
+    const tile = screen.getByTestId('ledger-total-agentDrafts');
+    expect(tile.textContent).toContain('AI draft quality');
+    expect(tile.textContent).toContain('75.0% accepted');
+    expect(tile.textContent).toContain('20 decided: 15 accepted, 5 rejected');
+    expect(tile.textContent).toContain('Edited-accept rate: 40.0%');
+    expect(tile.textContent).toContain('Defect rate: 15.0% (3 rejected for a defect)');
+    expect(tile.textContent).toContain('Average review: 2.5 min');
+  });
+
+  it('says no drafts were decided rather than printing 0% rates', async () => {
+    api.fetchAutomationLedger.mockResolvedValue(
+      ok(
+        report({
+          agentDrafts: {
+            decided: 0,
+            accepted: 0,
+            editedAccepted: 0,
+            rejected: 0,
+            defectRejects: 0,
+            acceptanceRate: 0,
+            editedAcceptRate: 0,
+            defectRate: 0,
+            avgReviewMinutes: null,
+          },
+        }),
+      ),
+    );
+    await mountLoaded();
+    const tile = screen.getByTestId('ledger-total-agentDrafts');
+    expect(tile.textContent).toContain('No AI drafts decided in this range.');
+    expect(tile.textContent).not.toContain('%');
+  });
+
+  it('marks the totals and chart busy while an applied range loads (frontend-console-16)', async () => {
+    const user = userEvent.setup();
+    await mountLoaded();
+    const next = deferred<ApiResult<LedgerReport>>();
+    api.fetchAutomationLedger.mockReturnValue(next.promise);
+
+    await user.selectOptions(screen.getByLabelText('Granularity'), 'month');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(await screen.findByTestId('ledger-refetching')).toBeTruthy();
+    expect(screen.getByTestId('ledger-totals').getAttribute('aria-busy')).toBe('true');
+    expect(screen.getByTestId('ledger-chart-section').getAttribute('aria-busy')).toBe('true');
+    // The old figures stay on screen, dimmed, rather than vanishing.
+    expect(screen.getByTestId('ledger-total-hoursSaved').textContent).toContain('14.3 h');
+
+    await act(async () => next.resolve(ok(report({ granularity: 'month' }))));
+    await waitFor(() => expect(screen.queryByTestId('ledger-refetching')).toBeNull());
+    expect(screen.getByTestId('ledger-totals').getAttribute('aria-busy')).toBeNull();
+    expect(screen.getByTestId('ledger-chart-section').getAttribute('aria-busy')).toBeNull();
+  });
+
+  it('labels the weekly chart with short dates that do not overlap (frontend-console-17)', async () => {
+    const weeks = Array.from({ length: 12 }, (_, i) => {
+      const d = new Date(Date.UTC(2026, 5, 29 + i * 7));
+      return series(d.toISOString().slice(0, 10), 'publish_pipeline', 10 + i);
+    });
+    api.fetchAutomationLedger.mockResolvedValue(ok(report({ series: weeks })));
+    await mountLoaded();
+
+    const svg = screen.getByRole('img', { name: 'Minutes saved per period' });
+    const labels = Array.from(svg.querySelectorAll('text'));
+    expect(labels.length).toBeGreaterThan(0);
+    expect(labels[0].textContent).toBe('06-29');
+    // About 0.6 em per character at the axis font size: every label fits
+    // between its neighbours and the first starts inside the SVG.
+    const xs = labels.map(l => Number(l.getAttribute('x')));
+    for (const label of labels) {
+      const width = (label.textContent ?? '').length * Number(label.getAttribute('font-size')) * 0.6;
+      expect(Number(label.getAttribute('x')) - width / 2).toBeGreaterThanOrEqual(0);
+      for (let i = 1; i < xs.length; i++) expect(xs[i] - xs[i - 1]).toBeGreaterThan(width);
+    }
+    // The full date is still in the bar title and the data table.
+    expect(screen.getAllByTestId('ledger-bar')[0].querySelector('title')?.textContent).toContain('2026-06-29');
+  });
+
+  it('lets a super_admin dry-run the backfill, then apply it (automation-11)', async () => {
+    const user = userEvent.setup();
+    await mountLoaded();
+    const panel = within(screen.getByTestId('ledger-backfill'));
+    expect(panel.getByRole('heading', { level: 3 }).textContent).toBe('Backfill history');
+    const apply = panel.getByRole('button', { name: 'Apply backfill' }) as HTMLButtonElement;
+    expect(apply.disabled).toBe(true);
+
+    api.runAutomationBackfill.mockResolvedValueOnce(
+      ok({ dryRun: true, inserted: { publish_pipeline: 12, bulk_import: 3 }, skipped: { publish_pipeline: 0, bulk_import: 1 } }),
+    );
+    await user.click(panel.getByRole('button', { name: 'Dry run' }));
+    expect(api.runAutomationBackfill).toHaveBeenLastCalledWith(true);
+    expect((await panel.findByTestId('ledger-backfill-preview')).textContent).toContain(
+      'would insert Publish pipeline 12, Bulk import 3',
+    );
+    expect(screen.getByTestId('ledger-live').textContent).toContain('Dry run: would insert');
+
+    const ledgerCalls = api.fetchAutomationLedger.mock.calls.length;
+    api.runAutomationBackfill.mockResolvedValueOnce(
+      ok({ dryRun: false, inserted: { publish_pipeline: 12, bulk_import: 3 }, skipped: { publish_pipeline: 0, bulk_import: 1 } }),
+    );
+    await user.click(panel.getByRole('button', { name: 'Apply backfill' }));
+    expect(api.runAutomationBackfill).toHaveBeenLastCalledWith(false);
+    expect((await panel.findByTestId('ledger-backfill-applied')).textContent).toContain('inserted Publish pipeline 12');
+    await waitFor(() => expect(api.fetchAutomationLedger.mock.calls.length).toBeGreaterThan(ledgerCalls));
+    // The preview is spent: another apply needs another dry run.
+    expect((panel.getByRole('button', { name: 'Apply backfill' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('shows a backfill refusal and offers the panel to a super_admin only', async () => {
+    const user = userEvent.setup();
+    api.runAutomationBackfill.mockResolvedValue(refused('FORBIDDEN', 'Only a super_admin can backfill.'));
+    await mountLoaded();
+    await user.click(within(screen.getByTestId('ledger-backfill')).getByRole('button', { name: 'Dry run' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('Only a super_admin can backfill.');
+    cleanup();
+
+    signOut();
+    signInAsEditor();
+    await mountLoaded();
+    expect(screen.queryByTestId('ledger-backfill')).toBeNull();
   });
 });

@@ -114,7 +114,31 @@ export function formatPercent(rate: number): string {
   return `${(rate * 100).toFixed(1)}%`;
 }
 
-/** Contract §9.1, restated for the page. */
+/**
+ * The axis label under a bar: `MM-DD`, short enough for its slot. The full
+ * period start stays in the bar's title and in the data table.
+ */
+export function ledgerAxisLabel(periodStart: string): string {
+  return DATE_PATTERN.test(periodStart) ? periodStart.slice(5) : periodStart;
+}
+
+/**
+ * Label every n-th bar so that no two labels overlap: a label of
+ * `labelChars` characters at `fontSize` px is about 0.6 × fontSize px per
+ * character, plus a small gap, and one bar owns `slot` px.
+ */
+export function ledgerLabelEvery(slot: number, labelChars: number, fontSize: number): number {
+  const labelWidth = labelChars * fontSize * 0.6 + 4;
+  return Math.max(1, Math.ceil(labelWidth / slot));
+}
+
+/**
+ * How the Automation Ledger computes its numbers, restated for the page. It
+ * follows what GET /api/v1/admin/automation/ledger computes
+ * (src_C/Vpc/Ledger/LedgerRoutes.cs, after the X01 fixes), not the first draft
+ * of contract §9.1: savings are clamped per automation and source, and a
+ * rejected AI draft is a review cost, never a defect caught.
+ */
 export const LEDGER_DEFINITIONS: ReadonlyArray<{ term: string; definition: string }> = [
   {
     term: 'Run',
@@ -132,21 +156,31 @@ export const LEDGER_DEFINITIONS: ReadonlyArray<{ term: string; definition: strin
   {
     term: 'Actual minutes',
     definition:
-      'Measured human time, such as review time. It counts as 0 when it was not recorded. Draft review time counts only while the review tab is visible and is capped at 30 minutes per draft.',
+      'Measured human time, such as review time. It counts as 0 when it was not recorded. It includes the review time spent on every rejected AI draft. Draft review time counts only while the review tab is visible and is capped at 30 minutes per draft.',
   },
   {
     term: 'Minutes saved',
     definition:
-      'The sum over successful and partial runs of max(0, units × baseline − actual minutes). Failures save nothing. Hours are minutes ÷ 60.',
+      'Per automation and source (live or inferred from history): max(0, Σ units × baseline − Σ actual minutes) over successful and partial events, where actual minutes include review time on rejected drafts. Failures save nothing. The total is the sum of those groups; the chart applies the same rule per period. Hours are minutes ÷ 60.',
+  },
+  {
+    term: 'Live and inferred from history',
+    definition:
+      'Live events are recorded as the automations run. Inferred events come from the super_admin backfill, which reads past publishes and bulk imports; they carry no actual minutes, so live review time never offsets them. The headline shows how much of the total is inferred.',
   },
   {
     term: 'Defects caught before publish',
     definition:
-      'Exactly one of three things: (a) an AI QA blocker or major finding resolved as fixed; (b) an AI draft rejected as incorrect, ambiguous, duplicate or unsupported by its source; (c) a publish refused by the MCQ gate. Nothing else counts.',
+      'Exactly one of two things: (a) an AI QA blocker or major finding resolved as fixed; (b) a publish refused by the MCQ gate (one per refused card version). A rejected AI draft is not a defect caught: it counts in the AI draft defect rate instead. Nothing else counts.',
   },
   {
     term: 'QA false positives',
     definition: 'AI QA findings that were dismissed. They are shown separately and are not defects.',
+  },
+  {
+    term: 'AI draft quality',
+    definition:
+      'From the review decisions on AI drafts in the range. Acceptance rate: accepted (with or without edits) ÷ decided. Edited-accept rate: accepted with edits ÷ accepted. Defect rate: rejected as incorrect, ambiguous, duplicate or unsupported by its source ÷ decided. Average review minutes: the mean recorded review time per decision.',
   },
   {
     term: 'Failure rate',
@@ -154,6 +188,6 @@ export const LEDGER_DEFINITIONS: ReadonlyArray<{ term: string; definition: strin
   },
   {
     term: 'Default baselines',
-    definition: `Seeded placeholders, shown as "${DEFAULT_BASELINE_LABEL}". Time the work and save a measured value to replace them.`,
+    definition: `Seeded placeholders, shown as "${DEFAULT_BASELINE_LABEL}". Time the work and save a measured value to replace them. The headline shows how much of the total rests on them.`,
   },
 ];
