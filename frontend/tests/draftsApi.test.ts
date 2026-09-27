@@ -110,6 +110,21 @@ describe('src/api/drafts', () => {
     expect(res.data).toEqual({ draftId: 41, cardId: 901, stableUid: card.stableUid, action: 'edited_accepted' });
   });
 
+  it('sends runQa and reads the chained AI QA run back (automation-17)', async () => {
+    httpMock.post.mockResolvedValue({
+      data: ok({
+        draftId: 41,
+        cardId: 901,
+        stableUid: 's',
+        action: 'accepted',
+        qa: { status: 'queued', runId: 'run-5', code: null, message: null },
+      }),
+    });
+    const res = await api.acceptDraft(41, { reviewMs: 1, runQa: true });
+    expect(httpMock.post).toHaveBeenCalledWith('/api/v1/authoring/drafts/41/accept', { reviewMs: 1, runQa: true });
+    expect(res.data?.qa).toEqual({ status: 'queued', runId: 'run-5', code: null, message: null });
+  });
+
   it('rejects with a reason through POST /api/v1/authoring/drafts/:draftId/reject', async () => {
     httpMock.post.mockResolvedValue({ data: ok({ draftId: 41, action: 'rejected' }) });
 

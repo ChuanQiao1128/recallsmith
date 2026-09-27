@@ -22,9 +22,11 @@ export type DraftRejectReason =
   | 'other';
 
 /**
- * Where the draft's quote was found in the ingested source (Y06 contract):
- * the chunk and source it was matched against, whether it matched, and how
- * many characters the quote has. Absent when the draft carries none.
+ * Where the draft's quote was found in the ingested source. Cross-wave contract
+ * (r18z-c, ai-agent-24): the MCP server's submit_draft sends it INSIDE the card
+ * as `card.source.grounding = { chunkId, sourceId, matched: true, quoteChars }`,
+ * core-vpc keeps it on the stored draft and returns it on GET drafts, and strips
+ * it on accept. Absent when the draft was submitted outside the MCP server.
  */
 export type DraftGrounding = { chunkId: string; sourceId: string; matched: boolean; quoteChars: number };
 
@@ -93,11 +95,20 @@ export type Draft = DraftSummary & {
 
 export type DraftsPage = { items: DraftSummary[]; nextCursor: string | null };
 
+/**
+ * What became of the AI QA run an accept with `runQa: true` chained
+ * (automation-17): `queued`/`in_progress` carry the run id; `nothing_to_review`,
+ * `not_started` and `disabled` carry the reason in `code`/`message`.
+ */
+export type DraftAcceptQa = { status: string; runId: string | null; code: string | null; message: string | null };
+
 export type DraftAcceptResult = {
   draftId: number;
   cardId: number;
   stableUid: string;
   action: 'accepted' | 'edited_accepted';
+  /** Present only when the accept asked for runQa. */
+  qa?: DraftAcceptQa;
 };
 
 export type DraftRejectResult = { draftId: number; action: 'rejected' };
