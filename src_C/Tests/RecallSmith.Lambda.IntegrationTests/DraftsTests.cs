@@ -529,6 +529,17 @@ public class DraftsTests
     Assert.True(grounding.GetProperty("matched").GetBoolean());
     Assert.Equal(SourceQuote.Length, grounding.GetProperty("quoteChars").GetInt32());
 
+    // Keys outside the contract (the MCP server's kind, url, offsets) are dropped, not a reason to reject the draft.
+    var extra = new Dictionary<string, object?>
+    {
+      ["chunkId"] = "c0002", ["sourceId"] = "src-synthetic-2", ["matched"] = true, ["quoteChars"] = 43,
+      ["kind"] = "url", ["url"] = SourceUrl, ["chunkCharStart"] = 30, ["chunkCharEnd"] = 191,
+    };
+    var extraId = (await SubmitCardsAsync(deck.Id, GroundedCard("grounded-extra", extra)))[0];
+    var kept = Data(await GetAsync(extraId)).GetProperty("card").GetProperty("source").GetProperty("grounding");
+    Assert.Equal(new[] { "chunkId", "matched", "quoteChars", "sourceId" }, kept.EnumerateObject().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray());
+    Assert.Equal(43, kept.GetProperty("quoteChars").GetInt32());
+
     // A draft without grounding has none.
     Assert.False(Data(await GetAsync(ids[1])).GetProperty("card").GetProperty("source").TryGetProperty("grounding", out _));
 
@@ -543,7 +554,6 @@ public class DraftsTests
 
   [Theory]
   [InlineData("notObject")]
-  [InlineData("unknownKey")]
   [InlineData("notMatched")]
   [InlineData("blankChunk")]
   [InlineData("missingSource")]
@@ -555,7 +565,6 @@ public class DraftsTests
     object grounding = variant switch
     {
       "notObject" => "chunk-1",
-      "unknownKey" => new Dictionary<string, object?> { ["chunkId"] = "c", ["sourceId"] = "s", ["matched"] = true, ["quoteChars"] = 3, ["score"] = 1 },
       "notMatched" => Grounding(matched: false),
       "blankChunk" => Grounding(chunkId: "  "),
       "missingSource" => new Dictionary<string, object?> { ["chunkId"] = "c", ["matched"] = true, ["quoteChars"] = 3 },

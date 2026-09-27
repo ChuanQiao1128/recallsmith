@@ -33,7 +33,6 @@ public sealed class DraftCardError : Exception
 public sealed record DraftCard(string StableUid, int Difficulty, string? Topic, string Question, string Explanation,
   string? CodeSnippet, string? CodeLanguage, string? RealWorldUsage, string? McqJson, string SourceJson, string? GroundingJson = null)
 {
-  public static readonly IReadOnlyList<string> GroundingKeys = ["chunkId", "sourceId", "matched", "quoteChars"];
   public const int MaxGroundingIdLength = 200;
   public const int MaxGroundingQuoteChars = 100_000;
 
@@ -197,18 +196,15 @@ public sealed record DraftCard(string StableUid, int Difficulty, string? Topic, 
 
   /// <summary>
   /// <c>source.grounding</c> → canonical <c>{"chunkId":…,"sourceId":…,"matched":true,"quoteChars":…}</c>, or null
-  /// for JSON null. Exactly those keys; ids non-blank strings (trimmed, max <see cref="MaxGroundingIdLength"/>);
-  /// matched the literal true (an unmatched quote is not grounding); quoteChars an integer in
-  /// 0..<see cref="MaxGroundingQuoteChars"/>. Throws <see cref="ValidationError"/>.
+  /// for JSON null. Ids non-blank strings (trimmed, max <see cref="MaxGroundingIdLength"/>); matched the literal
+  /// true (an unmatched quote is not grounding); quoteChars an integer in 0..<see cref="MaxGroundingQuoteChars"/>.
+  /// Other keys (the MCP server's kind, url and chunk offsets) are dropped rather than rejected: they are review
+  /// metadata outside the contract, and a draft must not fail over them. Throws <see cref="ValidationError"/>.
   /// </summary>
   public static string? NormalizeGrounding(JsonElement el)
   {
     if (el.ValueKind == JsonValueKind.Null) return null;
     if (el.ValueKind != JsonValueKind.Object) throw new ValidationError("source.grounding must be an object", "source");
-    foreach (var prop in el.EnumerateObject())
-    {
-      if (!GroundingKeys.Contains(prop.Name)) throw new ValidationError($"source.grounding has unknown key {prop.Name}", "source");
-    }
 
     string Id(string key)
     {
