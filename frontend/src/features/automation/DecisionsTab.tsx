@@ -14,10 +14,16 @@
 //
 // Closing the detail returns focus to the row's Details button, or to the
 // Decisions heading when that row is not loaded (C07 frontend-console-18).
+//
+// The checkbox says what the server filter is: routed to a person and still
+// pending (D07 frontend-console-27). Filtering by "Would be accepted" shows
+// every row's verdict, so those rows are recorded as seen and a later
+// decision on them is not counted as blind (frontend-console-25).
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
 import { listAutomationDecisions, type AutomationDecision } from '../../api/automation';
+import { markVerdictSeen } from '../../lib/automationVerdictSeen';
 import { CARD_CLASS, H2_CLASS, INPUT_CLASS, LABEL_CLASS } from '../../components/console/consoleStyles';
 import { Button } from '../../components/ui/Button';
 import { Callout } from '../../components/ui/Callout';
@@ -28,6 +34,7 @@ import {
   decisionFiltersFrom,
   decisionReasonLabel,
   decisionStateLabel,
+  decisionVerdictHidden,
   hiddenDecidedText,
   isOpenDecision,
   withDecisionFilters,
@@ -137,6 +144,14 @@ export function DecisionsTab({
   }
 
   const shown = openOnly ? list.items.filter(isOpenDecision) : list.items;
+  // The state filter itself tells the verdict of every row it lists.
+  const verdictFiltered = state === 'would_accept';
+
+  useEffect(() => {
+    if (state !== 'would_accept') return;
+    const ids = list.items.filter(decisionVerdictHidden).map(d => d.draftId);
+    if (ids.length > 0) markVerdictSeen(...ids);
+  }, [state, list.items]);
   const closeSearch = `?${withDecisionFilters(new URLSearchParams({ tab: 'decisions' }), filters).toString()}`;
 
   return (
@@ -205,7 +220,7 @@ export function DecisionsTab({
               onChange={e => setFilters({ openOnly: e.target.checked })}
             />
             <label htmlFor={OPEN_ID} className="text-xs font-medium text-slate-700">
-              Open only (no person has decided)
+              Open exceptions only (routed to you, still pending)
             </label>
           </div>
           <Button variant="outline" size="xs" loading={loading} onClick={() => setNonce(n => n + 1)}>
@@ -221,9 +236,14 @@ export function DecisionsTab({
           ) : loading && list.items.length === 0 ? (
             <p className="text-sm text-slate-600">Loading the decisions…</p>
           ) : (
-            <DecisionTable items={shown} onOpenDecision={onOpenDecision} />
+            <DecisionTable items={shown} onOpenDecision={onOpenDecision} revealAll={verdictFiltered} />
           )}
         </div>
+        {verdictFiltered ? (
+          <p className="mt-1 text-xs text-slate-600" data-testid="automation-decisions-verdict-filter">
+            This filter shows the verdict: a later decision on these drafts counts as not blind.
+          </p>
+        ) : null}
         {openOnly && !list.error && list.items.length > shown.length ? (
           <p className="mt-1 text-xs text-slate-600">{hiddenDecidedText(list.items.length - shown.length)}</p>
         ) : null}

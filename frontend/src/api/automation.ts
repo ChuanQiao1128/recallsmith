@@ -48,6 +48,8 @@ export type EvalGate = {
   createdAt: string;
   revokedAt: string | null;
   revokedBySub: string | null;
+  /** M1 (R18D): the author configuration the gate measured; null when unset or on an older server. */
+  authorConfigId: string | null;
 };
 
 export type EvalGateState = { current: EvalGate | null; history: EvalGate[] };
@@ -65,8 +67,18 @@ export type AutomationStatus = {
     humanAccepted: number;
     humanEditedAccepted: number;
     humanRejected: number;
+    /**
+     * M3 (R18D): blindAccepted / blindDecided, computed by the server; null when
+     * blindDecided is 0. The console never computes a rate of its own.
+     */
     agreementRate: number | null;
+    /** C02/M3: would-accept drafts a person decided without seeing the verdict; null on an older server. */
+    blindDecided: number | null;
+    /** Of blindDecided, the ones accepted unedited; null on an older server. */
+    blindAccepted: number | null;
   };
+  /** M2 (R18D): the quality of live auto-accepts over 30 days. Null when the server predates the field. */
+  live: AutomationLive | null;
   publishes7d: { byState: Record<string, number> };
   spend: { todayUsd: number; automationTodayUsd: number; reservedUsd: number; dailyCapUsd: number };
   watch: { targets: number; active: number; failing: number; lastCheckedAt: string | null; changes7d: number };
@@ -80,6 +92,15 @@ export type AutomationStatus = {
   };
   /** K7: the open exceptions. Null when the server predates the field. */
   backlog: AutomationBacklog | null;
+};
+
+/** M2 (R18D): auto-accepted cards a person later deleted or edited, over the last 30 days. */
+export type AutomationLive = {
+  autoAccepted30d: number;
+  deletedByPerson: number;
+  editedByPerson: number;
+  /** (deleted + edited) / autoAccepted30d; null when autoAccepted30d is 0. */
+  overrideRate: number | null;
 };
 
 /** K7 (R18B): what still needs a person, whenever it was routed. */
@@ -365,6 +386,7 @@ function normalizeEvalGate(value: unknown): EvalGate | null {
     createdAt: toText(value.createdAt),
     revokedAt: toNullableText(value.revokedAt),
     revokedBySub: toNullableText(value.revokedBySub),
+    authorConfigId: typeof value.authorConfigId === 'string' && value.authorConfigId !== '' ? value.authorConfigId : null,
   };
 }
 
@@ -402,7 +424,10 @@ function normalizeStatus(data: unknown): AutomationStatus | null {
       humanEditedAccepted: toNumber(shadow.humanEditedAccepted),
       humanRejected: toNumber(shadow.humanRejected),
       agreementRate: toNumber(shadow.agreementRate, true),
+      blindDecided: toNumber(shadow.blindDecided, true),
+      blindAccepted: toNumber(shadow.blindAccepted, true),
     },
+    live: normalizeLive(data.live),
     publishes7d: { byState: normalizeCounts(asRecord(data.publishes7d).byState) },
     spend: {
       todayUsd: toNumber(spend.todayUsd),
@@ -425,6 +450,16 @@ function normalizeStatus(data: unknown): AutomationStatus | null {
       lastSentAt: toNullableText(notifications.lastSentAt),
     },
     backlog: normalizeBacklog(data.backlog),
+  };
+}
+
+function normalizeLive(value: unknown): AutomationLive | null {
+  if (!isRecord(value)) return null;
+  return {
+    autoAccepted30d: toNumber(value.autoAccepted30d),
+    deletedByPerson: toNumber(value.deletedByPerson),
+    editedByPerson: toNumber(value.editedByPerson),
+    overrideRate: toNumber(value.overrideRate, true),
   };
 }
 

@@ -9,6 +9,11 @@
 // Each run shows the agent's notes (K3 `summary`): the runner's final-message
 // notes, the channel the agent uses to report an existing card that looks
 // wrong. They render as plain text, never as markup.
+//
+// A failed run shows its error under the Outcome (D07 frontend-console-24),
+// clipped in the table and in full in the run's Decisions section, where the
+// runner_run_failed email's `?runId=` deep link lands. A run's decisions page
+// with Load more like the Decisions tab (frontend-console-28).
 import { useEffect, useRef, useState } from 'react';
 
 import {
@@ -38,6 +43,12 @@ import type { ApiError } from '../../types/api';
 import { DecisionTable } from './DecisionTable';
 
 const PAGE_SIZE = 50;
+/** The run error shown in a table cell; the run's Decisions section shows it in full. */
+const RUN_ERROR_CELL_MAX = 200;
+
+function clipError(text: string): string {
+  return text.length > RUN_ERROR_CELL_MAX ? `${text.slice(0, RUN_ERROR_CELL_MAX - 1)}…` : text;
+}
 const STATUS_ID = 'automation-runs-status';
 
 type ListState<T> = { forKey: string | null; error: string | null; items: T[]; nextCursor: string | null };
@@ -69,6 +80,8 @@ export function RunsTab({
   // The list key a Load more is running for; another key's Load more is not busy.
   const [loadingMoreKey, setLoadingMoreKey] = useState<string | null>(null);
   const [moreError, setMoreError] = useState<{ forKey: string; text: string } | null>(null);
+  const [decisionsMoreKey, setDecisionsMoreKey] = useState<string | null>(null);
+  const [decisionsMoreError, setDecisionsMoreError] = useState<{ forKey: string; text: string } | null>(null);
   const decisionsHeadingRef = useRef<HTMLHeadingElement>(null);
 
   const runsKey = `${status}|${nonce}`;
@@ -147,6 +160,26 @@ export function RunsTab({
 
   const decisionsLoading = decisions.forKey !== decisionsKey;
 
+  async function onLoadMoreDecisions() {
+    if (!runId || !decisions.nextCursor || decisionsLoading) return;
+    const startKey = decisionsKey;
+    setDecisionsMoreKey(startKey);
+    setDecisionsMoreError(null);
+    const res = await listAutomationDecisions({ runId, limit: PAGE_SIZE, cursor: decisions.nextCursor });
+    setDecisionsMoreKey(k => (k === startKey ? null : k));
+    if (!res.success || !res.data) {
+      setDecisionsMoreError({ forKey: startKey, text: errorText(res.error, "Failed to load more of the run's decisions.") });
+      return;
+    }
+    const page = res.data;
+    // Appended only to the run it was asked for: opening another run meanwhile drops it.
+    setDecisions(prev =>
+      prev.forKey === startKey ? { ...prev, items: [...prev.items, ...page.items], nextCursor: page.nextCursor } : prev,
+    );
+  }
+
+  const openRun = runId ? (runs.items.find(r => r.runId === runId) ?? null) : null;
+
   return (
     <div className="space-y-4">
       <section className={CARD_CLASS} aria-label="Runs">
@@ -219,7 +252,17 @@ export function RunsTab({
                     <td className={TD_CLASS}>{orDash(r.deckSlug)}</td>
                     <td className={TD_CLASS}>{r.runnerId}</td>
                     <td className={TD_CLASS}>{codeLabel(RUN_STATUS_LABELS, r.status)}</td>
-                    <td className={TD_CLASS}>{codeLabel(RUN_OUTCOME_LABELS, r.outcome)}</td>
+                    <td className={TD_CLASS}>
+                      {codeLabel(RUN_OUTCOME_LABELS, r.outcome)}
+                      {r.error ? (
+                        <div
+                          className="max-w-xs text-xs text-slate-600 break-words"
+                          data-testid={`automation-run-error-${r.runId}`}
+                        >
+                          {clipError(r.error)}
+                        </div>
+                      ) : null}
+                    </td>
                     <td className={TD_CLASS}>{formatTimestamp(r.startedAt)}</td>
                     <td className={TD_CLASS}>
                       {`${r.counts.submitted} / ${r.counts.autoAccepted} / ${r.counts.wouldAccept} / ${r.counts.human} / ${r.counts.superseded}`}
@@ -290,6 +333,13 @@ export function RunsTab({
           <h2 ref={decisionsHeadingRef} tabIndex={-1} className={`${H2_CLASS} focus:outline-none`}>
             Decisions of run <span className="font-mono">{shortId(runId)}</span>
           </h2>
+          {openRun?.error ? (
+            <div className="mt-2" data-testid="automation-run-error-full">
+              <Callout tone="danger" title="Why this run failed">
+                <span className="whitespace-pre-wrap break-words">{openRun.error}</span>
+              </Callout>
+            </div>
+          ) : null}
           <div className="mt-2">
             {decisions.error ? (
               <Callout tone="danger" role="alert">
@@ -301,6 +351,26 @@ export function RunsTab({
               <DecisionTable items={decisions.items} onOpenDecision={onOpenDecision} />
             )}
           </div>
+          {decisionsMoreError && decisionsMoreError.forKey === decisionsKey ? (
+            <div className="mt-2">
+              <Callout tone="danger" role="alert">
+                {decisionsMoreError.text}
+              </Callout>
+            </div>
+          ) : null}
+          {decisions.nextCursor && !decisionsLoading && !decisions.error ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <span className="text-xs text-slate-600">{`${decisions.items.length} shown; this run has more.`}</span>
+              <Button
+                variant="outline"
+                size="xs"
+                loading={decisionsMoreKey === decisionsKey}
+                onClick={() => void onLoadMoreDecisions()}
+              >
+                Load more decisions
+              </Button>
+            </div>
+          ) : null}
         </section>
       ) : null}
     </div>

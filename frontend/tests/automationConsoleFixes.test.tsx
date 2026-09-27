@@ -193,7 +193,8 @@ describe('handled vs open exceptions (frontend-console-1, automation-10, K7)', (
       }),
     );
 
-    await user.click(screen.getByLabelText('Open only (no person has decided)'));
+    // D07 frontend-console-27: the label says what the server filter is.
+    await user.click(screen.getByLabelText('Open exceptions only (routed to you, still pending)'));
     // The filters are written in one canonical order.
     expect(screen.getByTestId('loc').textContent).toBe(
       '/automation?tab=decisions&deckId=7&state=human&reason=QA_FLAGGED&open=1',
@@ -478,10 +479,15 @@ describe('accessible names and invalid fields (frontend-console-9)', () => {
     await user.type(await screen.findByLabelText('Title'), 'x'.repeat(301));
     await user.click(screen.getByRole('button', { name: 'Add to queue' }));
     await screen.findByText('Enter a URL.');
-    for (const label of ['URL', 'Deck', 'Title']) {
+    // D07 frontend-console-28: each field points at its own message, not at the whole list.
+    for (const [label, field_] of [
+      ['URL', 'url'],
+      ['Deck', 'deckId'],
+      ['Title', 'title'],
+    ] as const) {
       const field = screen.getByLabelText(label);
       expect(field.getAttribute('aria-invalid'), label).toBe('true');
-      expect(field.getAttribute('aria-describedby'), label).toBe('automation-queue-problems');
+      expect(field.getAttribute('aria-describedby'), label).toBe(`automation-queue-problems-${field_}`);
       expect(field.className, label).toContain('border-red-400');
     }
     const note = screen.getByLabelText('Note');
