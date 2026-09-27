@@ -77,6 +77,9 @@ module "identity" {
   secret_parameter_names = ["pg-password", "migrate-secret", "internal-shared-secret", "rc-webhook-auth-production", "rc-webhook-auth-development", "webhook-signing-secret", "anthropic-api-key", "webhook-report-secret", "ai-qa-results-secret", "source-watch-secret", "notifier-secret"]
 
   console_hostname = "console.${var.domain}"
+
+  # R18A A11: the automation email recipient (sensitive; never printed).
+  notify_recipient_email = local.alert_email
 }
 
 module "data" {
@@ -111,6 +114,9 @@ module "edge" {
   domain           = var.domain
   manage_domain    = true
   site_bucket_name = "developercards-site-622994489535"
+
+  # R18A A11: the SES recipient identity (sensitive; never printed).
+  notify_recipient_email = local.alert_email
 }
 
 module "api" {
