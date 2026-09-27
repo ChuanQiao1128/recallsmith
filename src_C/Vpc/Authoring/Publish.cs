@@ -306,11 +306,15 @@ public static class Publish
   /// <c>deck_publishes</c> insert and the SQS send. <paramref name="bindSnapshot"/> stores the gated-vs-current digest
   /// in <c>qa_snapshot_sha256</c>; a non-null <paramref name="expectedSnapshot"/> that differs from the digest of the
   /// cards read here is refused <c>AI_QA_STALE</c>; <paramref name="allowResume"/> = false refuses any active job of
-  /// the deck with <c>PUBLISH_IN_PROGRESS</c> instead of returning it. Validation errors, a <c>23505</c> on
-  /// <c>uq_deck_publishes_active</c> and SQS failures (after the job is marked <c>FAILED</c>) propagate as exceptions.
+  /// the deck with <c>PUBLISH_IN_PROGRESS</c> instead of returning it. A non-null <paramref name="expectedDeckUpdatedAt"/>
+  /// (the automation's check 5 value) that is no longer the deck's <c>updated_at</c> is refused <c>AI_QA_STALE</c> too,
+  /// and is stored on the job so the Worker refuses to build after a later settings edit (R18C, backend-design-11). Every
+  /// job records the ids of the deck's live cards at its insert in <c>card_ids</c> (backend-design-12). Validation
+  /// errors, a <c>23505</c> on <c>uq_deck_publishes_active</c> and SQS failures (after the job is marked
+  /// <c>FAILED</c>) propagate as exceptions.
   /// </summary>
   internal static async Task<PublishStart> StartPublishAsync(NpgsqlConnection conn, long deckId, string actorSub, string? note,
-    bool bindSnapshot, string? expectedSnapshot, bool allowResume, CancellationToken ct = default)
+    bool bindSnapshot, string? expectedSnapshot, bool allowResume, DateTime? expectedDeckUpdatedAt = null, CancellationToken ct = default)
   {
     ct.ThrowIfCancellationRequested();
     var queueUrl = TestEnqueueSeam?.QueueUrl ?? PublishJobQueueUrl;
@@ -324,6 +328,12 @@ public static class Publish
     // The automation checked exactly these cards; anything else changed since (A00 §6.3).
     if (expectedSnapshot is not null &&
         !string.Equals(expectedSnapshot, PublishSnapshot.Digest(cardRows.Select(PublishSnapshot.FromRow)), StringComparison.Ordinal))
+    {
+      return StaleRefusal(deckId);
+    }
+    // The automation checked exactly these deck settings; a human edit since then is shipped only by a human.
+    if (expectedDeckUpdatedAt is { } checkedAt &&
+        await DbUtil.ExecuteScalarAsync(conn, null, "select updated_at is distinct from $2 from decks where id = $1", [deckId, checkedAt]) is not false)
     {
       return StaleRefusal(deckId);
     }
@@ -414,8 +424,25 @@ public static class Publish
       insert into deck_publishes (job_id, build_id, s3_key, deck_id, deck_slug, status, published_by_admin_sub, note, qa_snapshot_sha256)
       values ($1, $2, $3, $4, $5, 'PENDING', $6, $7, $8)
       """;
-    if (qaSnapshot is null) await DbUtil.ExecuteAsync(conn, null, insertJobSql, [jobId, buildId, s3Key, deckId, deckSlug, actorSub, note]);
-    else await DbUtil.ExecuteAsync(conn, null, insertGatedJobSql, [jobId, buildId, s3Key, deckId, deckSlug, actorSub, note, qaSnapshot]);
+    // 035+: the job also records the deck's live card ids and the checked deck settings (R18C, backend-design-11/-12).
+    const string insertRecordedJobSql = """
+      insert into deck_publishes (job_id, build_id, s3_key, deck_id, deck_slug, status, published_by_admin_sub, note, qa_snapshot_sha256,
+        deck_updated_at, card_ids)
+      values ($1, $2, $3, $4, $5, 'PENDING', $6, $7, $8::text, $9::timestamptz,
+        (select coalesce(array_agg(c.id order by c.id), '{}'::bigint[]) from cards c where c.deck_id = $4 and c.is_deleted = 0))
+      """;
+    try
+    {
+      await DbUtil.ExecuteAsync(conn, null, insertRecordedJobSql,
+        [jobId, buildId, s3Key, deckId, deckSlug, actorSub, note, qaSnapshot, expectedDeckUpdatedAt]);
+    }
+    catch (PostgresException pg) when (pg.SqlState == "42703" && expectedDeckUpdatedAt is null)
+    {
+      // Pre-035 window (code shipped, console Migrate not yet clicked): a console publish records nothing extra. An
+      // automation publish never runs unbound, so it keeps the error.
+      if (qaSnapshot is null) await DbUtil.ExecuteAsync(conn, null, insertJobSql, [jobId, buildId, s3Key, deckId, deckSlug, actorSub, note]);
+      else await DbUtil.ExecuteAsync(conn, null, insertGatedJobSql, [jobId, buildId, s3Key, deckId, deckSlug, actorSub, note, qaSnapshot]);
+    }
 
     // 3. Create the SQS message payload
     var messageBody = JsonSerializer.Serialize(new

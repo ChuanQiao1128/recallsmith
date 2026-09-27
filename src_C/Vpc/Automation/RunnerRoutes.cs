@@ -414,6 +414,7 @@ public static class RunnerRoutes
     catch (Exception ex)
     {
       Log.Event("warn", new { tag = "automation", reason = "after_complete_failed", runId, error = ex.Message });
+      AutomationFailures.Record();
     }
   }
 

@@ -34,6 +34,12 @@ public static class Notifications
   /// status API's email health (R18B K6). It is never sent again: SQS redelivery and the notify DLQ own its retries.
   /// </summary>
   public const int UnconfirmedAfterMinutes = 60;
+  /// <summary>
+  /// A row still <c>queued</c> with 0 attempts this long after its insert was never handed to SQS: the process died
+  /// between the insert and the send (R18C, backend-design-9/automation-17). The tick sends it; no SQS send happened
+  /// for it, so this cannot be a second email.
+  /// </summary>
+  public const int NeverSentAfterMinutes = 10;
   public const int DefaultListLimit = 50, MaxListLimit = 100;
 
   public static readonly IReadOnlyList<string> Kinds = ["exception", "batch_summary", "weekly_digest", "source_changed", "test"];
@@ -89,19 +95,27 @@ public static class Notifications
       }
 
       Log.Event("info", new { tag = "automation", outcome = "notification_logged", notificationId, kind = request.Kind, subkind = request.Subkind, mode = request.Mode });
-      if (request.Kind == "exception")
+      // The email is sent right after its insert, before the webhook side effect (R18C, backend-design-9): the window in
+      // which a dying process leaves a never-sent 'queued' row is as short as it can be, and the tick's resend covers it.
+      string status;
+      try
       {
-        await WebhookEvents.EnqueueAsync(conn, "automation.exception", new
-        {
-          subkind = request.Subkind,
-          mode = request.Mode,
-          summary = EmailTemplates.Cap(request.Email.Summary, EmailTemplates.MaxSummaryLength),
-          refs = request.Refs ?? new Dictionary<string, object?>(),
-          consoleUrl = request.ConsoleUrl ?? EmailTemplates.AutomationUrl(ConsoleBaseUrl()),
-        }, ct: ct);
+        status = await SendAsync(conn, notificationId, request.Kind, request.Subkind, subject, request.Email.BodyText, request.Mode, ct);
       }
-
-      var status = await SendAsync(conn, notificationId, request.Kind, request.Subkind, subject, request.Email.BodyText, request.Mode, ct);
+      finally
+      {
+        if (request.Kind == "exception")
+        {
+          await WebhookEvents.EnqueueAsync(conn, "automation.exception", new
+          {
+            subkind = request.Subkind,
+            mode = request.Mode,
+            summary = EmailTemplates.Cap(request.Email.Summary, EmailTemplates.MaxSummaryLength),
+            refs = request.Refs ?? new Dictionary<string, object?>(),
+            consoleUrl = request.ConsoleUrl ?? EmailTemplates.AutomationUrl(ConsoleBaseUrl()),
+          }, ct: ct);
+        }
+      }
       return new NotificationResult(notificationId, status, true);
     }
     catch (PostgresException pg) when (pg.SqlState is "42P01" or "42703")
@@ -112,6 +126,7 @@ public static class Notifications
     catch (Exception ex)
     {
       Log.Event("warn", new { tag = "automation", reason = "notification_enqueue_failed", kind = request.Kind, subkind = request.Subkind, error = ex.Message });
+      AutomationFailures.Record();
       return null;
     }
   }
@@ -147,15 +162,18 @@ public static class Notifications
     catch (Exception ex)
     {
       Log.Event("warn", new { tag = "automation", reason = "raise_exception_failed", subkind, error = ex.Message });
+      AutomationFailures.Record();
       return null;
     }
   }
 
   /// <summary>
   /// Tick step 11: rows <c>enqueue_failed</c> with fewer than <see cref="MaxSendAttempts"/> attempts, oldest first, at
-  /// most <paramref name="max"/>, are sent again (the same message). A <c>queued</c> row is never sent again (R18B K6):
-  /// its SQS send succeeded, so SQS redelivery and the notify DLQ own its retries, and a second send would be a second
-  /// email when only the notifier's report was lost. Returns how many were sent again. Never throws.
+  /// most <paramref name="max"/>, are sent again (the same message). A <c>queued</c> row with attempts is never sent
+  /// again (R18B K6): its SQS send was attempted, so SQS redelivery and the notify DLQ own its retries, and a second send
+  /// would be a second email when only the notifier's report was lost. A <c>queued</c> row with 0 attempts older than
+  /// <see cref="NeverSentAfterMinutes"/> was never handed to SQS (the process died after the insert) and is sent now
+  /// (R18C, backend-design-9/automation-17). Returns how many were sent. Never throws.
   /// </summary>
   internal static async Task<int> ResendAsync(NpgsqlConnection conn, int max, CancellationToken ct = default)
   {
@@ -165,11 +183,13 @@ public static class Notifications
         $"""
         select notification_id, kind, subkind, subject, body_text, mode
         from automation_notifications
-        where attempts < $1 and status = 'enqueue_failed'
+        where attempts < $1
+          and (status = 'enqueue_failed'
+               or (status = 'queued' and attempts = 0 and created_at < now() - make_interval(mins => $3)))
         order by created_at, id
         limit $2
         """,
-        [MaxSendAttempts, max]);
+        [MaxSendAttempts, max, NeverSentAfterMinutes]);
       var resent = 0;
       foreach (var row in rows)
       {

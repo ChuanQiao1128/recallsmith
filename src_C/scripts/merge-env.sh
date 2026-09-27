@@ -17,6 +17,14 @@ SSM_TO_ENV="${SSM_TO_ENV%\}},${SSM_TO_ENV_INTERNAL#\{}"
 # a key would outlive its deleted leaf (a rotation that has ended would keep accepting the old secret).
 # deploy.sh drops each of these from the live environment when the path no longer holds its leaf.
 SSM_OPTIONAL_ENV='["INTERNAL_SHARED_SECRET_PREVIOUS","INTERNAL_SECRET_AI_QA_RESULTS","INTERNAL_SECRET_AI_QA_RESULTS_PREVIOUS","INTERNAL_SECRET_WEBHOOK_REPORT","INTERNAL_SECRET_WEBHOOK_REPORT_PREVIOUS","INTERNAL_SECRET_SOURCE_WATCH","INTERNAL_SECRET_SOURCE_WATCH_PREVIOUS","INTERNAL_SECRET_NOTIFIER","INTERNAL_SECRET_NOTIFIER_PREVIOUS"]'
+# R18C L2 (cloud-security-resilience-9): Terraform seeds every secret leaf with a committed placeholder value until the
+# owner's post-apply secret step sets it. An internal-secret leaf (the rows of SSM_TO_ENV_INTERNAL) whose value starts
+# with PLACEHOLDER_SECRET_PREFIX or is shorter than MIN_INTERNAL_SECRET_LENGTH is never deployed: drop_placeholder_secrets
+# removes it with a warning, and drop_absent_optional then removes a stale copy from the live environment, so core-vpc
+# answers "Missing <env>" instead of verifying signatures against a string that is public in the repo.
+PLACEHOLDER_SECRET_PREFIX='PLACEHOLDER-'
+MIN_INTERNAL_SECRET_LENGTH=32
+SSM_PLACEHOLDER_CHECKED_ENV="$(jq -c '[.[]]' <<<"$SSM_TO_ENV_INTERNAL")"
 # Leaves read by a Python Lambda at cold start; they never become a core-vpc/worker env var (R18-00 §14 #8).
 # webhook-signing-secret-previous exists only while a signing-secret rotation is in progress (dispatcher
 # README runbook); deploy.sh reads the whole path, so it must be skipped here or every deploy in that
@@ -62,6 +70,21 @@ ssm_to_env() {
         end
     )
     ' <<<"${1:-null}"
+}
+
+# drop_placeholder_secrets SECRETS_JSON
+#   → SECRETS_JSON without each SSM_PLACEHOLDER_CHECKED_ENV key whose value starts with PLACEHOLDER_SECRET_PREFIX or
+#     is shorter than MIN_INTERNAL_SECRET_LENGTH; one warning per dropped key on stderr (the key name, never the value).
+drop_placeholder_secrets() {
+  local filter dropped key
+  filter='.key as $k | (.value | tostring) as $v | ($keys | index($k)) != null and (($v | startswith($p)) or ($v | length) < $min)'
+  dropped="$(jq -r --argjson keys "$SSM_PLACEHOLDER_CHECKED_ENV" --arg p "$PLACEHOLDER_SECRET_PREFIX" --argjson min "$MIN_INTERNAL_SECRET_LENGTH" \
+    "(. // {}) | to_entries[] | select($filter) | .key" <<<"${1:-null}")" || return 1
+  for key in $dropped; do
+    echo "warning: $key holds a placeholder or a value shorter than $MIN_INTERNAL_SECRET_LENGTH characters; not deployed (set its SSM leaf first)" >&2
+  done
+  jq -c --argjson keys "$SSM_PLACEHOLDER_CHECKED_ENV" --arg p "$PLACEHOLDER_SECRET_PREFIX" --argjson min "$MIN_INTERNAL_SECRET_LENGTH" \
+    "(. // {}) | with_entries(select(($filter) | not))" <<<"${1:-null}"
 }
 
 # drop_absent_optional CURRENT_JSON SECRETS_JSON
