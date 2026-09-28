@@ -117,19 +117,45 @@ resource "aws_cloudwatch_metric_alarm" "worker_throttles" {
 
 resource "aws_cloudwatch_metric_alarm" "core_vpc_duration_p95" {
   alarm_name          = "developercards-${var.env}-core-vpc-duration-p95"
-  alarm_description   = "The core-vpc function p95 duration stayed above three seconds for fifteen minutes."
-  namespace           = "AWS/Lambda"
-  metric_name         = "Duration"
-  extended_statistic  = "p95"
-  dimensions          = { FunctionName = var.core_vpc_function_name }
+  alarm_description   = "The core-vpc function p95 duration stayed above three seconds for fifteen minutes while it served at least ten requests in each five-minute period. Periods with fewer requests count as healthy, so isolated cold starts at low traffic do not page."
   comparison_operator = "GreaterThanThreshold"
   threshold           = 3000
-  period              = 300
   evaluation_periods  = 3
   datapoints_to_alarm = 3
   treat_missing_data  = "notBreaching"
   alarm_actions       = [aws_sns_topic.alerts.arn]
   ok_actions          = [aws_sns_topic.alerts.arn]
+
+  metric_query {
+    id          = "loaded_p95"
+    expression  = "IF(invocations >= 10, p95, 0)"
+    label       = "core-vpc p95 duration (ms) when at least 10 requests"
+    return_data = true
+  }
+
+  metric_query {
+    id          = "p95"
+    return_data = false
+    metric {
+      namespace   = "AWS/Lambda"
+      metric_name = "Duration"
+      stat        = "p95"
+      period      = 300
+      dimensions  = { FunctionName = var.core_vpc_function_name }
+    }
+  }
+
+  metric_query {
+    id          = "invocations"
+    return_data = false
+    metric {
+      namespace   = "AWS/Lambda"
+      metric_name = "Invocations"
+      stat        = "Sum"
+      period      = 300
+      dimensions  = { FunctionName = var.core_vpc_function_name }
+    }
+  }
 }
 
 resource "aws_cloudwatch_metric_alarm" "sqs_oldest_age" {

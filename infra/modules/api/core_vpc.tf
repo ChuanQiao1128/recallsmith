@@ -8,7 +8,7 @@ resource "aws_lambda_function" "core_vpc" {
   filename                       = "${path.module}/../../bootstrap/placeholder.zip"
   function_name                  = var.core_vpc_function_name
   handler                        = "RecallSmith.Lambda::RecallSmith.Lambda.VpcFunction::Handler"
-  memory_size                    = 128
+  memory_size                    = 512 # CPU scales with memory: at 128 MB a cold .NET request took ~3.7 s (2026-09-29 REPORT logs)
   reserved_concurrent_executions = 40
   role                           = var.core_vpc_role_arn
   runtime                        = "dotnet8"

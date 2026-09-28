@@ -1,0 +1,7 @@
+{
+  "tags_only_updates": false,
+  "changes": {
+    "module.api.aws_lambda_function.core_vpc": "update",
+    "module.observability.aws_cloudwatch_metric_alarm.core_vpc_duration_p95": "update"
+  }
+}
