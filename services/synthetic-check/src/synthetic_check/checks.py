@@ -1,5 +1,12 @@
 """The five synthetic checks (H00 §5.2), run sequentially, one GET each, never raising.
 
+The whole run is bounded by RUN_DEADLINE_S of wall time, well under the 60 s Lambda timeout, so the
+EMF line is always written. Each check runs in a daemon worker thread that the caller joins with the
+remaining budget: that bounds what a socket timeout cannot (name resolution, a slow-drip body read
+over many recv calls). A check still running at the deadline, and every check not yet started, is
+TIMEOUT. An abandoned worker holds only its own sockets (each with the per-request timeout) and is
+frozen with the sandbox when the invocation returns.
+
 Every request: GET, no proxy, no redirect followed (a 3xx is HTTP_STATUS), per-request timeout
 `settings.timeout_s`, no retry, only `User-Agent` and `Accept` set (never a credential), at most
 `cap + 1` bytes read. A result carries a bounded failure code, never a URL, body or header value.
@@ -12,6 +19,7 @@ import http.client
 import json
 import re
 import socket
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -34,6 +42,9 @@ NO_PUBLIC_DECK = "NO_PUBLIC_DECK"
 CONFIG = "CONFIG"
 ERROR = "ERROR"
 CODES = (HTTP_STATUS, TIMEOUT, NETWORK, BAD_BODY, HASH_MISMATCH, TOO_LARGE, NO_PUBLIC_DECK, CONFIG, ERROR)
+
+# Wall-time budget of one run_checks call; the Lambda timeout is 60 s (infra synthetic.tf).
+RUN_DEADLINE_S = 40.0
 
 MIB = 1024 * 1024
 BODY_CAP = 1 * MIB
@@ -241,16 +252,42 @@ def _elapsed_ms(started: float) -> int:
     return max(0, int((time.monotonic() - started) * 1000))
 
 
-def run_checks(settings: Settings) -> list[CheckResult]:
-    """The five checks in CHECK_NAMES order, sequentially. Never raises."""
+def _call_bounded(fn: CheckFn, settings: Settings, state: dict[str, Any], budget_s: float) -> int:
+    """fn(settings, state) in a daemon worker joined for at most budget_s; still running -> TIMEOUT."""
+    outcome: dict[str, Any] = {}
+
+    def work() -> None:
+        try:
+            outcome["status"] = fn(settings, state)
+        except Exception as err:
+            outcome["error"] = err
+
+    worker = threading.Thread(target=work, name="synthetic-check", daemon=True)
+    worker.start()
+    worker.join(budget_s)
+    if worker.is_alive():
+        raise CheckFailed(TIMEOUT)
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["status"]
+
+
+def run_checks(settings: Settings, deadline_s: float | None = None) -> list[CheckResult]:
+    """The five checks in CHECK_NAMES order, sequentially, within deadline_s (default RUN_DEADLINE_S)
+    of wall time; checks past the deadline are TIMEOUT without a request. Never raises."""
     if settings.config_error is not None:
         return [CheckResult(name, False, None, 0, CONFIG) for name in CHECK_NAMES]
+    deadline = time.monotonic() + (RUN_DEADLINE_S if deadline_s is None else deadline_s)
     results: list[CheckResult] = []
     state: dict[str, Any] = {}
     for name, fn in _check_fns():
         started = time.monotonic()
+        remaining = deadline - started
+        if remaining <= 0:
+            results.append(CheckResult(name, False, None, 0, TIMEOUT))
+            continue
         try:
-            status = fn(settings, state)
+            status = _call_bounded(fn, settings, state, remaining)
             results.append(CheckResult(name, True, status, _elapsed_ms(started), None))
         except CheckFailed as failed:
             code = failed.code if failed.code in CODES else ERROR
