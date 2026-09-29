@@ -343,3 +343,148 @@ recipient identity (the old one is destroyed, a new one created, and SES sends a
 link to the new address) and the recipient ARN in `developercards-notifier-ses-send`. Emails fail
 with `MessageRejected` until the owner clicks the new link. The plan shows every changed value as
 `(sensitive value)`; never print the plan JSON.
+
+## 8. Traces, SLOs and the synthetic check (R18H)
+
+### Find a trace from a log line and back
+
+Three correlation fields appear on log and EMF lines (H00 §3.3):
+
+- `traceId` — the API Gateway request id, **unchanged** (the same value the client sees in the envelope).
+- `xrayTraceId` — the X-Ray root of this invocation (`1-xxxxxxxx-xxxxxxxxxxxxxxxxxxxxxxxx`), taken from
+  `_X_AMZN_TRACE_ID`; omitted when the function runs without a trace.
+- `upstreamTraceId` — the X-Ray root of the producer: the SQS `AWSTraceHeader` attribute on consumers, or
+  the `x-dc-trace-id` header that the Python services send on their HMAC callbacks to core.
+
+From a log line to the trace: copy its `xrayTraceId` (or `upstreamTraceId`) and run a Logs Insights query
+across the seven traced log groups `/aws/lambda/core-vpc`, `/aws/lambda/worker-lambda`,
+`/aws/lambda/developercards-ai-qa`, `/aws/lambda/developercards-webhook-dispatcher`,
+`/aws/lambda/developercards-notifier`, `/aws/lambda/developercards-source-watcher` and
+`/aws/lambda/developercards-synthetic-check`:
+
+```
+fields @timestamp, tag, traceId, xrayTraceId, upstreamTraceId
+| filter xrayTraceId = "<id>" or upstreamTraceId = "<id>"
+| sort @timestamp asc
+```
+
+The result lists the producer and every consumer of the same request. Then open the trace itself:
+
+- `aws xray batch-get-traces --trace-ids <id>` — the segments (`AWS::Lambda` and `AWS::Lambda::Function`
+  with init and invocation timing).
+- `aws xray get-trace-summaries --start-time <epoch-10min> --end-time <epoch-now> --filter-expression 'service("core-vpc")'`
+  — the recent traces of one function; take an id from it and run the Logs Insights query above to go
+  back from the trace to the log lines.
+
+Limits:
+
+- HTTP APIs do not support X-Ray, so a request trace starts at the Lambda; `edge-public` is **not** traced.
+- A function traces only from its first version published after H05: published versions freeze the tracing
+  mode, so a `prod` alias on an older version still shows no traces until the next deploy.
+- core-vpc and worker-lambda run in the VPC without an X-Ray interface endpoint. Lambda's own trace daemon
+  (`169.254.79.129:2000`) sits on the Lambda host, so the function segments are expected without one. If
+  the `AWS::Lambda::Function` segments of those two are missing, record it in the H05 notes; the endpoint
+  (≈ USD 14.60/month) is an owner decision (H00 §3.6), and the log correlation above still works.
+
+### The SLO table
+
+All three SLOs use a rolling **28-day** window; error budget = 1 − target; burn rate = (bad / total) /
+(1 − target). Fast burn ≥ **14.4** spends 2 % of the budget in 1 hour; slow burn ≥ **6** spends ≈ 5 % in 6
+hours. Minimum-event guards stop one bad request from paging at 13–124 requests a day.
+
+| SLO | SLI | Target | Window |
+|---|---|---|---|
+| api-availability | app API requests (API Gateway `Count`) without a `5xx` | 99.5 % | 28 days |
+| sync-latency | requests to `POST /api/v1/sync/push`, `GET /api/v1/sync/progress`, `POST /api/v1/draw-state/sync` served in ≤ 2000 ms (EMF `Latency` `PR(:2000)` weighted by `SampleCount`) | 95 % | 28 days |
+| publish-success | publish jobs that end in success (`PublishJobsSucceeded` vs `PublishJobsFailed`) | 95 % | 28 days |
+
+| Alarm | Means | Pages | First three things to check |
+|---|---|---|---|
+| `developercards-prod-slo-api-availability-fast-burn` | composite: the 1-hour **and** 5-minute availability burn are both ≥ 14.4 | yes | 1. API Gateway 5xx by route on the dashboard; 2. core-vpc errors / throttles (`developercards-prod-core-vpc-errors`, `-core-vpc-throttles`); 3. recent deploys (`aws lambda list-aliases --function-name core-vpc`) |
+| `developercards-prod-slo-api-availability-slow-burn` | 6-hour availability burn ≥ 6 (≥ 30 requests, ≥ 3 5xx) | yes | same three as the fast burn; also RDS CPU / connections |
+| `developercards-prod-slo-api-availability-burn-1h` | child: 1-hour burn ≥ 14.4 (≥ 10 requests, ≥ 2 5xx) | never | only read as part of the composite |
+| `developercards-prod-slo-api-availability-burn-5m` | child: 5-minute burn ≥ 14.4 | never | only read as part of the composite |
+| `developercards-prod-slo-sync-latency-fast-burn` | composite: the 1-hour **and** 5-minute sync-latency burn are both ≥ 14.4 (≥ 72 % of sync requests slower than 2 s) | yes | 1. `Latency p95 by Route (top 10)` on the dashboard; 2. core-vpc cold starts (`Init Duration` in REPORT lines) and memory; 3. RDS CPU (`developercards-prod-rds-cpu`) |
+| `developercards-prod-slo-sync-latency-slow-burn` | 6-hour sync-latency burn ≥ 6 (≥ 12 requests, ≥ 30 % slow) | yes | same three as the fast burn |
+| `developercards-prod-slo-sync-latency-burn-1h` | child: 1-hour burn ≥ 14.4 (≥ 6 requests) | never | only read as part of the composite |
+| `developercards-prod-slo-sync-latency-burn-5m` | child: 5-minute burn ≥ 14.4 | never | only read as part of the composite |
+| `developercards-prod-slo-publish-success-fast-burn` | 1-hour publish burn ≥ 14.4 (≥ 2 failed jobs) | yes | 1. worker logs `Job marked as FAILED` in `/aws/lambda/worker-lambda`; 2. the publish DLQ (`developercards-prod-dlq-nonempty`); 3. `developercards-prod-worker-errors` |
+| `developercards-prod-slo-publish-success-slow-burn` | 6-hour publish burn ≥ 6 (≥ 2 failed jobs) | yes | same three as the fast burn |
+| `developercards-prod-synthetic-check-failing` | two consecutive synthetic runs failed or did not run | yes (once enabled) | the synthetic check subsection below |
+
+Paging: the two composites, the two request slow-burn alarms, the two publish alarms and the synthetic
+alarm (7 alarms). The four children (`…-burn-1h`, `…-burn-5m` of api-availability and sync-latency) never
+page; they have no actions and exist only to feed the composites. The publish alarms stay
+`INSUFFICIENT_DATA` / `OK` until the H02 worker gauges ship (missing data is not breaching).
+
+Replaced and kept:
+
+- `developercards-prod-api-5xx` was replaced by api-availability: same two metrics, but its
+  `IF(count > 20, …)` guard per 5 minutes never evaluated at this traffic.
+- `developercards-prod-core-vpc-duration-p95` was replaced by sync-latency: it flapped 6 times on
+  2026-09-28 on cold starts and did not measure what the app waits for.
+- Kept on purpose: `developercards-prod-core-vpc-errors` (scheduled `/internal/*` invocations never pass
+  API Gateway, so availability cannot see them), `developercards-prod-worker-errors` and
+  `developercards-prod-dlq-nonempty` (crash and timeout paths that emit no publish gauge).
+
+### Error-budget policy
+
+- The dashboard section "SLOs (R18H)" shows the budget remaining over 28 days per SLO.
+- Budget remaining **< 25 %** on any SLO ⇒ reliability work comes before feature work until the budget
+  recovers above 25 %.
+- Review the sync-latency target after 28 days of data at **512 MB** (core-vpc moved from 128 MB on
+  2026-09-29; the 95 % ≤ 2000 ms target was chosen on 128 MB data), due 2026-10-27.
+
+### Synthetic check
+
+`developercards-synthetic-check` runs every 15 minutes (schedule `developercards-synthetic-check`, input
+`{"job":"synthetic-check"}`) and runs five checks in order: `api-health` (`GET /health`), `cdn-manifest`
+(the app's content manifest), `cdn-deck` (the first public live deck, SHA-256 checked), `console-index`
+(the console's HTML) and `api-auth-guard` (`GET /api/v1/me` without a token must be exactly 401). It emits
+`SyntheticCheckSuccess` (1 when all five pass) and `SyntheticCheckLatency`; the EMF line lists the failed
+checks with a code:
+
+| Code | Meaning |
+|---|---|
+| `HTTP_STATUS` | unexpected status (including any redirect) |
+| `TIMEOUT` | no answer within `CHECK_TIMEOUT_SECONDS` |
+| `NETWORK` | DNS, TLS or connection failure |
+| `BAD_BODY` | the body is not the expected JSON / HTML |
+| `HASH_MISMATCH` | the deck's SHA-256 differs from the manifest |
+| `TOO_LARGE` | body over the size cap (1 MiB manifest, 5 MiB deck) |
+| `NO_PUBLIC_DECK` | the manifest failed or lists no public live deck |
+| `CONFIG` | a base URL in the environment is not `https://` |
+| `ERROR` | an unexpected exception inside the check |
+
+One supervised run (after a deploy, or to confirm a fix):
+`aws lambda invoke --function-name developercards-synthetic-check:prod --payload '{"job":"synthetic-check"}' --cli-binary-format raw-in-base64-out /dev/stdout`
+⇒ `{"ok": true, "failed": []}`.
+
+Enable / disable the schedule with the §7 recipe (`update-schedule` replaces the whole definition;
+Terraform ignores `state`):
+
+1. `aws scheduler get-schedule --name developercards-synthetic-check`
+2. `aws scheduler update-schedule --name developercards-synthetic-check --schedule-expression 'rate(15 minutes)' --flexible-time-window Mode=OFF --target '<same Target JSON>' --state ENABLED`
+   (or `--state DISABLED`)
+
+After two good scheduled runs (≥ 30 minutes with `SyntheticCheckSuccess = 1`):
+`aws cloudwatch enable-alarm-actions --alarm-names developercards-prod-synthetic-check-failing`.
+
+Silence it during a planned outage:
+`aws cloudwatch disable-alarm-actions --alarm-names developercards-prod-synthetic-check-failing`, and
+afterwards `aws cloudwatch enable-alarm-actions --alarm-names developercards-prod-synthetic-check-failing`.
+Terraform ignores `actions_enabled` on this alarm, so neither step causes drift.
+
+### Rollback (H00 §8.2 step 8)
+
+- **Tracing:** revert H05's `tracing_config` lines, apply, and redeploy so new versions carry
+  `PassThrough`; or, quicker, `aws lambda update-function-configuration --function-name <fn> --tracing-config Mode=PassThrough`
+  and then revert in Terraform so the next plan is empty.
+- **Synthetic check:** disable the schedule (`--state DISABLED` above) and the alarm actions
+  (`disable-alarm-actions` above).
+- **SLOs:** revert H06; the apply removes the ten SLO alarms and restores `developercards-prod-api-5xx`
+  and `developercards-prod-core-vpc-duration-p95`.
+
+No rollback changes any data.
+
+Cost: ≈ USD 4.80/month for the whole R18H release (H00 §9; H06's alarms ≈ USD 3.40 of it).

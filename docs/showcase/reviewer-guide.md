@@ -241,6 +241,11 @@ Publishing uses the existing pipeline: the deck is built and delivered to the ap
 cards carry their source, and the 1.8.0 app update adds a Source row to the card detail screen
 (`mobile/src/content/cardSource.ts`), so learners can check the claim themselves.
 
+Every request the app makes is traced end to end across the functions we own, so one id links the
+API call to the background jobs it starts. Three SLOs (service-level objectives) with error budgets
+(API availability, sync latency and publish success) page only when the budget burns fast or keeps burning,
+not on a single failed request, and a synthetic check exercises the app's public paths every 15 minutes.
+
 ---
 
 ## 6. Notifications: webhooks and n8n

@@ -182,6 +182,190 @@ locals {
         ]
       }
     },
+    {
+      type   = "text"
+      x      = 0
+      y      = 30
+      width  = 24
+      height = 2
+      properties = {
+        markdown = "## SLOs (R18H) — rolling 28 days: API availability 99.5 %, sync latency 95 % ≤ 2 s, publish success 95 %; fast burn ≥ 14.4, slow burn ≥ 6"
+      }
+    },
+    {
+      type   = "metric"
+      x      = 0
+      y      = 32
+      width  = 8
+      height = 4
+      properties = {
+        region               = var.region
+        view                 = "singleValue"
+        stacked              = false
+        period               = 3600
+        setPeriodToTimeRange = true
+        start                = "-PT672H"
+        end                  = "P0D"
+        title                = "API availability error budget remaining %"
+        metrics = [
+          ["AWS/ApiGateway", "5xx", "ApiId", var.api_id, "Stage", var.api_stage_name, { stat = "Sum", id = "e5xx", visible = false }],
+          ["AWS/ApiGateway", "Count", "ApiId", var.api_id, "Stage", var.api_stage_name, { stat = "Sum", id = "total", visible = false }],
+          [{ expression = "FILL(e5xx, 0)", id = "bad", visible = false }],
+          [{ expression = "100 * (1 - (bad / total) / 0.005)", label = "API availability budget remaining %", id = "budget" }],
+        ]
+      }
+    },
+    {
+      type   = "metric"
+      x      = 8
+      y      = 32
+      width  = 8
+      height = 4
+      properties = {
+        region               = var.region
+        view                 = "singleValue"
+        stacked              = false
+        period               = 3600
+        setPeriodToTimeRange = true
+        start                = "-PT672H"
+        end                  = "P0D"
+        title                = "Sync latency error budget remaining %"
+        metrics = concat(
+          [for q in local.slo_sync_metrics : [var.metrics_namespace, "Latency", "Service", "core-vpc", "Route", q.route, "Method", q.method, { stat = q.stat, id = q.id, visible = false }]],
+          [
+            [{ expression = local.slo_sync_total, id = "total", visible = false }],
+            [{ expression = local.slo_sync_bad, id = "bad", visible = false }],
+            [{ expression = "100 * (1 - (bad / total) / 0.05)", label = "Sync latency budget remaining %", id = "budget" }],
+          ],
+        )
+      }
+    },
+    {
+      type   = "metric"
+      x      = 16
+      y      = 32
+      width  = 8
+      height = 4
+      properties = {
+        region               = var.region
+        view                 = "singleValue"
+        stacked              = false
+        period               = 3600
+        setPeriodToTimeRange = true
+        start                = "-PT672H"
+        end                  = "P0D"
+        title                = "Publish success error budget remaining %"
+        metrics = [
+          [var.metrics_namespace, "PublishJobsSucceeded", { stat = "Sum", id = "succeeded", visible = false }],
+          [var.metrics_namespace, "PublishJobsFailed", { stat = "Sum", id = "failed", visible = false }],
+          [{ expression = "FILL(succeeded, 0)", id = "good", visible = false }],
+          [{ expression = "FILL(failed, 0)", id = "bad", visible = false }],
+          [{ expression = "good + bad", id = "total", visible = false }],
+          [{ expression = "100 * (1 - (bad / total) / 0.05)", label = "Publish success budget remaining %", id = "budget" }],
+        ]
+      }
+    },
+    {
+      type   = "metric"
+      x      = 0
+      y      = 36
+      width  = 8
+      height = 6
+      properties = {
+        region      = var.region
+        view        = "timeSeries"
+        stacked     = false
+        period      = 3600
+        title       = "API availability burn rate (1 h)"
+        annotations = { horizontal = [{ value = 14.4, label = "fast" }, { value = 6, label = "slow" }] }
+        metrics = [
+          ["AWS/ApiGateway", "5xx", "ApiId", var.api_id, "Stage", var.api_stage_name, { stat = "Sum", id = "e5xx", visible = false }],
+          ["AWS/ApiGateway", "Count", "ApiId", var.api_id, "Stage", var.api_stage_name, { stat = "Sum", id = "total", visible = false }],
+          [{ expression = "FILL(e5xx, 0)", id = "bad", visible = false }],
+          [{ expression = "IF(total >= 10 AND bad >= 2, (bad / total) / 0.005, 0)", label = "burn rate (1 h)", id = "burn" }],
+        ]
+      }
+    },
+    {
+      type   = "metric"
+      x      = 8
+      y      = 36
+      width  = 8
+      height = 6
+      properties = {
+        region      = var.region
+        view        = "timeSeries"
+        stacked     = false
+        period      = 3600
+        title       = "Sync latency burn rate (1 h)"
+        annotations = { horizontal = [{ value = 14.4, label = "fast" }, { value = 6, label = "slow" }] }
+        metrics = concat(
+          [for q in local.slo_sync_metrics : [var.metrics_namespace, "Latency", "Service", "core-vpc", "Route", q.route, "Method", q.method, { stat = q.stat, id = q.id, visible = false }]],
+          [
+            [{ expression = local.slo_sync_total, id = "total", visible = false }],
+            [{ expression = local.slo_sync_bad, id = "bad", visible = false }],
+            [{ expression = "IF(total >= 6, (bad / total) / 0.05, 0)", label = "burn rate (1 h)", id = "burn" }],
+          ],
+        )
+      }
+    },
+    {
+      type   = "metric"
+      x      = 16
+      y      = 36
+      width  = 8
+      height = 6
+      properties = {
+        region      = var.region
+        view        = "timeSeries"
+        stacked     = false
+        period      = 3600
+        title       = "Publish success burn rate (1 h)"
+        annotations = { horizontal = [{ value = 14.4, label = "fast" }, { value = 6, label = "slow" }] }
+        metrics = [
+          [var.metrics_namespace, "PublishJobsSucceeded", { stat = "Sum", id = "succeeded", visible = false }],
+          [var.metrics_namespace, "PublishJobsFailed", { stat = "Sum", id = "failed", visible = false }],
+          [{ expression = "FILL(succeeded, 0)", id = "good", visible = false }],
+          [{ expression = "FILL(failed, 0)", id = "bad", visible = false }],
+          [{ expression = local.slo_publish_burn, label = "burn rate (1 h)", id = "burn" }],
+        ]
+      }
+    },
+    {
+      type   = "metric"
+      x      = 0
+      y      = 42
+      width  = 12
+      height = 6
+      properties = {
+        region  = var.region
+        view    = "timeSeries"
+        stacked = false
+        period  = 900
+        title   = "Synthetic check success"
+        metrics = [
+          [var.metrics_namespace, "SyntheticCheckSuccess", "Service", "synthetic-check", { stat = "Minimum", id = "success" }],
+        ]
+      }
+    },
+    {
+      type   = "metric"
+      x      = 12
+      y      = 42
+      width  = 12
+      height = 6
+      properties = {
+        region  = var.region
+        view    = "timeSeries"
+        stacked = false
+        period  = 900
+        title   = "Synthetic check latency"
+        metrics = [
+          [var.metrics_namespace, "SyntheticCheckLatency", "Service", "synthetic-check", { stat = "p50", id = "latp50" }],
+          [var.metrics_namespace, "SyntheticCheckLatency", "Service", "synthetic-check", { stat = "Maximum", id = "latmax" }],
+        ]
+      }
+    },
   ]
 }
 

@@ -1,0 +1,23 @@
+{
+  "tags_only_updates": false,
+  "changes": {
+    "module.observability.aws_cloudwatch_metric_alarm.slo_api_availability_burn_1h": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.slo_api_availability_burn_5m": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.slo_api_availability_slow_burn": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.slo_sync_latency_burn_1h": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.slo_sync_latency_burn_5m": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.slo_sync_latency_slow_burn": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.slo_publish_success_fast_burn": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.slo_publish_success_slow_burn": "create",
+    "module.observability.aws_cloudwatch_composite_alarm.slo_api_availability_fast_burn": "create",
+    "module.observability.aws_cloudwatch_composite_alarm.slo_sync_latency_fast_burn": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.api_5xx": "delete",
+    "module.observability.aws_cloudwatch_metric_alarm.core_vpc_duration_p95": "delete",
+    "module.observability.aws_cloudwatch_dashboard.prod": {
+      "action": "update",
+      "keys": [
+        "dashboard_body"
+      ]
+    }
+  }
+}
