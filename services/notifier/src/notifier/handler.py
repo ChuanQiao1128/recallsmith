@@ -15,7 +15,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from . import emf, ses
+from . import emf, ses, tracectx
 from .internal_client import REPORT_PATH, TICK_PATH, InternalClient
 from .logs import log
 from .settings import Settings, get_recipient, get_secret, load_settings, previous_secret_name, ses_client
@@ -322,18 +322,28 @@ def _handle_record(settings: Settings, record: Mapping[str, Any], context: Any) 
     return True
 
 
+def _trace_header(record: object) -> object:
+    """The SQS system attribute AWSTraceHeader (H00 §3.3); None when absent or malformed."""
+    attributes = record.get("attributes") if isinstance(record, Mapping) else None
+    return attributes.get("AWSTraceHeader") if isinstance(attributes, Mapping) else None
+
+
 def _handle_sqs(settings: Settings, records: list[Any], context: Any) -> dict[str, Any]:
     failures: list[dict[str, str]] = []
     for record in records:
-        record = record if isinstance(record, Mapping) else {}
-        message_id = record.get("messageId")
+        tracectx.bind_upstream(_trace_header(record))
         try:
-            acked = _handle_record(settings, record, context)
-        except Exception as exc:
-            log("error", TAG, event="record_error", messageId=message_id, errorClass=type(exc).__name__)
-            acked = False
-        if not acked and isinstance(message_id, str):
-            failures.append({"itemIdentifier": message_id})
+            record = record if isinstance(record, Mapping) else {}
+            message_id = record.get("messageId")
+            try:
+                acked = _handle_record(settings, record, context)
+            except Exception as exc:
+                log("error", TAG, event="record_error", messageId=message_id, errorClass=type(exc).__name__)
+                acked = False
+            if not acked and isinstance(message_id, str):
+                failures.append({"itemIdentifier": message_id})
+        finally:
+            tracectx.clear_upstream()
     return {"batchItemFailures": failures}
 
 
