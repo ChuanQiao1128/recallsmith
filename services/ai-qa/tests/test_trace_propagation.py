@@ -17,13 +17,15 @@ class _StubRaw:
         yield b"{}"
 
 
-@pytest.fixture(autouse=True)
-def offline_aws(monkeypatch: pytest.MonkeyPatch) -> None:
+def _offline_aws(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AWS_CONFIG_FILE", "/dev/null")
     monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", "/dev/null")
     monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
     for name in ("AWS_PROFILE", "AWS_SESSION_TOKEN", "AWS_LAMBDA_FUNCTION_NAME", "_X_AMZN_TRACE_ID"):
         monkeypatch.delenv(name, raising=False)
+
+
+offline_aws = pytest.fixture(name="offline_aws", autouse=True)(_offline_aws)
 
 
 def _captured_trace_headers(service: str) -> list[str | None]:

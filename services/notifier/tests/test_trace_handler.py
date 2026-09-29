@@ -18,12 +18,14 @@ def _is_error_line(d: dict[str, Any]) -> bool:
     return bool(d["tag"] == handler.TAG and d["event"] == "record_error")
 
 
-@pytest.fixture(autouse=True)
-def no_trace_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def _no_trace_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.delenv(tracectx.ENV_VAR, raising=False)
     tracectx.clear_upstream()
     yield
     tracectx.clear_upstream()
+
+
+no_trace_state = pytest.fixture(name="no_trace_state", autouse=True)(_no_trace_state)
 
 
 def _install(monkeypatch: pytest.MonkeyPatch, fail_ids: tuple[str, ...] = ()) -> None:

@@ -19,12 +19,14 @@ HEX = "0123456789abcdef"
 OK_BODY = json.dumps({"success": True, "data": {}, "error": None, "traceId": "t", "version": "v1"}).encode()
 
 
-@pytest.fixture(autouse=True)
-def no_trace_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def _no_trace_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.delenv(tracectx.ENV_VAR, raising=False)
     tracectx.clear_upstream()
     yield
     tracectx.clear_upstream()
+
+
+no_trace_state = pytest.fixture(name="no_trace_state", autouse=True)(_no_trace_state)
 
 
 def _hex(rng: random.Random, n: int) -> str:
