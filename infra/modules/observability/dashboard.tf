@@ -1,4 +1,11 @@
 locals {
+  # Q1 (R18I I03): a budget reads 100 % until its 28-day window holds this many events, so one bad event is at most
+  # 10 % of the budget (N = 10 / budget); the widget shows the event count beside it.
+  slo_budget_min_events = {
+    api     = 2000
+    sync    = 200
+    publish = 200
+  }
   dashboard_widgets = [
     {
       type   = "metric"
@@ -210,8 +217,12 @@ locals {
         metrics = [
           ["AWS/ApiGateway", "5xx", "ApiId", var.api_id, "Stage", var.api_stage_name, { stat = "Sum", id = "e5xx", visible = false }],
           ["AWS/ApiGateway", "Count", "ApiId", var.api_id, "Stage", var.api_stage_name, { stat = "Sum", id = "total", visible = false }],
-          [{ expression = "FILL(e5xx, 0)", id = "bad", visible = false }],
-          [{ expression = "100 * (1 - (bad / total) / 0.005)", label = "API availability budget remaining %", id = "budget" }],
+          ["AWS/ApiGateway", "Count", "ApiId", var.api_id, "Stage", var.api_stage_name, "Resource", "/health", "Method", "GET", { stat = "Sum", id = "hc", visible = false }],
+          ["AWS/ApiGateway", "5xx", "ApiId", var.api_id, "Stage", var.api_stage_name, "Resource", "/health", "Method", "GET", { stat = "Sum", id = "h5xx", visible = false }],
+          ["AWS/ApiGateway", "4xx", "ApiId", var.api_id, "Stage", var.api_stage_name, "Resource", "/api/v1/me", "Method", "GET", { stat = "Sum", id = "m4xx", visible = false }],
+          [{ expression = local.slo_api_user_total, label = "requests in window, synthetic check excluded (budget counts from ${local.slo_budget_min_events.api})", id = "user_total" }],
+          [{ expression = local.slo_api_user_bad, id = "user_bad", visible = false }],
+          [{ expression = "IF(user_total >= ${local.slo_budget_min_events.api}, 100 * (1 - (user_bad / user_total) / 0.005), 100)", label = "API availability budget remaining % (synthetic check excluded)", id = "budget" }],
         ]
       }
     },
@@ -233,9 +244,9 @@ locals {
         metrics = concat(
           [for q in local.slo_sync_metrics : [var.metrics_namespace, "Latency", "Service", "core-vpc", "Route", q.route, "Method", q.method, { stat = q.stat, id = q.id, visible = false }]],
           [
-            [{ expression = local.slo_sync_total, id = "total", visible = false }],
+            [{ expression = local.slo_sync_total, label = "sync requests in window (budget counts from ${local.slo_budget_min_events.sync})", id = "total" }],
             [{ expression = local.slo_sync_bad, id = "bad", visible = false }],
-            [{ expression = "100 * (1 - (bad / total) / 0.05)", label = "Sync latency budget remaining %", id = "budget" }],
+            [{ expression = "IF(total >= ${local.slo_budget_min_events.sync}, 100 * (1 - (bad / total) / 0.05), 100)", label = "Sync latency budget remaining %", id = "budget" }],
           ],
         )
       }
@@ -260,8 +271,8 @@ locals {
           [var.metrics_namespace, "PublishJobsFailed", { stat = "Sum", id = "failed", visible = false }],
           [{ expression = "FILL(succeeded, 0)", id = "good", visible = false }],
           [{ expression = "FILL(failed, 0)", id = "bad", visible = false }],
-          [{ expression = "good + bad", id = "total", visible = false }],
-          [{ expression = "100 * (1 - (bad / total) / 0.05)", label = "Publish success budget remaining %", id = "budget" }],
+          [{ expression = "good + bad", label = "publish jobs in window (budget counts from ${local.slo_budget_min_events.publish})", id = "total" }],
+          [{ expression = "IF(total >= ${local.slo_budget_min_events.publish}, 100 * (1 - (bad / total) / 0.05), 100)", label = "Publish success budget remaining %", id = "budget" }],
         ]
       }
     },
@@ -282,7 +293,7 @@ locals {
           ["AWS/ApiGateway", "5xx", "ApiId", var.api_id, "Stage", var.api_stage_name, { stat = "Sum", id = "e5xx", visible = false }],
           ["AWS/ApiGateway", "Count", "ApiId", var.api_id, "Stage", var.api_stage_name, { stat = "Sum", id = "total", visible = false }],
           [{ expression = "FILL(e5xx, 0)", id = "bad", visible = false }],
-          [{ expression = "IF(total >= 10 AND bad >= 2, (bad / total) / 0.005, 0)", label = "burn rate (1 h)", id = "burn" }],
+          [{ expression = "IF(total >= 16 AND bad >= 2, (bad / total) / 0.005, 0)", label = "burn rate (1 h)", id = "burn" }],
         ]
       }
     },
@@ -363,6 +374,23 @@ locals {
         metrics = [
           [var.metrics_namespace, "SyntheticCheckLatency", "Service", "synthetic-check", { stat = "p50", id = "latp50" }],
           [var.metrics_namespace, "SyntheticCheckLatency", "Service", "synthetic-check", { stat = "Maximum", id = "latmax" }],
+        ]
+      }
+    },
+    {
+      type   = "metric"
+      x      = 0
+      y      = 48
+      width  = 12
+      height = 6
+      properties = {
+        region  = var.region
+        view    = "timeSeries"
+        stacked = false
+        period  = 300
+        title   = "API 5xx by route (top 10)"
+        metrics = [
+          [{ expression = "SORT(SEARCH('{AWS/ApiGateway,ApiId,Method,Resource,Stage} MetricName=\"5xx\" ApiId=\"${var.api_id}\" Stage=\"${var.api_stage_name}\"', 'Sum', 300), SUM, DESC, 10)", label = "5xx by route", id = "top5xx" }],
         ]
       }
     },
