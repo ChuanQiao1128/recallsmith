@@ -9,9 +9,12 @@
 //
 //   node asc-release.cjs --version 1.6.0 --build 16 [--wait-build] [--whats-new FILE]
 //                        [--description FILE] [--keywords FILE] [--promo FILE] [--subtitle FILE]
+//                        [--review-notes FILE]
 //                        [--release-type AFTER_APPROVAL|MANUAL] [--apply] [--submit]
 //   description/keywords/promo live on the version's en-US localization; subtitle lives on the
 //   App Info localization (Apple limits: subtitle 30, promo 170, keywords 100, description 4000).
+//   --review-notes sets the Notes of the version's App Review Information (limit 4000); the other
+//   review fields (contact, demo account) are left as they are and never printed.
 //                        [--bundle-id com.timeawake.recallsmith] [--username info@timeawake.co.nz]
 //
 // Exit codes: 0 ok · 1 error · 3 Apple session expired (re-run `eas credentials --platform ios`).
@@ -34,6 +37,7 @@ function argv() {
     else if (k === '--keywords') o.keywords = a[++i];
     else if (k === '--promo') o.promo = a[++i];
     else if (k === '--subtitle') o.subtitle = a[++i];
+    else if (k === '--review-notes') o.reviewNotes = a[++i];
     else if (k === '--release-type') o.releaseType = a[++i];
     else if (k === '--bundle-id') o.bundleId = a[++i];
     else if (k === '--username') o.username = a[++i];
@@ -91,6 +95,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const keywords = readOpt(o.keywords, 100, 'keywords');
   const promo = readOpt(o.promo, 170, 'promotionalText');
   const subtitle = readOpt(o.subtitle, 30, 'subtitle');
+  const reviewNotes = readOpt(o.reviewNotes, 4000, 'review notes');
   const plan = [];
   if (!version) plan.push('create version ' + o.version);
   else if (version.attributes.versionString !== o.version) plan.push('rename edit version ' + version.attributes.versionString + ' -> ' + o.version);
@@ -99,6 +104,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   if (keywords) plan.push('set en-US keywords (' + keywords.length + ' chars)');
   if (promo) plan.push('set en-US promotional text (' + promo.length + ' chars)');
   if (subtitle) plan.push('set en-US subtitle (' + subtitle.length + ' chars)');
+  if (reviewNotes) plan.push('set App Review notes (' + reviewNotes.length + ' chars)');
   plan.push('attach build ' + build.id);
   plan.push('releaseType=' + o.releaseType);
   if (o.submit) plan.push('create review submission + submit for review');
@@ -146,6 +152,33 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     for (const k of ['privacyPolicyUrl', 'privacyChoicesUrl', 'privacyPolicyText']) { const v = ikeep(k); if (v) ipatch[k] = v; }
     await iloc.updateAsync(ipatch);
     console.log('SUBTITLE set on', iloc.attributes.locale);
+  }
+  if (reviewNotes) {
+    // 2026-09-30 (Guideline 3.1.2(c) rejection of 1.8.0): App Review asked for the subscription
+    // details in the review Notes. PATCH only `notes`, then re-read: if Apple cleared any other
+    // field (the localization PATCH did, see above), put the earlier values back. Values are
+    // compared in memory and never printed (the demo account fields may hold a password).
+    const before = await version.getAppStoreReviewDetailAsync();
+    if (!before) {
+      await version.createReviewDetailAsync({ notes: reviewNotes });
+      console.log('REVIEW_NOTES created');
+    } else {
+      await before.updateAsync({ notes: reviewNotes });
+      const after = await version.getAppStoreReviewDetailAsync();
+      const lost = {};
+      for (const [k, v] of Object.entries(before.attributes || {})) {
+        if (k === 'notes' || v === null || v === undefined || v === '') continue;
+        if (!after || after.attributes[k] !== v) lost[k] = v;
+      }
+      if (Object.keys(lost).length) {
+        await after.updateAsync(lost);
+        console.log('REVIEW_NOTES set; restored', Object.keys(lost).length, 'cleared field(s):', Object.keys(lost).join(','));
+      } else {
+        console.log('REVIEW_NOTES set; other review fields unchanged');
+      }
+    }
+    const check = await version.getAppStoreReviewDetailAsync();
+    if (!check || check.attributes.notes !== reviewNotes) throw new Error('review notes did not persist');
   }
   await version.updateBuildAsync({ buildId: build.id });
   version = await version.updateAsync({ releaseType: o.releaseType });

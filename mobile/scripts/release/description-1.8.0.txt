@@ -25,4 +25,9 @@ Decks are stored on your phone and reviews are offline-first. Signing in is opti
 FROM ONE DEVELOPER
 DeveloperCards is an indie project: one person built the app and the backend. Cards are drafted from the official AWS and Anthropic documentation with AI assistance and checked by me; every card records its source. All three decks are free. A monthly Premium subscription exists for future premium decks, but there is nothing premium to unlock yet. Feedback is welcome.
 
+PREMIUM SUBSCRIPTION
+Premium is an optional auto-renewing monthly subscription (1-month period). The app shows its price in your currency before you buy. Payment is charged to your Apple Account when you confirm the purchase. It renews automatically unless cancelled at least 24 hours before the end of the current period; the renewal is charged within the 24 hours before the period ends. Manage or cancel it in your App Store account settings.
+Terms of Use (EULA): https://www.apple.com/legal/internet-services/itunes/dev/stdeula/
+Privacy Policy: https://tartan-tortoise-e81.notion.site/DevCards-Spaced-Recall-Privacy-Policy-2bfa758eb54580db99a3ed89369f9a13
+
 AWS is a trademark of Amazon.com, Inc. Claude and Anthropic are trademarks of Anthropic, PBC. DeveloperCards is not affiliated with, sponsored by, or endorsed by Amazon or Anthropic.
