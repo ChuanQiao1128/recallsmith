@@ -15,7 +15,7 @@ from collections import OrderedDict
 from collections.abc import Mapping
 from typing import Any
 
-from . import emf, profiles, second_opinion, settings
+from . import emf, profiles, second_opinion, settings, tracectx
 from .internal_client import RESULTS_PATH, InternalClient
 from .logs import log
 from .providers import effective_effort, make_client
@@ -576,15 +576,25 @@ def _process(record: Mapping[str, Any], context: Any, env: Mapping[str, str]) ->
     return finish(items)
 
 
+def _trace_header(record: object) -> object:
+    """The SQS system attribute AWSTraceHeader (H00 §3.3); None when absent or malformed."""
+    attributes = record.get("attributes") if isinstance(record, Mapping) else None
+    return attributes.get("AWSTraceHeader") if isinstance(attributes, Mapping) else None
+
+
 def lambda_handler(event: Mapping[str, Any], context: Any) -> dict[str, list[dict[str, str]]]:
     failures: list[dict[str, str]] = []
     for record in (event or {}).get("Records") or []:
-        message_id = record.get("messageId")
+        tracectx.bind_upstream(_trace_header(record))
         try:
-            ok = _process(record, context, os.environ)
-        except Exception as exc:
-            log("error", "ai-qa", event="unexpected_error", messageId=message_id, errorClass=type(exc).__name__)
-            ok = False
-        if not ok:
-            failures.append({"itemIdentifier": message_id})
+            message_id = record.get("messageId")
+            try:
+                ok = _process(record, context, os.environ)
+            except Exception as exc:
+                log("error", "ai-qa", event="unexpected_error", messageId=message_id, errorClass=type(exc).__name__)
+                ok = False
+            if not ok:
+                failures.append({"itemIdentifier": message_id})
+        finally:
+            tracectx.clear_upstream()
     return {"batchItemFailures": failures}
