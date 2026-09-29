@@ -5,6 +5,7 @@ using Amazon.Lambda.Core;
 using Amazon.Lambda.SQSEvents;
 using Amazon.S3;
 using Amazon.S3.Model;
+using RecallSmith.Lambda.Common;
 using RecallSmith.Lambda.Db;
 using RecallSmith.Lambda.Worker.Models;
 using RecallSmith.Lambda.Worker.Repositories;
@@ -95,6 +96,7 @@ public class WorkerFunction
 
       // 所有日志带 JobId 前缀，便于追踪
       LogWithJobId(jobId, $"Processing message {record.MessageId} (receiveCount={receiveCount})");
+      Log.Event("info", new { tag = "worker-record", messageId = record.MessageId, jobId, receiveCount, upstreamTraceId = TraceContext.RootFromHeader(record.Attributes?.GetValueOrDefault("AWSTraceHeader")) });
 
       try
       {
