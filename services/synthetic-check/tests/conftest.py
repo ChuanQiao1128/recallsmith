@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import http.server
 import json
+import sys
 import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -15,6 +16,10 @@ import pytest
 
 from synthetic_check import tracectx
 from synthetic_check.settings import Settings, load_settings
+
+# No bytecode cache under tests/: the verify greps this directory for the real hostnames, which only
+# test_settings.py may name, and a cached test_settings .pyc would carry them too.
+sys.dont_write_bytecode = True
 
 USER_AGENT = "DeveloperCards-Synthetic/1.0 (+https://developercards.app)"
 DECK_PATH = "decks/demo/builds/b1/deck.json"
