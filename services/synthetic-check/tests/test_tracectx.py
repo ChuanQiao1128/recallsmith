@@ -126,3 +126,61 @@ def test_log_fields_present_only_when_set(monkeypatch: pytest.MonkeyPatch, capsy
     record = _log_keys(capsys)
     assert list(record) == ["level", "tag", "k"]
 
+
+
+# ---------------------------------------------------------------- shared vectors (H00 Q3)
+# The same table, row for row, is in src_C TraceContextTests (SharedVectors) and in every service's
+# test_tracectx.py, so a parser drift between .NET and Python fails in both suites. Rules: the Root
+# segment starts exactly "Root=" (case-sensitive, nothing before "="), the first such segment wins,
+# whitespace around a segment and after "=" is trimmed, and a header longer than 512 characters
+# (counted before trimming) is rejected.
+VECTOR_ROOT = "1-5759e988-bd862e3fe1be46a994272793"
+VECTOR_PARENT = "53995c3f42cd8ad8"
+
+
+def _vector_padded(length: int) -> str:
+    """'Root=<root>;Lineage=aaa…' of exactly `length` characters."""
+    head = f"Root={VECTOR_ROOT};Lineage="
+    return head + "a" * (length - len(head))
+
+
+SHARED_VECTORS: list[tuple[str | None, str | None]] = [
+    (VECTOR_ROOT, VECTOR_ROOT),
+    (f"Root={VECTOR_ROOT};Parent={VECTOR_PARENT};Sampled=1", VECTOR_ROOT),
+    (f"Parent={VECTOR_PARENT};Root={VECTOR_ROOT};Sampled=0", VECTOR_ROOT),
+    (f"Parent={VECTOR_PARENT};Sampled=1;Root={VECTOR_ROOT}", VECTOR_ROOT),
+    (f"Root={VECTOR_ROOT};Parent={VECTOR_PARENT};Sampled=1;Lineage=a87bd80c:1", VECTOR_ROOT),
+    (f"  Root={VECTOR_ROOT} ; Parent={VECTOR_PARENT} ;  Sampled=1 ", VECTOR_ROOT),
+    (f"Root= {VECTOR_ROOT};Parent={VECTOR_PARENT}", VECTOR_ROOT),
+    (f"\t{VECTOR_ROOT}\t", VECTOR_ROOT),
+    (f"Root={VECTOR_ROOT};", VECTOR_ROOT),
+    (f"Root ={VECTOR_ROOT};Parent={VECTOR_PARENT}", None),
+    (f"Root\t={VECTOR_ROOT}", None),
+    (f"xRoot={VECTOR_ROOT}", None),
+    (f"root={VECTOR_ROOT};Parent={VECTOR_PARENT}", None),
+    (f"ROOT={VECTOR_ROOT}", None),
+    (f"Root=={VECTOR_ROOT}", None),
+    (f"Root=1-XYZ;Root={VECTOR_ROOT}", None),
+    (f"Root={VECTOR_ROOT}x;Parent={VECTOR_PARENT}", None),
+    (f"Root={VECTOR_ROOT.upper()};Parent={VECTOR_PARENT}", None),
+    ("Root=2-5759e988-bd862e3fe1be46a994272793", None),
+    ("Root=1-5759e988-bd862e3fe1be46a99427279", None),
+    ("Root=1-5759e98-bd862e3fe1be46a994272793", None),
+    (f"Root=;Parent={VECTOR_PARENT};Sampled=1", None),
+    (f"Parent={VECTOR_PARENT};Sampled=1", None),
+    (f"{VECTOR_ROOT};Parent={VECTOR_PARENT}", None),
+    (f"{VECTOR_ROOT} junk", None),
+    ("", None),
+    ("   \t ", None),
+    (None, None),
+    (_vector_padded(512), VECTOR_ROOT),
+    (_vector_padded(513), None),
+    (" " * 477 + VECTOR_ROOT, VECTOR_ROOT),
+    (" " * 478 + VECTOR_ROOT, None),
+]
+
+
+def test_shared_vectors_match_the_dotnet_parser() -> None:
+    assert len(_vector_padded(512)) == 512 and len(" " * 478 + VECTOR_ROOT) == 513
+    for header, expected in SHARED_VECTORS:
+        assert tracectx.root_from_header(header) == expected, repr(header)
