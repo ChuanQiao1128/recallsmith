@@ -21,7 +21,7 @@ resource "aws_lambda_function" "core_vpc" {
     log_group  = "/aws/lambda/${var.core_vpc_function_name}"
   }
   tracing_config {
-    mode = "PassThrough"
+    mode = "Active"
   }
   vpc_config {
     ipv6_allowed_for_dual_stack = false

@@ -1,0 +1,57 @@
+{
+  "tags_only_updates": false,
+  "changes": {
+    "module.identity.aws_iam_role_policy.xray_write[\"core_vpc\"]": "create",
+    "module.identity.aws_iam_role_policy.xray_write[\"worker\"]": "create",
+    "module.identity.aws_iam_role_policy.xray_write[\"webhook_dispatcher\"]": "create",
+    "module.identity.aws_iam_role_policy.xray_write[\"ai_qa\"]": "create",
+    "module.identity.aws_iam_role_policy.xray_write[\"notifier\"]": "create",
+    "module.identity.aws_iam_role_policy.xray_write[\"source_watcher\"]": "create",
+    "module.identity.aws_iam_role_policy.xray_write[\"synthetic_check\"]": "create",
+    "module.identity.aws_iam_role.synthetic_check": "create",
+    "module.identity.aws_iam_role_policy.synthetic_check": "create",
+    "module.identity.aws_iam_role_policy.synthetic_scheduler": "create",
+    "module.worker.aws_cloudwatch_log_group.synthetic_check": "create",
+    "module.worker.aws_lambda_function.synthetic_check": "create",
+    "module.worker.aws_lambda_alias.synthetic_check_prod": "create",
+    "module.worker.aws_lambda_function_event_invoke_config.synthetic_check_prod": "create",
+    "module.worker.aws_scheduler_schedule.synthetic_check": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.synthetic_check_failing": "create",
+    "module.api.aws_lambda_function.core_vpc": {
+      "action": "update",
+      "keys": [
+        "tracing_config"
+      ]
+    },
+    "module.worker.aws_lambda_function.worker": {
+      "action": "update",
+      "keys": [
+        "tracing_config"
+      ]
+    },
+    "module.worker.aws_lambda_function.ai_qa": {
+      "action": "update",
+      "keys": [
+        "tracing_config"
+      ]
+    },
+    "module.worker.aws_lambda_function.webhook_dispatcher": {
+      "action": "update",
+      "keys": [
+        "tracing_config"
+      ]
+    },
+    "module.worker.aws_lambda_function.notifier": {
+      "action": "update",
+      "keys": [
+        "tracing_config"
+      ]
+    },
+    "module.worker.aws_lambda_function.source_watcher": {
+      "action": "update",
+      "keys": [
+        "tracing_config"
+      ]
+    }
+  }
+}
