@@ -12,7 +12,7 @@ namespace RecallSmith.Lambda.Worker.Services;
 /// 发布任务处理器
 /// 执行 5-Step 流水线：抢占 -> 数据准备 -> S3上传 -> 完成
 /// </summary>
-public class PublishJobProcessor : IPublishJobProcessor
+public class PublishJobProcessor : IPublishJobProcessor, IReplayOutcome
 {
   private readonly IJobRepository _jobRepository;
   private readonly IS3DeckUploader _s3Uploader;
@@ -29,8 +29,13 @@ public class PublishJobProcessor : IPublishJobProcessor
       ?? new ContentArtifactsGenerator(s3Uploader, new ContentArtifactsRepository());
   }
 
+  /// <inheritdoc />
+  public bool LastCallWasTerminalReplay { get; private set; }
+
   public async Task ProcessAsync(string jobId, int receiveCount = 1)
   {
+    LastCallWasTerminalReplay = false;
+
     // Step 2: 乐观锁抢占任务（receiveCount = SQS ApproximateReceiveCount）
     var acquired = await _jobRepository.TryAcquireJobAsync(jobId, receiveCount);
     if (!acquired)
@@ -46,6 +51,8 @@ public class PublishJobProcessor : IPublishJobProcessor
         // replay is its only second chance (automation-1): both side effects are idempotent (the outbox
         // rows staged with the SUCCESS commit are sent once, the ledger row is keyed on the job).
         if (row is { Status: "SUCCESS" }) await AfterPublishSucceededAsync(row);
+        // Not a publish outcome (R18I Q4): the job's gauge, if any, was emitted when it became terminal.
+        LastCallWasTerminalReplay = true;
         return;
       }
       throw new JobNotAcquiredException(jobId);

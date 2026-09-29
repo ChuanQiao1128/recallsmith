@@ -59,7 +59,8 @@ public class WorkerFunction
   /// <summary>Upper bound on the exception text copied into deck_publishes.error_message.</summary>
   public const int MaxErrorDetailChars = 400;
 
-  /// <summary>EMF gauge counted once per job that reaches SUCCESS in this handler (H00 §4.3 publish-success SLO, good events).</summary>
+  /// <summary>EMF gauge counted once per job that reaches SUCCESS in this handler (H00 §4.3 publish-success SLO, good events);
+  /// never for a replayed message of an already terminal or absent job (<see cref="IReplayOutcome"/>, R18I Q4).</summary>
   public const string PublishSucceededMetric = "PublishJobsSucceeded";
 
   /// <summary>EMF gauge counted once per terminal job failure in this handler (H00 §4.3 publish-success SLO, bad events).</summary>
@@ -115,7 +116,11 @@ public class WorkerFunction
         await _rebuildManifest(completedAtMs);
 
         LogWithJobId(jobId, "Processing completed successfully");
-        RouteMetrics.EmitGauge(PublishSucceededMetric, 1);
+        // A replay of a job that was already terminal (or absent) is acknowledged, not counted (R18I Q4).
+        if (!(_processor is IReplayOutcome replay && replay.LastCallWasTerminalReplay))
+        {
+          RouteMetrics.EmitGauge(PublishSucceededMetric, 1);
+        }
       }
       catch (BusinessException ex)
       {
