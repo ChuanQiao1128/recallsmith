@@ -21,7 +21,7 @@ resource "aws_lambda_function" "worker" {
     log_group  = local.log_group_name
   }
   tracing_config {
-    mode = "PassThrough"
+    mode = "Active"
   }
   vpc_config {
     ipv6_allowed_for_dual_stack = false

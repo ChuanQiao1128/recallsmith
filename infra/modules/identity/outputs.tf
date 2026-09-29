@@ -1,5 +1,6 @@
 output "core_vpc_role_arn" {
-  value = aws_iam_role.core_vpc.arn
+  value      = aws_iam_role.core_vpc.arn
+  depends_on = [aws_iam_role_policy.xray_write] # Lambda rejects Active tracing until the role may write traces
 }
 
 output "core_vpc_role_name" {
@@ -40,7 +41,7 @@ output "mobile_client_id" {
 
 output "worker_role_arn" {
   value      = aws_iam_role.worker.arn
-  depends_on = [aws_iam_role_policy.worker] # the function update must follow the policy (Context #5)
+  depends_on = [aws_iam_role_policy.worker, aws_iam_role_policy.xray_write] # the function update must follow the policy (Context #5)
 }
 
 output "worker_role_name" {
@@ -59,25 +60,30 @@ output "secret_parameter_arns" {
 
 output "webhook_dispatcher_role_arn" {
   value      = aws_iam_role.webhook_dispatcher.arn
-  depends_on = [aws_iam_role_policy.webhook_dispatcher] # the ESM create needs the consume grant first (Context "ESM ordering")
+  depends_on = [aws_iam_role_policy.webhook_dispatcher, aws_iam_role_policy.xray_write] # the ESM create needs the consume grant first (Context "ESM ordering")
 }
 
 output "ai_qa_role_arn" {
   value      = aws_iam_role.ai_qa.arn
-  depends_on = [aws_iam_role_policy.ai_qa] # the ESM create needs the consume grant first
+  depends_on = [aws_iam_role_policy.ai_qa, aws_iam_role_policy.xray_write] # the ESM create needs the consume grant first
 }
 
 output "notifier_role_arn" {
   value      = aws_iam_role.notifier.arn
-  depends_on = [aws_iam_role_policy.notifier] # the ESM create needs the consume grant first
+  depends_on = [aws_iam_role_policy.notifier, aws_iam_role_policy.xray_write] # the ESM create needs the consume grant first
 }
 
 output "source_watcher_role_arn" {
   value      = aws_iam_role.source_watcher.arn
-  depends_on = [aws_iam_role_policy.source_watcher]
+  depends_on = [aws_iam_role_policy.source_watcher, aws_iam_role_policy.xray_write]
 }
 
 output "automation_scheduler_role_arn" {
   value      = aws_iam_role.automation_scheduler.arn
   depends_on = [aws_iam_role_policy.automation_scheduler] # a schedule is created only once its role may invoke
+}
+
+output "synthetic_check_role_arn" {
+  value      = aws_iam_role.synthetic_check.arn
+  depends_on = [aws_iam_role_policy.synthetic_check, aws_iam_role_policy.xray_write]
 }

@@ -52,6 +52,9 @@ resource "aws_lambda_function" "ai_qa" {
     log_format = "Text"
     log_group  = aws_cloudwatch_log_group.ai_qa.name
   }
+  tracing_config {
+    mode = "Active"
+  }
   lifecycle {
     ignore_changes = [filename, source_code_hash, s3_bucket, s3_key, s3_object_version, publish, environment, description]
   }
