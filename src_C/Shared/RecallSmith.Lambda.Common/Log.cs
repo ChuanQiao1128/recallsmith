@@ -123,6 +123,10 @@ public static class Log
       // trace stays on one line.
       writer.WriteString("ts", DateTime.UtcNow.ToString("o"));
       writer.WriteString("level", level);
+      // The invocation's X-Ray root, read per call (Lambda rewrites the env var per invocation);
+      // absent outside Lambda or when the value is not a valid root, so the line is as before.
+      var xrayRoot = TraceContext.CurrentRoot();
+      if (xrayRoot is not null) writer.WriteString(TraceContext.XrayField, xrayRoot);
       writeBody(writer);
       writer.WriteEndObject();
     }
@@ -135,6 +139,8 @@ public static class Log
     foreach (var prop in obj.EnumerateObject())
     {
       if (prop.NameEquals("ts") || prop.NameEquals("level")) continue;
+      // Reserved to the prefix like ts/level: a logged xrayTraceId is always this invocation's.
+      if (prop.NameEquals(TraceContext.XrayField)) continue;
       prop.WriteTo(writer);
     }
   }
