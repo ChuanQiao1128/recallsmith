@@ -89,6 +89,9 @@ module "identity" {
 
   # R18A A11: the automation email recipient (sensitive; never printed).
   notify_recipient_email = local.alert_email
+
+  # R18H H05: the synthetic check (H00 §5.4).
+  synthetic_check_function_name = "developercards-synthetic-check"
 }
 
 module "data" {
@@ -233,6 +236,19 @@ module "worker" {
     WATCH_USER_AGENT            = "DeveloperCards-SourceWatch/1.0 (+https://developercards.app)"
     METRICS_NAMESPACE           = "DeveloperCards"
     LOG_LEVEL                   = "info"
+  }
+
+  # R18H H05: the synthetic check (H00 §5.4). Create-time only; equals services/synthetic-check/env/prod.env.json (H04).
+  synthetic_check_function_name = "developercards-synthetic-check"
+  synthetic_check_role_arn      = module.identity.synthetic_check_role_arn
+  synthetic_check_environment = {
+    API_BASE              = "https://api.developercards.app"
+    CDN_BASE              = "https://cdn.developercards.app"
+    CONSOLE_BASE          = "https://console.developercards.app"
+    CHECK_TIMEOUT_SECONDS = "10"
+    CHECK_USER_AGENT      = "DeveloperCards-Synthetic/1.0 (+https://developercards.app)"
+    METRICS_NAMESPACE     = "DeveloperCards"
+    LOG_LEVEL             = "info"
   }
 }
 

@@ -89,3 +89,7 @@ output "notifier_function_name" {
 output "source_watcher_function_name" {
   value = aws_lambda_function.source_watcher.function_name
 }
+
+output "synthetic_check_function_name" {
+  value = aws_lambda_function.synthetic_check.function_name
+}

@@ -49,6 +49,9 @@ resource "aws_lambda_function" "webhook_dispatcher" {
     log_format = "Text"
     log_group  = aws_cloudwatch_log_group.webhook_dispatcher.name
   }
+  tracing_config {
+    mode = "Active"
+  }
   lifecycle {
     ignore_changes = [filename, source_code_hash, s3_bucket, s3_key, s3_object_version, publish, environment, description]
   }

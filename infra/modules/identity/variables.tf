@@ -163,3 +163,7 @@ variable "ses_configuration_set_name" {
   default     = "developercards-automation"
   description = "R18A A11: the SES configuration set the notifier sends through."
 }
+
+variable "synthetic_check_function_name" {
+  type = string
+} # prod "developercards-synthetic-check"

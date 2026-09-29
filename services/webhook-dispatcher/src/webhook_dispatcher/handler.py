@@ -9,11 +9,12 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
-from . import emf, settings
+from . import emf, settings, tracectx
 from .delivery import MAX_ATTEMPTS, RETRY_DELAYS_SECONDS, classify, post_json
 from .internal_client import InternalClient
 from .logs import log
@@ -382,21 +383,31 @@ def _report(
     return bool(result.data and result.data.get("stop") is True)
 
 
+def _trace_header(record: object) -> object:
+    """The SQS system attribute AWSTraceHeader (H00 §3.3); None when absent or malformed."""
+    attributes = record.get("attributes") if isinstance(record, Mapping) else None
+    return attributes.get("AWSTraceHeader") if isinstance(attributes, Mapping) else None
+
+
 def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, list[dict[str, str]]]:
     cfg = settings.load_settings()
     failures: list[dict[str, str]] = []
     for record in (event or {}).get("Records") or []:
-        message_id = record.get("messageId") if isinstance(record, dict) else None
+        tracectx.bind_upstream(_trace_header(record))
         try:
-            ack = _process(record, context, cfg)
-        except Exception as exc:
-            log(
-                "error",
-                "webhook_unexpected_error",
-                messageId=message_id,
-                errorClass=type(exc).__name__,
-            )
-            ack = False
-        if not ack:
-            failures.append({"itemIdentifier": message_id})
+            message_id = record.get("messageId") if isinstance(record, dict) else None
+            try:
+                ack = _process(record, context, cfg)
+            except Exception as exc:
+                log(
+                    "error",
+                    "webhook_unexpected_error",
+                    messageId=message_id,
+                    errorClass=type(exc).__name__,
+                )
+                ack = False
+            if not ack:
+                failures.append({"itemIdentifier": message_id})
+        finally:
+            tracectx.clear_upstream()
     return {"batchItemFailures": failures}

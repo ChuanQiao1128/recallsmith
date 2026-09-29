@@ -21,6 +21,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from . import tracectx
+
 # The notifier's two routes (contract A00 §12.3, §12.6), served by core-vpc and verified against
 # INTERNAL_SECRET_NOTIFIER (+_PREVIOUS).
 REPORT_PATH = "/api/internal/automation/notifications/report"
@@ -139,15 +141,19 @@ class InternalClient:
 
     def _attempt(self, path: str, body: str, timeout: float, secret: str) -> tuple[InternalResult, bool]:
         ts = self._clock_ms()
+        headers = {
+            "content-type": "application/json",
+            HEADER_TIMESTAMP: str(ts),
+            HEADER_SIGNATURE: sign_internal(secret, ts, body),
+        }
+        root = tracectx.current_root()
+        if root is not None:
+            headers[tracectx.HEADER] = root
         request = urllib.request.Request(
             self._base_url + path,
             data=body.encode("ascii"),
             method="POST",
-            headers={
-                "content-type": "application/json",
-                HEADER_TIMESTAMP: str(ts),
-                HEADER_SIGNATURE: sign_internal(secret, ts, body),
-            },
+            headers=headers,
         )
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:

@@ -19,7 +19,7 @@ set -euo pipefail
 set +x
 
 usage() {
-  echo "usage: $(basename "$0") <webhook-dispatcher|ai-qa|source-watcher|notifier>" >&2
+  echo "usage: $(basename "$0") <webhook-dispatcher|ai-qa|source-watcher|notifier|synthetic-check>" >&2
   echo "  env: ENV (prod), AWS_REGION (ap-southeast-2), AWS_PROFILE (dev), PUBLISH_ALIAS (prod), UV, DRY_RUN=1" >&2
   exit 2
 }
@@ -31,6 +31,7 @@ case "$SERVICE" in
   ai-qa)              FN="developercards-ai-qa";              PKG="ai_qa" ;;
   source-watcher)     FN="developercards-source-watcher";     PKG="source_watcher" ;;
   notifier)           FN="developercards-notifier";           PKG="notifier" ;;
+  synthetic-check)    FN="developercards-synthetic-check";    PKG="synthetic_check" ;;
   *) usage ;;
 esac
 
