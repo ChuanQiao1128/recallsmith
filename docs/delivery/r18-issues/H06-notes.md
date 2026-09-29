@@ -8,7 +8,29 @@ appeared, so H05 was applied at the branch point.
 
 ## get-metric-data replay
 
-REPLAY_PLACEHOLDER
+Every planned metric alarm's `metric_query` list and every new dashboard metric widget's `metrics`, through
+`aws cloudwatch get-metric-data` over the last 24 h with each query's own period (2026-09-29, read-only):
+
+| Query set | Period | Returned ids | StatusCode |
+|---|---|---|---|
+| slo_api_availability_burn_1h | 3600 | burn | Complete |
+| slo_api_availability_burn_5m | 300 | burn | Complete |
+| slo_api_availability_slow_burn | 21600 | burn | Complete |
+| slo_sync_latency_burn_1h | 3600 | burn | Complete |
+| slo_sync_latency_burn_5m | 300 | burn | Complete |
+| slo_sync_latency_slow_burn | 21600 | burn | Complete |
+| slo_publish_success_fast_burn | 3600 | burn | Complete |
+| slo_publish_success_slow_burn | 21600 | burn | Complete |
+| widget 2 API availability error budget remaining % | 3600 | budget | Complete |
+| widget 3 Sync latency error budget remaining % | 3600 | budget | Complete |
+| widget 4 Publish success error budget remaining % | 3600 | budget | Complete |
+| widget 5 API availability burn rate (1 h) | 3600 | burn | Complete |
+| widget 6 Sync latency burn rate (1 h) | 3600 | burn | Complete |
+| widget 7 Publish success burn rate (1 h) | 3600 | burn | Complete |
+| widget 8 Synthetic check success | 900 | success | Complete |
+| widget 9 Synthetic check latency | 900 | latmax, latp50 | Complete |
+
+No call failed validation.
 
 ## Nine widgets, not ten
 
