@@ -19,6 +19,9 @@ public static class TraceContext
   public const string XrayField = "xrayTraceId";
   public const string UpstreamField = "upstreamTraceId";
 
+  /// <summary>Longer inputs are rejected before any parsing (R18I Q3, same cap as the Python twin).</summary>
+  public const int MaxHeaderChars = 512;
+
   private const int RootLength = 35;
 
   private static readonly Regex RootPattern =
@@ -39,13 +42,15 @@ public static class TraceContext
 
   /// <summary>
   /// <c>"Root=1-…;Parent=…;Sampled=…"</c> (Root at any position) or a bare <c>"1-…"</c> →
-  /// the validated root; anything else → null. Never throws.
+  /// the validated root; anything else → null. Never throws. Same rule as the Python twin (R18I Q3): an
+  /// input longer than <see cref="MaxHeaderChars"/> is null, and a segment counts only when it starts with
+  /// exactly <c>Root=</c> after trimming (no whitespace before <c>=</c>); the first such segment decides.
   /// </summary>
   public static string? RootFromHeader(string? value)
   {
     try
     {
-      if (string.IsNullOrWhiteSpace(value)) return null;
+      if (string.IsNullOrWhiteSpace(value) || value.Length > MaxHeaderChars) return null;
 
       var v = value.Trim();
       string? candidate = null;

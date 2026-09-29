@@ -18,16 +18,20 @@ _upstream: str | None = None
 
 
 def root_from_header(value: object) -> str | None:
-    """'Root=1-…;Parent=…;Sampled=1' or a bare '1-…' -> the validated root; anything else -> None."""
+    """'Root=1-…;Parent=…;Sampled=1' or a bare '1-…' -> the validated root; anything else -> None.
+
+    Same rule as .NET TraceContext.RootFromHeader (H00 Q3): the first segment that starts exactly
+    'Root=' wins, and a value longer than MAX_HEADER_CHARS is rejected before trimming.
+    """
     if not isinstance(value, str) or len(value) > MAX_HEADER_CHARS:
         return None
     text = value.strip()
     if _ROOT.fullmatch(text):
         return text
     for part in text.split(";"):
-        key, sep, val = part.partition("=")
-        if sep and key.strip() == "Root":
-            val = val.strip()
+        segment = part.strip()
+        if segment.startswith("Root="):
+            val = segment[len("Root="):].strip()
             return val if _ROOT.fullmatch(val) else None
     return None
 

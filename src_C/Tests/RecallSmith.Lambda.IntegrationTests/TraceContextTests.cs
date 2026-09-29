@@ -72,6 +72,52 @@ public class TraceContextTests
     return rows;
   }
 
+  // ---------------------------------------------------------------- shared vectors (R18I Q3)
+
+  // The same literal table is copied into every Python test_tracectx.py; a change here must be made there
+  // too. R = ExampleRoot. PadTo(s, n) appends 'x' up to n chars; LeftPad(s, n) prepends spaces up to n chars.
+  private static string PadTo(string s, int length) => s + new string('x', length - s.Length);
+
+  private static string LeftPad(string s, int length) => new string(' ', length - s.Length) + s;
+
+  public static IEnumerable<object?[]> SharedVectors()
+  {
+    const string R = ExampleRoot;
+    return
+    [
+      [R, R],
+      [$"Root={R};Parent=53995c3f42cd8ad8;Sampled=1", R],
+      [$"Parent=53995c3f42cd8ad8;Root={R};Sampled=0", R],
+      [$"Parent=53995c3f42cd8ad8;Sampled=1;Root={R}", R],
+      [$"  Root={R} ; Parent=53995c3f42cd8ad8 ;  Sampled=1  ", R],
+      [$"Root= {R} ;Sampled=1", R],
+      [$"\t{R}\t", R],
+      [$"Root ={R};Sampled=1", null],
+      [$"Root\t={R}", null],
+      [$"root={R};Sampled=1", null],
+      [$"ROOT={R}", null],
+      [$"Rootx={R}", null],
+      [$"Root=={R}", null],
+      [$"Root={R.ToUpperInvariant()};Sampled=1", null],
+      ["Root=;Parent=53995c3f42cd8ad8;Sampled=1", null],
+      [$"Root=1-XYZ;Root={R}", null],
+      [$"Root={R}x;Parent=53995c3f42cd8ad8", null],
+      ["Parent=53995c3f42cd8ad8;Sampled=1", null],
+      [$"{R} junk", null],
+      ["2-5759e988-bd862e3fe1be46a994272793", null],
+      ["1-5759e988-bd862e3fe1be46a99427279", null],
+      ["Root", null],
+      ["=", null],
+      [string.Empty, null],
+      ["   ", null],
+      [null, null],
+      [PadTo($"Root={R};Lineage=", 512), R],
+      [PadTo($"Root={R};Lineage=", 513), null],
+      [LeftPad(R, 512), R],
+      [LeftPad(R, 513), null],
+    ];
+  }
+
   // ---------------------------------------------------------------- tests
 
   [Fact]
@@ -88,6 +134,19 @@ public class TraceContextTests
   public void RootFromHeader_ParsesEveryGeneratedHeader(string? header, string? expected)
   {
     Assert.Equal(expected, TraceContext.RootFromHeader(header));
+  }
+
+  [Theory]
+  [MemberData(nameof(SharedVectors))]
+  public void RootFromHeader_MatchesTheSharedVectors(string? header, string? expected)
+  {
+    Assert.Equal(expected, TraceContext.RootFromHeader(header));
+  }
+
+  [Fact]
+  public void MaxHeaderChars_Is512()
+  {
+    Assert.Equal(512, TraceContext.MaxHeaderChars);
   }
 
   [Fact]
