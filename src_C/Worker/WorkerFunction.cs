@@ -5,6 +5,7 @@ using Amazon.Lambda.Core;
 using Amazon.Lambda.SQSEvents;
 using Amazon.S3;
 using Amazon.S3.Model;
+using RecallSmith.Lambda.Common;
 using RecallSmith.Lambda.Db;
 using RecallSmith.Lambda.Worker.Models;
 using RecallSmith.Lambda.Worker.Repositories;
@@ -58,6 +59,12 @@ public class WorkerFunction
   /// <summary>Upper bound on the exception text copied into deck_publishes.error_message.</summary>
   public const int MaxErrorDetailChars = 400;
 
+  /// <summary>EMF gauge counted once per job that reaches SUCCESS in this handler (H00 §4.3 publish-success SLO, good events).</summary>
+  public const string PublishSucceededMetric = "PublishJobsSucceeded";
+
+  /// <summary>EMF gauge counted once per terminal job failure in this handler (H00 §4.3 publish-success SLO, bad events).</summary>
+  public const string PublishFailedMetric = "PublishJobsFailed";
+
   /// <summary>"system error on attempt {n}/{MaxReceiveCount}: {ExceptionType}: {message ≤ MaxErrorDetailChars}".</summary>
   public static string SystemErrorMessage(int receiveCount, Exception ex)
   {
@@ -95,6 +102,7 @@ public class WorkerFunction
 
       // 所有日志带 JobId 前缀，便于追踪
       LogWithJobId(jobId, $"Processing message {record.MessageId} (receiveCount={receiveCount})");
+      Log.Event("info", new { tag = "worker-record", messageId = record.MessageId, jobId, receiveCount, upstreamTraceId = TraceContext.RootFromHeader(record.Attributes?.GetValueOrDefault("AWSTraceHeader")) });
 
       try
       {
@@ -107,6 +115,7 @@ public class WorkerFunction
         await _rebuildManifest(completedAtMs);
 
         LogWithJobId(jobId, "Processing completed successfully");
+        RouteMetrics.EmitGauge(PublishSucceededMetric, 1);
       }
       catch (BusinessException ex)
       {
@@ -116,6 +125,7 @@ public class WorkerFunction
         {
           await _processor.FailAsync(jobId, ex.Message);
           LogWithJobId(jobId, "Job marked as FAILED");
+          RouteMetrics.EmitGauge(PublishFailedMetric, 1);
         }
         catch (Exception failEx)
         {
@@ -137,6 +147,7 @@ public class WorkerFunction
         LogWithJobId(jobId, reason);
         if (receiveCount >= MaxReceiveCount)
         {
+          RouteMetrics.EmitGauge(PublishFailedMetric, 1);
           try
           {
             await _processor.FailAsync(jobId, reason);

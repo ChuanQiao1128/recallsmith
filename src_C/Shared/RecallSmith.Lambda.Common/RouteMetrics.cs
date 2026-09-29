@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using Amazon.Lambda.APIGatewayEvents;
 
@@ -364,9 +365,11 @@ public static class RouteMetrics
     int errors,
     int statusCode,
     string? traceId,
-    long timestampMs)
+    long timestampMs,
+    string? xrayTraceId = null,
+    string? upstreamTraceId = null)
   {
-    return JsonSerializer.Serialize(new
+    var line = JsonSerializer.Serialize(new
     {
       _aws = new
       {
@@ -399,7 +402,20 @@ public static class RouteMetrics
       statusCode,
       traceId,
     });
+
+    // The X-Ray ids are free-form properties appended after traceId, and only when present,
+    // so a line without them is byte-identical to the one this method always produced. They
+    // are never declared as metrics above, so no series is minted per trace.
+    if (xrayTraceId is null && upstreamTraceId is null) return line;
+
+    var sb = new StringBuilder(line, 0, line.Length - 1, line.Length + 128);
+    if (xrayTraceId is not null) AppendProperty(sb, TraceContext.XrayField, xrayTraceId);
+    if (upstreamTraceId is not null) AppendProperty(sb, TraceContext.UpstreamField, upstreamTraceId);
+    return sb.Append('}').ToString();
   }
+
+  private static void AppendProperty(StringBuilder sb, string name, string value) =>
+    sb.Append(',').Append(JsonSerializer.Serialize(name)).Append(':').Append(JsonSerializer.Serialize(value));
 
   // ------------------------------------------------------------------ the seam
 
@@ -537,7 +553,11 @@ public static class RouteMetrics
         errors: isError ? 1 : 0,
         statusCode: statusCode,
         traceId: req.TraceId,
-        timestampMs: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        timestampMs: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        xrayTraceId: TraceContext.CurrentRoot(),
+        // A producer's id (the Python callbacks send it); an invalid value is simply omitted.
+        upstreamTraceId: TraceContext.RootFromHeader(
+          req.Headers.TryGetValue(TraceContext.UpstreamHeader, out var upstream) ? upstream : null));
 
       // Console.Out directly, NOT Log.Info, and that is the difference between a metric and
       // a log line. Log.Info is gated on LOG_LEVEL, so the first person who turns logging

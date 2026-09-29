@@ -57,6 +57,9 @@ resource "aws_lambda_function" "notifier" {
     log_format = "Text"
     log_group  = aws_cloudwatch_log_group.notifier.name
   }
+  tracing_config {
+    mode = "Active"
+  }
   lifecycle {
     ignore_changes = [filename, source_code_hash, s3_bucket, s3_key, s3_object_version, publish, environment, description]
   }
@@ -119,6 +122,9 @@ resource "aws_lambda_function" "source_watcher" {
   logging_config {
     log_format = "Text"
     log_group  = aws_cloudwatch_log_group.source_watcher.name
+  }
+  tracing_config {
+    mode = "Active"
   }
   lifecycle {
     ignore_changes = [filename, source_code_hash, s3_bucket, s3_key, s3_object_version, publish, environment, description]

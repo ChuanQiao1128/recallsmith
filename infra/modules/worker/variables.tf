@@ -106,3 +106,16 @@ variable "source_watcher_environment" {
 variable "automation_scheduler_role_arn" {
   type = string
 }
+
+variable "synthetic_check_function_name" {
+  type = string
+}
+
+variable "synthetic_check_role_arn" {
+  type = string
+}
+
+variable "synthetic_check_environment" {
+  type        = map(string)
+  description = "Create-time only; equals services/synthetic-check/env/prod.env.json"
+}
