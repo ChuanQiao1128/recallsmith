@@ -390,50 +390,105 @@ Limits:
 
 All three SLOs use a rolling **28-day** window; error budget = 1 − target; burn rate = (bad / total) /
 (1 − target). Fast burn ≥ **14.4** spends 2 % of the budget in 1 hour; slow burn ≥ **6** spends ≈ 5 % in 6
-hours. Minimum-event guards stop one bad request from paging at 13–124 requests a day.
+hours. Minimum-event guards stop one bad request from paging at 13–124 requests a day. Both burns are
+multi-window (SRE workbook): fast = 1 h AND 5 min, slow = 6 h AND 30 min, so an alarm clears within about
+5 / 30 minutes of recovery instead of staying in ALARM for the whole long window.
 
 | SLO | SLI | Target | Window |
 |---|---|---|---|
-| api-availability | app API requests (API Gateway `Count`) without a `5xx` | 99.5 % | 28 days |
-| sync-latency | requests to `POST /api/v1/sync/push`, `GET /api/v1/sync/progress`, `POST /api/v1/draw-state/sync` served in ≤ 2000 ms (EMF `Latency` `PR(:2000)` weighted by `SampleCount`) | 95 % | 28 days |
+| api-availability | app API requests (API Gateway `Count`) without a `5xx`. The slow burn and the budget leave out the synthetic check's own requests (`GET /health`, and the `4xx` of `GET /api/v1/me`, which is the token-less probe's 401) through the detailed route metrics; the fast burn counts every request. Scheduled `/api/internal/*` callbacks that pass the gateway are counted. | 99.5 % | 28 days |
+| sync-latency | requests to `POST /api/v1/sync/push`, `GET /api/v1/sync/progress`, `POST /api/v1/draw-state/sync` served in ≤ 2000 ms (EMF `Latency` `PR(:2000)` weighted by `SampleCount`). This is **handler latency**: RouteMetrics times the core-vpc dispatch, so Lambda init / cold start is not in it. | 95 % | 28 days |
 | publish-success | publish jobs that end in success (`PublishJobsSucceeded` vs `PublishJobsFailed`) | 95 % | 28 days |
+
+The synthetic check sends 8 API requests an hour (4 × `GET /health`, 4 × `GET /api/v1/me` → 401). Counted as
+traffic, they would be ≈ 73 % of the availability denominator at 13–124 real requests a day, and the budget
+would read ≈ 100 % whatever users saw. That is why the slow burn and the budget subtract them. The 1-hour
+fast-burn guard is ≥ **16** requests, twice the probes' 8, so the probes alone never meet it and are at most
+half of the hour it measures. A synthetic-only outage in a quiet hour (4 of 8 probe requests 5xx) therefore
+pages through `developercards-prod-synthetic-check-failing` (≈ 30 minutes), which is the alarm built for the
+"no real traffic" case, and not through the SLO alarms.
+
+**Dormant at 2026-09 traffic** (replayed read-only on 2026-09-29 over the data since 2026-09-21): the sync
+routes saw 14 requests in total, at most 6 in one hour and 10 in 6 hours, so the sync guards (≥ 6 per hour, ≥
+12 per 6 hours) are almost never met. No publish job ran, so the publish guard (≥ 2 failed jobs) is never met.
+Those alarms stay `OK` / `INSUFFICIENT_DATA` at this volume: a sync latency regression is visible only on the
+dashboard (`Latency p95 by Route (top 10)`, `Sync latency burn rate (1 h)`) and in `SyntheticCheckLatency`.
+The deleted `core-vpc-duration-p95` was just as dormant (≥ 10 invocations in each of 3 five-minute periods),
+so no paging coverage was lost. For api-availability, requests other than the probes reached ≥ 8 in an hour
+(the fast guard) in 7 of 183 hours, and ≥ 30 in 6 hours (the slow guard) in 41 of 183 windows: the fast burn
+is rare but live, the slow burn is live.
 
 | Alarm | Means | Pages | First three things to check |
 |---|---|---|---|
-| `developercards-prod-slo-api-availability-fast-burn` | composite: the 1-hour **and** 5-minute availability burn are both ≥ 14.4 | yes | 1. API Gateway 5xx by route on the dashboard; 2. core-vpc errors / throttles (`developercards-prod-core-vpc-errors`, `-core-vpc-throttles`); 3. recent deploys (`aws lambda list-aliases --function-name core-vpc`) |
-| `developercards-prod-slo-api-availability-slow-burn` | 6-hour availability burn ≥ 6 (≥ 30 requests, ≥ 3 5xx) | yes | same three as the fast burn; also RDS CPU / connections |
-| `developercards-prod-slo-api-availability-burn-1h` | child: 1-hour burn ≥ 14.4 (≥ 10 requests, ≥ 2 5xx) | never | only read as part of the composite |
+| `developercards-prod-slo-api-availability-fast-burn` | composite: the 1-hour **and** 5-minute availability burn are both ≥ 14.4 | yes | 1. `API 5xx by route (top 10)` on the dashboard (or run `SEARCH('{AWS/ApiGateway,ApiId,Method,Resource,Stage} MetricName="5xx" ApiId="ktbq1sie2c" Stage="$default"', 'Sum', 300)` in the metrics console); 2. core-vpc errors / throttles (`developercards-prod-core-vpc-errors`, `-core-vpc-throttles`); 3. recent deploys (`aws lambda list-aliases --function-name core-vpc`) |
+| `developercards-prod-slo-api-availability-slow-burn` | composite: the 6-hour **and** 30-minute availability burn, synthetic check excluded, are both ≥ 6; actions suppressed while the fast burn is in ALARM and 30 minutes after | yes | same three as the fast burn; also RDS CPU / connections |
+| `developercards-prod-slo-api-availability-burn-1h` | child: 1-hour burn ≥ 14.4 (≥ 16 requests, ≥ 2 5xx; all requests) | never | only read as part of the composite |
 | `developercards-prod-slo-api-availability-burn-5m` | child: 5-minute burn ≥ 14.4 | never | only read as part of the composite |
-| `developercards-prod-slo-sync-latency-fast-burn` | composite: the 1-hour **and** 5-minute sync-latency burn are both ≥ 14.4 (≥ 72 % of sync requests slower than 2 s) | yes | 1. `Latency p95 by Route (top 10)` on the dashboard; 2. core-vpc cold starts (`Init Duration` in REPORT lines) and memory; 3. RDS CPU (`developercards-prod-rds-cpu`) |
-| `developercards-prod-slo-sync-latency-slow-burn` | 6-hour sync-latency burn ≥ 6 (≥ 12 requests, ≥ 30 % slow) | yes | same three as the fast burn |
-| `developercards-prod-slo-sync-latency-burn-1h` | child: 1-hour burn ≥ 14.4 (≥ 6 requests) | never | only read as part of the composite |
+| `developercards-prod-slo-api-availability-burn-6h` | child: 6-hour burn ≥ 6 (≥ 30 requests, ≥ 3 5xx; synthetic check excluded) | never | only read as part of the composite |
+| `developercards-prod-slo-api-availability-burn-30m` | child: 30-minute burn ≥ 6 (synthetic check excluded) | never | only read as part of the composite |
+| `developercards-prod-slo-sync-latency-fast-burn` | composite: the 1-hour **and** 5-minute sync-latency burn are both ≥ 14.4 (≥ 72 % of sync requests slower than 2 s). **Dormant at 2026-09 traffic**: needs ≥ 6 sync requests in an hour | yes (dormant) | 1. `Latency p95 by Route (top 10)` on the dashboard; 2. core-vpc cold starts (`Init Duration` in REPORT lines; not in this SLI) and memory; 3. RDS CPU (`developercards-prod-rds-cpu`) |
+| `developercards-prod-slo-sync-latency-slow-burn` | composite: the 6-hour **and** 30-minute sync-latency burn are both ≥ 6 (≥ 30 % slow); suppressed while the fast burn pages. **Dormant at 2026-09 traffic**: needs ≥ 12 sync requests in 6 hours | yes (dormant) | same three as the fast burn |
+| `developercards-prod-slo-sync-latency-burn-1h` | child: 1-hour burn ≥ 14.4 (≥ 6 requests); dormant at 2026-09 traffic | never | only read as part of the composite |
 | `developercards-prod-slo-sync-latency-burn-5m` | child: 5-minute burn ≥ 14.4 | never | only read as part of the composite |
-| `developercards-prod-slo-publish-success-fast-burn` | 1-hour publish burn ≥ 14.4 (≥ 2 failed jobs) | yes | 1. worker logs `Job marked as FAILED` in `/aws/lambda/worker-lambda`; 2. the publish DLQ (`developercards-prod-dlq-nonempty`); 3. `developercards-prod-worker-errors` |
-| `developercards-prod-slo-publish-success-slow-burn` | 6-hour publish burn ≥ 6 (≥ 2 failed jobs) | yes | same three as the fast burn |
+| `developercards-prod-slo-sync-latency-burn-6h` | child: 6-hour burn ≥ 6 (≥ 12 requests); dormant at 2026-09 traffic | never | only read as part of the composite |
+| `developercards-prod-slo-sync-latency-burn-30m` | child: 30-minute burn ≥ 6 | never | only read as part of the composite |
+| `developercards-prod-slo-publish-success-fast-burn` | 1-hour publish burn ≥ 14.4 (≥ 2 failed jobs). **Dormant at 2026-09 traffic**: no publish job ran | yes (dormant) | 1. worker logs `Job marked as FAILED` in `/aws/lambda/worker-lambda`; 2. the publish DLQ (`developercards-prod-dlq-nonempty`); 3. `developercards-prod-worker-errors` |
+| `developercards-prod-slo-publish-success-slow-burn` | composite: the 6-hour (≥ 2 failed jobs) **and** 30-minute (≥ 1 failed job) publish burn are both ≥ 6; suppressed while the fast burn pages. **Dormant at 2026-09 traffic** | yes (dormant) | same three as the fast burn |
+| `developercards-prod-slo-publish-success-burn-6h` | child: 6-hour burn ≥ 6 (≥ 2 failed jobs); dormant at 2026-09 traffic | never | only read as part of the composite |
+| `developercards-prod-slo-publish-success-burn-30m` | child: 30-minute burn ≥ 6 (≥ 1 failed job) | never | only read as part of the composite |
 | `developercards-prod-synthetic-check-failing` | two consecutive synthetic runs failed or did not run | yes (once enabled) | the synthetic check subsection below |
 
-Paging: the two composites, the two request slow-burn alarms, the two publish alarms and the synthetic
-alarm (7 alarms). The four children (`…-burn-1h`, `…-burn-5m` of api-availability and sync-latency) never
+Paging: the two fast-burn composites, the three slow-burn composites, the publish fast burn and the
+synthetic alarm (7 alarms). The ten children (`…-burn-1h`, `…-burn-5m`, `…-burn-6h`, `…-burn-30m`) never
 page; they have no actions and exist only to feed the composites. The publish alarms stay
-`INSUFFICIENT_DATA` / `OK` until the H02 worker gauges ship (missing data is not breaching).
+`INSUFFICIENT_DATA` / `OK` until a publish job runs (missing data is not breaching).
+
+One incident, one page: each slow-burn composite names its SLO's fast burn as its actions suppressor
+(`extension_period` 30 minutes, `wait_period` 5 minutes). While the fast burn is in ALARM, and for 30 minutes
+after it clears, the slow burn changes state without notifying. If the slow burn is still in ALARM when the
+suppression ends, it notifies then. A slow burn with no fast burn notifies after at most the 5-minute wait.
+After recovery a slow burn clears when its 30-minute child clears (≤ 30 minutes), not after 6 hours; the 6-hour
+child may stay in ALARM up to 6 hours, which is expected and silent.
 
 Replaced and kept:
 
 - `developercards-prod-api-5xx` was replaced by api-availability: same two metrics, but its
   `IF(count > 20, …)` guard per 5 minutes never evaluated at this traffic.
 - `developercards-prod-core-vpc-duration-p95` was replaced by sync-latency: it flapped 6 times on
-  2026-09-28 on cold starts and did not measure what the app waits for.
+  2026-09-28 on cold starts, and it measured every core-vpc invocation, including the scheduled
+  `/internal/*` calls, not only the app's sync requests. The new SLI is handler latency of those three
+  routes; neither metric includes Lambda init (`AWS/Lambda Duration` excludes `Init Duration` too).
 - Kept on purpose: `developercards-prod-core-vpc-errors` (scheduled `/internal/*` invocations never pass
   API Gateway, so availability cannot see them), `developercards-prod-worker-errors` and
   `developercards-prod-dlq-nonempty` (crash and timeout paths that emit no publish gauge).
+- A database outage is not visible to the synthetic check (`GET /health` answers before any DB access). It
+  pages through `developercards-prod-notifier-errors`: the 15-minute automation tick touches the DB, core
+  answers 500, the notifier raises, and the alarm fires on one Lambda error in 5 minutes (≈ 22 minutes
+  worst case; I02 notes, `services/synthetic-check/README.md`).
 
 ### Error-budget policy
 
-- The dashboard section "SLOs (R18H)" shows the budget remaining over 28 days per SLO.
-- Budget remaining **< 25 %** on any SLO ⇒ reliability work comes before feature work until the budget
-  recovers above 25 %.
+- The dashboard section "SLOs (R18H)" shows the budget remaining over 28 days per SLO, and beside it the
+  number of events in the window. A budget reads **100 %** until its window holds its minimum N, chosen so
+  that one bad event costs at most 10 % of the budget (N = 10 / budget):
+
+  | SLO | Minimum N in 28 days | Events at 2026-09 traffic |
+  |---|---|---|
+  | api-availability | 2,000 requests, synthetic check excluded | ≈ 320 (since 2026-09-21) |
+  | sync-latency | 200 sync requests | 14 |
+  | publish-success | 200 publish jobs | 0 |
+
+  Below N the widget's 100 % means "not enough events to measure", not "no errors". Read the event count
+  and the burn-rate widgets instead. Without the guard, sync would read −42.9 % from 1 slow request out of 14
+  (measured at 128 MB).
+- Above N, budget remaining **< 25 %** on any SLO ⇒ reliability work comes before feature work until the
+  budget recovers above 25 %. Below N the policy does not apply.
 - Review the sync-latency target after 28 days of data at **512 MB** (core-vpc moved from 128 MB on
-  2026-09-29; the 95 % ≤ 2000 ms target was chosen on 128 MB data), due 2026-10-27.
+  2026-09-29; the 95 % ≤ 2000 ms target was chosen on 128 MB data), due 2026-10-27. In the same review,
+  check whether the sync guards (≥ 6 per hour, ≥ 12 per 6 hours) and the three budget minimums are ever met,
+  and lower them or accept the SLOs as dashboard-only.
+- After a release, expect each budget to show its real value, or 100 % below N. Do not expect ~100 %: at
+  2026-09 volume every budget is below N. The 128 MB slow sync request leaves the sync window on 2026-10-25.
 
 ### Synthetic check
 
@@ -477,14 +532,29 @@ Terraform ignores `actions_enabled` on this alarm, so neither step causes drift.
 
 ### Rollback (H00 §8.2 step 8)
 
-- **Tracing:** revert H05's `tracing_config` lines, apply, and redeploy so new versions carry
-  `PassThrough`; or, quicker, `aws lambda update-function-configuration --function-name <fn> --tracing-config Mode=PassThrough`
-  and then revert in Terraform so the next plan is empty.
+- **Tracing:** live traffic runs on the `prod` alias of a published version, and a published version keeps
+  the tracing mode it was published with. Changing `$LATEST` alone (`update-function-configuration
+  --tracing-config Mode=PassThrough`) does **not** change live traffic. Either:
+  - quickest: move the alias back with the `ROLLBACK` line the deploy printed (`aws lambda update-alias
+    --function-name <fn> --name prod --function-version <previous>`). That version predates `Active` tracing,
+    but it also rolls back the code shipped with it; or
+  - keep the code: revert H05's `tracing_config` lines and apply (`$LATEST` becomes `PassThrough`), then
+    redeploy (`ENV=prod ./src_C/deploy.sh` for core-vpc and worker-lambda, `services/deploy-python-lambda.sh`
+    for the Python services). The deploy publishes a new version and moves `prod` to it. By hand, the same is
+    `aws lambda publish-version --function-name <fn>` and then
+    `aws lambda update-alias --function-name <fn> --name prod --function-version <new>`.
+
+  Either way, finish with the Terraform revert so the next plan is empty.
 - **Synthetic check:** disable the schedule (`--state DISABLED` above) and the alarm actions
   (`disable-alarm-actions` above).
-- **SLOs:** revert H06; the apply removes the ten SLO alarms and restores `developercards-prod-api-5xx`
-  and `developercards-prod-core-vpc-duration-p95`.
+- **SLOs:** revert H06 and I03; the apply removes the sixteen SLO alarms and restores
+  `developercards-prod-api-5xx` and `developercards-prod-core-vpc-duration-p95`. To undo only I03 (single-window
+  slow burn, probes counted, unguarded budgets), revert I03; the `moved` blocks go with it, and the apply
+  replaces the three `…-burn-6h` children with the three single `…-slow-burn` metric alarms again.
 
 No rollback changes any data.
 
-Cost: ≈ USD 4.80/month for the whole R18H release (H00 §9; H06's alarms ≈ USD 3.40 of it).
+Cost: ≈ USD 4.80/month for the whole R18H release (H00 §9; H06's alarms ≈ USD 3.40 of it), plus ≈ USD
+3.10/month for I03: three 30-minute children (api 5 + sync 6 + publish 2 = 13 alarm-metrics, USD 1.30), the api
+6-hour child going from 2 to 5 metrics (USD 0.30), and three slow-burn composites (3 × USD 0.50). The
+dashboard widget is free.
