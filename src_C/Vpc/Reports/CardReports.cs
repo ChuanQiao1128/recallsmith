@@ -17,6 +17,8 @@ namespace RecallSmith.Lambda.Vpc.Reports;
 /// triages the reports of the decks they may read (<c>/api/v1/admin/card-reports</c>). The learner's note is untrusted
 /// text: length-capped, stored as is, returned only to console admins with deck read, and never logged or sent to a
 /// model. No response carries a user sub or an email. Every route answers <c>503 NOT_READY</c> until migration 037 ran.
+/// A learner can report only a card they can see (live deck; free, or premium with an active entitlement) and reads back
+/// the question captured at report time (migration 041), never the live working copy (R20X F02, contract §10.3).
 /// </summary>
 public static class CardReports
 {
@@ -115,17 +117,27 @@ public static class CardReports
         // One report at a time per learner: the duplicate check, the daily count and the insert see the same rows.
         await DbUtil.ExecuteAsync(conn, tx, "select pg_advisory_xact_lock(hashtext('card_reports:' || $1))", [userSub]);
 
+        // Only a card the learner can see (R20X F02, contract §10.3): a live deck, and a free one or premium with an
+        // active entitlement (the premium download gate's rule). Anything else is the same 404 as an unknown card.
         var card = await DbUtil.QueryAsync(conn, tx,
-          """
-          select d.id as deck_id, c.id as card_id
+          $"""
+          select d.id as deck_id, c.id as card_id, left(c.question, {MaxQuestionLength}) as question
           from decks d join cards c on c.deck_id = d.id
           where d.slug = $1 and d.is_deleted = 0 and c.stable_uid = $2 and c.is_deleted = 0
+            and d.availability = 'live'
+            and (d.tier = 'free' or exists (
+              select 1 from user_premium_state p
+              where p.app_user_id = $3
+                and case when p.expires_at_ms is not null then p.expires_at_ms > (extract(epoch from now()) * 1000)::bigint
+                         else coalesce(p.premium_active, false) end
+                and not ($4 and lower(coalesce(p.premium_env, '')) = 'sandbox')))
           order by d.id, c.id
           limit 1
-          """, [input.DeckSlug, input.StableUid]);
+          """, [input.DeckSlug, input.StableUid, userSub, Env.IsTruthy(Environment.GetEnvironmentVariable("DISALLOW_SANDBOX_PREMIUM"))]);
         if (card.Count == 0) return Helpers.ErrorEnvelope(res, 404, "CARD_NOT_FOUND", "Card not found");
         deckId = RunnerRoutes.Long(card[0]["deck_id"]);
         cardId = RunnerRoutes.Long(card[0]["card_id"]);
+        var question = card[0]["question"] as string;
 
         var open = await DbUtil.ExecuteScalarAsync(conn, tx,
           "select id from card_reports where user_sub = $1 and stable_uid = $2 and status = 'open'", [userSub, input.StableUid]);
@@ -147,10 +159,10 @@ public static class CardReports
 
         var inserted = (await DbUtil.QueryAsync(conn, tx,
           """
-          insert into card_reports (user_sub, deck_id, deck_slug, card_id, stable_uid, reason, note, client_version)
-          values ($1, $2, $3, $4, $5, $6, $7::text, $8::text)
+          insert into card_reports (user_sub, deck_id, deck_slug, card_id, stable_uid, reason, note, client_version, question)
+          values ($1, $2, $3, $4, $5, $6, $7::text, $8::text, $9::text)
           returning id, created_at
-          """, [userSub, deckId, input.DeckSlug, cardId, input.StableUid, input.Reason, input.Note, input.ClientVersion]))[0];
+          """, [userSub, deckId, input.DeckSlug, cardId, input.StableUid, input.Reason, input.Note, input.ClientVersion, question]))[0];
         reportId = RunnerRoutes.Long(inserted["id"]);
         createdAt = inserted["created_at"];
         await tx.CommitAsync();
@@ -211,13 +223,13 @@ public static class CardReports
 
       var rows = await DbUtil.QueryAsync(conn, null,
         """
-        select r.id, r.deck_slug, r.stable_uid, left(c.question, $3) as question, r.reason, r.status, r.resolution, r.resolution_note,
+        select r.id, r.deck_slug, r.stable_uid, r.question, r.reason, r.status, r.resolution, r.resolution_note,
           r.created_at, r.resolved_at
-        from card_reports r left join cards c on c.id = r.card_id
+        from card_reports r
         where r.user_sub = $1
         order by r.id desc
         limit $2
-        """, [userSub, limit, MaxQuestionLength]);
+        """, [userSub, limit]);
       var items = rows.Select(r => new
       {
         reportId = RunnerRoutes.Long(r["id"]),

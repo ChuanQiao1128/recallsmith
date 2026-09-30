@@ -95,6 +95,18 @@ public static class ChangeImpact
     return list;
   }
 
+  /// <summary>
+  /// <paramref name="details"/> with its <c>affectedCards</c> replaced by <paramref name="affected"/> (R20X F02: the deck
+  /// filter of the watch route); unchanged when it has no <c>affectedCards</c>.
+  /// </summary>
+  public static JsonElement WithAffectedCards(JsonElement details, IEnumerable<AffectedCard> affected)
+  {
+    if (details.ValueKind != JsonValueKind.Object || !details.TryGetProperty("affectedCards", out _)) return details.Clone();
+    var node = System.Text.Json.Nodes.JsonNode.Parse(details.GetRawText())!.AsObject();
+    node["affectedCards"] = JsonSerializer.SerializeToNode(affected.Select(ToJson).ToList());
+    return JsonSerializer.SerializeToElement(node);
+  }
+
   /// <summary><c>details.needsHumanReview</c> (false when absent).</summary>
   public static bool ParseNeedsHumanReview(JsonElement details) =>
     details.ValueKind == JsonValueKind.Object && details.TryGetProperty("needsHumanReview", out var v) && v.ValueKind == JsonValueKind.True;
@@ -167,8 +179,11 @@ public static class ChangeImpact
     }
   }
 
-  /// <summary>The latest analysed items for the watch route (empty before migration 039).</summary>
-  public static async Task<List<object>> RecentFeedItemsAsync(NpgsqlConnection conn)
+  /// <summary>
+  /// The latest analysed items for the watch route (empty before migration 039). With <paramref name="readableDecks"/>
+  /// (a caller who is not super_admin, R20X F02) each item lists only the possibly affected cards of those decks.
+  /// </summary>
+  public static async Task<List<object>> RecentFeedItemsAsync(NpgsqlConnection conn, IReadOnlySet<long>? readableDecks = null)
   {
     try
     {
@@ -186,7 +201,8 @@ public static class ChangeImpact
         title = r["title"] as string,
         url = (string)r["url"]!,
         firstSeenAt = RunnerRoutes.Timestamp(r["first_seen_at"]),
-        possiblyAffectedCards = ParsePossiblyAffected(r["cards"] as string).Select(ToJson).ToList(),
+        possiblyAffectedCards = ParsePossiblyAffected(r["cards"] as string)
+          .Where(c => readableDecks is null || readableDecks.Contains(c.DeckId)).Select(ToJson).ToList(),
       }).ToList();
     }
     catch (PostgresException ex) when (ex.SqlState is "42P01" or "42703")

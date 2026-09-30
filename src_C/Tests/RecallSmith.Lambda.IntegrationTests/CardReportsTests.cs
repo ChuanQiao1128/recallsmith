@@ -356,6 +356,61 @@ public sealed class CardReportsTests
     Assert.Empty(AutomationTestKit.Data(await MineAsync(Learner(Sub("nobody")))).GetProperty("items").EnumerateArray());
   }
 
+  [Fact]
+  public async Task CardReport_Post_OnlyCardsTheLearnerCanSee()
+  {
+    // R20X F02 (s-security-2, contract §10.3): a coming or retired deck, or a premium deck without an active entitlement,
+    // answers the same 404 as an unknown card, so a report is no existence check and no way to read a hidden question.
+    using var scope = new Scope();
+    var sub = Sub("visible");
+
+    var (comingDeck, comingSlug, _, comingUid) = await CardAsync("coming", "Synthetic coming question?");
+    await _db.QueryAsync("update decks set availability = 'coming', eta = '2027' where id = $1", comingDeck);
+    var (retiredDeck, retiredSlug, _, retiredUid) = await CardAsync("retired", "Synthetic retired question?");
+    await _db.QueryAsync("update decks set availability = 'retired', retired_at_ms = 1 where id = $1", retiredDeck);
+    var (premiumDeck, premiumSlug, _, premiumUid) = await CardAsync("premium", "Synthetic premium question?");
+    await _db.QueryAsync("update decks set tier = 'premium' where id = $1", premiumDeck);
+
+    AutomationTestKit.AssertError(await PostAsync(Learner(sub), Report(comingSlug, comingUid)), 404, "CARD_NOT_FOUND");
+    AutomationTestKit.AssertError(await PostAsync(Learner(sub), Report(retiredSlug, retiredUid)), 404, "CARD_NOT_FOUND");
+    AutomationTestKit.AssertError(await PostAsync(Learner(sub), Report(premiumSlug, premiumUid)), 404, "CARD_NOT_FOUND");
+
+    // An expired entitlement is no entitlement.
+    var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    await _db.QueryAsync(
+      "insert into user_premium_state (app_user_id, premium_active, premium_env, expires_at_ms) values ($1, true, 'production', $2)", sub, nowMs - 60_000);
+    AutomationTestKit.AssertError(await PostAsync(Learner(sub), Report(premiumSlug, premiumUid)), 404, "CARD_NOT_FOUND");
+    Assert.Empty(AutomationTestKit.Data(await MineAsync(Learner(sub))).GetProperty("items").EnumerateArray());
+
+    // An active one sees the premium card.
+    await _db.QueryAsync("update user_premium_state set expires_at_ms = $2 where app_user_id = $1", sub, nowMs + 3_600_000);
+    await CreateAsync(Learner(sub), premiumSlug, premiumUid);
+    var mine = AutomationTestKit.Data(await MineAsync(Learner(sub))).GetProperty("items").EnumerateArray().Single();
+    Assert.Equal(("Synthetic premium question?", premiumUid), (mine.GetProperty("question").GetString(), mine.GetProperty("stableUid").GetString()));
+  }
+
+  [Fact]
+  public async Task CardReport_GetMine_ReturnsTheQuestionCapturedAtReportTime_NotTheWorkingCopy()
+  {
+    // R20X F02 (s-security-2, contract §10.3): later, possibly unpublished edits of the card never reach the learner.
+    using var scope = new Scope();
+    var (_, slug, cardId, uid) = await CardAsync("captured", "Synthetic question as reported?");
+    var sub = Sub("captured");
+    var reportId = await CreateAsync(Learner(sub), slug, uid);
+    Assert.Equal("Synthetic question as reported?", await _db.ScalarAsync("select question from card_reports where id = $1", reportId));
+
+    await _db.QueryAsync("update cards set question = 'Unpublished working copy edit?' where id = $1", cardId);
+    var response = await MineAsync(Learner(sub));
+    Assert.DoesNotContain("Unpublished working copy edit?", response.Body);
+    var item = AutomationTestKit.Data(response).GetProperty("items").EnumerateArray().Single();
+    Assert.Equal("Synthetic question as reported?", item.GetProperty("question").GetString());
+
+    // A report from before migration 041 has no captured question: null, never the live row.
+    await _db.QueryAsync("update card_reports set question = null where id = $1", reportId);
+    var legacy = AutomationTestKit.Data(await MineAsync(Learner(sub))).GetProperty("items").EnumerateArray().Single();
+    Assert.Equal(JsonValueKind.Null, legacy.GetProperty("question").ValueKind);
+  }
+
   // ---------------------------------------------------------------- console list
 
   [Fact]

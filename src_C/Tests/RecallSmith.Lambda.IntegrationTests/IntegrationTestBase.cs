@@ -30,7 +30,15 @@ public sealed class PostgresFixture : Xunit.IAsyncLifetime
   // real planner does must not quietly change planners between runs.
   // R20 V06: PostgreSQL 17 with pgvector (was postgres:16-alpine), so migration 038 installs
   // the vector extension here; the "extension absent" path is tested in a scratch database.
-  private const string Image = "pgvector/pgvector:pg17";
+  // R20X F02: the multi-arch index digest of the exact tag pgvector/pgvector:0.8.6-pg17 (the
+  // tag and digest together do not parse in Testcontainers), so neither the
+  // PostgreSQL minor nor the pgvector version moves under the suite. This digest is pgvector
+  // 0.8.6 on PostgreSQL 17.11 (the image the floating pg17 tag named on 2026-10-01, so the move
+  // to a pinned tag changes nothing). Prod is RDS PostgreSQL 17.9 (infra/modules/data/rds.tf);
+  // the pgvector version RDS 17.9 offers is unverified here (check
+  // `select default_version from pg_available_extensions where name = 'vector'` as the master).
+  // Bump both on purpose, together with docs/runbooks/automation-operations.md.
+  private const string Image = "pgvector/pgvector@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f";
   private const string Db = "recallsmith";
   private const string User = "recallsmith";
   private const string Password = "recallsmith";

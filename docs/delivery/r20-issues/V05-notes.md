@@ -29,11 +29,14 @@ Learner (`Auth.RequireUser`: 401 bad token, 403 no sub):
     `note`: string or null, trimmed, ≤500 after the trim, empty → null. `clientVersion`: string or null, trimmed, ≤64, empty → null.
   - `200 {reportId, status:"open", duplicate:false}`; an open report by the same user for the same `stableUid` →
     `200 {reportId:<existing>, status:"open", duplicate:true}` (no new row, no webhook, not counted, answered even at the limit).
-  - `400 VALIDATION_ERROR` (also for invalid JSON), `404 CARD_NOT_FOUND` (deck slug or card uid unknown or deleted),
+  - `400 VALIDATION_ERROR` (also for invalid JSON), `404 CARD_NOT_FOUND` (deck slug or card uid unknown or deleted; since R20X F02 also a card
+    the learner cannot see: a `coming`/`retired` deck, or a premium deck without an active entitlement),
     `429 REPORT_DAILY_LIMIT` (reports created by the user since 00:00 UTC, any status, ≥ limit),
     `503 CARD_REPORTS_DISABLED`, `503 NOT_READY`.
 - `GET /api/v1/user/card-reports?limit=50` (1..100) → `{items:[{reportId, deckSlug, stableUid, question, reason, status,
-  resolution, resolutionNote, createdAt, resolvedAt}]}`, own reports only, newest first, `question` ≤200 chars (null when the card row is gone).
+  resolution, resolutionNote, createdAt, resolvedAt}]}`, own reports only, newest first, `question` ≤200 chars (null when the card row is gone). Corrected in R20X F02: this read
+  the live `cards` row, the admin's working copy with possibly unpublished edits; it now returns the question captured when
+  the report was created (`card_reports.question`, migration `041_card_reports_question.sql`), null for older reports.
   The learner's own note is not echoed back (not in the §4 shape).
 
 Console (`Auth.RequireAdmin`):
@@ -101,3 +104,11 @@ Commands run:
 - `requested_by_sub = card_report` makes a triage run count as a "human run" in the digest's AI QA spend split
   (the split only separates `automation`).
 - The unique open report is per `(user_sub, stable_uid)` as the contract fixes it, so the same uid in two decks shares one open report per learner.
+
+## R20X F02 corrections
+
+See `docs/delivery/r20-issues/F02-fixes.md` (finding s-security-2). `POST /api/v1/user/card-reports` looked the card up by
+slug and uid only, so any signed-in learner could confirm that a card of a coming, retired or premium deck exists and read
+its current question through the GET. Now only cards the learner can see are reportable, and the GET returns the question
+captured at report time. Tests: `CardReport_Post_OnlyCardsTheLearnerCanSee`,
+`CardReport_GetMine_ReturnsTheQuestionCapturedAtReportTime_NotTheWorkingCopy`.
