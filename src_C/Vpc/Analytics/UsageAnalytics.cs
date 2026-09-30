@@ -82,7 +82,8 @@ public static class UsageAnalytics
 
   /// <summary>
   /// Recomputes the <see cref="RecomputeDays"/> complete UTC days before <paramref name="today"/> in one transaction:
-  /// an upsert of <c>analytics_daily</c> (premium_active untouched) and a replace of those days' deck rows.
+  /// an upsert of <c>analytics_daily</c> (premium_active untouched; <c>computed_at</c> from <see cref="UtcNow"/>, the clock
+  /// the once-per-day check compares with) and a replace of those days' deck rows.
   /// </summary>
   public static async Task<Outcome> ComputeAsync(NpgsqlConnection conn, DateOnly today)
   {
@@ -116,14 +117,14 @@ public static class UsageAnalytics
           (select count(*) from first_card f where f.first_day = d.day),
           case when d.day + 1 < $3::date and c.n > 0 then round(c.back1::numeric / c.n, 4) end,
           case when d.day + 7 < $3::date and c.n > 0 then round(c.back7::numeric / c.n, 4) end,
-          now()
+          $5
         from days d
         left join cohort c on c.day = d.day
         on conflict (day) do update set
           dau = excluded.dau, wau = excluded.wau, mau = excluded.mau, reviews = excluded.reviews, new_users = excluded.new_users,
           cards_learned = excluded.cards_learned, d1_retention = excluded.d1_retention, d7_retention = excluded.d7_retention,
           computed_at = excluded.computed_at
-        """, [from, to, today, excluded]);
+        """, [from, to, today, excluded, UtcNow().ToUniversalTime()]);
 
       // Replaced, not upserted: a deck whose every review is now excluded must lose its row.
       await DbUtil.ExecuteAsync(conn, tx, "delete from analytics_deck_daily where day between $1 and $2", [from, to]);
