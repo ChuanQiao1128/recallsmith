@@ -47,6 +47,8 @@ type Props = {
   reviewHref?: string;
   // Not role-gated: the AI QA routes decide who may act.
   qaHref?: string;
+  // Not role-gated: the card report routes are RequireAdmin and deck-scoped.
+  reportsHref?: string;
   // Not role-gated, like ledgerHref: the automation read routes are RequireAdmin.
   // Part of consoleNav(), so every console page offers it.
   automationHref?: string;
@@ -77,6 +79,7 @@ export function ConsoleShell({
   ledgerHref,
   reviewHref,
   qaHref,
+  reportsHref,
   automationHref,
   children,
 }: Props) {
@@ -126,7 +129,7 @@ export function ConsoleShell({
                 Sign out is where a shell usually puts it. */}
             <nav aria-label="Console sections" className="flex items-center gap-2 flex-wrap">
               {/* Grouped: authoring (Decks, Review queue, AI QA, Content
-                  Intelligence), then the ledger and Automation, then the super_admin-only
+                  Intelligence, Reports), then the ledger and Automation, then the super_admin-only
                   sections together at the end (frontend-console-27). */}
               {decksHref ? (
                 <Link to={decksHref} {...navProps('decks')}>
@@ -149,6 +152,12 @@ export function ConsoleShell({
               {contentIntelligenceHref ? (
                 <Link to={contentIntelligenceHref} {...navProps('contentIntelligence')}>
                   Content Intelligence
+                </Link>
+              ) : null}
+
+              {reportsHref ? (
+                <Link to={reportsHref} {...navProps('reports')}>
+                  Reports
                 </Link>
               ) : null}
 

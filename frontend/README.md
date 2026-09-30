@@ -51,6 +51,20 @@ callback.
 to `VITE_MANIFEST_URL`). Neither is set in `.env.development`; that feature
 reports a "not set" error until one is provided.
 
+## Card reports (`/reports`)
+
+The Reports section lists what learners reported on published cards
+(`GET /api/v1/admin/card-reports`), filtered by status (open, resolved, all)
+and deck; both filters live in the URL (`/reports?status=all&deckId=7`). Each
+row links the card editor (`/decks/cards/edit?deckId=&cardId=`) and resolves in
+an inline form (resolution plus an optional note of at most 500 characters,
+`POST /api/v1/admin/card-reports/:reportId/resolve`); the row updates at once
+and rolls back if the server refuses. Learner notes are shown as plain text and
+no reporter is ever shown. Until the server's card reports migration has run,
+the page shows a neutral "not set up on the server yet" callout. The Automation
+overview has a "Card reports" tile (open, new in 7 days) when the status
+response carries `cardReports`.
+
 ## Deployment
 
 `./deploy.sh` is the whole deploy as one command: it runs `npm run build`, syncs
