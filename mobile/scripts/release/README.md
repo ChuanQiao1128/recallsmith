@@ -27,9 +27,9 @@ and `tests/unit/storeSubscriptionMetadata.test.ts` checks both for every `descri
 Always publish OTAs through `ota.sh`; a bare `eas update` without `--environment production` ships empty `EXPO_PUBLIC_*` values.
 
 Exit codes: `ota.sh` 0 ok · 2 usage / eas-cli missing or not logged in · 3 missing `EXPO_PUBLIC_*` name(s) · 6 runtime guard;
-`ios-build.sh` 5 Sentry org/project placeholders; `asc-release.cjs` 0 ok · 1 error · 3 Apple session expired · 4 version held by App Review.
+`ios-build.sh` 0 ok · 1 build failed · 2 eas-cli missing or not logged in · 3 production is missing `EXPO_PUBLIC_SENTRY_DSN` / `SENTRY_AUTH_TOKEN` in the EAS production environment (names only, DRY_RUN included) · 5 Sentry org/project placeholders; `asc-release.cjs` 0 ok · 1 error · 3 Apple session expired · 4 version held by App Review.
 
-Typical run for 1.9.0 (23) (from `mobile/`, after the `REPLACE_ME_SENTRY_*` placeholders in `eas.json` are filled):
+Typical run for 1.9.0 (23) (from `mobile/`; the Sentry org/project slugs in `eas.json` were filled in 9c3dd9d, and `EXPO_PUBLIC_SENTRY_DSN` + `SENTRY_AUTH_TOKEN` must exist in the EAS production environment):
 
 ```bash
 DRY_RUN=1 scripts/release/ios-build.sh production
