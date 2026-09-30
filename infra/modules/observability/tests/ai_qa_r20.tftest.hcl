@@ -5,6 +5,15 @@
 
 mock_provider "aws" {}
 
+# The topic ARN is only known after apply; pin it so the alarm actions can be compared at plan time.
+override_resource {
+  target          = aws_sns_topic.alerts
+  override_during = plan
+  values = {
+    arn = "arn:aws:sns:ap-southeast-2:000000000000:developercards-alerts"
+  }
+}
+
 variables {
   env                              = "prod"
   account_id                       = "000000000000"
@@ -59,7 +68,8 @@ run "ai_qa_latency_p95_alarm_per_provider" {
 
   assert {
     condition = alltrue([for a in aws_cloudwatch_metric_alarm.ai_qa_latency_p95 : (
-      a.alarm_actions == toset([aws_sns_topic.alerts.arn]) && a.ok_actions == toset([aws_sns_topic.alerts.arn])
+      a.alarm_actions == toset(["arn:aws:sns:ap-southeast-2:000000000000:developercards-alerts"]) &&
+      a.ok_actions == toset(["arn:aws:sns:ap-southeast-2:000000000000:developercards-alerts"])
     )])
     error_message = "every p95 latency alarm must notify the alerts topic on ALARM and OK"
   }
