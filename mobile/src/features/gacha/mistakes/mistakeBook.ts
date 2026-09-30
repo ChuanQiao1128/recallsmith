@@ -145,7 +145,10 @@ export function applyOutcome(s: MistakeBookState, o: MistakeOutcome): MistakeBoo
 
 // Correctness (correctStreak, resolvedAt, lastCorrectAt) travels as one unit from one side, so a
 // merged entry never mixes a streak from one book with a resolution from the other.
-function withResolutionFrom(base: Omit<MistakeEntry, 'correctStreak' | 'resolvedAt' | 'lastCorrectAt'>, src: MistakeEntry): MistakeEntry {
+function withResolutionFrom(
+  base: Omit<MistakeEntry, 'correctStreak' | 'resolvedAt' | 'lastCorrectAt'>,
+  src: MistakeEntry,
+): MistakeEntry {
   const merged: MistakeEntry = { ...base, correctStreak: src.correctStreak, resolvedAt: src.resolvedAt };
   if (src.lastCorrectAt !== undefined) merged.lastCorrectAt = src.lastCorrectAt;
   return merged;
