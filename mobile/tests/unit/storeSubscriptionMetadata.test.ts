@@ -54,3 +54,23 @@ describe('App Store subscription metadata (Guideline 3.1.2(c))', () => {
     expect(paywall).toContain('testID="paywall-privacy-link"');
   });
 });
+
+describe('App Store subscription metadata for 1.9.0 (Guideline 3.1.2(c))', () => {
+  it('covers the 1.9.0 description', () => {
+    expect(descriptions.map((d) => d.version)).toContain('1.9.0');
+    const text = descriptions.find((d) => d.version === '1.9.0')?.text ?? '';
+    expect(text).toContain(`Terms of Use (EULA): ${TERMS_URL}`);
+    expect(text).toContain(`Privacy Policy: ${PRIVACY_URL}`);
+    expect(text).toMatch(/auto-renew/i);
+    expect(text.length).toBeLessThanOrEqual(4000);
+  });
+
+  it('keeps the 1.9.0 App Review notes within the limit and pointing at the paywall', () => {
+    const notes = readFileSync(resolve(RELEASE_DIR, 'review-notes-1.9.0.txt'), 'utf8').trim();
+    expect(notes.length).toBeLessThanOrEqual(4000);
+    expect(notes).toContain('Open premium');
+    expect(notes).toContain('Terms of Use');
+    expect(notes).toContain('Privacy Policy');
+    expect(notes).toContain('Sentry');
+  });
+});

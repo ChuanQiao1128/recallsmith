@@ -1,0 +1,151 @@
+import { describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// 1.9.0 release plumbing (M04): eas.json Sentry env per profile, version 1.9.0 (23), the CI
+// expo export step and the ios-build.sh placeholder guard. ios-build.sh only ever runs from a temp
+// copy with fixture files, a fake eas first on PATH and DRY_RUN=1.
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const MOBILE = path.resolve(HERE, '../..');
+const IOS_BUILD = path.join(MOBILE, 'scripts/release/ios-build.sh');
+const readJson = (f: string) => JSON.parse(fs.readFileSync(path.join(MOBILE, f), 'utf8'));
+
+type Profile = { image?: string; ios?: { image?: string; env?: Record<string, string> } };
+const eas = readJson('eas.json') as { build: Record<string, Profile> };
+const iosEnv = (p: string) => eas.build[p]?.ios?.env ?? {};
+
+describe('eas.json Sentry env (1.9.0)', () => {
+  it('production uploads source maps, a failed upload only warns, org/project are placeholders', () => {
+    expect(iosEnv('production')).toMatchObject({
+      SENTRY_ALLOW_FAILURE: 'true',
+      SENTRY_ORG: 'REPLACE_ME_SENTRY_ORG',
+      SENTRY_PROJECT: 'REPLACE_ME_SENTRY_PROJECT',
+    });
+    expect(iosEnv('production').SENTRY_DISABLE_AUTO_UPLOAD).toBeUndefined();
+  });
+
+  it.each(['development', 'development-simulator', 'staging', 'staging-internal-release'])(
+    '%s never uploads (SENTRY_DISABLE_AUTO_UPLOAD)',
+    (p) => {
+      expect(iosEnv(p).SENTRY_DISABLE_AUTO_UPLOAD).toBe('true');
+    },
+  );
+
+  it('release-simulator carries an explicit env that never uploads', () => {
+    expect(iosEnv('release-simulator')).toEqual({
+      CLANG_CXX_LANGUAGE_STANDARD: 'c++17',
+      CLANG_CXX_LIBRARY: 'libc++',
+      EXPO_PUBLIC_ENV: 'production',
+      SENTRY_DISABLE_AUTO_UPLOAD: 'true',
+    });
+  });
+
+  it('holds no DSN or auth-token key anywhere', () => {
+    const keys: string[] = [];
+    const walk = (v: unknown) => {
+      if (v && typeof v === 'object') {
+        for (const [k, child] of Object.entries(v as Record<string, unknown>)) {
+          keys.push(k);
+          walk(child);
+        }
+      }
+    };
+    walk(eas);
+    expect(keys.filter((k) => /DSN|AUTH_TOKEN/.test(k))).toEqual([]);
+    expect(JSON.stringify(eas)).not.toMatch(/DSN|AUTH_TOKEN/);
+  });
+
+  it('keeps every EAS image at latest', () => {
+    const images = Object.values(eas.build)
+      .map((p) => p.ios?.image)
+      .filter((i): i is string => typeof i === 'string');
+    expect(images.length).toBe(5);
+    for (const i of images) expect(i).toBe('latest');
+  });
+});
+
+describe('version 1.9.0 (23)', () => {
+  it('app.json is 1.9.0 build 23 with the Sentry plugin and the appVersion runtime policy', () => {
+    const app = readJson('app.json').expo;
+    expect(app.version).toBe('1.9.0');
+    expect(app.ios.buildNumber).toBe('23');
+    expect(app.runtimeVersion.policy).toBe('appVersion');
+    expect(JSON.stringify(app.plugins)).toContain('@sentry/react-native/expo');
+  });
+
+  it('package.json and the lockfile root say 1.9.0', () => {
+    expect(readJson('package.json').version).toBe('1.9.0');
+    const lock = readJson('package-lock.json');
+    expect(lock.version).toBe('1.9.0');
+    expect(lock.packages[''].version).toBe('1.9.0');
+  });
+});
+
+describe('CI mobile job', () => {
+  it('ci.yml runs npx expo export --platform ios after vitest in the mobile job', () => {
+    const ci = fs.readFileSync(path.resolve(MOBILE, '../.github/workflows/ci.yml'), 'utf8');
+    const start = ci.indexOf('\n  mobile:');
+    const end = ci.indexOf('\n  frontend:');
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const job = ci.slice(start, end);
+    expect(job).toContain('npx expo export --platform ios');
+    expect(job.indexOf('npx vitest run')).toBeLessThan(job.indexOf('npx expo export --platform ios'));
+  });
+});
+
+function runIosBuild(opts: { org: string; project: string; profile?: string }) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ios-build-tree-'));
+  const mobile = path.join(root, 'mobile');
+  const release = path.join(mobile, 'scripts', 'release');
+  fs.mkdirSync(release, { recursive: true });
+  fs.copyFileSync(IOS_BUILD, path.join(release, 'ios-build.sh'));
+  fs.writeFileSync(path.join(mobile, 'app.json'), JSON.stringify({ expo: { version: '1.9.0', ios: { buildNumber: '23' } } }));
+  fs.writeFileSync(
+    path.join(mobile, 'eas.json'),
+    JSON.stringify({ build: { production: { ios: { env: { SENTRY_ALLOW_FAILURE: 'true', SENTRY_ORG: opts.org, SENTRY_PROJECT: opts.project } } } } }),
+  );
+  const bin = path.join(root, 'bin');
+  fs.mkdirSync(bin);
+  const easLog = path.join(root, 'eas.log');
+  fs.writeFileSync(path.join(bin, 'eas'), ['#!/usr/bin/env bash', `echo "$@" >> "${easLog}"`, 'exit 0', ''].join('\n'));
+  fs.chmodSync(path.join(bin, 'eas'), 0o755);
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const k of Object.keys(env)) if (k.startsWith('SENTRY_') || k === 'EXPO_PUBLIC_SENTRY_DSN') delete env[k];
+  env.PATH = `${bin}:${process.env.PATH ?? ''}`;
+  env.DRY_RUN = '1';
+  const args = [path.join(release, 'ios-build.sh')];
+  if (opts.profile) args.push(opts.profile);
+  const res = spawnSync('bash', args, { env, encoding: 'utf8' });
+  const log = fs.existsSync(easLog) ? fs.readFileSync(easLog, 'utf8') : '';
+  return { res, log };
+}
+
+describe('ios-build.sh Sentry placeholder guard', () => {
+  it('exits 5 with the fill message while production org/project are placeholders (DRY_RUN=1)', () => {
+    const { res, log } = runIosBuild({ org: 'REPLACE_ME_SENTRY_ORG', project: 'REPLACE_ME_SENTRY_PROJECT' });
+    expect(res.status).toBe(5);
+    expect(res.stderr).toContain('ios-build: fill SENTRY_ORG/SENTRY_PROJECT in eas.json (production) before a store build');
+    expect(log).toBe('');
+  });
+
+  it('exits 5 when only one of org/project is filled or one is empty', () => {
+    expect(runIosBuild({ org: 'example-org', project: 'REPLACE_ME_SENTRY_PROJECT' }).res.status).toBe(5);
+    expect(runIosBuild({ org: '', project: 'example-project' }).res.status).toBe(5);
+  });
+
+  it('passes the guard with example-org/example-project and prints the DRY command', () => {
+    const { res } = runIosBuild({ org: 'example-org', project: 'example-project' });
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain('DRY: eas build --platform ios --profile production');
+  });
+
+  it('does not apply the guard to a non-production profile', () => {
+    const { res } = runIosBuild({ org: 'REPLACE_ME_SENTRY_ORG', project: 'REPLACE_ME_SENTRY_PROJECT', profile: 'staging' });
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain('DRY: eas build --platform ios --profile staging');
+  });
+});

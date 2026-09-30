@@ -1,0 +1,4 @@
+• Mistake Book fixes: mistakes you collected before signing in now keep their counts when you sign in, instead of being replaced.
+• When every mistake already has today's correct answer, the Mistake Book now shows a clear "No mistakes due today" state and tells you to come back tomorrow. A card still leaves the book once you get it right on two different days.
+• The app now sends anonymous crash and performance reports so we can fix problems faster. No account data, name or email address is sent with them.
+• Stability and performance improvements.

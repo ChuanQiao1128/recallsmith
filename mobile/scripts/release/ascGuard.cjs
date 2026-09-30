@@ -1,0 +1,25 @@
+'use strict';
+// ascGuard.cjs — pure checks for asc-release.cjs (no Apple session, no network, no child processes).
+//
+// Apple holds a version once it is submitted: renaming it to the target version or attaching another
+// build would pull it from review or change what Apple is reviewing or about to release.
+
+exports.BLOCKED_EDIT_STATES = ['WAITING_FOR_REVIEW', 'IN_REVIEW', 'PENDING_DEVELOPER_RELEASE'];
+
+// attrs: the editable App Store version's attributes (null/undefined when there is none).
+// Returns { ok: true } or { ok: false, state, reason }.
+exports.checkEditableVersion = (attrs, target) => {
+  if (!attrs) return { ok: true };
+  for (const key of ['appVersionState', 'appStoreState']) {
+    const state = attrs[key];
+    if (exports.BLOCKED_EDIT_STATES.includes(state)) {
+      return {
+        ok: false,
+        state,
+        reason: 'App Review holds this version (' + key + '); renaming it to ' + String(target) +
+          ' or attaching a build would pull or change it. Wait for the review outcome or release it first.',
+      };
+    }
+  }
+  return { ok: true };
+};
