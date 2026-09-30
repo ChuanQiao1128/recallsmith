@@ -6,11 +6,11 @@ Issue #536, wave R19M-M. Contract: M00 §4. No server, CORS, dependency or froze
 
 | Change | Location |
 |---|---|
-| Provider injection `setTraceHeaderProvider` (module variable `_traceHeaderProvider`) | `mobile/src/api/apiClient.ts:40-47` |
-| Local `TRACE_HEADER_PATTERN` literal (must agree with `TraceContext.cs:28` and `sentryPolicy.DC_TRACE_HEADER_PATTERN`) | `mobile/src/api/apiClient.ts:49-52` |
-| Case-insensitive lookup of a caller header / guarded provider read (try/catch + pattern check) | `mobile/src/api/apiClient.ts:54-72` |
-| Header added in `requestOnce` after the caller's headers are merged, before the first `send()` | `mobile/src/api/apiClient.ts:103-114` |
-| `err.requestId` (envelope `traceId` when a string) and `err.dcTraceId` (header actually sent) on non-OK responses | `mobile/src/api/apiClient.ts:180-183` |
+| Provider injection `setTraceHeaderProvider` (module variable `_traceHeaderProvider`) | `mobile/src/api/apiClient.ts:40-48` |
+| Local `TRACE_HEADER_PATTERN` literal (must agree with `TraceContext.cs:28` and `sentryPolicy.DC_TRACE_HEADER_PATTERN`) | `mobile/src/api/apiClient.ts:50-53` |
+| Case-insensitive lookup of a caller header / guarded provider read (try/catch + pattern check) | `mobile/src/api/apiClient.ts:55-73` |
+| Header added in `requestOnce` after the caller's headers are merged, before the first `send()` | `mobile/src/api/apiClient.ts:104-114` |
+| `err.requestId` (envelope `traceId` when a string) and `err.dcTraceId` (header actually sent) on non-OK responses | `mobile/src/api/apiClient.ts:181-184` |
 | `DC_TRACE_HEADER`, `DC_TRACE_HEADER_PATTERN`, `toDcTraceHeader`, `apiErrorTags` (appended, no existing line changed) | `mobile/src/telemetry/sentryPolicy.ts:218-254` |
 | Kill-switch close removes the provider: `setTraceHeaderProvider(null)` | `mobile/src/telemetry/observability.ts:92` |
 | `beforeSend` merges `apiErrorTags(hint?.originalException)` into `event.tags` before `scrubEvent` (after the drop rule and the cap) | `mobile/src/telemetry/observability.ts:159-160` |

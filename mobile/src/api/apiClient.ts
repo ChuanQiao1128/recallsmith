@@ -38,8 +38,9 @@ export function setAccessTokenRefresher(fn: (() => Promise<string | null>) | nul
 }
 
 // Injected trace-header provider (R19M M03). apiClient must not import telemetry
-// or the Sentry SDK, so observability.ts installs a provider here only while Sentry
-// is active. With no provider installed no header is sent and requests are unchanged.
+// or the crash-reporting SDK, so the telemetry layer installs a provider here only
+// while crash reporting is active. With no provider installed no header is sent and
+// requests are unchanged.
 let _traceHeaderProvider: (() => string | null) | null = null;
 
 export function setTraceHeaderProvider(fn: (() => string | null) | null): void {
@@ -47,7 +48,7 @@ export function setTraceHeaderProvider(fn: (() => string | null) | null): void {
 }
 
 const TRACE_HEADER_NAME = 'x-dc-trace-id';
-// Must agree with TraceContext.cs:28 (server) and sentryPolicy.DC_TRACE_HEADER_PATTERN;
+// Must agree with TraceContext.cs:28 (server) and the telemetry DC_TRACE_HEADER_PATTERN;
 // kept as a local copy so apiClient stays free of telemetry imports.
 const TRACE_HEADER_PATTERN = /^1-[0-9a-f]{8}-[0-9a-f]{24}$/;
 
