@@ -60,6 +60,8 @@ vi.mock('../../src/features/gacha/audience/audiencePrefs', () => ({
 
 vi.mock('../../src/api/apiClient', () => ({ apiJson: vi.fn() }));
 vi.mock('../../src/auth/freshToken', () => ({ getFreshAccessToken: vi.fn() }));
+const authState = vi.hoisted(() => ({ status: 'signed_in' as string }));
+vi.mock('../../src/auth/authStore', () => ({ useAuthStore: { getState: () => authState } }));
 
 import { apiJson } from '../../src/api/apiClient';
 import { getFreshAccessToken } from '../../src/auth/freshToken';
@@ -151,6 +153,7 @@ beforeEach(() => {
   vi.mocked(apiJson).mockReset();
   vi.mocked(getFreshAccessToken).mockReset();
   vi.mocked(getFreshAccessToken).mockResolvedValue('tok-9');
+  authState.status = 'signed_in';
   openUrlMock.mockClear();
 });
 
@@ -230,9 +233,19 @@ describe('MyReportsScreen', () => {
   });
 
   it('shows a sign-in message when signed out, without calling the API', async () => {
+    authState.status = 'anonymous';
     vi.mocked(getFreshAccessToken).mockResolvedValue(null);
     const tree = await renderReports();
     expect(textOf(byTestId(tree, 'my-reports-signed-out')[0])).toBe('Sign in to see your reports');
+    expect(apiJson).not.toHaveBeenCalled();
+  });
+
+  it('shows offline copy and Try again, not the sign-in message, when signed in but the token refresh failed', async () => {
+    vi.mocked(getFreshAccessToken).mockResolvedValue(null);
+    const tree = await renderReports();
+    expect(byTestId(tree, 'my-reports-signed-out')).toHaveLength(0);
+    expect(textOf(byTestId(tree, 'my-reports-error')[0])).toBe(FRIENDLY_ERROR_COPY.offline);
+    expect(byTestId(tree, 'my-reports-retry')).toHaveLength(1);
     expect(apiJson).not.toHaveBeenCalled();
   });
 

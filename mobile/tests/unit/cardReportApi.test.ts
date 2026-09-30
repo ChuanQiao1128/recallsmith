@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../src/api/apiClient', () => ({ apiJson: vi.fn() }));
 vi.mock('../../src/auth/freshToken', () => ({ getFreshAccessToken: vi.fn() }));
+const authState = vi.hoisted(() => ({ status: 'signed_in' as string }));
+vi.mock('../../src/auth/authStore', () => ({ useAuthStore: { getState: () => authState } }));
 
 import { apiJson } from '../../src/api/apiClient';
 import { FRIENDLY_ERROR_COPY } from '../../src/api/errorKind';
@@ -12,6 +14,7 @@ import {
   CARD_REPORTS_PATH,
   CardReportSignedOutError,
   cardReportErrorMessage,
+  getCardReportAuth,
   listMyCardReports,
   submitCardReport,
 } from '../../src/features/cardReport/cardReportApi';
@@ -28,6 +31,7 @@ beforeEach(() => {
   vi.mocked(apiJson).mockReset();
   vi.mocked(getFreshAccessToken).mockReset();
   vi.mocked(getFreshAccessToken).mockResolvedValue('tok-123');
+  authState.status = 'signed_in';
 });
 
 describe('submitCardReport', () => {
@@ -72,11 +76,45 @@ describe('submitCardReport', () => {
   });
 
   it('throws CardReportSignedOutError without calling the API when there is no token', async () => {
+    authState.status = 'anonymous';
     vi.mocked(getFreshAccessToken).mockResolvedValue(null);
     await expect(submitCardReport({ deckSlug: 'd', stableUid: 'u', reason: 'unclear' })).rejects.toBeInstanceOf(
       CardReportSignedOutError,
     );
     expect(apiJson).not.toHaveBeenCalled();
+  });
+});
+
+describe('submitCardReport without a token', () => {
+  it('rejects with offline copy when signed in but the token refresh failed', async () => {
+    vi.mocked(getFreshAccessToken).mockResolvedValue(null);
+    const err = await submitCardReport({ deckSlug: 'd', stableUid: 'u', reason: 'typo' }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).not.toBeInstanceOf(CardReportSignedOutError);
+    expect(cardReportErrorMessage(err)).toBe(FRIENDLY_ERROR_COPY.offline);
+    expect(apiJson).not.toHaveBeenCalled();
+  });
+
+  it('is signed out when the refresh itself ended the session', async () => {
+    vi.mocked(getFreshAccessToken).mockImplementation(async () => {
+      authState.status = 'anonymous';
+      return null;
+    });
+    await expect(submitCardReport({ deckSlug: 'd', stableUid: 'u', reason: 'typo' })).rejects.toBeInstanceOf(
+      CardReportSignedOutError,
+    );
+  });
+});
+
+describe('getCardReportAuth', () => {
+  it('tells a token, signed out and unavailable apart', async () => {
+    expect(await getCardReportAuth()).toEqual({ kind: 'token', token: 'tok-123' });
+    vi.mocked(getFreshAccessToken).mockResolvedValue(null);
+    expect(await getCardReportAuth()).toEqual({ kind: 'unavailable' });
+    authState.status = 'anonymous';
+    expect(await getCardReportAuth()).toEqual({ kind: 'signed_out' });
   });
 });
 
@@ -134,8 +172,20 @@ describe('listMyCardReports', () => {
   });
 
   it('throws CardReportSignedOutError when signed out', async () => {
+    authState.status = 'anonymous';
     vi.mocked(getFreshAccessToken).mockResolvedValue(null);
     await expect(listMyCardReports()).rejects.toBeInstanceOf(CardReportSignedOutError);
+    expect(apiJson).not.toHaveBeenCalled();
+  });
+
+  it('treats a signed-in learner whose token refresh failed as offline, not signed out', async () => {
+    vi.mocked(getFreshAccessToken).mockResolvedValue(null);
+    const err = await listMyCardReports().then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).not.toBeInstanceOf(CardReportSignedOutError);
+    expect(cardReportErrorMessage(err)).toBe(FRIENDLY_ERROR_COPY.offline);
     expect(apiJson).not.toHaveBeenCalled();
   });
 });
