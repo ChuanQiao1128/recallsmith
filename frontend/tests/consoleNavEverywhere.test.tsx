@@ -85,6 +85,7 @@ describe('the console sections on the landing page', () => {
     expect(navLinks()).toEqual({
       'Content Intelligence': '/content-intelligence',
       Reports: '/reports',
+      Usage: '/usage',
       Webhooks: '/admin/webhooks',
       'Automation ledger': '/ledger',
       Automation: '/automation',
@@ -100,6 +101,7 @@ describe('the console sections on the landing page', () => {
     expect(navLinks()).toEqual({
       'Content Intelligence': '/content-intelligence',
       Reports: '/reports',
+      Usage: '/usage',
       'Automation ledger': '/ledger',
       Automation: '/automation',
       'Review queue': '/review',
@@ -130,6 +132,7 @@ describe('the current section in the header (frontend-console-27)', () => {
       ['/admin/users', 'Admin Management'],
       ['/content-intelligence', 'Content Intelligence'],
       ['/reports', 'Reports'],
+      ['/usage', 'Usage'],
       ['/decks/cards?deckId=7', 'Decks'],
       ['/', 'Decks'],
     ] as const) {
@@ -158,6 +161,7 @@ describe('the current section in the header (frontend-console-27)', () => {
       'AI QA',
       'Content Intelligence',
       'Reports',
+      'Usage',
       'Automation ledger',
       'Automation',
       'Webhooks',
@@ -179,6 +183,7 @@ describe('consoleNav', () => {
         'qaHref',
         'reportsHref',
         'reviewHref',
+        'usageHref',
         'webhooksHref',
       ],
     );
@@ -198,7 +203,7 @@ describe('consoleNav', () => {
         shells += 1;
         expect(tag, `${file}: a ConsoleShell without consoleNav()`).toContain('{...consoleNav(');
         expect(tag, `${file}: a hard-coded destination next to consoleNav()`).not.toMatch(
-          /\s(decksHref|contentIntelligenceHref|reviewHref|qaHref|reportsHref|ledgerHref|automationHref|webhooksHref|adminUsersHref)=/,
+          /\s(decksHref|contentIntelligenceHref|reviewHref|qaHref|reportsHref|usageHref|ledgerHref|automationHref|webhooksHref|adminUsersHref)=/,
         );
       }
     }

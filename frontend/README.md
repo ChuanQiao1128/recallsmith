@@ -65,6 +65,35 @@ the page shows a neutral "not set up on the server yet" callout. The Automation
 overview has a "Card reports" tile (open, new in 7 days) when the status
 response carries `cardReports`.
 
+## Usage and freshness (`/usage`)
+
+The Usage section shows learner activity from
+`GET /api/v1/admin/analytics/usage?days=30`: DAU, WAU and MAU for the latest
+complete UTC day with a plain SVG sparkline of DAU, a 30-day table (day, DAU,
+reviews, new users, cards learned, D1 and D7 retention; "—" for anything the
+server has not computed yet), a per-deck table, the number of excluded accounts
+(`ANALYTICS_EXCLUDED_SUBS` on the server) and when the figures were last
+computed. Its Freshness section (`/usage#freshness`) lists detected source
+changes followed to their publish (`GET /api/v1/admin/automation/freshness`)
+with the median minutes to draft, decision and publish. Until the analytics
+migration has run, both show a neutral "not set up yet" callout.
+
+Related, all optional and hidden when the server does not send them:
+
+- Automation overview: a "Freshness" tile (median time to publish, n, link to
+  `/usage#freshness`) and "Needs review" in Watched sources.
+- Automation Watch tab: per change, the affected cards (question linked to the
+  editor, "Quote missing" badge) and a "Needs review" badge; a "Recent release
+  notes" section lists new feed items with the cards they may touch.
+- AI QA page: a "Semantic duplicates" panel (card pairs at cosine ≥ 0.90 from
+  `GET /api/v1/admin/decks/:deckId/semantic-duplicates`, plus the embeddings
+  status). Without pgvector the server answers `VECTOR_NOT_READY` and the
+  panel lists the owner steps: install the extension, re-run the migration,
+  push embeddings with `dc-evals embed-cards --deck <slug> --push`.
+- Automation ledger: a baseline with enough measured reviews shows "Suggested
+  from N reviews: X min"; a super_admin's "Use as measured" pre-fills the edit
+  form, and Save is the existing baseline PUT.
+
 ## Deployment
 
 `./deploy.sh` is the whole deploy as one command: it runs `npm run build`, syncs

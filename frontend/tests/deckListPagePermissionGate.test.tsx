@@ -133,6 +133,10 @@ function inventory(): string[] {
 // Re-measured again (R20 V09, 2026-10-01): the Reports section (learner card
 // reports) joined the shared set, so both roles gained `a:Reports`. Nothing
 // else in either list moved.
+//
+// Re-measured again (R20 V10, 2026-10-01): the Usage section (learner usage and
+// publish freshness) joined the shared set, so both roles gained `a:Usage`.
+// Nothing else in either list moved.
 const SUPER_ADMIN_CONTROLS = [
   'a:AI QA',
   'a:Admin Management',
@@ -141,6 +145,7 @@ const SUPER_ADMIN_CONTROLS = [
   'a:Content Intelligence',
   'a:Reports',
   'a:Review queue',
+  'a:Usage',
   'a:Webhooks',
   'button:4',
   'button:4',
@@ -174,6 +179,7 @@ const EDITOR_CONTROLS = [
   'a:Content Intelligence',
   'a:Reports',
   'a:Review queue',
+  'a:Usage',
   'button:4',
   'button:4',
   'button:Cards',
