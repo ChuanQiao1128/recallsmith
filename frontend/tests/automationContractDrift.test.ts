@@ -92,6 +92,10 @@ const watchTests = serverTest('WatchAdminRoutesTests.cs');
 const WATCH_TARGET_KEYS = pinnedKeys(watchTests, 'WatchTargetKeys');
 const WATCH_EVENT_KEYS = pinnedKeys(watchTests, 'WatchEventKeys');
 const NOTIFICATION_KEYS = pinnedKeys(serverTest('AutomationNotificationsTests.cs'), 'NotificationKeys');
+const changeImpactTests = serverTest('ChangeImpactTests.cs');
+const AFFECTED_KEYS = pinnedKeys(changeImpactTests, 'AffectedKeys');
+const POSSIBLY_AFFECTED_KEYS = pinnedKeys(changeImpactTests, 'PossiblyAffectedKeys');
+const FEED_ITEM_KEYS = pinnedKeys(changeImpactTests, 'FeedItemKeys');
 
 /** Server keys the console deliberately drops, with the reason. None today. */
 const IGNORED: Record<string, string[]> = {};
@@ -156,6 +160,9 @@ describe('the console normalizers keep every key the server pins (frontend-conso
     expect(WATCH_TARGET_KEYS).toContain('targetId');
     expect(WATCH_EVENT_KEYS).toContain('eventId');
     expect(NOTIFICATION_KEYS).toContain('notificationId');
+    expect(AFFECTED_KEYS).toContain('quoteMissing');
+    expect(POSSIBLY_AFFECTED_KEYS).toContain('rank');
+    expect(FEED_ITEM_KEYS).toContain('possiblyAffectedCards');
   });
 
   it('GET …/status: every section of StatusContractJson', async () => {
@@ -213,11 +220,30 @@ describe('the console normalizers keep every key the server pins (frontend-conso
     expectSameKeys('queueItem', item, (await listQueueItems()).data?.items[0]);
 
     const target = rawOf(WATCH_TARGET_KEYS);
-    const event = rawOf(WATCH_EVENT_KEYS, { recheckRunIds: [], queueItemIds: [], details: null });
-    answer(ok({ items: [target], recentEvents: [event], nextCursor: null }));
+    // Typed values for the keys the normalizer keeps only in their real shape; keys
+    // the server does not pin are ignored by rawOf.
+    const affected = rawOf(AFFECTED_KEYS, { quoteMissing: true });
+    const event = rawOf(WATCH_EVENT_KEYS, {
+      recheckRunIds: [],
+      queueItemIds: [],
+      details: null,
+      affectedCards: [affected],
+      needsHumanReview: false,
+    });
+    // The server's feed item id is opaque text "<targetId>:<itemKey>" (contract §10.5).
+    const possiblyAffected = rawOf(POSSIBLY_AFFECTED_KEYS);
+    const feedItem = rawOf(FEED_ITEM_KEYS, {
+      id: '12:9f3c0a',
+      url: 'https://aws.amazon.com/new/',
+      possiblyAffectedCards: [possiblyAffected],
+    });
+    answer(ok({ items: [target], recentEvents: [event], nextCursor: null, recentFeedItems: [feedItem] }));
     const watch = (await fetchWatch()).data;
     expectSameKeys('watchTarget', target, watch?.items[0]);
     expectSameKeys('watchEvent', event, watch?.recentEvents[0]);
+    expectSameKeys('affectedCard', affected, watch?.recentEvents[0].affectedCards?.[0]);
+    expectSameKeys('feedItem', feedItem, watch?.recentFeedItems?.[0]);
+    expectSameKeys('possiblyAffectedCard', possiblyAffected, watch?.recentFeedItems?.[0].possiblyAffectedCards[0]);
 
     const notification = rawOf(NOTIFICATION_KEYS);
     answer(ok({ items: [notification], nextCursor: null }));

