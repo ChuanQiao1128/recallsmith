@@ -1,0 +1,10 @@
+{
+  "tags_only_updates": false,
+  "changes": {
+    "module.observability.aws_cloudwatch_dashboard.prod": { "action": "update", "keys": ["dashboard_body"] },
+    "module.observability.aws_cloudwatch_metric_alarm.ai_qa_latency_p95[\"bedrock\"]": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.ai_qa_latency_p95[\"anthropic\"]": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.ai_qa_latency_p95[\"bedrock-converse\"]": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.ai_qa_latency_p95[\"openai-mantle\"]": "create"
+  }
+}
