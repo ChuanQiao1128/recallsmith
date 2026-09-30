@@ -449,3 +449,43 @@ has a line `Card reports: N open (M new this week)`. There is no per-report emai
 **The note is untrusted text.** It is capped at 500 characters, stored as is, shown only to console admins
 with deck read, and never logged. Treat it like any other learner input: do not paste it into a prompt or a
 shell.
+
+## Card embeddings and semantic duplicates (R20 V06)
+
+Semantic similarity uses vectors computed on the owner's Mac (`BAAI/bge-small-en-v1.5`, 384 dims, cosine) and
+pushed to the server. The server never calls a model. Everything here needs the PostgreSQL `vector` extension
+(pgvector); until it is installed, the routes below answer `503 VECTOR_NOT_READY`, the status route reports
+`engine: "none"`, and `POST /api/v1/authoring/cards/similar` keeps its trigram engine.
+
+**Why an owner step.** Migration `038_card_embeddings.sql` creates the extension only when the migrating role
+holds CREATE on the database. Prod migrates as the app role, which does not, so there 038 only raises a
+NOTICE ("vector not installed ...") and records itself as applied without creating `card_embeddings`.
+
+**Turning it on (owner, once):**
+
+1. As the RDS master user: `CREATE EXTENSION IF NOT EXISTS vector;` in the app database.
+2. If 038 already ran (check `GET /api/v1/admin/db/migrations`), let it run again: as the master user,
+   `DELETE FROM schema_migrations WHERE version = 38;`. The migrate route skips versions it has recorded, and
+   038 is idempotent, so running it a second time is safe.
+3. `POST /api/v1/admin/db/migrate` through `scripts/invoke-as-admin.sh`. 038 now creates `card_embeddings`, owned
+   by the app role.
+4. Readiness is cached for 5 minutes per Lambda container. `GET /api/v1/admin/card-embeddings/status` shows
+   `engine: "vector"` once it has expired.
+5. Push the vectors: `dc-evals embed-cards --deck <slug> --push`, with a super_admin console token in the environment.
+
+**Routes:**
+
+| Route | Who | What |
+|---|---|---|
+| `PUT /api/v1/admin/card-embeddings` | super_admin | `{model, dim:384, items:[{deckSlug, stableUid, textSha256, embedding}]}`, 1..200 items → `{upserted, unknownCards, staleText}`. The server recomputes each card's `textSha256` from `question.Trim() + "\n\n" + explanation.Trim()`. An item whose hash differs (the card changed after it was embedded) is not stored and is listed in `staleText`. Re-embed those cards. |
+| `GET /api/v1/admin/card-embeddings/status?deckId=` | admin (deck read) | `{engine, model, cards, embedded, stale}`. `stale` counts stored vectors whose card text changed since. |
+| `GET /api/v1/admin/decks/<deckId>/semantic-duplicates?minCosine=0.90&limit=50` | admin + deck read | Pairs of live cards with cosine ≥ minCosine, each pair once, highest first. |
+| `POST /api/v1/authoring/cards/similar` + `embedding` | admin | Engine `vector` (cosine, `likelyDuplicate` at ≥ 0.90) when the store is ready; otherwise the trigram answer is unchanged. |
+
+**Body size.** The API rejects bodies over 1 MiB (`413`). A 384-number vector printed at full float precision is
+about 8 KB, so a push with 200 items can exceed the limit. Push in batches of 100 or fewer, or round the values
+to 6 decimals.
+
+**Rollback.** The table only adds data. To stop using it, stop pushing vectors. To remove it, the master can run
+`DROP TABLE card_embeddings;`, and the routes return `503 VECTOR_NOT_READY` once the 5-minute cache expires. Do not
+drop the extension while the table exists.
