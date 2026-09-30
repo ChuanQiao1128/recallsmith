@@ -18,6 +18,19 @@ type Profile = { image?: string; ios?: { image?: string; env?: Record<string, st
 const eas = readJson('eas.json') as { build: Record<string, Profile> };
 const iosEnv = (p: string) => eas.build[p]?.ios?.env ?? {};
 
+// Profiles whose ios.image breaks the rule: production is `latest` or a non-empty pinned image name
+// (trimmed), every other profile is `latest`.
+function imagePolicyViolations(build: Record<string, Profile>): string[] {
+  return Object.entries(build)
+    .filter(([name, p]) => {
+      const image = p.ios?.image;
+      if (typeof image !== 'string') return false;
+      if (name === 'production') return image.trim() !== image || image.length === 0;
+      return image !== 'latest';
+    })
+    .map(([name]) => name);
+}
+
 describe('eas.json Sentry env (1.9.0)', () => {
   // Supervisor 2026-09-30 (M00 §9.2 #2): the Sentry org/project were created, so production carries the real,
   // non-secret slugs; the placeholder guard itself stays covered by the ios-build.sh cases below.
@@ -61,12 +74,26 @@ describe('eas.json Sentry env (1.9.0)', () => {
     expect(JSON.stringify(eas)).not.toMatch(/DSN|AUTH_TOKEN/);
   });
 
-  it('keeps every EAS image at latest', () => {
+  // R19M-REL-4: M00 §9.2 #4 has the supervisor pin build.production.ios.image to build 22's image right
+  // before the 1.9.0 build, so production may be `latest` or a non-empty pinned name; the rest stay `latest`.
+  it('keeps every non-production EAS image at latest; production is latest or a pinned image name', () => {
     const images = Object.values(eas.build)
       .map((p) => p.ios?.image)
       .filter((i): i is string => typeof i === 'string');
     expect(images.length).toBe(5);
-    for (const i of images) expect(i).toBe('latest');
+    expect(imagePolicyViolations(eas.build)).toEqual([]);
+  });
+
+  it('accepts a pinned production image and refuses a pinned non-production or empty production image', () => {
+    const pinned = structuredClone(eas.build);
+    pinned.production = { ...pinned.production, ios: { ...pinned.production?.ios, image: 'macos-sequoia-15.6-xcode-26.0' } };
+    expect(imagePolicyViolations(pinned)).toEqual([]);
+    const staging = structuredClone(eas.build);
+    staging.staging = { ...staging.staging, ios: { ...staging.staging?.ios, image: 'macos-sequoia-15.6-xcode-26.0' } };
+    expect(imagePolicyViolations(staging)).toEqual(['staging']);
+    const empty = structuredClone(eas.build);
+    empty.production = { ...empty.production, ios: { ...empty.production?.ios, image: ' ' } };
+    expect(imagePolicyViolations(empty)).toEqual(['production']);
   });
 });
 
