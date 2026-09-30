@@ -48,9 +48,10 @@ evals/
   data/authored-v2.labels.jsonl  A15: its jury labels (dc-evals jury --dataset authored-v2), + .labels.summary.json
   src/dc_evals/                  cli, dataset, sources, seed, mutations, runner, score, report,
                                  author, jury, compare, automation_gate, drafts_import, deck_review,
-                                 source_cache and retrieval (V02), backfill (V03)
+                                 source_cache and retrieval (V02), backfill (V03), embed_cards (V04)
   reports/                       run files and reports (the owner commits them)
   reports/backfill/              V03 SOURCE proposals: <date>-<deck>-sources.{jsonl,md,patch}
+  reports/semantic-dupes/        V04 nearest-pair reports: <date>-semantic-dupes-<deck>.{json,md}
   .cache/review/                 dc-evals review output (git-ignored, never committed)
   tests/                         pytest with a FakeLlm; no test calls a model
 ```
@@ -303,11 +304,16 @@ uv run --python 3.12 dc-evals review --deck <deck.md> (--changed-since REF | --c
 uv run --python 3.12 dc-evals fetch-sources [--deck <slug> ...] [--max-pages N] [--delay-s 1.0] [--retry-failed]
 uv run --python 3.12 [--extra embeddings] dc-evals retrieval [--deck <slug> ...] [--k 1,5,10] \
     [--methods bm25,embed,hybrid] [--date YYYY-MM-DD] [--out reports/]
+uv run --python 3.12 --extra embeddings dc-evals embed-cards --deck PATH_OR_SLUG [--out FILE] \
+    [--push --api-base URL]
+uv run --python 3.12 --extra embeddings dc-evals semantic-dupes --deck PATH_OR_SLUG [--min-cosine 0.90] \
+    [--embeddings FILE] [--date YYYY-MM-DD] [--out reports/semantic-dupes]
 ```
 
 `dc-evals review` is described in [Local pre-publish review](#local-pre-publish-review);
 `fetch-sources` and `retrieval` in [Retrieval eval](#retrieval-eval); `backfill-sources` in
-[Citation backfill](#citation-backfill).
+[Citation backfill](#citation-backfill); `embed-cards` and `semantic-dupes` in
+[Card embeddings](#card-embeddings).
 
 The three Q03 commands (`author`, `jury`, `compare`) are described in
 [Agent-authored cards, model jury and configuration comparison](#agent-authored-cards-model-jury-and-configuration-comparison-q03).
@@ -1020,6 +1026,45 @@ dc-evals backfill-sources --deck SLUG [--limit N] [--min-score X] [--out reports
   every proposed card reads back its exact source.
 - The lexical score is only a rough guide: a hand check of 20 proposals found about 60 % that
   support the answer (docs/delivery/r20-issues/V03-notes.md). Review every row before applying.
+
+## Card embeddings
+
+`dc-evals embed-cards` (V04) embeds a deck's cards on the owner's machine with the open-source
+`BAAI/bge-small-en-v1.5` (fastembed, the optional `embeddings` extra; no paid model) and can push
+the vectors to the API's pgvector store. `dc-evals semantic-dupes` reports near-duplicate pairs
+from the same local vectors, offline.
+
+```
+cd evals
+uv run --python 3.12 --extra embeddings dc-evals embed-cards --deck aws-saa-c03
+DC_ADMIN_TOKEN=... uv run --python 3.12 --extra embeddings dc-evals embed-cards \
+    --deck ../content/decks/aws-saa-c03.md --push --api-base https://<api host>
+uv run --python 3.12 --extra embeddings dc-evals semantic-dupes --deck aws-saa-c03 --out reports/semantic-dupes
+```
+
+- `--deck` takes a deck file (`.md` through `scripts/parse-deck.mts`, or an exported `.jsonl`) or
+  a slug: the exported `data/cards-<slug>.jsonl` for the two known decks, else
+  `../content/decks/<slug>.md`. Push the `.md` file when the export may be older than the
+  published deck; cards whose text differs from the server's come back as `staleText`.
+- Canonical text is `question.strip() + "\n\n" + explanation.strip()`; `textSha256` is the lower
+  hex SHA-256 of its UTF-8 bytes (the server computes the same digest and refuses a stale one).
+  Vectors are L2-normalised, 384 dims.
+- Vectors are written to `$DC_EMBED_CACHE/<slug>.jsonl` (default
+  `~/.cache/developercards/embeddings`, outside the repo), one `{deckSlug, stableUid, textSha256,
+  model, dim, embedding}` per line, or to `--out FILE`. A card with unchanged text keeps its cached
+  vector; only new or edited cards are embedded.
+- `--push --api-base URL` sends `PUT /api/v1/admin/card-embeddings` in batches of at most 100
+  (the API rejects bodies over 1 MiB) with `Authorization: Bearer $DC_ADMIN_TOKEN`. The token is
+  read from the environment only, never printed (it is redacted from any error text), and the
+  command refuses to run without it. `--api-base` must be https (plain http only to localhost).
+  It prints the upserted / unknownCards / staleText counts. Exit codes: 0 ok, 1 failed, 2 usage,
+  3 when the API answers `503 VECTOR_NOT_READY` (the owner must CREATE EXTENSION vector and re-run
+  the migration).
+- `semantic-dupes` writes `<date>-semantic-dupes-<slug>.{json,md}`: every unordered pair with
+  cosine >= `--min-cosine` (default 0.90), highest first, at most 50, shown by stableUid and
+  question only; the 10 closest pairs below the threshold; and the distribution of each card's
+  nearest-neighbour cosine. It reuses the cached vectors, so it needs fastembed only for cards not
+  yet embedded.
 
 ## Versioning
 

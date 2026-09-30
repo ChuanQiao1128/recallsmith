@@ -1,0 +1,454 @@
+{
+  "v": 1,
+  "kind": "semantic-dupes",
+  "date": "2026-09-30",
+  "deckSlug": "aws-saa-c03",
+  "model": "BAAI/bge-small-en-v1.5",
+  "dim": 384,
+  "similarity": "cosine of the L2-normalised canonical-text vectors (question + explanation)",
+  "cards": 371,
+  "minCosine": 0.9,
+  "pairsAtOrAboveThreshold": 25,
+  "pairs": [
+    {
+      "cosine": 0.9567,
+      "a": {
+        "stableUid": "aws-quick-service-card",
+        "question": "Business analysts want interactive dashboards over data in Athena, Redshift and RDS, shared with 300 readers, with no servers to run and fast response under load. Which AWS service is the fit, and what should it not be used for?"
+      },
+      "b": {
+        "stableUid": "aws-bi-dashboard-choice-mcq-36",
+        "question": "A retail company stores sales data in Amazon Redshift and clickstream data in S3 queried through Athena. Business analysts want interactive dashboards with filters and drill-downs that respond quickly, embedded in an internal portal, without the company running any dashboard servers. Which AWS service should the company use?"
+      }
+    },
+    {
+      "cosine": 0.9523,
+      "a": {
+        "stableUid": "aws-asg-scale-workers-on-queue-mcq-06",
+        "question": "An Auto Scaling group of EC2 workers processes document-conversion jobs from an SQS queue. Each job spends most of its time waiting on a third-party API, so instance CPU rarely exceeds 15 percent. Partners upload batches at unpredictable times, and during a batch the queue backlog grows for 20 minutes before the fleet catches up. The company wants the fleet to follow demand so that jobs wait no more than 5 minutes. Which scaling configuration is the MOST performant?"
+      },
+      "b": {
+        "stableUid": "aws-queue-backlog-per-instance-mcq-08",
+        "question": "A fleet of EC2 workers in an Auto Scaling group pulls jobs from an SQS queue; each job calls a slow third-party API and waits for the reply, so instances sit at about 15 percent CPU. The group scales on average CPU utilization. During bursts the queue grows to thousands of messages while the group adds nothing, and when it finally does, the new instances take three minutes to load configuration before they work. Which scaling configuration will process the backlog MOST effectively?"
+      }
+    },
+    {
+      "cosine": 0.9473,
+      "a": {
+        "stableUid": "aws-dms-and-sct",
+        "question": "An on-premises Oracle database with thousands of lines of PL/SQL must move to AWS. The company wants to stop paying Oracle licence fees, keep the application online during the move, and cut over with minutes of downtime. Which approach is the MOST cost-effective way to do this?"
+      },
+      "b": {
+        "stableUid": "aws-d4-db-engine-license-cost-mcq-23",
+        "question": "A company's on-premises Oracle Database Enterprise Edition licence renews in nine months at a price the CFO refuses to pay again. The application relies on PL/SQL stored procedures and packages. Which migration path is the MOST cost-effective while keeping application changes small?"
+      }
+    },
+    {
+      "cosine": 0.9345,
+      "a": {
+        "stableUid": "aws-amazon-mq-service",
+        "question": "A company is lifting an order-processing application into AWS. It talks to an on-premises ActiveMQ broker over JMS and OpenWire, a partner feed arrives over MQTT, and rewriting the messaging code is out of scope. Which AWS messaging service should carry these messages, and how is it deployed for high availability?"
+      },
+      "b": {
+        "stableUid": "aws-amazon-mq-jms-no-code-change-mcq-11",
+        "question": "A logistics company is moving a warehouse application to AWS. The application's components exchange messages through a self-managed Apache ActiveMQ broker using JMS over the OpenWire protocol, and the vendor will not change the application code. The company wants the broker to survive an Availability Zone failure. Which solution meets these requirements with the LEAST amount of change?"
+      }
+    },
+    {
+      "cosine": 0.9325,
+      "a": {
+        "stableUid": "aws-single-az-three-tier-to-ha-mcq-04",
+        "question": "A three-tier web application runs in a single Availability Zone: an Auto Scaling group of two EC2 web servers whose only subnet is in that zone, behind an Application Load Balancer, and an RDS for MySQL instance in a Single-AZ deployment. The company requires that the application keep serving traffic, with automatic failover, if that Availability Zone fails. Which combination of changes is the MOST cost-effective way to meet the requirement? (Choose two.)"
+      },
+      "b": {
+        "stableUid": "aws-single-az-asg-make-regional-ha-mcq-26",
+        "question": "A stateless web tier runs in an EC2 Auto Scaling group whose network configuration lists a single private subnet in Availability Zone a, behind an Application Load Balancer. During a recent zone event every instance was lost and the site went down. An engineer proposes deploying a copy in a second Region with Route 53 failover. What is the MOST cost-effective change that keeps the site running through the loss of one Availability Zone?"
+      }
+    },
+    {
+      "cosine": 0.9284,
+      "a": {
+        "stableUid": "aws-lambda-concurrency-reserved-provisioned",
+        "question": "A payment Lambda function is being throttled because a noisy batch function in the same account is using all the available concurrency. Do you set reserved or provisioned concurrency, what does each change, and why does the fix not carry over to your disaster recovery Region?"
+      },
+      "b": {
+        "stableUid": "aws-lambda-critical-function-throttled-mcq-17",
+        "question": "An account runs a payment-authorisation Lambda function and, in the same Region, a nightly batch function that fans out thousands of concurrent invocations. During the batch window the payment function returns throttling errors even though its own traffic is unchanged. The company needs the payment function to keep the HIGHEST availability regardless of what other functions in the account do. Which change achieves this?"
+      }
+    },
+    {
+      "cosine": 0.9277,
+      "a": {
+        "stableUid": "aws-asg-predictable-daily-spike-mcq-05",
+        "question": "An internal web application on an Auto Scaling group with a target tracking policy on CPU is slow every weekday between 9:00 and 9:20 AM: staff log in at 9 AM, new instances take about 8 minutes to become healthy, and by the time scaling catches up the peak is over. Traffic is flat for the rest of the day. Which solution is the MOST performant way to handle the morning peak without paying for peak capacity all day?"
+      },
+      "b": {
+        "stableUid": "aws-d4-scheduled-vs-predictive-scaling-mcq-17",
+        "question": "A customer-facing web tier on an Auto Scaling group with a target tracking policy on CPU is slow every weekday at 09:00. New instances take about 10 minutes to warm up, and the size of the spike differs by weekday and grows month over month, so the operations team keeps raising the minimum capacity and now runs near peak all day. Which approach is the MOST cost-effective way to be ready for the 09:00 load?"
+      }
+    },
+    {
+      "cosine": 0.925,
+      "a": {
+        "stableUid": "aws-artifact-service",
+        "question": "When does an exam scenario point to AWS Artifact rather than Security Hub, AWS Config or Trusted Advisor, and what two things can an account do in Artifact?"
+      },
+      "b": {
+        "stableUid": "aws-artifact-audit-evidence-mcq-34",
+        "question": "An external auditor reviewing a company's payment platform asks for evidence that the AWS infrastructure it runs on has been independently assessed: specifically the current SOC 2 Type II report and the PCI DSS attestation of compliance for AWS itself. Which is the FASTEST way for the solutions architect to obtain these documents?"
+      }
+    },
+    {
+      "cosine": 0.9244,
+      "a": {
+        "stableUid": "aws-acm-certificates-and-cloudfront-region",
+        "question": "A team requests one ACM certificate in ap-southeast-2 and attaches it to an ALB, then cannot select it for their CloudFront distribution. What went wrong, and when can an ACM certificate be exported?"
+      },
+      "b": {
+        "stableUid": "aws-acm-cert-region-for-cloudfront-mcq-39",
+        "question": "A team in Sydney requested a public certificate in AWS Certificate Manager in ap-southeast-2 and attached it to their Application Load Balancer. They are now creating a CloudFront distribution for the same domain, but the certificate does not appear in the distribution's custom SSL certificate list. What should the team do to serve HTTPS on the distribution MOST quickly?"
+      }
+    },
+    {
+      "cosine": 0.923,
+      "a": {
+        "stableUid": "aws-firewall-manager-service",
+        "question": "A security team runs an AWS Organization with 80 accounts. Every new Application Load Balancer and CloudFront distribution must carry the corporate WAF web ACL, every account must be enrolled in Shield Advanced, and no security group may allow 0.0.0.0/0 on port 22, including resources created next month. Which service enforces this, what must be in place first, and what does it not do?"
+      },
+      "b": {
+        "stableUid": "aws-firewall-manager-enforce-waf-org-mcq-30",
+        "question": "A company with 40 AWS accounts in one organization must ensure that every Application Load Balancer in every account, including ALBs created next month, is protected by the same AWS WAF web ACL with the security team's rule groups. Which approach achieves this with the LEAST operational overhead?"
+      }
+    },
+    {
+      "cosine": 0.9209,
+      "a": {
+        "stableUid": "aws-d4-pat-ec2-hibernation",
+        "question": "A rendering farm's EC2 workers take 20 minutes to load models into RAM before they can accept jobs, so the team pays for idle instances overnight to avoid the warm-up. Which EC2 feature removes the idle cost while keeping the loaded state, and what are its constraints?"
+      },
+      "b": {
+        "stableUid": "aws-d4-scaling-method-hibernation-mcq-16",
+        "question": "A financial modelling service runs on a single memory-optimized EC2 instance with 96 GiB of RAM. At startup it spends 40 minutes loading and indexing reference data into memory before it can answer requests. It is used only during business hours on weekdays, must be serving requests within a few minutes of being started each morning, and paying for idle nights and weekends is not acceptable. Which approach is the MOST cost-effective way to run it?"
+      }
+    },
+    {
+      "cosine": 0.9207,
+      "a": {
+        "stableUid": "aws-dr-backup-and-restore",
+        "question": "A regional payroll application can tolerate several hours of data loss and up to a day of downtime if its AWS Region fails, and finance wants the cheapest possible disaster recovery. What does a backup-and-restore strategy consist of, and which mistake makes it worthless?"
+      },
+      "b": {
+        "stableUid": "aws-dr-24h-objectives-lowest-cost-mcq-39",
+        "question": "An internal reporting application runs in one AWS Region on EC2 instances behind a load balancer with an RDS for PostgreSQL database. The business has agreed that after a Regional outage the application may take up to 24 hours to return and may lose up to 24 hours of data, but it must be recoverable in a second Region. Which disaster recovery approach meets these objectives in the MOST cost-effective way?"
+      }
+    },
+    {
+      "cosine": 0.9159,
+      "a": {
+        "stableUid": "aws-rds-backups-snapshots-pitr",
+        "question": "A developer ran an accidental DELETE on an RDS database 40 minutes ago and asks you to roll back; the team also asks whether taking more snapshots will raise the backup bill. What do you use, and what actually drives backup cost?"
+      },
+      "b": {
+        "stableUid": "aws-d4-db-backup-retention-cost-mcq-22",
+        "question": "An RDS for MySQL instance with 500 GiB of storage supports an order system. The recovery point objective is 5 minutes, and any point in the last 30 days must be restorable. Which backup configuration is the MOST cost-effective?"
+      }
+    },
+    {
+      "cosine": 0.9158,
+      "a": {
+        "stableUid": "aws-cloudfront-cost-reduction",
+        "question": "A static site served straight from S3 is paying for data transfer and requests from viewers worldwide. How does CloudFront lower that bill, and which three distribution settings cut it further?"
+      },
+      "b": {
+        "stableUid": "aws-d4-cdn-edge-caching-need-mcq-32",
+        "question": "A marketing site of static HTML, images and video clips is served directly from an S3 bucket in us-east-1 to viewers worldwide. The monthly S3 data transfer out and GET request charges keep rising, and viewers far from Virginia complain about slow loads. What is the MOST cost-effective change?"
+      }
+    },
+    {
+      "cosine": 0.9153,
+      "a": {
+        "stableUid": "aws-snow-family-selection",
+        "question": "A research site holds 500 TB on local disks behind a 500 Mbps internet link. The data must be in Amazon S3 within 3 weeks, and about 50 GB of new results must follow every night after that. Which two actions meet both requirements? (Choose two.)"
+      },
+      "b": {
+        "stableUid": "aws-d4-data-migration-service-mcq-08",
+        "question": "A media company must move a 500 TB archive from an on-premises NFS array into Amazon S3 within three weeks, before its data centre lease ends. The site has a single 1 Gbps internet connection that production traffic also uses. Which approach gets the archive into S3 the FASTEST?"
+      }
+    },
+    {
+      "cosine": 0.9139,
+      "a": {
+        "stableUid": "aws-datasync-vs-transfer-family",
+        "question": "About 40 trading partners push CSV files every day over SFTP with their existing clients and credentials. Each file must land in Amazon S3 and immediately trigger a processing job. Which design meets this with the LEAST operational overhead?"
+      },
+      "b": {
+        "stableUid": "aws-partner-sftp-into-s3-mcq-22",
+        "question": "A logistics company is closing the data centre that hosts its SFTP server. Two hundred partners upload shipment files to it with scripted SFTP clients that authenticate with usernames and passwords held in the company's Active Directory, and the files must land in an S3 bucket for a downstream pipeline. Partners cannot be asked to change their clients or credentials. Which solution meets these requirements with the LEAST operational overhead?"
+      }
+    },
+    {
+      "cosine": 0.9124,
+      "a": {
+        "stableUid": "aws-mfa-pattern",
+        "question": "A security team wants MFA on every human path into an account: console sign-in, destructive API calls, and permanent deletion of S3 object versions. Which mechanism covers each, and what is the trap when they add an MFA condition to a service control policy?"
+      },
+      "b": {
+        "stableUid": "aws-iam-mfa-for-destructive-api-mcq-02",
+        "question": "A company's IAM users administer EC2 and S3 from both the console and the CLI. A new control requires that TerminateInstances and DeleteBucket succeed only when the caller has authenticated with MFA, while the Lambda execution roles and CI/CD roles that never carry MFA must keep working unchanged. Which solution is the MOST secure way to meet these requirements?"
+      }
+    },
+    {
+      "cosine": 0.9093,
+      "a": {
+        "stableUid": "aws-rds-multi-az-vs-read-replica",
+        "question": "An RDS PostgreSQL instance must survive an Availability Zone failure and also serve a growing reporting load. Which of Multi-AZ and read replicas answers each need, and how does the replica story differ on Aurora and DynamoDB?"
+      },
+      "b": {
+        "stableUid": "aws-rds-multi-az-cluster-vs-instance",
+        "question": "A team on RDS for PostgreSQL wants automatic failover and also wants to send reporting queries to a standby. Do they choose a Multi-AZ DB instance or a Multi-AZ DB cluster, why, and what does RDS itself give and withhold?"
+      }
+    },
+    {
+      "cosine": 0.9045,
+      "a": {
+        "stableUid": "aws-efs-performance-and-throughput-modes",
+        "question": "Several hundred Linux web servers spread across three Availability Zones must share one POSIX file system for uploaded assets. Load is spiky and hard to forecast, and the team has no capacity to tune storage. Which solution meets these requirements with the LEAST operational overhead?"
+      },
+      "b": {
+        "stableUid": "aws-shared-posix-across-azs-mcq-18",
+        "question": "A video rendering farm runs Linux instances in an Auto Scaling group across three Availability Zones. Every node must read and write the same directory tree with standard POSIX permissions and file locks, the working set swings between gigabytes and tens of terabytes, and rendering must continue if one Availability Zone fails. Which shared storage design is the MOST highly available?"
+      }
+    },
+    {
+      "cosine": 0.9044,
+      "a": {
+        "stableUid": "aws-control-tower-service",
+        "question": "A company is about to build its first multi-account AWS environment. It wants dedicated log archive and audit accounts, guardrails that block or flag non-compliant configuration in every account, and a self-service way for teams to request new accounts that are governed from the moment they exist. Which service should the architect use, and when would plain AWS Organizations be the better answer?"
+      },
+      "b": {
+        "stableUid": "aws-control-tower-new-landing-zone-mcq-11",
+        "question": "A company new to AWS expects to grow to about 20 accounts within a year. Security wants preventive and detective guardrails on every account from day one, CloudTrail and Config logs centralized in a dedicated account, and a way for team leads to request a new pre-configured account without opening a ticket with the platform team. Which approach meets these requirements with the LEAST operational overhead?"
+      }
+    },
+    {
+      "cosine": 0.9033,
+      "a": {
+        "stableUid": "aws-s3-bucket-policy-vs-iam-policy",
+        "question": "A Lambda role in account B must read objects from a bucket owned by account A. Which policy must account A write, and is an identity policy on the role still needed?"
+      },
+      "b": {
+        "stableUid": "aws-cross-account-s3-two-policies-mcq-13",
+        "question": "An analytics job runs under an IAM role in account B and must read objects from a bucket that account A owns. Both accounts already exist, the bucket keeps its default settings and must stay private, and the role currently has no S3 permissions. Which change lets the role read the objects with the LEAST amount of change?"
+      }
+    },
+    {
+      "cosine": 0.9028,
+      "a": {
+        "stableUid": "aws-d4-transfer-cost-routes-mcq-30",
+        "question": "EC2 instances in private subnets download about 50 TB a month from an S3 bucket in the same Region through a NAT gateway. The same instances call a partner team's API that runs in another VPC in the same Region and Availability Zone; the two VPCs are already peered, but the client is configured with the API's public Elastic IP, so those calls also leave through the NAT gateway. Which change is the MOST cost-effective way to cut the data transfer bill?"
+      },
+      "b": {
+        "stableUid": "aws-d4-network-review-optimizations-mcq-31",
+        "question": "A monthly cost review of a VPC shows two large line items: NatGateway-Bytes, which VPC Flow Logs attribute almost entirely to EC2 instances in private subnets writing to Amazon S3 in the same Region, and a public IPv4 address charge driven by dozens of Elastic IP addresses allocated for past projects and no longer associated with anything. Which two actions are the MOST cost-effective way to cut both charges? (Choose two.)"
+      }
+    },
+    {
+      "cosine": 0.9024,
+      "a": {
+        "stableUid": "aws-d4-pat-s3-intelligent-tiering",
+        "question": "A media archive holds objects whose popularity is unpredictable: some are fetched daily for years, others never again after upload. Why is S3 Intelligent-Tiering the right class, what does it cost, and when does it stop being a good idea?"
+      },
+      "b": {
+        "stableUid": "aws-d4-storage-tier-unknown-pattern-mcq-04",
+        "question": "A SaaS company stores customer-uploaded documents, typically 1 to 20 MB each, in S3 Standard. Some customers open their documents daily for years while others never return after upload, and the company cannot predict which is which. It wants to reduce storage cost without retrieval surprises or ongoing work. Which storage choice meets these requirements with the LEAST operational overhead?"
+      }
+    },
+    {
+      "cosine": 0.9013,
+      "a": {
+        "stableUid": "aws-s3-glacier-retrieval-tiers",
+        "question": "Compliance archives are read perhaps once a year, but when auditors ask, a handful of files must be back within minutes. Which Glacier class and retrieval tier do you pick, and what does Deep Archive change?"
+      },
+      "b": {
+        "stableUid": "aws-d4-backup-archival-selection-mcq-07",
+        "question": "A brokerage must keep 40 TB of trade confirmation files for seven years. Regulators require that no one, including administrators, can delete or alter a file during that period. Files are retrieved perhaps twice a year for audits, and a retrieval that takes up to 24 hours is acceptable. Which solution is the MOST cost-effective way to meet these requirements?"
+      }
+    },
+    {
+      "cosine": 0.9001,
+      "a": {
+        "stableUid": "aws-nat-gateway-cost-vs-vpc-endpoint",
+        "question": "Private-subnet instances push terabytes into S3 every night through a NAT Gateway, and dozens of VPCs each call SQS and Secrets Manager through their own NAT. What is being charged, and what removes it?"
+      },
+      "b": {
+        "stableUid": "aws-d4-transfer-cost-routes-mcq-30",
+        "question": "EC2 instances in private subnets download about 50 TB a month from an S3 bucket in the same Region through a NAT gateway. The same instances call a partner team's API that runs in another VPC in the same Region and Availability Zone; the two VPCs are already peered, but the client is configured with the API's public Elastic IP, so those calls also leave through the NAT gateway. Which change is the MOST cost-effective way to cut the data transfer bill?"
+      }
+    }
+  ],
+  "nearMisses": [
+    {
+      "cosine": 0.8992,
+      "a": {
+        "stableUid": "aws-tls-in-transit-pattern",
+        "question": "An auditor requires encryption in transit end to end for a web app behind an Application Load Balancer, for its S3 uploads and for its RDS PostgreSQL connections. Where does the ACM certificate go, how do the hops behind the load balancer stay encrypted, and how do you force clients to use TLS on S3 and RDS?"
+      },
+      "b": {
+        "stableUid": "aws-end-to-end-tls-alb-targets-mcq-40",
+        "question": "A healthcare application runs on EC2 instances in private subnets behind an internet-facing Application Load Balancer. The ALB has an HTTPS listener with an ACM certificate. A compliance audit requires that patient data is encrypted in transit on every network hop, including between the load balancer and the instances. Which configuration meets this requirement in the MOST secure way?"
+      }
+    },
+    {
+      "cosine": 0.8982,
+      "a": {
+        "stableUid": "aws-rds-encryption-and-iam-auth",
+        "question": "An unencrypted RDS MySQL instance must now be encrypted at rest and reachable from an EC2 application without a stored password. What are the steps, and what cannot be done in place?"
+      },
+      "b": {
+        "stableUid": "aws-rds-encrypt-existing-instance-mcq-37",
+        "question": "An Amazon RDS for MySQL DB instance was created two years ago without encryption at rest. A new compliance rule requires all database storage to be encrypted with AWS KMS, and the application can tolerate a short maintenance window. Which approach meets the requirement with the LEAST amount of change?"
+      }
+    },
+    {
+      "cosine": 0.8977,
+      "a": {
+        "stableUid": "aws-d4-s3-lifecycle-management-mcq-05",
+        "question": "An application writes about 2 TB of log objects a day to S3. Engineers query the logs heavily for 30 days; for roughly three months after that, on-call engineers still open a few of them each week and expect millisecond access; beyond that the logs are read only during audits that come with 48 hours' notice, and regulators require them to be kept for 7 years and then deleted. Which lifecycle configuration is the MOST cost-effective?"
+      },
+      "b": {
+        "stableUid": "aws-d4-backup-archival-selection-mcq-07",
+        "question": "A brokerage must keep 40 TB of trade confirmation files for seven years. Regulators require that no one, including administrators, can delete or alter a file during that period. Files are retrieved perhaps twice a year for audits, and a retrieval that takes up to 24 hours is acceptable. Which solution is the MOST cost-effective way to meet these requirements?"
+      }
+    },
+    {
+      "cosine": 0.8958,
+      "a": {
+        "stableUid": "aws-security-group-referencing",
+        "question": "Web servers behind an ALB scale in and out, and the database must accept connections only from those web servers. How do you write the rule without maintaining IP lists, and where does each tier live in the VPC?"
+      },
+      "b": {
+        "stableUid": "aws-three-tier-security-group-chain-mcq-19",
+        "question": "A three-tier application has an internet-facing Application Load Balancer, web servers in an Auto Scaling group, and an RDS for MySQL instance. Each tier is in its own subnets and has its own security group. Which security group design is the MOST secure?"
+      }
+    },
+    {
+      "cosine": 0.8957,
+      "a": {
+        "stableUid": "aws-nat-gateway-cost-vs-vpc-endpoint",
+        "question": "Private-subnet instances push terabytes into S3 every night through a NAT Gateway, and dozens of VPCs each call SQS and Secrets Manager through their own NAT. What is being charged, and what removes it?"
+      },
+      "b": {
+        "stableUid": "aws-d4-network-review-optimizations-mcq-31",
+        "question": "A monthly cost review of a VPC shows two large line items: NatGateway-Bytes, which VPC Flow Logs attribute almost entirely to EC2 instances in private subnets writing to Amazon S3 in the same Region, and a public IPv4 address charge driven by dozens of Elastic IP addresses allocated for past projects and no longer associated with anything. Which two actions are the MOST cost-effective way to cut both charges? (Choose two.)"
+      }
+    },
+    {
+      "cosine": 0.8956,
+      "a": {
+        "stableUid": "aws-s3-encryption-options-sse",
+        "question": "Auditors require proof of which principal decrypted each object and the ability to revoke a key for one dataset. Which S3 server-side encryption option satisfies this, and what cost issue follows?"
+      },
+      "b": {
+        "stableUid": "aws-s3-sse-kms-audit-revoke-mcq-36",
+        "question": "A company keeps three regulated datasets in one S3 bucket, one prefix each. Auditors require a log entry for every object decryption, and the security team must be able to cut off access to a single dataset's encryption key within minutes if that dataset is compromised, without affecting the other two. Which encryption configuration is the MOST secure way to meet both requirements?"
+      }
+    },
+    {
+      "cosine": 0.8954,
+      "a": {
+        "stableUid": "aws-rds-proxy",
+        "question": "Thousands of concurrent Lambda invocations each open a short-lived connection to an RDS for MySQL instance, which now returns too many connections errors under load. Which fix resolves the errors with the LEAST amount of change to the application?"
+      },
+      "b": {
+        "stableUid": "aws-legacy-app-too-many-connections-mcq-40",
+        "question": "A legacy Java application on a fleet of EC2 instances opens a new connection to an RDS for MySQL Multi-AZ instance for every request and closes it afterwards. During traffic peaks the database returns too-many-connections errors, and during a Multi-AZ failover the application keeps failing for several minutes because its hosts cache the old DNS answer. The source code can no longer be modified. Which solution improves reliability with the LEAST amount of change to the application?"
+      }
+    },
+    {
+      "cosine": 0.8938,
+      "a": {
+        "stableUid": "aws-d4-nat-single-vs-per-az-mcq-28",
+        "question": "A production application runs in private subnets across three Availability Zones. All outbound traffic, about 20 TB a month, leaves through one NAT gateway in the first zone; two thirds of it is writes to S3 and DynamoDB in the same Region, the rest goes to third-party SaaS APIs. Finance wants the NAT bill cut and operations wants the single point of failure removed. Which change is the MOST cost-effective way to meet both goals?"
+      },
+      "b": {
+        "stableUid": "aws-d4-transfer-cost-routes-mcq-30",
+        "question": "EC2 instances in private subnets download about 50 TB a month from an S3 bucket in the same Region through a NAT gateway. The same instances call a partner team's API that runs in another VPC in the same Region and Availability Zone; the two VPCs are already peered, but the client is configured with the API's public Elastic IP, so those calls also leave through the NAT gateway. Which change is the MOST cost-effective way to cut the data transfer bill?"
+      }
+    },
+    {
+      "cosine": 0.8925,
+      "a": {
+        "stableUid": "aws-route-tables-ha-angle",
+        "question": "A VPC has private subnets in three Availability Zones that all share one route table whose 0.0.0.0/0 route points at a single NAT gateway in AZ a. When AZ a fails, instances in AZ b and AZ c lose all outbound access even though they are healthy. Why, and how should the route tables be laid out?"
+      },
+      "b": {
+        "stableUid": "aws-single-nat-gateway-spof-mcq-31",
+        "question": "A VPC has private subnets in Availability Zones a and b. Application servers in both zones reach third-party HTTPS APIs through one NAT gateway in a public subnet in zone a, and both private route tables send 0.0.0.0/0 to it. During a zone a disruption the servers in zone b stayed up but every outbound call from them failed. Which change makes outbound internet access the MOST resilient?"
+      }
+    },
+    {
+      "cosine": 0.8913,
+      "a": {
+        "stableUid": "aws-dr-strategies-rpo-rto",
+        "question": "A workload may lose no more than a few minutes of data, but the business accepts a recovery time measured in hours rather than seconds. Which disaster recovery strategy fits, and why not its cheaper or dearer neighbours?"
+      },
+      "b": {
+        "stableUid": "aws-dr-rto-1h-rpo-minutes-mcq-37",
+        "question": "A company's order system runs on EC2 behind an ALB with an Amazon RDS for PostgreSQL database in one Region. The business requires that after a Regional outage the system is serving again within 1 hour and loses no more than a few minutes of orders, and it wants to spend as little as possible on standby capacity. Which disaster recovery design is the MOST cost-effective way to meet these objectives?"
+      }
+    }
+  ],
+  "distribution": {
+    "cards": 371,
+    "cardsAtOrAboveThreshold": 49,
+    "nearestNeighbourCosine": {
+      "min": 0.7275,
+      "p50": 0.849,
+      "p90": 0.9045,
+      "p99": 0.9523,
+      "max": 0.9567
+    },
+    "buckets": [
+      {
+        "range": "< 0.70",
+        "cards": 0
+      },
+      {
+        "range": "0.70-0.75",
+        "cards": 2
+      },
+      {
+        "range": "0.75-0.80",
+        "cards": 44
+      },
+      {
+        "range": "0.80-0.85",
+        "cards": 142
+      },
+      {
+        "range": "0.85-0.88",
+        "cards": 86
+      },
+      {
+        "range": "0.88-0.90",
+        "cards": 48
+      },
+      {
+        "range": "0.90-0.92",
+        "cards": 25
+      },
+      {
+        "range": "0.92-0.95",
+        "cards": 20
+      },
+      {
+        "range": "0.95-0.98",
+        "cards": 4
+      },
+      {
+        "range": ">= 0.98",
+        "cards": 0
+      }
+    ]
+  }
+}

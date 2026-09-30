@@ -1,6 +1,8 @@
 """dc-evals command line: seed, run (paid, owner only), score, (Q03) author, jury and compare, and
-(V01) review, the local pre-publish self-check through the Claude CLI, and (V02) fetch-sources and
-retrieval, the retrieval eval over the pages the deck ledgers cite."""
+(V01) review, the local pre-publish self-check through the Claude CLI, (V02) fetch-sources and
+retrieval, the retrieval eval over the pages the deck ledgers cite, and (V04) embed-cards and
+semantic-dupes, local bge-small card embeddings, their push to the admin route and an offline
+nearest-pair report."""
 
 from __future__ import annotations
 
@@ -316,6 +318,31 @@ def _parser() -> argparse.ArgumentParser:
     backfill.add_argument("--apply", action="store_true",
                           help="also write the SOURCE lines into the deck file (the owner's step, after review)")
 
+    embed = sub.add_parser(
+        "embed-cards",
+        help="embed a deck's cards locally with bge-small into $DC_EMBED_CACHE, optionally push them (V04)",
+    )
+    embed.add_argument("--deck", required=True, metavar="PATH_OR_SLUG",
+                       help="a deck file (.md or exported .jsonl) or a deck slug")
+    embed.add_argument("--out", type=Path, default=None,
+                       help="the embeddings JSONL (default $DC_EMBED_CACHE/<slug>.jsonl, "
+                            "$DC_EMBED_CACHE defaulting to ~/.cache/developercards/embeddings)")
+    embed.add_argument("--push", action="store_true",
+                       help="PUT the vectors to /api/v1/admin/card-embeddings (token from $DC_ADMIN_TOKEN)")
+    embed.add_argument("--api-base", default=None, metavar="URL", help="the API base URL for --push")
+
+    dupes = sub.add_parser(
+        "semantic-dupes",
+        help="offline nearest-pair report from the local card embeddings (V04; no network)",
+    )
+    dupes.add_argument("--deck", required=True, metavar="PATH_OR_SLUG",
+                       help="a deck file (.md or exported .jsonl) or a deck slug")
+    dupes.add_argument("--min-cosine", type=_score_value, default=0.90, help="pair threshold (default 0.90)")
+    dupes.add_argument("--embeddings", type=Path, default=None,
+                       help="the embeddings JSONL (default $DC_EMBED_CACHE/<slug>.jsonl)")
+    dupes.add_argument("--out", type=Path, default=REPORTS_DIR)
+    dupes.add_argument("--date", type=_review_date, default=None, help="YYYY-MM-DD (default: UTC today)")
+
     score = sub.add_parser("score", help="print the report JSON for a run file")
     score.add_argument("run_file", type=Path)
     score.add_argument("--gate", action="store_true", help="exit 1 unless every rollout gate condition passes")
@@ -606,6 +633,20 @@ def _backfill_sources(args: argparse.Namespace) -> int:
     return backfill.run_backfill(args)
 
 
+def _embed_cards(args: argparse.Namespace) -> int:
+    from . import embed_cards
+
+    if args.push and not args.api_base:
+        _parser().error("embed-cards --push needs --api-base URL")
+    return embed_cards.run_embed_cards(args)
+
+
+def _semantic_dupes(args: argparse.Namespace) -> int:
+    from . import embed_cards
+
+    return embed_cards.run_semantic_dupes(args)
+
+
 def _compare(args: argparse.Namespace) -> int:
     from .compare import compare
 
@@ -645,6 +686,8 @@ def main(argv: list[str] | None = None) -> int:
         "fetch-sources": _fetch_sources,
         "retrieval": _retrieval,
         "backfill-sources": _backfill_sources,
+        "embed-cards": _embed_cards,
+        "semantic-dupes": _semantic_dupes,
     }
     return handlers[args.command](args)
 
