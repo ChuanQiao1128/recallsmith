@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PROBE, waitUntilExecutable } from '../setup/execProbe';
 
 // 1.9.0 release plumbing (M04): eas.json Sentry env per profile, version 1.9.0 (23), the CI
 // expo export step and the ios-build.sh placeholder guard. ios-build.sh only ever runs from a temp
@@ -113,8 +114,9 @@ function runIosBuild(opts: { org: string; project: string; profile?: string }) {
   const bin = path.join(root, 'bin');
   fs.mkdirSync(bin);
   const easLog = path.join(root, 'eas.log');
-  fs.writeFileSync(path.join(bin, 'eas'), ['#!/usr/bin/env bash', `echo "$@" >> "${easLog}"`, 'exit 0', ''].join('\n'));
+  fs.writeFileSync(path.join(bin, 'eas'), ['#!/usr/bin/env bash', `[ "$1" = ${PROBE} ] && exit 0`, `echo "$@" >> "${easLog}"`, 'exit 0', ''].join('\n'));
   fs.chmodSync(path.join(bin, 'eas'), 0o755);
+  waitUntilExecutable(path.join(bin, 'eas'));
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const k of Object.keys(env)) if (k.startsWith('SENTRY_') || k === 'EXPO_PUBLIC_SENTRY_DSN') delete env[k];
   env.PATH = `${bin}:${process.env.PATH ?? ''}`;

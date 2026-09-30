@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PROBE, waitUntilExecutable } from '../setup/execProbe';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const OTA = path.resolve(HERE, '../../scripts/release/ota.sh');
@@ -31,6 +32,7 @@ function makeFakeEasDir(): string {
     eas,
     [
       '#!/usr/bin/env bash',
+      `[ "$1" = ${PROBE} ] && exit 0`,
       'case "$1" in',
       '  whoami) exit 0 ;;',
       `  env:list) for n in $FAKE_EAS_NAMES; do echo "$n=${MARKER}"; done ;;`,
@@ -43,6 +45,7 @@ function makeFakeEasDir(): string {
     ].join('\n'),
   );
   fs.chmodSync(eas, 0o755);
+  waitUntilExecutable(eas);
   return dir;
 }
 
@@ -106,8 +109,10 @@ type TreeOpts = {
 };
 
 function writeExecutable(file: string, lines: string[]) {
-  fs.writeFileSync(file, [...lines, ''].join('\n'));
+  const [shebang, ...rest] = lines;
+  fs.writeFileSync(file, [shebang, `[ "$1" = ${PROBE} ] && exit 0`, ...rest, ''].join('\n'));
   fs.chmodSync(file, 0o755);
+  waitUntilExecutable(file);
 }
 
 function runOtaTree(opts: TreeOpts) {
