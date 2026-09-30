@@ -92,7 +92,15 @@ export type AutomationStatus = {
   };
   /** K7: the open exceptions. Null when the server predates the field. */
   backlog: AutomationBacklog | null;
+  /**
+   * R20 V05: learner card reports. Absent (not null) when the server predates
+   * the field, so the Overview hides its tile; zeros when the table is missing.
+   */
+  cardReports?: AutomationCardReports;
 };
+
+/** R20 V05: open learner card reports and those opened in the last 7 days. */
+export type AutomationCardReports = { open: number; openedLast7d: number };
 
 /** M2 (R18D): auto-accepted cards a person later deleted or edited, over the last 30 days. */
 export type AutomationLive = {
@@ -450,7 +458,12 @@ function normalizeStatus(data: unknown): AutomationStatus | null {
       lastSentAt: toNullableText(notifications.lastSentAt),
     },
     backlog: normalizeBacklog(data.backlog),
+    ...(isRecord(data.cardReports) ? { cardReports: normalizeCardReports(data.cardReports) } : {}),
   };
+}
+
+function normalizeCardReports(value: Record<string, unknown>): AutomationCardReports {
+  return { open: toNumber(value.open), openedLast7d: toNumber(value.openedLast7d) };
 }
 
 function normalizeLive(value: unknown): AutomationLive | null {

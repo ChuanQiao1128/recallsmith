@@ -129,12 +129,17 @@ function inventory(): string[] {
 // Re-measured again (B07, 2026-09-28, frontend-console-12): Automation joined
 // the shared section set, so both roles gained `a:Automation`. Nothing else in
 // either list moved.
+//
+// Re-measured again (R20 V09, 2026-10-01): the Reports section (learner card
+// reports) joined the shared set, so both roles gained `a:Reports`. Nothing
+// else in either list moved.
 const SUPER_ADMIN_CONTROLS = [
   'a:AI QA',
   'a:Admin Management',
   'a:Automation',
   'a:Automation ledger',
   'a:Content Intelligence',
+  'a:Reports',
   'a:Review queue',
   'a:Webhooks',
   'button:4',
@@ -167,6 +172,7 @@ const EDITOR_CONTROLS = [
   'a:Automation',
   'a:Automation ledger',
   'a:Content Intelligence',
+  'a:Reports',
   'a:Review queue',
   'button:4',
   'button:4',

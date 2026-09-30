@@ -29,6 +29,9 @@
 // stay listed by deck in every mode: the server lists live rows only, whose
 // drafts were auto-accepted, so they tell no dry-run verdict (G04
 // frontend-console-41). The notes name the mode the page is in.
+//
+// Card reports (R20 V09) shows the open learner reports and those opened in the
+// last 7 days, linked to /reports, when the server sends status.cardReports.
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 
@@ -472,6 +475,20 @@ export function OverviewTab({
               </dl>
             </section>
           </div>
+
+          {/* R20 V09: learner card reports; hidden when the server predates the field. */}
+          {status.cardReports ? (
+            <section className={CARD_CLASS} aria-label="Card reports">
+              <h2 className={H2_CLASS}>Card reports</h2>
+              <dl className="mt-2 grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <Stat label="Open" value={String(status.cardReports.open)} />
+                <Stat label="New in 7 days" value={String(status.cardReports.openedLast7d)} />
+              </dl>
+              <Link to="/reports" className="mt-2 inline-block text-sm text-indigo-700 underline">
+                Open card reports
+              </Link>
+            </section>
+          ) : null}
         </>
       ) : null}
     </div>
