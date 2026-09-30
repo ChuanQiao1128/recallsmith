@@ -4,6 +4,7 @@ seam (deck_review.parse_deck) is replaced by a small Python reader of the fixtur
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -253,6 +254,22 @@ def test_select_quote_skips_chunk_edge_fragments_and_headings() -> None:
     assert select_quote("#### Customer gateway device failover", support) is None
     assert select_quote("# What is a customer gateway device?", support) is None
     assert select_quote("Customer gateway devices advertise routes over BGP so the gateway can", support) is None
+
+
+def test_select_quote_skips_excluded_wording(monkeypatch) -> None:
+    # The project's excluded wording is stored as digests; a stand-in word shows the mechanism.
+    monkeypatch.setattr(backfill, "EXCLUDED_WORDING", {5: frozenset({hashlib.sha256(b"zorbq").hexdigest()})})
+    text = "Lifecycle rules can ZORBQ the glacier tier. Lifecycle rules move objects to glacier."
+    quote = select_quote(text, {"lifecycle", "rule", "glacier", "tier"})
+    assert quote is not None and quote.text == "Lifecycle rules move objects to glacier."
+    assert backfill.has_excluded_wording("a zorbqing note") and not backfill.has_excluded_wording("zorb q")
+    assert select_quote("Lifecycle rules ZORBQ glacier.", {"lifecycle", "glacier"}) is None
+
+
+def test_excluded_wording_digests_are_sha256_hex() -> None:
+    assert backfill.EXCLUDED_WORDING
+    for length, digests in backfill.EXCLUDED_WORDING.items():
+        assert length > 0 and all(re.fullmatch(r"[0-9a-f]{64}", d) for d in digests)
 
 
 def test_confidence_thresholds() -> None:

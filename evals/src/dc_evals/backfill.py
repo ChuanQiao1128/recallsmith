@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import csv
 import difflib
+import hashlib
 import json
 import re
 import sys
@@ -71,6 +72,29 @@ _SENTENCE_END = re.compile(r"[.!?][\"')\]]*(?=\s)")
 # A whole sentence ends with a stop; a heading, a table cell or a chunk cut mid-sentence does not.
 _ENDS_SENTENCE = re.compile(r"[.!?][\"')\]]*$")
 _ABBREVIATIONS = frozenset({"e.g", "i.e", "etc", "vs", "approx", "incl", "no", "fig", "cf", "u.s"})
+
+
+# Wording the project keeps out of every tracked file (card text included). Quotes are copied from
+# third-party pages, so a window containing any of it is never proposed. Stored as the sha256 of each
+# lower-case term, keyed by its length, so the list itself stays out of the repository; a window
+# matches when any of its lower-cased substrings of that length has one of these digests.
+EXCLUDED_WORDING: dict[int, frozenset[str]] = {
+    5: frozenset({"c8e11d434104c3c2b39e2ca496eb1196fd3e41f74475878d293f560760915a4a"}),
+    6: frozenset({"f271a122bf4230c7c217b4cb8a66f8b4325b9c1821627dca16924fff32d6aa71"}),
+    8: frozenset({"09691337b12ffb6570b4c327ebbd4e492548a16b90a467922d0d715bec3e37be",
+                  "f2b3cbe41413047352141e5b863d87e696ec4f52b503040dba3a5700acd529a0"}),
+    9: frozenset({"f614735fa80bbb5857fed488a90894c5ce5de1e4b4fc02589f82ebbe8c162083"}),
+    11: frozenset({"e7f1f148813f90327451b09bd19a24e33422cc109962d6658095b0e9f85c9b42"}),
+}
+
+
+def has_excluded_wording(text: str) -> bool:
+    lowered = text.lower()
+    for length, digests in EXCLUDED_WORDING.items():
+        for i in range(len(lowered) - length + 1):
+            if hashlib.sha256(lowered[i:i + length].encode("utf-8")).hexdigest() in digests:
+                return True
+    return False
 
 
 class BackfillError(Exception):
@@ -156,7 +180,7 @@ def select_quote(
     Seed: the sentence sharing the most answer terms (the first one on a tie) that fits the cap and
     does not begin with a deck marker. A window starts on a character that is neither lower-case nor a
     Markdown heading ``#`` and ends with a stop, so a chunk that dc-ingest cut mid-sentence (overlap start, size-driven end) and a
-    heading never make a quote. Growth: the neighbour on the same line that adds the most new
+    heading never make a quote, nor does a window holding excluded wording (EXCLUDED_WORDING). Growth: the neighbour on the same line that adds the most new
     answer terms (the following one on a tie), while it adds at least one, the window stays within
     ``max_chars`` and ``max_sentences``, and the window's first sentence is not a marker line."""
     support = frozenset(_stem(t) for t in support)
@@ -166,10 +190,13 @@ def select_quote(
     line_of = [text.count("\n", 0, start) for start, _ in spans]
     overlap = [terms(text[a:b]) & support for a, b in spans]
 
+    flagged = has_excluded_wording(text)
+
     def fits(i: int, j: int) -> bool:
         window = text[spans[i][0]:spans[j][1]]
         return (len(window) <= max_chars and not starts_with_marker(window) and not window[0].islower() and not window.startswith("#")
-                and _ENDS_SENTENCE.search(window) is not None)
+                and _ENDS_SENTENCE.search(window) is not None
+                and not (flagged and has_excluded_wording(window)))
 
     seeds = [i for i in range(len(spans)) if overlap[i] and fits(i, i)]
     if not seeds:
