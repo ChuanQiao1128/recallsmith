@@ -15,7 +15,13 @@
           "microphonePermission": false
         }
       ],
-      "./plugins/withPodsDeploymentTarget"
+      "./plugins/withPodsDeploymentTarget",
+      [
+        "@sentry/react-native/expo",
+        {
+          "url": "https://sentry.io/"
+        }
+      ]
     ],
     "splash": {
       "image": "./assets/splash-icon.png",

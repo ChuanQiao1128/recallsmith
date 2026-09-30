@@ -15,6 +15,7 @@ import {
   loadLastCeremonyPerfReport,
   type CeremonyPerfReport,
 } from '../features/gacha/draw/ceremonyPerf';
+import { getObservabilityStatus, sendTestEvent } from '../telemetry/observability';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'DebugMenu'>;
 const scenarios = [
@@ -51,6 +52,7 @@ export function DebugMenuScreen({ navigation }: Props) {
   const [perfHistory, setPerfHistory] = useState<CeremonyPerfReport[]>([]);
   const [perfLoaded, setPerfLoaded] = useState(false);
   const [perfJsonVisible, setPerfJsonVisible] = useState(false);
+  const [sentryResult, setSentryResult] = useState<string | null>(null);
 
   const reloadPerf = useCallback(async () => {
     let report: CeremonyPerfReport | null = null;
@@ -181,6 +183,9 @@ export function DebugMenuScreen({ navigation }: Props) {
   // dev error/offline shells and the progress-wiping DANGER ZONE are __DEV__
   // only so an App Reviewer or curious user cannot reach them.
   const isDev = __DEV__;
+  // Read at render: startObservability settles shortly after launch, and the
+  // test-event press re-renders this screen.
+  const sentryStatus = getObservabilityStatus();
 
   return (
     <AppInfoScreen
@@ -255,6 +260,37 @@ export function DebugMenuScreen({ navigation }: Props) {
           {perfJsonVisible && perfHistory.length > 1 ? (
             <Text style={styles.perfJson} selectable testID="debug-ceremony-perf-history-json">
               {JSON.stringify(perfHistory, null, 1)}
+            </Text>
+          ) : null}
+        </View>
+        <View style={styles.perfCard} testID="debug-sentry">
+          <Text style={styles.ceremonyEyebrow} numberOfLines={1}>
+            ERROR REPORTING
+          </Text>
+          <Text style={styles.perfLine} testID="debug-sentry-status">
+            {sentryStatus.active ? 'Sentry: active' : `Sentry: inactive (${sentryStatus.reason})`}
+          </Text>
+          <View style={styles.perfRow}>
+            <Pressable
+              testID="debug-sentry-test-event"
+              accessibilityRole="button"
+              accessibilityLabel="Send test event"
+              style={({ pressed }) => [styles.ceremonyButton, styles.perfButton, pressed && styles.dangerButtonPressed]}
+              onPress={() => {
+                const result = sendTestEvent();
+                setSentryResult(
+                  result.sent
+                    ? `Sent: ${(result.eventId ?? '').slice(0, 8)}`
+                    : `Not sent (${result.reason})`,
+                );
+              }}
+            >
+              <Text style={styles.ceremonyButtonText}>Send test event</Text>
+            </Pressable>
+          </View>
+          {sentryResult ? (
+            <Text style={styles.perfLine} testID="debug-sentry-test-event-result">
+              {sentryResult}
             </Text>
           ) : null}
         </View>

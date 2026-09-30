@@ -1,10 +1,12 @@
 // mobile/src/telemetry/clientErrorReporter.ts
 //
-// Interim, OTA-safe client error reporter (MSHELL-02 / MSHELL-12). Until Sentry
-// lands in the 1.7.0 binary (H02), this posts a tiny JSON blob to Wave F's F16
-// endpoint (`/api/v1/user/client-errors`) with the signed-in user's bearer
-// token — fire-and-forget, rate-limited, all failures swallowed, and nothing at
-// all for anonymous users.
+// Interim, OTA-safe client error reporter (MSHELL-02 / MSHELL-12). Sentry arrived
+// in the 1.9.0 (M02) binary: when it is active, an injected `captureException`
+// takes every report and nothing is posted. The POST path below remains for
+// builds where Sentry is inactive and for runtimes 1.6.1 / 1.8.0: it posts a tiny
+// JSON blob to Wave F's F16 endpoint (`/api/v1/user/client-errors`) with the
+// signed-in user's bearer token — fire-and-forget, rate-limited, all failures
+// swallowed, and nothing at all for anonymous users.
 //
 // IMPORTANT: this module imports nothing at runtime (types only). The access
 // token, device info, current screen and fetch implementation are injected from
@@ -42,6 +44,7 @@ export type ClientErrorReporterDeps = {
   getCurrentScreen: () => string | null;
   fetchImpl: typeof fetch;
   now: () => number;
+  captureException?: (error: unknown, ctx: { screen: string | null; kind: ClientErrorKind }) => boolean;
 };
 
 type ReportContext = { screen?: string | null; kind?: ClientErrorKind };
@@ -100,6 +103,25 @@ export function createClientErrorReporter(
 
   function report(error: unknown, ctx?: ReportContext): boolean {
     try {
+      const screen =
+        ctx && ctx.screen !== undefined
+          ? ctx.screen
+          : deps.getCurrentScreen
+            ? deps.getCurrentScreen()
+            : null;
+      const kind = ctx?.kind ?? 'js_error';
+
+      // Sentry active: it takes the report; no POST, no rate-limit slot.
+      if (deps.captureException) {
+        let captured = false;
+        try {
+          captured = deps.captureException(error, { screen, kind }) === true;
+        } catch {
+          captured = false;
+        }
+        if (captured) return true;
+      }
+
       const apiBase = deps.apiBase !== undefined ? deps.apiBase : defaultApiBase();
       if (!apiBase) return false;
 
@@ -112,13 +134,6 @@ export function createClientErrorReporter(
       if (sentAt.length >= CLIENT_ERROR_RATE_LIMIT.maxEvents) return false;
 
       const env = deps.getEnv ? deps.getEnv() : DEFAULT_ENV;
-      const screen =
-        ctx && ctx.screen !== undefined
-          ? ctx.screen
-          : deps.getCurrentScreen
-            ? deps.getCurrentScreen()
-            : null;
-      const kind = ctx?.kind ?? 'js_error';
       const payload = buildClientErrorPayload(error, screen, env, kind);
 
       const fetchImpl = deps.fetchImpl ?? (globalThis as { fetch?: typeof fetch }).fetch;
