@@ -77,7 +77,7 @@ async function press(node: renderer.ReactTestInstance) {
 describe('ReportCardSheet', () => {
   it('renders a Modal with five plain-English reason chips and no pre-selection', async () => {
     const tree = await renderSheet();
-    expect(tree.root.findAll((n) => n.type === 'Modal')).toHaveLength(1);
+    expect(tree.root.findAll((n) => (n.type as unknown) === 'Modal')).toHaveLength(1);
     expect(CARD_REPORT_REASONS.map((r) => r.value)).toEqual(['wrong_answer', 'outdated', 'unclear', 'typo', 'other']);
     for (const reason of CARD_REPORT_REASONS) {
       const chip = one(tree, `report-reason-${reason.value}`);
@@ -183,7 +183,7 @@ describe('ReportCardSheet', () => {
 
   it('gives every control a role, label, 44pt target and capped chrome text', async () => {
     const tree = await renderSheet();
-    const controls = tree.root.findAll((n) => n.type === 'Pressable');
+    const controls = tree.root.findAll((n) => (n.type as unknown) === 'Pressable');
     expect(controls.length).toBe(7);
     for (const control of controls) {
       expect(['button', 'radio']).toContain(control.props.accessibilityRole);
@@ -195,7 +195,7 @@ describe('ReportCardSheet', () => {
     for (const id of ['report-card-submit', 'report-card-cancel']) {
       expect(typeof one(tree, id).props.accessibilityHint).toBe('string');
     }
-    for (const text of tree.root.findAll((n) => n.type === 'Text')) {
+    for (const text of tree.root.findAll((n) => (n.type as unknown) === 'Text')) {
       expect(text.props.maxFontSizeMultiplier).toBe(CHROME_MAX_FONT_SCALE);
     }
   });
