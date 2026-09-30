@@ -91,8 +91,14 @@ const FIRST_LOAD_BUDGET_BYTES = 377_000;
  * (createBrowserRouter/RouterProvider), required by useBlocker for the
  * unsaved-changes guard; measured 418,085 -> 473,677. Raised to measured+10k,
  * rounded up to the next 1,000.
+ *
+ * F03 (2026-10-01): axios 1.19.0 -> 1.20.0 (GHSA-542g-h47m-68v8; the CI audit
+ * step fails on 1.19.0). Same src, same machine, only the dependency swapped:
+ * eager 483,869 -> 486,771 (+2,902 B, all in the http chunk). The first-load
+ * closure did not move (372,460). Raised to the measurement rounded up to the
+ * next 1,000, not measured+10k: the headroom stays as small as it already was.
  */
-const EAGER_BUDGET_BYTES = 484_000;
+const EAGER_BUDGET_BYTES = 487_000;
 
 /**
  * Floor, so a parser that degenerates to an empty or near-empty set cannot make
