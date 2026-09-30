@@ -37,6 +37,40 @@ export function setAccessTokenRefresher(fn: (() => Promise<string | null>) | nul
   _accessTokenRefresher = fn;
 }
 
+// Injected trace-header provider (R19M M03). apiClient must not import telemetry
+// or the Sentry SDK, so observability.ts installs a provider here only while Sentry
+// is active. With no provider installed no header is sent and requests are unchanged.
+let _traceHeaderProvider: (() => string | null) | null = null;
+
+export function setTraceHeaderProvider(fn: (() => string | null) | null): void {
+  _traceHeaderProvider = fn;
+}
+
+const TRACE_HEADER_NAME = 'x-dc-trace-id';
+// Must agree with TraceContext.cs:28 (server) and sentryPolicy.DC_TRACE_HEADER_PATTERN;
+// kept as a local copy so apiClient stays free of telemetry imports.
+const TRACE_HEADER_PATTERN = /^1-[0-9a-f]{8}-[0-9a-f]{24}$/;
+
+/** Existing value of the trace header in `headers` (any key casing), else undefined. */
+function findTraceHeader(headers: Record<string, string>): string | undefined {
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === TRACE_HEADER_NAME) return headers[key];
+  }
+  return undefined;
+}
+
+/** The provider's value when it is a valid trace header; a throw or anything else ⇒ null. */
+function readTraceHeader(): string | null {
+  const provider = _traceHeaderProvider;
+  if (!provider) return null;
+  try {
+    const value = provider();
+    return typeof value === 'string' && TRACE_HEADER_PATTERN.test(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 function safeJsonParse(text: string): any | null {
   const t = (text ?? '').trim();
   if (!t) return null;
@@ -65,6 +99,18 @@ async function requestOnce<T>(base: string, path: string, opts: ApiOpts): Promis
       'content-type': 'application/json',
       ...(opts.headers || {}),
     };
+
+    // A caller-supplied trace header (any casing) wins; otherwise ask the provider.
+    // The 401 replay reuses this object, and the fallback retry runs requestOnce again.
+    const callerTraceHeader = findTraceHeader(headers);
+    let sentTraceHeader: string | null = callerTraceHeader ? callerTraceHeader : null;
+    if (callerTraceHeader === undefined) {
+      const provided = readTraceHeader();
+      if (provided) {
+        headers[TRACE_HEADER_NAME] = provided;
+        sentTraceHeader = provided;
+      }
+    }
 
     const token = (opts.accessToken ?? '').trim();
     if (token) {
@@ -131,6 +177,10 @@ async function requestOnce<T>(base: string, path: string, opts: ApiOpts): Promis
       err.status = resp.status;
       err.apiErrorCode = typeof json?.error?.code === 'string' ? json.error.code : null;
       err.kind = classifyError({ status: resp.status });
+      // Lookup keys for the backend log line: the envelope traceId (API Gateway request
+      // id) and the x-dc-trace-id header this request carried.
+      err.requestId = typeof json?.traceId === 'string' ? json.traceId : null;
+      err.dcTraceId = sentTraceHeader;
       throw err;
     }
 

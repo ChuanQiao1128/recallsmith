@@ -214,3 +214,41 @@ export function buildOtaTags(
     'ota.is_embedded': typeof embedded === 'boolean' ? String(embedded) : 'unknown',
   };
 }
+
+// --- x-dc-trace-id (R19M M03, M00 §4.2) ---
+// The header links a mobile event to the core-vpc log line of the request that
+// caused it (logged there as upstreamTraceId). The pattern must agree with
+// TraceContext.cs:28 and apiClient.ts's local copy.
+
+export const DC_TRACE_HEADER = 'x-dc-trace-id';
+export const DC_TRACE_HEADER_PATTERN = /^1-[0-9a-f]{8}-[0-9a-f]{24}$/;
+
+const SENTRY_TRACE_ID = /^[0-9a-f]{32}$/;
+const ZERO_TRACE_ID = '0'.repeat(32);
+
+/** 32 lower-case hex (not all zeros) → `1-<8 hex>-<24 hex>`; anything else → null. Never throws. */
+export function toDcTraceHeader(sentryTraceId: unknown): string | null {
+  if (typeof sentryTraceId !== 'string') return null;
+  if (!SENTRY_TRACE_ID.test(sentryTraceId) || sentryTraceId === ZERO_TRACE_ID) return null;
+  return `1-${sentryTraceId.slice(0, 8)}-${sentryTraceId.slice(8)}`;
+}
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value !== '';
+}
+
+/** Event tags from an apiClient error (status, error code, envelope request id, header sent). Never throws. */
+export function apiErrorTags(err: unknown): Record<string, string> {
+  const tags: Record<string, string> = {};
+  if (typeof err !== 'object' || err === null) return tags;
+  try {
+    const e = err as { status?: unknown; apiErrorCode?: unknown; requestId?: unknown; dcTraceId?: unknown };
+    if (typeof e.status === 'number' && Number.isFinite(e.status)) tags['api.status'] = String(e.status);
+    if (nonEmptyString(e.apiErrorCode)) tags['api.error_code'] = e.apiErrorCode;
+    if (nonEmptyString(e.requestId)) tags['api.request_id'] = e.requestId;
+    if (nonEmptyString(e.dcTraceId)) tags['api.dc_trace_id'] = e.dcTraceId;
+  } catch {
+    // a throwing getter yields the tags read so far
+  }
+  return tags;
+}
