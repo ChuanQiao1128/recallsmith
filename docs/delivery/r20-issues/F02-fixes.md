@@ -248,5 +248,7 @@ because the matching pgvector version is not known.
 
 ## Test run
 
-See the report at the end of the worker run; the full integration suite and `F02.verify.sh` were run on the final
-commit.
+- `dotnet test RecallSmith.Lambda.sln` (src_C, pinned pgvector digest): 2841 passed, 0 failed, 0 skipped.
+- `F02.verify.sh` (BASE=delivery/r20x-s): `F02 VERIFY OK`.
+- Every new test was run against the base server code first and failed there (or, where it uses a new seam, does not
+  compile against it); `s-tests-2`'s extended test passes on the base by design, since the code was already correct.
