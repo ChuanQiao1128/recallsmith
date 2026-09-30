@@ -281,6 +281,16 @@ def test_confidence_thresholds() -> None:
     assert backfill.MEDIUM_SCORE < backfill.HIGH_SCORE
 
 
+def test_confidence_thresholds_are_the_documented_values() -> None:
+    """F01 (e-tests-4): the README, the V03 notes and the committed report headers promise
+    "high >= 0.5, medium >= 0.3"; pin the literals, not the constants against themselves."""
+    assert (backfill.HIGH_SCORE, backfill.MEDIUM_SCORE) == (0.5, 0.3)
+    assert confidence_for(0.5) == "high"
+    assert confidence_for(0.4999) == "medium"
+    assert confidence_for(0.3) == "medium"
+    assert confidence_for(0.2999) == "low"
+
+
 def test_window_score_rewards_density_and_matched_terms() -> None:
     assert backfill.window_score(matched=6, quote_terms=6) == pytest.approx(1.0)
     assert backfill.window_score(matched=3, quote_terms=6) == pytest.approx(0.5 * 3 / backfill.FULL_MATCH_TERMS)
