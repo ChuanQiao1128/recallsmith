@@ -5,10 +5,10 @@ has a dry-run mode and prints the evidence the runbook asks for (build id, submi
 
 | script | does | auth it uses |
 |---|---|---|
-| `ios-build.sh [profile]` | `eas build --platform ios --non-interactive --json --wait`; prints build id + artifact URL. For `production` it exits 5 (also under `DRY_RUN=1`) while `eas.json` `build.production.ios.env.SENTRY_ORG`/`SENTRY_PROJECT` is empty or still a `REPLACE_ME_*` placeholder | EAS login (`eas whoami`) + EAS-managed signing |
+| `ios-build.sh [profile]` | `eas build --platform ios --non-interactive --json --wait`; prints build id + artifact URL. For `production` it exits 5 (also under `DRY_RUN=1`) while `eas.json` `build.production.ios.env.SENTRY_ORG`/`SENTRY_PROJECT` is empty or still a `REPLACE_ME_*` placeholder, and exits 3 (names only, also under `DRY_RUN=1`) when `eas env:list --environment production` lacks `EXPO_PUBLIC_SENTRY_DSN` or `SENTRY_AUTH_TOKEN` | EAS login (`eas whoami`) + EAS-managed signing |
 | `ios-submit.sh [profile]` | `eas submit --platform ios --latest --non-interactive --wait`; uploads the newest finished build to App Store Connect | the App Store Connect API key stored on EAS (`[Expo] EAS Submit`) |
-| `asc-release.cjs` | with the local Apple session (`~/.app-store/auth`, refreshed by `eas credentials`): wait for processing, ensure the App Store version, set What's New, attach the build, set the release type (default `MANUAL` since 1.9.0; pass `--release-type AFTER_APPROVAL` to release on approval), and with `--submit` create + submit the review submission. Exits 4 with `BLOCKED <version> is <state>: <reason>` (plan mode included, before any mutation) when the editable version is held by App Review | `@expo/apple-utils` from the global `eas-cli` install |
-| `ascGuard.cjs` | pure check `asc-release.cjs` runs on the editable version: `WAITING_FOR_REVIEW`, `IN_REVIEW` or `PENDING_DEVELOPER_RELEASE` in `appVersionState` or `appStoreState` refuses a rename or re-attach (exit 4) | — |
+| `asc-release.cjs` | with the local Apple session (`~/.app-store/auth`, refreshed by `eas credentials`): wait for processing, ensure the App Store version, set What's New, attach the build, set the release type (default `MANUAL` since 1.9.0; pass `--release-type AFTER_APPROVAL` to release on approval), and with `--submit` create + submit the review submission. Exits 4 with `BLOCKED <version> is <state>: <reason>` (plan mode included, before any mutation) when the editable, in-review or pending-release version is held by App Review | `@expo/apple-utils` from the global `eas-cli` install |
+| `ascGuard.cjs` | pure checks `asc-release.cjs` runs on the editable, in-review and pending-release versions (`firstHeldVersion`; the edit read alone never returns `IN_REVIEW` or `PENDING_*_RELEASE`): `WAITING_FOR_REVIEW`, `IN_REVIEW` or `PENDING_DEVELOPER_RELEASE` in `appVersionState` or `appStoreState` refuses a rename or re-attach (exit 4) | — |
 | `whats-new-1.6.0.txt` | the en-US What's New text `asc-release.cjs` pushes | — |
 | `description-<v>.txt`, `review-notes-<v>.txt` | the en-US description (`--description`) and the App Review Information notes (`--review-notes`) | — |
 | `ota.sh "<message>"` | `eas update --channel production --environment production`; first verifies every required `EXPO_PUBLIC_*` name exists in the EAS production environment (names only, never values), then publishes. `DRY_RUN=1` checks the names and prints the command without publishing | EAS login (`eas whoami`) |
@@ -27,9 +27,9 @@ and `tests/unit/storeSubscriptionMetadata.test.ts` checks both for every `descri
 Always publish OTAs through `ota.sh`; a bare `eas update` without `--environment production` ships empty `EXPO_PUBLIC_*` values.
 
 Exit codes: `ota.sh` 0 ok · 2 usage / eas-cli missing or not logged in · 3 missing `EXPO_PUBLIC_*` name(s) · 6 runtime guard;
-`ios-build.sh` 5 Sentry org/project placeholders; `asc-release.cjs` 0 ok · 1 error · 3 Apple session expired · 4 version held by App Review.
+`ios-build.sh` 0 ok · 1 build failed · 2 eas-cli missing or not logged in · 3 production is missing `EXPO_PUBLIC_SENTRY_DSN` / `SENTRY_AUTH_TOKEN` in the EAS production environment (names only, DRY_RUN included) · 5 Sentry org/project placeholders; `asc-release.cjs` 0 ok · 1 error · 3 Apple session expired · 4 version held by App Review.
 
-Typical run for 1.9.0 (23) (from `mobile/`, after the `REPLACE_ME_SENTRY_*` placeholders in `eas.json` are filled):
+Typical run for 1.9.0 (23) (from `mobile/`; the Sentry org/project slugs in `eas.json` were filled in 9c3dd9d, and `EXPO_PUBLIC_SENTRY_DSN` + `SENTRY_AUTH_TOKEN` must exist in the EAS production environment):
 
 ```bash
 DRY_RUN=1 scripts/release/ios-build.sh production

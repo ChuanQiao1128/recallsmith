@@ -1,9 +1,11 @@
 import { spawnSync } from 'node:child_process';
 
-// Linux can refuse to exec a just-written script with ETXTBSY while a process forked by another test
-// worker still holds the write descriptor (between its fork and exec). ota.sh hides the fake eas's
-// stderr, so that race used to surface as a bogus "missing names" exit 3 on CI. Probe each fake once,
-// retrying only on ETXTBSY, before the real run; the probe argument makes the fakes exit silently.
+// Probe each fake once, retrying only on ETXTBSY, before the real run; the probe argument makes the fakes
+// exit silently. This is a cheap guard, not the explanation of the CI exit-3 flake (run 36673253161):
+// ota.sh execs the same fake for `eas whoami` before `eas env:list` and exits 2 if that fails, and nothing
+// reopens a fake for writing afterwards, so ETXTBSY cannot empty env:list (R19M-REL-7). The cause is still
+// unknown; the ota.sh/ios-build.sh tests therefore print stdout, stderr and every fake's argv and stderr
+// logs when a status is unexpected, so the next occurrence carries its own diagnosis.
 export const PROBE = '__exec_probe__';
 export function waitUntilExecutable(file: string) {
   for (let i = 0; i < 50; i++) {

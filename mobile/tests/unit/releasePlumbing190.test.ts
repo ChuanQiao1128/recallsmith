@@ -18,6 +18,19 @@ type Profile = { image?: string; ios?: { image?: string; env?: Record<string, st
 const eas = readJson('eas.json') as { build: Record<string, Profile> };
 const iosEnv = (p: string) => eas.build[p]?.ios?.env ?? {};
 
+// Profiles whose ios.image breaks the rule: production is `latest` or a non-empty pinned image name
+// (trimmed), every other profile is `latest`.
+function imagePolicyViolations(build: Record<string, Profile>): string[] {
+  return Object.entries(build)
+    .filter(([name, p]) => {
+      const image = p.ios?.image;
+      if (typeof image !== 'string') return false;
+      if (name === 'production') return image.trim() !== image || image.length === 0;
+      return image !== 'latest';
+    })
+    .map(([name]) => name);
+}
+
 describe('eas.json Sentry env (1.9.0)', () => {
   // Supervisor 2026-09-30 (M00 §9.2 #2): the Sentry org/project were created, so production carries the real,
   // non-secret slugs; the placeholder guard itself stays covered by the ios-build.sh cases below.
@@ -61,12 +74,26 @@ describe('eas.json Sentry env (1.9.0)', () => {
     expect(JSON.stringify(eas)).not.toMatch(/DSN|AUTH_TOKEN/);
   });
 
-  it('keeps every EAS image at latest', () => {
+  // R19M-REL-4: M00 §9.2 #4 has the supervisor pin build.production.ios.image to build 22's image right
+  // before the 1.9.0 build, so production may be `latest` or a non-empty pinned name; the rest stay `latest`.
+  it('keeps every non-production EAS image at latest; production is latest or a pinned image name', () => {
     const images = Object.values(eas.build)
       .map((p) => p.ios?.image)
       .filter((i): i is string => typeof i === 'string');
     expect(images.length).toBe(5);
-    for (const i of images) expect(i).toBe('latest');
+    expect(imagePolicyViolations(eas.build)).toEqual([]);
+  });
+
+  it('accepts a pinned production image and refuses a pinned non-production or empty production image', () => {
+    const pinned = structuredClone(eas.build);
+    pinned.production = { ...pinned.production, ios: { ...pinned.production?.ios, image: 'macos-sequoia-15.6-xcode-26.0' } };
+    expect(imagePolicyViolations(pinned)).toEqual([]);
+    const staging = structuredClone(eas.build);
+    staging.staging = { ...staging.staging, ios: { ...staging.staging?.ios, image: 'macos-sequoia-15.6-xcode-26.0' } };
+    expect(imagePolicyViolations(staging)).toEqual(['staging']);
+    const empty = structuredClone(eas.build);
+    empty.production = { ...empty.production, ios: { ...empty.production?.ios, image: ' ' } };
+    expect(imagePolicyViolations(empty)).toEqual(['production']);
   });
 });
 
@@ -100,7 +127,13 @@ describe('CI mobile job', () => {
   });
 });
 
-function runIosBuild(opts: { org: string; project: string; profile?: string }) {
+// The fake eas prints NAME=value lines whose value carries this marker; ios-build.sh must never
+// surface it, because eas env:list reveals real secret values.
+const MARKER = 'secret-value-do-not-print';
+const SENTRY_NAMES = ['EXPO_PUBLIC_SENTRY_DSN', 'SENTRY_AUTH_TOKEN'];
+const OTHER_NAMES = ['EXPO_PUBLIC_API_BASE', 'EXPO_PUBLIC_RC_IOS_API_KEY'];
+
+function runIosBuild(opts: { org: string; project: string; profile?: string; names?: string[]; bold?: boolean }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ios-build-tree-'));
   const mobile = path.join(root, 'mobile');
   const release = path.join(mobile, 'scripts', 'release');
@@ -114,42 +147,130 @@ function runIosBuild(opts: { org: string; project: string; profile?: string }) {
   const bin = path.join(root, 'bin');
   fs.mkdirSync(bin);
   const easLog = path.join(root, 'eas.log');
-  fs.writeFileSync(path.join(bin, 'eas'), ['#!/usr/bin/env bash', `[ "$1" = ${PROBE} ] && exit 0`, `echo "$@" >> "${easLog}"`, 'exit 0', ''].join('\n'));
+  const easErr = path.join(root, 'eas.stderr.log');
+  // The fake keeps its own stderr in eas.stderr.log (ios-build.sh may discard it) so a failure shows why.
+  fs.writeFileSync(
+    path.join(bin, 'eas'),
+    [
+      '#!/usr/bin/env bash',
+      `[ "$1" = ${PROBE} ] && exit 0`,
+      `exec 2>> "${easErr}"`,
+      `echo "$@" >> "${easLog}"`,
+      'case "$1" in',
+      '  env:list)',
+      '    for n in $FAKE_EAS_NAMES; do',
+      // eas-cli prints chalk.bold(name)=value; with colour forced the name carries ANSI codes.
+      `      if [ -n "\${FAKE_EAS_BOLD:-}" ]; then printf '\\033[1m%s\\033[22m=%s\\n' "$n" "${MARKER}"; else echo "$n=${MARKER}"; fi`,
+      '    done ;;',
+      'esac',
+      'exit 0',
+      '',
+    ].join('\n'),
+  );
   fs.chmodSync(path.join(bin, 'eas'), 0o755);
   waitUntilExecutable(path.join(bin, 'eas'));
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const k of Object.keys(env)) if (k.startsWith('SENTRY_') || k === 'EXPO_PUBLIC_SENTRY_DSN') delete env[k];
   env.PATH = `${bin}:${process.env.PATH ?? ''}`;
   env.DRY_RUN = '1';
+  env.FAKE_EAS_NAMES = (opts.names ?? [...OTHER_NAMES, ...SENTRY_NAMES]).join(' ');
+  if (opts.bold) env.FAKE_EAS_BOLD = '1';
   const args = [path.join(release, 'ios-build.sh')];
   if (opts.profile) args.push(opts.profile);
   const res = spawnSync('bash', args, { env, encoding: 'utf8' });
-  const log = fs.existsSync(easLog) ? fs.readFileSync(easLog, 'utf8') : '';
-  return { res, log };
+  const read = (f: string) => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '');
+  const log = read(easLog);
+  // Printed by a failing status assertion: the script's output plus the fake's argv and stderr logs.
+  const diag = [
+    `status=${String(res.status)} signal=${String(res.signal)} error=${String(res.error ?? '')}`,
+    `stdout:\n${res.stdout}`,
+    `stderr:\n${res.stderr}`,
+    `eas argv log:\n${log}`,
+    `eas stderr log:\n${read(easErr)}`,
+  ].join('\n');
+  return { res, log, diag };
 }
 
 describe('ios-build.sh Sentry placeholder guard', () => {
   it('exits 5 with the fill message while production org/project are placeholders (DRY_RUN=1)', () => {
-    const { res, log } = runIosBuild({ org: 'REPLACE_ME_SENTRY_ORG', project: 'REPLACE_ME_SENTRY_PROJECT' });
-    expect(res.status).toBe(5);
+    const { res, log, diag } = runIosBuild({ org: 'REPLACE_ME_SENTRY_ORG', project: 'REPLACE_ME_SENTRY_PROJECT' });
+    expect(res.status, diag).toBe(5);
     expect(res.stderr).toContain('ios-build: fill SENTRY_ORG/SENTRY_PROJECT in eas.json (production) before a store build');
     expect(log).toBe('');
   });
 
   it('exits 5 when only one of org/project is filled or one is empty', () => {
-    expect(runIosBuild({ org: 'example-org', project: 'REPLACE_ME_SENTRY_PROJECT' }).res.status).toBe(5);
-    expect(runIosBuild({ org: '', project: 'example-project' }).res.status).toBe(5);
+    const a = runIosBuild({ org: 'example-org', project: 'REPLACE_ME_SENTRY_PROJECT' });
+    expect(a.res.status, a.diag).toBe(5);
+    const b = runIosBuild({ org: '', project: 'example-project' });
+    expect(b.res.status, b.diag).toBe(5);
   });
 
   it('passes the guard with example-org/example-project and prints the DRY command', () => {
-    const { res } = runIosBuild({ org: 'example-org', project: 'example-project' });
-    expect(res.status).toBe(0);
+    const { res, diag } = runIosBuild({ org: 'example-org', project: 'example-project' });
+    expect(res.status, diag).toBe(0);
     expect(res.stdout).toContain('DRY: eas build --platform ios --profile production');
   });
 
   it('does not apply the guard to a non-production profile', () => {
-    const { res } = runIosBuild({ org: 'REPLACE_ME_SENTRY_ORG', project: 'REPLACE_ME_SENTRY_PROJECT', profile: 'staging' });
-    expect(res.status).toBe(0);
+    const { res, diag } = runIosBuild({ org: 'REPLACE_ME_SENTRY_ORG', project: 'REPLACE_ME_SENTRY_PROJECT', profile: 'staging' });
+    expect(res.status, diag).toBe(0);
     expect(res.stdout).toContain('DRY: eas build --platform ios --profile staging');
+  });
+});
+
+// R19M-REL-3: a production build (DRY_RUN included) needs the EXPO_PUBLIC_SENTRY_DSN and SENTRY_AUTH_TOKEN
+// names in the EAS production environment; otherwise Sentry never initialises and SENTRY_ALLOW_FAILURE
+// turns the tokenless dSYM/source-map upload into a warning. The check reads names only.
+describe('ios-build.sh EAS production env names', () => {
+  it.each(SENTRY_NAMES)('exits 3 naming %s when it is missing from the production environment (DRY_RUN=1)', (name) => {
+    const names = [...OTHER_NAMES, ...SENTRY_NAMES.filter((n) => n !== name)];
+    const { res, log, diag } = runIosBuild({ org: 'example-org', project: 'example-project', names });
+    expect(res.status, diag).toBe(3);
+    expect(res.stderr).toContain(`ios-build: missing name(s) in the EAS production environment: ${name}`);
+    expect(log).toContain('env:list --environment production --format short');
+    expect(log).not.toContain('build');
+    expect(res.stdout).not.toContain('DRY: eas build');
+    expect(`${res.stdout}${res.stderr}`).not.toContain(MARKER);
+  });
+
+  it('lists both names when neither is set', () => {
+    const { res, diag } = runIosBuild({ org: 'example-org', project: 'example-project', names: OTHER_NAMES });
+    expect(res.status, diag).toBe(3);
+    expect(res.stderr).toContain('ios-build: missing name(s) in the EAS production environment: EXPO_PUBLIC_SENTRY_DSN SENTRY_AUTH_TOKEN');
+    expect(`${res.stdout}${res.stderr}`).not.toContain(MARKER);
+  });
+
+  it('a name that only appears inside a value does not count', () => {
+    const { res, diag } = runIosBuild({
+      org: 'example-org',
+      project: 'example-project',
+      names: [...OTHER_NAMES, 'EXPO_PUBLIC_SENTRY_DSN', 'OTHER_NOTE=SENTRY_AUTH_TOKEN'],
+    });
+    expect(res.status, diag).toBe(3);
+    expect(res.stderr).toContain('SENTRY_AUTH_TOKEN');
+  });
+
+  it('passes with both names present and never prints values', () => {
+    const { res, log, diag } = runIosBuild({ org: 'example-org', project: 'example-project' });
+    expect(res.status, diag).toBe(0);
+    expect(log).toContain('env:list --environment production --format short');
+    expect(res.stdout).toContain('DRY: eas build --platform ios --profile production');
+    expect(`${res.stdout}${res.stderr}`).not.toContain(MARKER);
+  });
+
+  it('reads names printed in bold (ANSI codes) and still never prints values', () => {
+    const ok = runIosBuild({ org: 'example-org', project: 'example-project', bold: true });
+    expect(ok.res.status, ok.diag).toBe(0);
+    const missing = runIosBuild({ org: 'example-org', project: 'example-project', names: [...OTHER_NAMES, 'SENTRY_AUTH_TOKEN'], bold: true });
+    expect(missing.res.status, missing.diag).toBe(3);
+    expect(missing.res.stderr).toContain('missing name(s) in the EAS production environment: EXPO_PUBLIC_SENTRY_DSN');
+    expect(`${missing.res.stdout}${missing.res.stderr}`).not.toContain(MARKER);
+  });
+
+  it('a non-production profile does not read the production environment', () => {
+    const { res, log, diag } = runIosBuild({ org: 'example-org', project: 'example-project', profile: 'staging', names: [] });
+    expect(res.status, diag).toBe(0);
+    expect(log).not.toContain('env:list');
   });
 });
