@@ -43,7 +43,12 @@ export type MistakeEntry = {
 };
 
 /** Entries are keyed `${deckSlug}::${stableUid}`. */
-export type MistakeBookState = { v: 1; entries: Record<string, MistakeEntry> };
+export type MistakeBookState = {
+  v: 1;
+  entries: Record<string, MistakeEntry>;
+  /** FNV-1a 32-bit of the last adopted raw anon JSON, 8 lowercase hex; replays of that adoption skip the merge. */
+  adoptedAnon?: string;
+};
 
 const LAST_OUTCOMES: ReadonlySet<string> = new Set(['again', 'mcq-wrong', 'mcq-partial']);
 
@@ -119,7 +124,7 @@ export function applyOutcome(s: MistakeBookState, o: MistakeOutcome): MistakeBoo
       resolvedAt: null,
     };
     const entries: Record<string, MistakeEntry> = { ...s.entries, [key]: next };
-    return { v: 1, entries: prev ? entries : capEntries(entries) };
+    return { ...s, entries: prev ? entries : capEntries(entries) };
   }
 
   if (!prev || prev.resolvedAt !== null) return s;
@@ -135,21 +140,60 @@ export function applyOutcome(s: MistakeBookState, o: MistakeOutcome): MistakeBoo
     resolvedAt: correctStreak >= RESOLVE_STREAK ? o.at : null,
     lastCorrectAt: o.at,
   };
-  return { v: 1, entries: { ...s.entries, [key]: next } };
+  return { ...s, entries: { ...s.entries, [key]: next } };
+}
+
+// Correctness (correctStreak, resolvedAt, lastCorrectAt) travels as one unit from one side, so a
+// merged entry never mixes a streak from one book with a resolution from the other.
+function withResolutionFrom(base: Omit<MistakeEntry, 'correctStreak' | 'resolvedAt' | 'lastCorrectAt'>, src: MistakeEntry): MistakeEntry {
+  const merged: MistakeEntry = { ...base, correctStreak: src.correctStreak, resolvedAt: src.resolvedAt };
+  if (src.lastCorrectAt !== undefined) merged.lastCorrectAt = src.lastCorrectAt;
+  return merged;
+}
+
+function mergeEntry(u: MistakeEntry, a: MistakeEntry): MistakeEntry {
+  const w = a.lastWrongAt > u.lastWrongAt ? a : u;
+  let source: MistakeEntry;
+  if (u.resolvedAt !== null && a.resolvedAt !== null) {
+    source = a.resolvedAt > u.resolvedAt ? a : u;
+  } else if (u.resolvedAt !== null) {
+    source = a.lastWrongAt < u.resolvedAt ? u : a;
+  } else if (a.resolvedAt !== null) {
+    source = u.lastWrongAt < a.resolvedAt ? a : u;
+  } else {
+    source = w;
+  }
+  return withResolutionFrom(
+    {
+      deckSlug: w.deckSlug,
+      stableUid: w.stableUid,
+      topic: w.topic,
+      wrongCount: u.wrongCount + a.wrongCount,
+      firstWrongAt: Math.min(u.firstWrongAt, a.firstWrongAt),
+      lastWrongAt: Math.max(u.lastWrongAt, a.lastWrongAt),
+      lastOutcome: w.lastOutcome,
+    },
+    source,
+  );
 }
 
 /**
- * Pure merge of the signed-out book into the account's book. Where both hold a card, the entry
- * with the newer lastWrongAt wins (the account's on a tie), then the LRU cap applies. Never
- * mutates its inputs.
+ * Pure merge of the signed-out book into the account's book, per key. A card in one book only
+ * keeps its entry. A card in both sums wrongCount, keeps the earliest firstWrongAt and the latest
+ * lastWrongAt, and takes deckSlug, topic and lastOutcome from the side with the newer lastWrongAt
+ * (the account's on a tie). Resolution comes as one unit from one side: both resolved ⇒ the later
+ * resolvedAt (the account's on a tie); one resolved ⇒ that side only when the other's last mistake
+ * came before its resolvedAt, otherwise the unresolved side (the card stays open); neither ⇒ the
+ * side with the newer lastWrongAt. The LRU cap applies last. Keeps the account book's other fields
+ * (adoptedAnon) and never mutates its inputs.
  */
 export function mergeMistakeBooks(user: MistakeBookState, anon: MistakeBookState): MistakeBookState {
   const entries: Record<string, MistakeEntry> = { ...user.entries };
   for (const [key, entry] of Object.entries(anon.entries)) {
     const mine = getEntry(user, key);
-    if (!mine || entry.lastWrongAt > mine.lastWrongAt) entries[key] = entry;
+    entries[key] = mine ? mergeEntry(mine, entry) : entry;
   }
-  return { v: 1, entries: capEntries(entries) };
+  return { ...user, entries: capEntries(entries) };
 }
 
 /** Unresolved entries inside the window, newest lastWrongAt first (ties by key ascending). */
@@ -234,7 +278,9 @@ function parseBook(raw: string | null): MistakeBookState {
       const entry = parseEntry(key, value);
       if (entry) entries[key] = entry;
     }
-    return { v: 1, entries };
+    return typeof obj.adoptedAnon === 'string' && /^[0-9a-f]{8}$/.test(obj.adoptedAnon)
+      ? { v: 1, entries, adoptedAnon: obj.adoptedAnon }
+      : { v: 1, entries };
   } catch {
     return emptyBook();
   }
@@ -282,6 +328,17 @@ export async function recordMistakeOutcome(o: MistakeOutcome): Promise<void> {
   await withMistakeBookLock(() => recordNow(o)).catch(() => undefined);
 }
 
+// FNV-1a 32-bit over the string's UTF-16 code units (equal to the byte-wise hash for ASCII), as
+// 8 lowercase hex characters. Fingerprints the raw anon JSON an adoption merged.
+function fnv1a32(raw: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < raw.length; i++) {
+    hash ^= raw.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
 export type AnonMistakeBookAdoption = { mistakesAdopted: number };
 
 async function adoptNow(): Promise<AnonMistakeBookAdoption> {
@@ -297,9 +354,16 @@ async function adoptNow(): Promise<AnonMistakeBookAdoption> {
     // A read error throws out of here on purpose, before the anon key goes: merging into a book
     // rebuilt from an empty read would wipe the account's entries.
     const user = parseBook(await AsyncStorage.getItem(userKey));
+    const fingerprint = fnv1a32(anonRaw);
+    // Copy, then clear. The merge sums counts, so running it twice on the same anon book would
+    // double them: the written book carries the anon JSON's fingerprint, and a replay after a kill
+    // between the two writes finds it, skips the merge and only clears the anon key.
+    if (user.adoptedAnon === fingerprint) {
+      await AsyncStorage.removeItem(anonKey);
+      return result;
+    }
     const adopted = Object.keys(anon.entries).length;
-    // Copy, then clear: a kill between the two writes replays the merge next time, which is idempotent.
-    if (adopted > 0) await AsyncStorage.setItem(userKey, JSON.stringify(mergeMistakeBooks(user, anon)));
+    await AsyncStorage.setItem(userKey, JSON.stringify({ ...mergeMistakeBooks(user, anon), adoptedAnon: fingerprint }));
     await AsyncStorage.removeItem(anonKey);
     result.mistakesAdopted = adopted;
   } catch {
@@ -311,7 +375,7 @@ async function adoptNow(): Promise<AnonMistakeBookAdoption> {
 /**
  * Adopts the book kept while signed out into the account that just signed in, then removes the
  * anon key, so it neither vanishes at sign-in nor comes back after a later sign-out. Runs on the
- * same chain as recordMistakeOutcome. Idempotent, and never throws.
+ * same chain as recordMistakeOutcome. Replay-safe (see adoptNow), and never throws.
  */
 export function adoptAnonMistakeBook(): Promise<AnonMistakeBookAdoption> {
   return withMistakeBookLock(adoptNow);
