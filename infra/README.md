@@ -57,6 +57,23 @@ cd infra/envs/prod && terraform init -backend=false -input=false && terraform va
 terraform fmt -check -recursive infra
 ```
 
+CI (`.github/workflows/ci.yml`, no AWS credentials, `permissions: contents: read`) runs the
+offline part of these gates on every push and PR:
+
+- job `infra`: terraform 1.16.3, `terraform fmt -check -recursive infra`,
+  `terraform -chdir=infra/envs/prod init -backend=false -input=false -lockfile=readonly` (the lock
+  is verified, never rewritten), `validate`, `python3 infra/scripts/check-agent-routes.py`,
+  `bash -n` on `src_C/deploy.sh`, `frontend/deploy.sh`, `services/lambda-release.sh` and
+  `src_C/scripts/merge-env.sh`, and `bash src_C/scripts/merge-env.test.sh`. Never plan or apply.
+- job `python`: `python3 -m unittest discover -s infra/scripts/tests` and
+  `python3 infra/scripts/check-gate-freshness.py --base origin/<base branch or main>`. When
+  `services/ai-qa/env/prod.env.json` or `services/ai-qa/src/ai_qa/prompts.py` changed against the
+  merge base AND the HEAD env has `AI_QA_ENABLED` truthy, it needs a committed
+  `evals/reports/**/*.jsonl` run whose header matches the shipping config (provider, model,
+  promptVersion, effort, structuredOutputsAtStart) and whose `dc-evals score <file> --gate` exits
+  0 (an offline re-score, no model call). Otherwise it prints why it passes (unchanged / AI QA
+  off). Exit 0 pass, 1 fail, 2 usage or unreadable input.
+
 Worker plan recipes (read-only, `AWS_PROFILE=dev`, never `apply`):
 
 (a) empty local state — E01–E05 (prod) and every staging-root plan. Write the gitignored
@@ -147,3 +164,4 @@ After merge, the supervisor (never a worker):
   | ai-qa-latency-p95-bedrock / -anthropic / -bedrock-converse / -openai-mantle | AiQaLatency ms (Service=ai-qa, Provider=bedrock / anthropic / bedrock-converse / openai-mantle) | p95 > 120 000 ms / 3600 s, 1 of 1, missing = notBreaching |
 
   Runbook: `ai-qa-latency-p95-<provider>` — per-card review time (primary + second reviewer when one is configured) for that provider was above two minutes at p95 for an hour. Check the provider's status and throttling first (Bedrock `ThrottlingException` in the ai-qa log, the `AiQaErrors` widget), then whether a prompt, effort or model change raised output tokens (tokens widget). Slow reviews waste Lambda time but are not wrong; if it persists and runs time out (600 s per chunk), use the ai-qa emergency stop in infra/RUNBOOK.md §7. The alarm only sees data when the model was called, so it stays OK while `AI_QA_ENABLED=0`. Tested offline by `modules/observability/tests/ai_qa_r20.tftest.hcl` (`terraform test`, mocked aws provider).
+- 2026-10-01 V13 — CI hardening, no AWS change: new CI job `infra` (terraform fmt/offline init+validate, agent-route census, `bash -n` on the deploy scripts, merge-env unit tests), workflow-wide `permissions: contents: read`, and `infra/scripts/check-gate-freshness.py` (+ `infra/scripts/tests/`) as a step in the `python` job (full-history checkout). See §3.
