@@ -284,4 +284,16 @@ test_ssm_to_env_unmapped_beside_automation_leaves
 test_drop_placeholder_secrets
 test_placeholder_leaf_never_deployed
 
+# (r) R19M: the console's Sentry DSN leaf lives under the same path but is never a Lambda env var.
+test_ssm_to_env_skips_console_sentry_dsn() {
+  local fixture out
+  fixture='{"Parameters":[
+    {"Name":"/developercards/prod/pg-password","Value":"PLACEHOLDER-1"},
+    {"Name":"/developercards/prod/console-sentry-dsn","Value":"https://publickey@example.invalid/1"}
+  ]}'
+  out="$(ssm_to_env "$fixture")" || fail "(r) console-sentry-dsn made ssm_to_env fail"
+  jq -e '. == {"PGPASSWORD":"PLACEHOLDER-1"}' <<<"$out" >/dev/null || fail "(r) console-sentry-dsn leaked into the env"
+}
+test_ssm_to_env_skips_console_sentry_dsn
+
 echo "merge-env tests OK"
