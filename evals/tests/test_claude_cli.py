@@ -145,3 +145,36 @@ def test_claude_cli_error_subtype_becomes_a_distinct_error_code() -> None:
     )
     record = _review_row(row, client, settings(), "2026-09-27")
     assert (record["status"], record["errorCode"]) == ("error", "CLI_ERROR_MAX_TURNS")
+
+
+SUBSCRIPTION_ONLY_SCRUB = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
+                           "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX")
+
+
+def test_claude_cli_child_env_drops_paid_api_credentials(monkeypatch) -> None:
+    """F01 (e-correctness-1, e-security-1, contract §10.7): every `claude -p` child runs without
+    the API key, auth token, base URL and Bedrock/Vertex switches, so the CLI can only use the
+    owner's subscription login and never bills API credits."""
+    for name in SUBSCRIPTION_ONLY_SCRUB:
+        monkeypatch.setenv(name, "set-in-the-owner-shell")
+    monkeypatch.setenv("DC_EVALS_KEEP_ME", "1")
+    runner = FakeRunner([cli_result('{"findings":[]}')])
+    ClaudeCliClient("claude-opus-5", runner=runner).messages.create(
+        system="s", messages=[{"role": "user", "content": "hi"}], output_config={"effort": "high"}, max_tokens=100
+    )
+    env = runner.calls[0]["env"]
+    assert not any(name in env for name in SUBSCRIPTION_ONLY_SCRUB)
+    assert env["DC_EVALS_KEEP_ME"] == "1" and env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "100"
+    assert all(name not in ClaudeCliClient.env(None) for name in SUBSCRIPTION_ONLY_SCRUB)
+
+
+def test_dc_evals_review_client_is_the_scrubbed_cli(monkeypatch) -> None:
+    from dc_evals.deck_review import make_review_client
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "set-in-the-owner-shell")
+    runner = FakeRunner([cli_result('{"findings":[]}')])
+    client = make_review_client("claude-opus-5")
+    assert isinstance(client, ClaudeCliClient)
+    client._runner = runner
+    client.messages.create(system="s", messages=[{"role": "user", "content": "hi"}], output_config={"effort": "high"})
+    assert "ANTHROPIC_API_KEY" not in runner.calls[0]["env"]

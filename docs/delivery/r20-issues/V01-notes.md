@@ -86,3 +86,12 @@ a one-line TOPIC edit (reverted); `--all` exits 2 at the 60-card cap; `--provide
 - No live CLI run was made in this issue (the worker has no business spending the owner's
   subscription); the first real run is the owner's.
 - The review items are not scored against labels; they are a self-check, not gate evidence.
+
+## Correction after review (F01, 2026-10-01)
+
+The "zero API spend" claim did not hold as first delivered: `ClaudeCliClient.env` passed the whole
+process environment to `claude -p`, so an exported `ANTHROPIC_API_KEY` would have made the CLI bill
+API credits. F01 (e-correctness-1, e-security-1) removes `ANTHROPIC_API_KEY`,
+`ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK` and
+`CLAUDE_CODE_USE_VERTEX` from every `claude -p` child (contract §10.7); the claim holds from F01 on.
+See `F01-fixes.md`.

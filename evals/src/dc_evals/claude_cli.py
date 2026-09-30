@@ -17,6 +17,8 @@ Fidelity notes, recorded in every report as provider "claude-cli":
   stop_reason; a result without one reads as "end_turn". The run file does not say which results
   carried one, so a proxy run cannot show that no card is truncated or refused: the MAX_TOKENS and
   REFUSAL rates are checked on the Bedrock gate run (PROXY_UNOBSERVABLE, echoed in the report).
+- The child environment drops PAID_API_ENV (ANTHROPIC_API_KEY and friends), so the CLI can only
+  use the owner's subscription login, never paid API credits.
 - A CLI error result raises ClaudeCliError with errorCode CLI_<SUBTYPE> (the runner records it)
   instead of one generic error.
 """
@@ -32,6 +34,15 @@ from types import SimpleNamespace
 from typing import Any, Callable
 
 EMPTY_MCP_CONFIG = '{"mcpServers":{}}'
+# Removed from every `claude -p` child (contract §10.7): with any of these set, the CLI bills the
+# API key or a cloud account instead of the owner's subscription login.
+PAID_API_ENV = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+)
 # The stop reasons ai_qa.review maps to an outcome; any other reads as "end_turn".
 MAPPED_STOP_REASONS = frozenset({"max_tokens", "refusal"})
 # What a claude-cli report cannot show (report.build_report puts it under proxyFidelity).
@@ -133,9 +144,9 @@ class ClaudeCliClient:
 
     @staticmethod
     def env(max_tokens: int | None) -> dict[str, str]:
-        """The subprocess environment: this process's, plus the request's max_tokens as the CLI's
-        output-token ceiling."""
-        env = dict(os.environ)
+        """The subprocess environment: this process's without PAID_API_ENV (subscription login
+        only), plus the request's max_tokens as the CLI's output-token ceiling."""
+        env = {name: value for name, value in os.environ.items() if name not in PAID_API_ENV}
         if max_tokens:
             env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(int(max_tokens))
         return env
