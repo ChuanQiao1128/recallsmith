@@ -53,6 +53,20 @@ describe('decideSentry', () => {
     expect(decideSentry({ ...ok, killed: true })).toEqual({ enabled: false, reason: 'kill-switch' });
   });
 
+  it.each([
+    ['surrounding quotes', `"${DSN}"`],
+    ['missing public key', 'https://example.invalid/1'],
+    ['missing project id', 'https://publickey@example.invalid/'],
+    ['http scheme', 'http://publickey@example.invalid/1'],
+    ['space inside', 'https://public key@example.invalid/1'],
+  ])('treats a malformed DSN (%s) as no-dsn (M02-R1)', (_label, dsn) => {
+    expect(decideSentry({ ...ok, dsn })).toEqual({ enabled: false, reason: 'no-dsn' });
+  });
+
+  it('accepts a valid DSN with whitespace around it after trim (M02-R1)', () => {
+    expect(decideSentry({ ...ok, dsn: `\n\t${DSN} \n` })).toEqual({ enabled: true, dsn: DSN, environment: 'production' });
+  });
+
   it('applies the gates in order: dev, channel, no-dsn, kill-switch', () => {
     const allBad = { isDev: true, channel: 'dev', dsn: '', killed: true };
     expect(decideSentry(allBad)).toEqual({ enabled: false, reason: 'dev' });
@@ -280,6 +294,22 @@ describe('buildOtaTags', () => {
       'ota.is_embedded': 'true',
     });
     expect(buildOtaTags({ updateId: '  ', channel: 'production', runtimeVersion: '1.9.0', isEmbeddedLaunch: true })['ota.update_id']).toBe('embedded');
+  });
+
+  it("reports 'embedded' when the launch is embedded even though expo-updates gives the embedded update's UUID (M02-R4)", () => {
+    expect(
+      buildOtaTags({
+        updateId: '0f6d2c9e-6b8a-4b3e-9a51-3c2d1e0f9a8b',
+        channel: 'production',
+        runtimeVersion: '1.9.0',
+        isEmbeddedLaunch: true,
+      }),
+    ).toEqual({
+      'ota.update_id': 'embedded',
+      'ota.channel': 'production',
+      'ota.runtime_version': '1.9.0',
+      'ota.is_embedded': 'true',
+    });
   });
 
   it('reports an OTA launch', () => {

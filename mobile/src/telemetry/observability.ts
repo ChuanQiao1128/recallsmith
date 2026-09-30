@@ -135,7 +135,8 @@ async function run(deps: ObservabilityDeps): Promise<ObservabilityStatus> {
     return status;
   }
 
-  // 3-4. JS init; a throw falls back to the interim handlers.
+  // 3-4. JS init; a throw, or a DSN the SDK could not parse, falls back to the interim handlers.
+  const otaTags = { ...buildOtaTags(updates ?? null), 'app.env': 'production' };
   try {
     const integration = Sentry.reactNavigationIntegration({ enableTimeToInitialDisplay: true });
     Sentry.init({
@@ -151,7 +152,7 @@ async function run(deps: ObservabilityDeps): Promise<ObservabilityStatus> {
       enableUserInteractionTracing: false,
       tracePropagationTargets: buildTracePropagationTargets(resolveApiBase(), resolveApiFallback()),
       integrations: [integration],
-      initialScope: { tags: { ...buildOtaTags(updates ?? null), 'app.env': 'production' } },
+      initialScope: { tags: otaTags },
       beforeSend(event, hint) {
         if (shouldDropEvent(hint)) return null;
         if (passedEvents >= SENTRY_MAX_EVENTS_PER_SESSION) return null;
@@ -169,6 +170,33 @@ async function run(deps: ObservabilityDeps): Promise<ObservabilityStatus> {
     installInterim();
     status = { active: false, reason: 'init-failed' };
     return status;
+  }
+
+  // An unparsable DSN leaves init silent with no transport (R19N M02-R1).
+  let dsnParsed = false;
+  try {
+    dsnParsed = Boolean(Sentry.getClient()?.getDsn());
+  } catch {
+    dsnParsed = false;
+  }
+  if (!dsnParsed) {
+    navigationIntegration = null;
+    try {
+      void Promise.resolve(Sentry.close()).catch(() => {});
+    } catch {
+      // never throw
+    }
+    installInterim();
+    status = { active: false, reason: 'init-failed' };
+    return status;
+  }
+
+  // initialScope stays on the JS current scope; setTags goes through the isolation
+  // scope, which the SDK syncs to native, so native crash events carry the tags too (R19N M02-R3).
+  try {
+    Sentry.setTags(otaTags);
+  } catch {
+    // never throw
   }
 
   // 5. Active; a same-launch remote flip to false closes the client once.

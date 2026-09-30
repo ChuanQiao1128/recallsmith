@@ -7,6 +7,8 @@ import { beforeEach, vi } from 'vitest';
 
 const sentryMock = vi.hoisted(() => {
   const makeIntegration = () => ({ name: 'ReactNavigation', registerNavigationContainer: vi.fn() });
+  // A client whose DSN parsed, as after a successful init with a well-formed DSN.
+  const makeClient = () => ({ getDsn: vi.fn(() => ({ protocol: 'https', publicKey: 'publickey', host: 'example.invalid', projectId: '1' })) });
   const mock = {
     init: vi.fn(),
     wrap: vi.fn((component: unknown) => component),
@@ -15,7 +17,10 @@ const sentryMock = vi.hoisted(() => {
     reactNavigationIntegration: vi.fn(makeIntegration),
     getActiveSpan: vi.fn(() => undefined),
     getCurrentScope: vi.fn(() => ({ setTag: vi.fn(), setContext: vi.fn() })),
+    getClient: vi.fn(makeClient),
+    setTags: vi.fn(),
     makeIntegration,
+    makeClient,
   };
   (globalThis as any).__sentryMock = mock;
   return mock;
@@ -29,6 +34,8 @@ vi.mock('@sentry/react-native', () => ({
   reactNavigationIntegration: sentryMock.reactNavigationIntegration,
   getActiveSpan: sentryMock.getActiveSpan,
   getCurrentScope: sentryMock.getCurrentScope,
+  getClient: sentryMock.getClient,
+  setTags: sentryMock.setTags,
 }));
 
 beforeEach(() => {
@@ -45,6 +52,9 @@ beforeEach(() => {
   sentryMock.getActiveSpan.mockImplementation(() => undefined);
   sentryMock.getCurrentScope.mockReset();
   sentryMock.getCurrentScope.mockImplementation(() => ({ setTag: vi.fn(), setContext: vi.fn() }));
+  sentryMock.getClient.mockReset();
+  sentryMock.getClient.mockImplementation(sentryMock.makeClient);
+  sentryMock.setTags.mockReset();
 });
 
 declare global {
@@ -56,6 +66,8 @@ declare global {
     reactNavigationIntegration: ReturnType<typeof vi.fn>;
     getActiveSpan: ReturnType<typeof vi.fn>;
     getCurrentScope: ReturnType<typeof vi.fn>;
+    getClient: ReturnType<typeof vi.fn>;
+    setTags: ReturnType<typeof vi.fn>;
   };
 }
 

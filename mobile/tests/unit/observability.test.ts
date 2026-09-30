@@ -86,6 +86,38 @@ describe('startObservability — active path', () => {
     expect(options.beforeBreadcrumb({ category: 'console', message: 'x' })).toBeNull();
   });
 
+  it('also sets the OTA tags through setTags after init so native crash events carry them (M02-R3)', async () => {
+    const { obs } = await load();
+    await obs.startObservability(
+      activeDeps({
+        updates: { channel: 'production', updateId: 'a1b2c3', runtimeVersion: '1.9.0', isEmbeddedLaunch: false },
+      }),
+    );
+    const tags = {
+      'ota.update_id': 'a1b2c3',
+      'ota.channel': 'production',
+      'ota.runtime_version': '1.9.0',
+      'ota.is_embedded': 'false',
+      'app.env': 'production',
+    };
+    expect(globalThis.__sentryMock.setTags).toHaveBeenCalledTimes(1);
+    expect(globalThis.__sentryMock.setTags).toHaveBeenCalledWith(tags);
+    expect(initOptions().initialScope).toEqual({ tags });
+    expect(globalThis.__sentryMock.init.mock.invocationCallOrder[0]).toBeLessThan(
+      globalThis.__sentryMock.setTags.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('stays active when setTags throws after a successful init (M02-R3)', async () => {
+    const { obs } = await load();
+    globalThis.__sentryMock.setTags.mockImplementation(() => {
+      throw new Error('native bridge');
+    });
+    const deps = activeDeps();
+    expect(await obs.startObservability(deps)).toEqual({ active: true, reason: 'active' });
+    expect(deps.installInterimHandlers).not.toHaveBeenCalled();
+  });
+
   it('beforeSend scrubs, drops offline/timeout, and caps the session at 25 passed events', async () => {
     const { obs } = await load();
     await obs.startObservability(activeDeps());
@@ -205,6 +237,9 @@ describe('startObservability — inactive reasons', () => {
     ['channel', activeDeps({ updates: null })],
     ['no-dsn', activeDeps({ env: { dsn: undefined, isDev: false } })],
     ['no-dsn', activeDeps({ env: { dsn: '  ', isDev: false } })],
+    ['no-dsn', activeDeps({ env: { dsn: `"${DSN}"`, isDev: false } })],
+    ['no-dsn', activeDeps({ env: { dsn: 'https://example.invalid/1', isDev: false } })],
+    ['no-dsn', activeDeps({ env: { dsn: 'https://publickey@example.invalid/', isDev: false } })],
   ])('%s: no init, interim installed exactly once', async (reason, deps) => {
     const { obs } = await load();
     (deps.installInterimHandlers as ReturnType<typeof vi.fn>).mockClear();
@@ -235,6 +270,27 @@ describe('startObservability — inactive reasons', () => {
     expect(status).toEqual({ active: false, reason: 'init-failed' });
     expect(globalThis.__sentryMock.init).toHaveBeenCalledTimes(1);
     expect(deps.installInterimHandlers).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['no client', () => undefined],
+    ['a client without a parsed DSN', () => ({ getDsn: () => undefined })],
+    ['a throwing getClient', () => {
+      throw new Error('sdk');
+    }],
+  ])("'init-failed': %s after init falls back to the interim handlers (M02-R1)", async (_label, getClient) => {
+    const { obs } = await load();
+    globalThis.__sentryMock.getClient.mockImplementation(getClient);
+    const deps = activeDeps();
+    const status = await obs.startObservability(deps);
+    expect(status).toEqual({ active: false, reason: 'init-failed' });
+    expect(obs.getObservabilityStatus()).toEqual({ active: false, reason: 'init-failed' });
+    expect(globalThis.__sentryMock.init).toHaveBeenCalledTimes(1);
+    expect(deps.installInterimHandlers).toHaveBeenCalledTimes(1);
+    expect(globalThis.__sentryMock.setTags).not.toHaveBeenCalled();
+    expect(globalThis.__sentryMock.close).toHaveBeenCalledTimes(1);
+    expect(obs.captureException(new Error('x'))).toBe(false);
+    expect(obs.sendTestEvent()).toEqual({ sent: false, eventId: null, reason: 'init-failed' });
   });
 
   it('inactive: captureException returns false and sendTestEvent reports the reason', async () => {
