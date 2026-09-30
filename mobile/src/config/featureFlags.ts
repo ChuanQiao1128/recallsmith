@@ -24,6 +24,9 @@ export type FeatureFlags = {
   // M02: remote kill switch read from the last-good cached config before init, so it takes
   // effect on the next cold start; a same-launch flip closes the client.
   sentry: { enabled: boolean };
+  // V11: default-off gate for the learner "Report a problem" entry points and My reports.
+  // Read as `?.enabled === true` because older test mocks omit the key.
+  cardReport: { enabled: boolean };
 };
 
 export const DEFAULT_FEATURE_FLAGS: FeatureFlags = Object.freeze({
@@ -40,6 +43,7 @@ export const DEFAULT_FEATURE_FLAGS: FeatureFlags = Object.freeze({
   mistakeBook: Object.freeze({ enabled: true, relatedCount: 3 }),
   cardSource: Object.freeze({ enabled: true }),
   sentry: Object.freeze({ enabled: true }),
+  cardReport: Object.freeze({ enabled: false }),
 });
 
 let snapshot = DEFAULT_FEATURE_FLAGS;
@@ -62,6 +66,7 @@ function snapshotsEqual(left: FeatureFlags, right: FeatureFlags): boolean {
     && left.mistakeBook.relatedCount === right.mistakeBook.relatedCount
     && left.cardSource.enabled === right.cardSource.enabled
     && left.sentry.enabled === right.sentry.enabled
+    && left.cardReport.enabled === right.cardReport.enabled
   );
 }
 
@@ -90,6 +95,8 @@ export function applyRemoteFeatures(config: RemoteConfig | null | undefined): Fe
   const cardSource = isRecord(remoteCardSource) ? remoteCardSource : undefined;
   const remoteSentry = features?.sentry;
   const sentry = isRecord(remoteSentry) ? remoteSentry : undefined;
+  const remoteCardReport = features?.cardReport;
+  const cardReport = isRecord(remoteCardReport) ? remoteCardReport : undefined;
 
   const maxPerRun = mcq?.maxPerRun;
   const relatedCount = mistakeBook?.relatedCount;
@@ -152,6 +159,12 @@ export function applyRemoteFeatures(config: RemoteConfig | null | undefined): Fe
         typeof sentry?.enabled === 'boolean'
           ? sentry.enabled
           : DEFAULT_FEATURE_FLAGS.sentry.enabled,
+    }),
+    cardReport: Object.freeze({
+      enabled:
+        typeof cardReport?.enabled === 'boolean'
+          ? cardReport.enabled
+          : DEFAULT_FEATURE_FLAGS.cardReport.enabled,
     }),
   });
 

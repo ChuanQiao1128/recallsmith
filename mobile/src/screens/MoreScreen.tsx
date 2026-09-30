@@ -28,7 +28,10 @@ export function MoreScreen({ navigation }: Props) {
   const [snapshot, setSnapshot] = useState<StreakSnapshot | null>(null);
   const [collected, setCollected] = useState<number | null>(null);
   // Read defensively: some suites mock the flags without the mistakeBook key.
-  const showMistakeBook = useFeatureFlags().mistakeBook?.enabled !== false;
+  const flags = useFeatureFlags();
+  const showMistakeBook = flags.mistakeBook?.enabled !== false;
+  // V11: default-off, so only an explicit true shows the row.
+  const showReports = flags.cardReport?.enabled === true;
 
   // Load stats once at mount and again on every focus. Once tab hops reuse the
   // mounted More (pop-navigation, MSHELL-01), a mount-only effect would leave
@@ -101,6 +104,17 @@ export function MoreScreen({ navigation }: Props) {
               >
                 <Text style={styles.rowTitle}>Mistake Book</Text>
                 <Text style={styles.rowSubtitle}>Cards you missed, plus related review</Text>
+              </Pressable>
+            ) : null}
+            {showReports ? (
+              <Pressable
+                accessibilityRole="button"
+                testID="more-row-reports"
+                style={styles.row}
+                onPress={() => navigation.navigate('MyReports')}
+              >
+                <Text style={styles.rowTitle}>My reports</Text>
+                <Text style={styles.rowSubtitle}>Problems you reported on cards</Text>
               </Pressable>
             ) : null}
             <Pressable

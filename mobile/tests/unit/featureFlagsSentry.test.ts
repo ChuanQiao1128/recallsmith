@@ -51,6 +51,7 @@ describe('sentry kill-switch flag', () => {
       mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook,
       cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
       sentry: { enabled: false },
+      cardReport: DEFAULT_FEATURE_FLAGS.cardReport,
     });
   });
 
