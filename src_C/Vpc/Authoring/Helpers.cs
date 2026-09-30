@@ -287,6 +287,20 @@ public static class Helpers
     return null;
   }
 
+  /// <summary>
+  /// The ids of the decks the caller may read: null for a super_admin (every deck), otherwise the caller's
+  /// <c>admin_deck_permissions</c> rows with <c>can_read = 1</c> (empty without a sub). For routes whose answer mixes
+  /// site-wide and deck-scoped data (R20X F02, contract R20-00 §10.4).
+  /// </summary>
+  public static async Task<HashSet<long>?> ReadableDeckIdsAsync(NpgsqlConnection conn, AuthContext auth)
+  {
+    if (auth.IsSuperAdmin) return null;
+    if (string.IsNullOrEmpty(auth.UserSub)) return [];
+    var rows = await DbUtil.QueryAsync(conn, null,
+      "select deck_id from admin_deck_permissions where admin_sub = $1 and can_read = 1", [auth.UserSub]);
+    return rows.Select(r => Convert.ToInt64(r["deck_id"], CultureInfo.InvariantCulture)).ToHashSet();
+  }
+
   public static async Task<APIGatewayProxyResponse?> RequireDeckWrite(
     NpgsqlConnection conn,
     string? adminSub,
