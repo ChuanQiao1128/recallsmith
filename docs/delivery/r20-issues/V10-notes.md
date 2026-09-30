@@ -58,13 +58,19 @@ No model call, no new dependency, no chart library, no env or secret change.
 - `fetchWatch()` additionally keeps, per event, `affectedCards` (from the event, or from
   `details.affectedCards` when only stored there; capped at 200) and `needsHumanReview` (same fallback),
   and `recentFeedItems: [{id, title, url, firstSeenAt, possiblyAffectedCards (≤ 5, with rank)}]`.
+  (Corrected in F03: `id` is the server's opaque string `"<targetId>:<itemKey>"`, not a number — the
+  first version dropped every real item; `url` is kept only when it is an http(s) URL, else `''`.)
 - `fetchAutomationBaselines()` additionally keeps `suggestedMeasuredMinutes` (positive number or null)
   and `suggestedFromN` when sent. `updateAutomationBaseline` is unchanged.
 - Everything returns `ApiResult` and never throws. `503 NOT_READY` and `503 VECTOR_NOT_READY` keep
   their code through `apiResultFromError`.
-- Every new optional key is absent (not null) when the server does not send it, so
-  `tests/automationContractDrift.test.ts` (which compares against the server's pinned keys on this
-  base) stays green, and it will require the console to keep the keys once wave s pins them.
+- Every new optional key is absent (not null) when the server does not send it.
+  (Corrected in F03: the original claim that `tests/automationContractDrift.test.ts` "stays green"
+  once wave s pins the keys was wrong. The drift test fills unpinned-shape keys with `'1'`, and the
+  normaliser keeps `affectedCards` only as an array and `needsHumanReview` only as a boolean, so it
+  went red as soon as `WatchEventKeys` gained them. The test now gives those keys typed values and
+  also compares `recentFeedItems[]`, `affectedCards[]` and `possiblyAffectedCards[]` against
+  `FeedItemKeys`, `AffectedKeys` and `PossiblyAffectedKeys` pinned in `ChangeImpactTests.cs`.)
 
 ## Page behaviour
 
@@ -82,10 +88,13 @@ No model call, no new dependency, no chart library, no env or secret change.
 - AI QA page: the panel loads both reads per deck (a late answer for a previous deck is dropped). A
   `VECTOR_NOT_READY` from either read, or `engine: 'none'`, shows the info callout with three owner
   steps (install the extension, re-run the migration, push embeddings); other failures are danger
-  callouts with the server message.
+  callouts with the server message. (F03: a 404 `NOT_FOUND`/`HTTP_404` from a server that predates
+  the routes shows a neutral "not on this server yet" callout; `DECK_NOT_FOUND` stays an error.)
 - Ledger: the suggestion line appears only when `suggestedMeasuredMinutes` is a number. "Use as
   measured" (super_admin only) opens the existing form with those minutes, source `measured` and the
-  current note, and announces it; nothing is sent until Save, which is the unchanged PUT.
+  current note, and announces it; nothing is sent until Save, which is the unchanged PUT. (F03: the
+  minutes are rounded to 2 decimals, matching the input's `step="0.01"`; unrounded values such as
+  2.7466… made the browser refuse to submit the form.)
 
 ## How it was tested
 

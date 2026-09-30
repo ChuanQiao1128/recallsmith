@@ -48,11 +48,15 @@ No model call, no new dependency, no env or secret change.
   the rows). Both are URL params (`?status=&deckId=`); invalid values fall back to open / all decks.
 - "Open in editor" → `/decks/cards/edit?deckId=&cardId=`; "Card deleted" when the card or deck id is null.
 - Resolve: an accessible inline form under the row (`<form aria-label>`, labelled Resolution select,
-  labelled Note textarea with `maxLength=500` and a described-by character count). Chosen over
+  labelled Note textarea with `maxLength=500` and a described-by character count). (F03: the help
+  text now says the note is "Shown to the learner who reported the card"; it first said "Not shown
+  to the learner", which contradicts contract §4 — the learner GET returns `resolutionNote`.) Chosen over
   `useConfirm` because the dialog has no select/textarea fields.
 - Optimistic update: the row reads resolved immediately; on failure it is restored and an alert says
   why. `ALREADY_RESOLVED` refreshes the list instead of restoring the row.
 - "Load more" pages with `nextCursor` and appends (deduplicated by report id).
+  (F03: the `ALREADY_RESOLVED` refresh, the deduplication and the Load more failure alert had no
+  tests at first; `tests/reportsPage.test.tsx` now covers all three.)
 - `NOT_READY` → neutral info callout "Card reports are not set up on the server yet (run the
   database migration)" (no `role=alert`, no table). Other failures → danger callout with the server message.
 - One persistent `aria-live` region announces resolve results.

@@ -436,7 +436,7 @@ export function ReportsPage() {
                                   onChange={e => setResolutionNote(e.target.value)}
                                 />
                                 <div id={noteHelpId} className="text-xs text-slate-500 mt-1">
-                                  {resolutionNote.length} / {CARD_REPORT_NOTE_MAX} characters. Not shown to the learner.
+                                  {resolutionNote.length} / {CARD_REPORT_NOTE_MAX} characters. Shown to the learner who reported the card.
                                 </div>
                               </div>
                               <div className="flex items-center gap-2 pt-5">

@@ -315,9 +315,13 @@ export type WatchPossiblyAffectedCard = {
   rank: number;
 };
 
-/** R20 V07: one recent release-notes/feed item. */
+/**
+ * R20 V07: one recent release-notes/feed item. `id` is opaque text
+ * ("<targetId>:<itemKey>", contract §10.5). `url` is '' unless the feed gave
+ * an http(s) link, because the feed is third-party text.
+ */
 export type WatchFeedItem = {
-  id: number;
+  id: string;
   title: string;
   url: string;
   firstSeenAt: string | null;
@@ -841,14 +845,25 @@ function normalizePossiblyAffectedCard(value: unknown): WatchPossiblyAffectedCar
   };
 }
 
+/** The link when it is an absolute http(s) URL, otherwise ''. */
+function webUrlOf(value: unknown): string {
+  const text = toText(value).trim();
+  try {
+    const protocol = new URL(text).protocol;
+    return protocol === 'http:' || protocol === 'https:' ? text : '';
+  } catch {
+    return '';
+  }
+}
+
 function normalizeFeedItem(value: unknown): WatchFeedItem | null {
   if (!isRecord(value)) return null;
-  const id = idOf(value.id);
-  if (id === null) return null;
+  const id = toText(value.id).trim();
+  if (id === '') return null;
   return {
     id,
     title: toText(value.title),
-    url: toText(value.url),
+    url: webUrlOf(value.url),
     firstSeenAt: toNullableText(value.firstSeenAt),
     possiblyAffectedCards: Array.isArray(value.possiblyAffectedCards)
       ? value.possiblyAffectedCards

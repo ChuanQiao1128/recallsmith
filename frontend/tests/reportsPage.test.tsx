@@ -238,6 +238,39 @@ describe('ReportsPage', () => {
     expect(api.resolveCardReport).toHaveBeenCalledWith(41, { resolution: 'fixed' });
   });
 
+  it('tells the editor the resolution note is shown to the learner who reported the card', async () => {
+    const user = userEvent.setup();
+    await mountLoaded();
+    await user.click(within(rowFor('Which S3 storage class suits infrequent access?')).getByRole('button', { name: /^Resolve/ }));
+    const note = screen.getByLabelText('Note (optional)');
+    const help = document.getElementById(note.getAttribute('aria-describedby') ?? '');
+    expect(help?.textContent).toBe('0 / 500 characters. Shown to the learner who reported the card.');
+    expect(screen.queryByText(/Not shown to the learner/)).toBeNull();
+  });
+
+  it('refreshes the list instead of rolling back when the report was already resolved', async () => {
+    const user = userEvent.setup();
+    api.resolveCardReport.mockResolvedValue(refused('ALREADY_RESOLVED', 'Report already resolved.'));
+    api.listCardReports
+      .mockResolvedValueOnce(page([report()]))
+      .mockResolvedValueOnce(page([report({ status: 'resolved', resolution: 'wont_fix', resolvedAt: '2026-10-01T11:00:00Z' })]));
+    await mountLoaded();
+
+    await user.click(within(rowFor('Which S3 storage class suits infrequent access?')).getByRole('button', { name: /^Resolve/ }));
+    await user.click(screen.getByRole('button', { name: 'Save resolution' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toContain('This report was already resolved. The list has been refreshed.'),
+    );
+    expect(screen.getByRole('alert').textContent).not.toContain('It is open again');
+    await waitFor(() => expect(api.listCardReports).toHaveBeenCalledTimes(2));
+    expect(api.listCardReports).toHaveBeenLastCalledWith({ status: 'open', deckId: null, cursor: null });
+    await waitFor(() =>
+      expect(within(rowFor('Which S3 storage class suits infrequent access?')).getByText("Resolved · Won't fix")).toBeTruthy(),
+    );
+    expect(within(rowFor('Which S3 storage class suits infrequent access?')).queryByRole('button', { name: /^Resolve/ })).toBeNull();
+  });
+
   it('closes the form on Cancel without calling the server', async () => {
     const user = userEvent.setup();
     await mountLoaded();
@@ -259,6 +292,33 @@ describe('ReportsPage', () => {
     expect(api.listCardReports).toHaveBeenLastCalledWith({ status: 'open', deckId: null, cursor: 'c2' });
     expect(screen.getByText('Which S3 storage class suits infrequent access?')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+  });
+
+  it('appends a Load more page without repeating a report already listed', async () => {
+    const user = userEvent.setup();
+    api.listCardReports
+      .mockResolvedValueOnce(page([report()], 'c2'))
+      .mockResolvedValueOnce(page([report(), report({ reportId: 42, question: 'What does IAM stand for?', reason: 'typo' })]));
+    await mountLoaded();
+
+    await user.click(screen.getByRole('button', { name: 'Load more' }));
+    await screen.findByText('What does IAM stand for?');
+    const table = screen.getByRole('table', { name: 'Card reports' });
+    expect(within(table).getAllByText('Which S3 storage class suits infrequent access?')).toHaveLength(1);
+    expect(within(table).getAllByRole('row')).toHaveLength(3);
+  });
+
+  it('shows an alert and keeps the list when Load more fails', async () => {
+    const user = userEvent.setup();
+    api.listCardReports
+      .mockResolvedValueOnce(page([report()], 'c2'))
+      .mockResolvedValueOnce(refused('FORBIDDEN', 'Cursor expired.'));
+    await mountLoaded();
+
+    await user.click(screen.getByRole('button', { name: 'Load more' }));
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Cursor expired.'));
+    expect(screen.getByText('Which S3 storage class suits infrequent access?')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Load more' })).toBeTruthy();
   });
 
   it('shows a neutral callout, not an error, when the server has no card reports table yet', async () => {

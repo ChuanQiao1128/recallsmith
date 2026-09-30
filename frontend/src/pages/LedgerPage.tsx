@@ -323,12 +323,21 @@ export function LedgerPage() {
     });
   }
 
-  /** Pre-fills the edit form with the server's suggestion, marked measured; Save sends it. */
+  /**
+   * Pre-fills the edit form with the server's suggestion, marked measured; Save sends it.
+   * Rounded to 2 decimals: the suggestion is median(review_ms)/60000, and the input's
+   * step="0.01" would otherwise refuse to submit it.
+   */
   function applySuggestion(row: AutomationBaseline) {
     const minutes = row.suggestedMeasuredMinutes;
     if (typeof minutes !== 'number') return;
     setEditProblem(null);
-    setEditing({ automation: row.automation, minutes: String(minutes), source: 'measured', note: row.note ?? '' });
+    setEditing({
+      automation: row.automation,
+      minutes: String(Math.round(minutes * 100) / 100),
+      source: 'measured',
+      note: row.note ?? '',
+    });
     setAnnouncement(`Suggested baseline for ${labelFor(row.automation)} copied into the form. Save to apply it.`);
   }
 

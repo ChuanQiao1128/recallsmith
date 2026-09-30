@@ -78,7 +78,8 @@ changes followed to their publish (`GET /api/v1/admin/automation/freshness`)
 with the median minutes to draft, decision and publish. Until the analytics
 migration has run, both show a neutral "not set up yet" callout.
 
-Related, all optional and hidden when the server does not send them:
+Related, all optional and hidden when the server does not send them (except
+the Semantic duplicates panel, which always shows on the AI QA page):
 
 - Automation overview: a "Freshness" tile (median time to publish, n, link to
   `/usage#freshness`) and "Needs review" in Watched sources.
@@ -89,7 +90,9 @@ Related, all optional and hidden when the server does not send them:
   `GET /api/v1/admin/decks/:deckId/semantic-duplicates`, plus the embeddings
   status). Without pgvector the server answers `VECTOR_NOT_READY` and the
   panel lists the owner steps: install the extension, re-run the migration,
-  push embeddings with `dc-evals embed-cards --deck <slug> --push`.
+  push embeddings with `dc-evals embed-cards --deck <slug> --push`. On a
+  server that predates these routes (404 "Route not found") the panel shows a
+  neutral "not on this server yet" callout instead of an error.
 - Automation ledger: a baseline with enough measured reviews shows "Suggested
   from N reviews: X min"; a super_admin's "Use as measured" pre-fills the edit
   form, and Save is the existing baseline PUT.
