@@ -6,7 +6,7 @@ on:
 
 jobs:
   mobile:
-    name: mobile (typecheck + vitest)
+    name: mobile (typecheck + vitest + expo export)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -34,6 +34,9 @@ jobs:
       # test run to report.
       - run: npm run test:typecheck
       - run: npx vitest run
+      # Local Metro bundle only (no EAS, no token): a broken metro.config.js or
+      # Sentry Expo plugin fails CI here instead of in a paid EAS build.
+      - run: npx expo export --platform ios --output-dir dist-ci
 
   frontend:
     name: frontend (vitest + build)
