@@ -19,6 +19,9 @@ import { MCQ_COPY } from '../features/gacha/mcq/mcqConstants';
 import { CardAnswerSections } from '../features/gacha/components/CardAnswerSections';
 import { cardDetailStatus } from '../features/gacha/library/cardDetailStatus';
 import { findCardAcrossDecks } from '../features/gacha/library/findCardAcrossDecks';
+import { ReportCardSheet } from '../features/cardReport/ReportCardSheet';
+import { CARD_REPORT_COPY } from '../features/cardReport/cardReportApi';
+import { a11y } from '../theme/a11y';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CardDetail'>;
 
@@ -231,9 +234,13 @@ export function CardDetailScreen({ navigation, route }: Props) {
   // The "Show answer" toggle is per-card: reset to closed whenever the route's
   // cardId changes so a new card never opens already-revealed.
   const [answerOpen, setAnswerOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
   useEffect(() => {
     setAnswerOpen(false);
+    setReportOpen(false);
   }, [route.params.cardId]);
+  // V11: default-off; read defensively because other suites mock the flags without the key.
+  const showReport = getFeatureFlags().cardReport?.enabled === true;
 
   // Source row: per-card like the toggle, and loaded only for an owned card
   // whose answer is open. A result that lands after the card changed, the
@@ -517,9 +524,26 @@ export function CardDetailScreen({ navigation, route }: Props) {
                       ) : null}
                     </Pressable>
                   ) : null}
+                  {showReport && deck ? (
+                    <Pressable
+                      testID="card-detail-report"
+                      accessibilityRole="button"
+                      accessibilityLabel="Report a problem with this card"
+                      accessibilityHint="Opens a short form to tell the author what is wrong"
+                      style={({ pressed }) => [styles.reportRow, pressed && styles.pressed]}
+                      onPress={() => setReportOpen(true)}
+                    >
+                      <Text style={styles.reportText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
+                        {CARD_REPORT_COPY.entry}
+                      </Text>
+                    </Pressable>
+                  ) : null}
                 </View>
               ) : null}
             </View>
+          ) : null}
+          {reportOpen && showReport && card && deck && !isLocked ? (
+            <ReportCardSheet deckSlug={deck.Slug} stableUid={card.StableUid} onClose={() => setReportOpen(false)} />
           ) : null}
 
           {/* ACTION ROW — primary opens the deck-wide session (planner-
@@ -834,6 +858,18 @@ const styles = StyleSheet.create({
     color: colors.inkSoft,
     fontWeight: '600',
     marginBottom: 6,
+  },
+  reportRow: {
+    minHeight: a11y.minTouch,
+    justifyContent: 'center',
+    borderTopWidth: 1,
+    borderTopColor: colors.hairline,
+  },
+  // Same AA reasoning as sourceLabel: inkSecondary on the white answer body.
+  reportText: {
+    fontSize: typography.bodySmall,
+    color: colors.inkSecondary,
+    fontWeight: '700',
   },
   sourceRow: {
     paddingVertical: spacing.sm,

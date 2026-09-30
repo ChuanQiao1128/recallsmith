@@ -51,6 +51,52 @@ callback.
 to `VITE_MANIFEST_URL`). Neither is set in `.env.development`; that feature
 reports a "not set" error until one is provided.
 
+## Card reports (`/reports`)
+
+The Reports section lists what learners reported on published cards
+(`GET /api/v1/admin/card-reports`), filtered by status (open, resolved, all)
+and deck; both filters live in the URL (`/reports?status=all&deckId=7`). Each
+row links the card editor (`/decks/cards/edit?deckId=&cardId=`) and resolves in
+an inline form (resolution plus an optional note of at most 500 characters,
+`POST /api/v1/admin/card-reports/:reportId/resolve`); the row updates at once
+and rolls back if the server refuses. Learner notes are shown as plain text and
+no reporter is ever shown. Until the server's card reports migration has run,
+the page shows a neutral "not set up on the server yet" callout. The Automation
+overview has a "Card reports" tile (open, new in 7 days) when the status
+response carries `cardReports`.
+
+## Usage and freshness (`/usage`)
+
+The Usage section shows learner activity from
+`GET /api/v1/admin/analytics/usage?days=30`: DAU, WAU and MAU for the latest
+complete UTC day with a plain SVG sparkline of DAU, a 30-day table (day, DAU,
+reviews, new users, cards learned, D1 and D7 retention; "—" for anything the
+server has not computed yet), a per-deck table, the number of excluded accounts
+(`ANALYTICS_EXCLUDED_SUBS` on the server) and when the figures were last
+computed. Its Freshness section (`/usage#freshness`) lists detected source
+changes followed to their publish (`GET /api/v1/admin/automation/freshness`)
+with the median minutes to draft, decision and publish. Until the analytics
+migration has run, both show a neutral "not set up yet" callout.
+
+Related, all optional and hidden when the server does not send them (except
+the Semantic duplicates panel, which always shows on the AI QA page):
+
+- Automation overview: a "Freshness" tile (median time to publish, n, link to
+  `/usage#freshness`) and "Needs review" in Watched sources.
+- Automation Watch tab: per change, the affected cards (question linked to the
+  editor, "Quote missing" badge) and a "Needs review" badge; a "Recent release
+  notes" section lists new feed items with the cards they may touch.
+- AI QA page: a "Semantic duplicates" panel (card pairs at cosine ≥ 0.90 from
+  `GET /api/v1/admin/decks/:deckId/semantic-duplicates`, plus the embeddings
+  status). Without pgvector the server answers `VECTOR_NOT_READY` and the
+  panel lists the owner steps: install the extension, re-run the migration,
+  push embeddings with `dc-evals embed-cards --deck <slug> --push`. On a
+  server that predates these routes (404 "Route not found") the panel shows a
+  neutral "not on this server yet" callout instead of an error.
+- Automation ledger: a baseline with enough measured reviews shows "Suggested
+  from N reviews: X min"; a super_admin's "Use as measured" pre-fills the edit
+  form, and Save is the existing baseline PUT.
+
 ## Deployment
 
 `./deploy.sh` is the whole deploy as one command: it runs `npm run build`, syncs

@@ -453,11 +453,64 @@ public static class LedgerRoutes
     try
     {
       var rows = await DbUtil.QueryAsync(conn, null, BaselineSelect + " order by automation collate \"C\"", []);
-      return res.Ok(new { items = rows.Select(BaselineItem).ToArray() });
+      var (suggested, fromN) = await SuggestedReviewMinutesAsync(conn);
+      return res.Ok(new
+      {
+        items = rows.Select(r =>
+        {
+          var measured = (string)r["automation"]! == SuggestedAutomation;
+          return new
+          {
+            automation = (string)r["automation"]!,
+            unit = (string)r["unit"]!,
+            baselineMinutesPerUnit = ToDecimal(r["baselineMinutesPerUnit"]),
+            baselineSource = (string)r["baselineSource"]!,
+            note = (string?)r["note"],
+            updatedAt = r["updatedAt"],
+            suggestedMeasuredMinutes = measured ? suggested : null,
+            suggestedFromN = measured ? fromN : (long?)null,
+          };
+        }).ToArray(),
+      });
     }
     catch (Exception ex)
     {
       return MapError(ex, res);
+    }
+  }
+
+  /// <summary>The automation whose baseline the measured human review time suggests (R20 V08).</summary>
+  public const string SuggestedAutomation = "ai_draft_review";
+
+  /// <summary>The fewest measured reviews a suggestion rests on (R20 V08).</summary>
+  public const int SuggestedMinN = 5;
+
+  /// <summary>
+  /// The suggested measured baseline of <see cref="SuggestedAutomation"/> (R20 V08, contract R20-00 §7): the median
+  /// <c>ai_review_events.review_ms</c> / 60000 over every console decision (accepted, edited_accepted, rejected) that
+  /// recorded a positive review time, 2 decimals, and how many it rests on; the minutes are null under
+  /// <see cref="SuggestedMinN"/> decisions. Only a suggestion: a super_admin still sets the baseline with the PUT.
+  /// Before migration 030 the table is missing and both are null.
+  /// </summary>
+  internal static async Task<(decimal? Minutes, long? N)> SuggestedReviewMinutesAsync(NpgsqlConnection conn)
+  {
+    try
+    {
+      var row = (await DbUtil.QueryAsync(conn, null,
+        """
+        select count(*) as n, percentile_cont(0.5) within group (order by review_ms) as median_ms
+        from ai_review_events
+        where action in ('accepted', 'edited_accepted', 'rejected') and review_ms > 0
+        """, []))[0];
+      var n = ToLong(row["n"]);
+      decimal? minutes = n >= SuggestedMinN && row["median_ms"] is not null
+        ? Round2(Convert.ToDecimal(row["median_ms"], CultureInfo.InvariantCulture) / 60000m)
+        : null;
+      return (minutes, n);
+    }
+    catch (PostgresException ex) when (ex.SqlState is "42P01" or "42703")
+    {
+      return (null, null);
     }
   }
 

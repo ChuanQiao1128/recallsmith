@@ -3,13 +3,19 @@ name = "developercards-evals"
 version = "0.1.0"
 description = "Seeded-defect eval harness for the DeveloperCards AI QA gate"
 requires-python = ">=3.12,<3.13"
-dependencies = ["developercards-ai-qa"]
+dependencies = ["developercards-ai-qa", "developercards-ingest"]
+
+[project.optional-dependencies]
+# V02: local embeddings for `dc-evals retrieval` (BAAI/bge-small-en-v1.5). Never a default
+# dependency: CI and the tests use a fake embedder and download nothing.
+embeddings = ["fastembed>=0.7"]
 
 [project.scripts]
 dc-evals = "dc_evals.cli:main"
 
 [tool.uv.sources]
 developercards-ai-qa = { path = "../services/ai-qa", editable = true }
+developercards-ingest = { path = "../tools/ingest", editable = true }
 
 [dependency-groups]
 dev = ["pytest>=8"]

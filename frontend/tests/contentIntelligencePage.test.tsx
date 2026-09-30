@@ -597,11 +597,14 @@ describe('what the header offers each role', () => {
     // header now also offers the HITL sections; ConsoleShell's order. Z06
     // (frontend-console-27) groups it: authoring, the ledger, then super_admin.
     // B07 (frontend-console-12): Automation is in the shared set, after the ledger.
+    // R20 V09: Reports closes the authoring group. R20 V10: Usage follows it.
     expect(names).toEqual([
       'Decks',
       'Review queue',
       'AI QA',
       'Content Intelligence',
+      'Reports',
+      'Usage',
       'Automation ledger',
       'Automation',
       'Webhooks',

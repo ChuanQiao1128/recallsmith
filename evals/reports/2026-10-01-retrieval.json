@@ -1,0 +1,217 @@
+{
+  "date": "2026-10-01",
+  "type": "retrieval",
+  "decks": {
+    "aws-saa-c03": {
+      "pages": {
+        "cited": 497,
+        "cached": 488,
+        "failed": 9,
+        "notFetched": 0
+      },
+      "chunks": 8682,
+      "pairs": {
+        "total": 753,
+        "evaluated": 738,
+        "pageNotCached": 15,
+        "cardNotInExport": 0
+      },
+      "cardsEvaluated": 307,
+      "metrics": {
+        "bm25": {
+          "n": 738,
+          "recall@1": 0.2818,
+          "recall@5": 0.668,
+          "recall@10": 0.8022,
+          "mrr": 0.4472
+        },
+        "embed": {
+          "n": 738,
+          "recall@1": 0.2846,
+          "recall@5": 0.6328,
+          "recall@10": 0.7493,
+          "mrr": 0.4347
+        },
+        "hybrid": {
+          "n": 738,
+          "recall@1": 0.2764,
+          "recall@5": 0.6626,
+          "recall@10": 0.7954,
+          "mrr": 0.4484
+        }
+      },
+      "cards": {
+        "bm25": {
+          "n": 307,
+          "recall@1": 0.6775,
+          "recall@5": 0.9349,
+          "recall@10": 0.9707,
+          "mrr": 0.7871
+        },
+        "embed": {
+          "n": 307,
+          "recall@1": 0.684,
+          "recall@5": 0.9446,
+          "recall@10": 0.9642,
+          "mrr": 0.7908
+        },
+        "hybrid": {
+          "n": 307,
+          "recall@1": 0.6645,
+          "recall@5": 0.9446,
+          "recall@10": 0.9642,
+          "mrr": 0.7882
+        }
+      }
+    },
+    "claude-ccdv-f": {
+      "pages": {
+        "cited": 114,
+        "cached": 114,
+        "failed": 0,
+        "notFetched": 0
+      },
+      "chunks": 4538,
+      "pairs": {
+        "total": 587,
+        "evaluated": 587,
+        "pageNotCached": 0,
+        "cardNotInExport": 0
+      },
+      "cardsEvaluated": 441,
+      "metrics": {
+        "bm25": {
+          "n": 587,
+          "recall@1": 0.632,
+          "recall@5": 0.9012,
+          "recall@10": 0.9438,
+          "mrr": 0.7465
+        },
+        "embed": {
+          "n": 587,
+          "recall@1": 0.5963,
+          "recall@5": 0.8756,
+          "recall@10": 0.9267,
+          "mrr": 0.7148
+        },
+        "hybrid": {
+          "n": 587,
+          "recall@1": 0.5997,
+          "recall@5": 0.9029,
+          "recall@10": 0.9489,
+          "mrr": 0.736
+        }
+      },
+      "cards": {
+        "bm25": {
+          "n": 441,
+          "recall@1": 0.8413,
+          "recall@5": 0.9773,
+          "recall@10": 0.9864,
+          "mrr": 0.8973
+        },
+        "embed": {
+          "n": 441,
+          "recall@1": 0.7937,
+          "recall@5": 0.9705,
+          "recall@10": 0.9887,
+          "mrr": 0.8728
+        },
+        "hybrid": {
+          "n": 441,
+          "recall@1": 0.7982,
+          "recall@5": 0.9819,
+          "recall@10": 0.9909,
+          "mrr": 0.8846
+        }
+      }
+    }
+  },
+  "overall": {
+    "bm25": {
+      "n": 1325,
+      "recall@1": 0.437,
+      "recall@5": 0.7713,
+      "recall@10": 0.8649,
+      "mrr": 0.5798
+    },
+    "embed": {
+      "n": 1325,
+      "recall@1": 0.4226,
+      "recall@5": 0.7404,
+      "recall@10": 0.8279,
+      "mrr": 0.5588
+    },
+    "hybrid": {
+      "n": 1325,
+      "recall@1": 0.4196,
+      "recall@5": 0.7691,
+      "recall@10": 0.8634,
+      "mrr": 0.5758
+    }
+  },
+  "overallCards": {
+    "bm25": {
+      "n": 748,
+      "recall@1": 0.7741,
+      "recall@5": 0.9599,
+      "recall@10": 0.9799,
+      "mrr": 0.8521
+    },
+    "embed": {
+      "n": 748,
+      "recall@1": 0.7487,
+      "recall@5": 0.9599,
+      "recall@10": 0.9786,
+      "mrr": 0.8392
+    },
+    "hybrid": {
+      "n": 748,
+      "recall@1": 0.7433,
+      "recall@5": 0.9666,
+      "recall@10": 0.9799,
+      "mrr": 0.8451
+    }
+  },
+  "methods": {
+    "bm25": {
+      "status": "ok",
+      "k1": 1.5,
+      "b": 0.75,
+      "idf": "ln(1+(N-df+0.5)/(df+0.5))",
+      "tokens": "lower-case [a-z0-9]+ minus an English stop list"
+    },
+    "embed": {
+      "status": "ok",
+      "model": "BAAI/bge-small-en-v1.5",
+      "similarity": "cosine",
+      "queryPrefix": null
+    },
+    "hybrid": {
+      "status": "ok",
+      "fusion": "reciprocal rank fusion of bm25 and embed",
+      "rrfK": 60
+    }
+  },
+  "config": {
+    "ks": [
+      1,
+      5,
+      10
+    ],
+    "corpus": "every chunk of every cached page the deck's ledger cites; pages ranked by best chunk",
+    "query": "card question + explanation + code + keyed options (mutations._answer_text)",
+    "chunking": {
+      "maxChunkChars": 1500,
+      "overlapChars": 150,
+      "chunkText": "page title + chunk text"
+    },
+    "rank": "1-based, pessimistic on ties",
+    "groundTruth": "distinct (uid, page) pairs of data/sources-<deck>.jsonl, URL fragment dropped"
+  },
+  "failureReasons": {
+    "HTTP 404": 1,
+    "no extractable text": 2,
+    "unsupported content type application/octet-stream": 6
+  }
+}

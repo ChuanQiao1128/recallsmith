@@ -1,4 +1,8 @@
-"""dc-evals command line: seed, run (paid, owner only), score, and (Q03) author, jury and compare."""
+"""dc-evals command line: seed, run (paid, owner only), score, (Q03) author, jury and compare, and
+(V01) review, the local pre-publish self-check through the Claude CLI, (V02) fetch-sources and
+retrieval, the retrieval eval over the pages the deck ledgers cite, and (V04) embed-cards and
+semantic-dupes, local bge-small card embeddings, their push to the admin route and an offline
+nearest-pair report."""
 
 from __future__ import annotations
 
@@ -6,6 +10,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -22,12 +27,19 @@ from ai_qa.settings import (
 )
 
 from .author import DEFAULT_AUTHOR_MODEL
+from .deck_review import (
+    DEFAULT_CONCURRENCY,
+    DEFAULT_LIMIT,
+    DEFAULT_REVIEW_MODEL,
+    REVIEW_PROVIDER,
+)
 from .dataset import (
     AUTHORED,
     AUTHORED_SOURCES_PATH,
     AUTHORED_V2,
     AUTHORED_V2_SOURCES_PATH,
     DATASETS,
+    DECKS,
     REPORTS_DIR,
     RUN_DATASETS,
     load_rows,
@@ -62,6 +74,46 @@ def _review_date(text: str) -> str:
         return dt.date.fromisoformat(text).isoformat()
     except ValueError:
         raise argparse.ArgumentTypeError("expected YYYY-MM-DD") from None
+
+
+def _positive_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("expected a positive integer") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError("expected a positive integer")
+    return value
+
+
+def _ks(text: str) -> list[int]:
+    return sorted({_positive_int(part.strip()) for part in text.split(",") if part.strip()})
+
+
+def _methods(text: str) -> list[str]:
+    from .retrieval import METHODS
+
+    chosen = [part.strip() for part in text.split(",") if part.strip()]
+    unknown = [m for m in chosen if m not in METHODS]
+    if unknown or not chosen:
+        raise argparse.ArgumentTypeError(f"methods are a comma list of {', '.join(METHODS)}")
+    return list(dict.fromkeys(chosen))
+
+
+def _deck_slug(text: str) -> str:
+    if not re.fullmatch(r"[a-z0-9]+(?:[-_][a-z0-9]+)*", text):
+        raise argparse.ArgumentTypeError("expected a deck slug such as aws-saa-c03")
+    return text
+
+
+def _score_value(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("expected a number between 0 and 1") from None
+    if not 0.0 <= value <= 1.0:
+        raise argparse.ArgumentTypeError("expected a number between 0 and 1")
+    return value
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -200,6 +252,96 @@ def _parser() -> argparse.ArgumentParser:
     gate.add_argument("--date", type=_review_date, default=None, help="YYYY-MM-DD (default: UTC today)")
     gate.add_argument("--out", type=Path, default=REPORTS_DIR)
     gate.add_argument("--ai-qa-env", type=Path, default=SHIPPING_ENV_PATH, help=argparse.SUPPRESS)
+
+    review = sub.add_parser(
+        "review",
+        help=(
+            "pre-publish AI QA self-check of a deck's cards through the local Claude CLI (the owner's "
+            "subscription; no paid provider)"
+        ),
+    )
+    review.add_argument("--deck", required=True, type=Path, help="the deck markdown file (content/decks/<slug>.md)")
+    selection = review.add_mutually_exclusive_group()
+    selection.add_argument(
+        "--changed-since", metavar="REF", default=None,
+        help="cards whose stableUid is new or whose content differs from the deck at git ref REF",
+    )
+    selection.add_argument("--cards", metavar="UID[,UID...]", default=None, help="these stableUids")
+    selection.add_argument("--all", action="store_true", help="every card in the deck")
+    review.add_argument(
+        "--provider", default=REVIEW_PROVIDER,
+        help=f"only {REVIEW_PROVIDER} (the local Claude Code CLI); paid providers are refused",
+    )
+    review.add_argument("--model", default=DEFAULT_REVIEW_MODEL, help=f"default {DEFAULT_REVIEW_MODEL}")
+    review.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
+    review.add_argument(
+        "--limit", type=int, default=None,
+        help=f"safety cap on the cards reviewed (default {DEFAULT_LIMIT}; a larger selection needs --limit)",
+    )
+    review.add_argument(
+        "--out", type=Path, default=None, help="JSONL of the review items (default evals/.cache/review/<date>-<deck>.jsonl)"
+    )
+    review.add_argument("--review-date", type=_review_date, default=None, help="YYYY-MM-DD (default: UTC today)")
+    review.add_argument("--dry-run", action="store_true", help="list the selected cards; no CLI call")
+
+    fetch = sub.add_parser(
+        "fetch-sources",
+        help="fetch the pages the deck ledgers cite into the local source cache (V02; $DC_SOURCES_CACHE)",
+    )
+    fetch.add_argument("--deck", action="append", choices=DECKS, default=None, help="a deck slug (repeatable; default both)")
+    fetch.add_argument("--max-pages", type=_positive_int, default=None, help="stop after N network fetches")
+    fetch.add_argument("--delay-s", type=float, default=1.0, help="seconds between network requests (default 1.0)")
+    fetch.add_argument("--retry-failed", action="store_true", help="fetch pages the manifest records as failed again")
+
+    retrieval = sub.add_parser(
+        "retrieval",
+        help="recall@k / MRR of finding a card's cited page among the cached pages (V02; no model call)",
+    )
+    retrieval.add_argument("--deck", action="append", choices=DECKS, default=None, help="a deck slug (repeatable; default both)")
+    retrieval.add_argument("--k", type=_ks, default=[1, 5, 10], help="comma list of cutoffs (default 1,5,10)")
+    retrieval.add_argument("--methods", type=_methods, default=["bm25", "embed", "hybrid"],
+                           help="comma list of bm25, embed, hybrid (default all three)")
+    retrieval.add_argument("--out", type=Path, default=REPORTS_DIR)
+    retrieval.add_argument("--date", type=_review_date, default=None, help="YYYY-MM-DD (default: UTC today)")
+
+    backfill = sub.add_parser(
+        "backfill-sources",
+        help="propose verbatim SOURCE quotes for a deck's cards without one (V03; review files, no deck edit)",
+    )
+    backfill.add_argument("--deck", required=True, type=_deck_slug, help="the deck slug (content/decks/<slug>.md)")
+    backfill.add_argument("--limit", type=_positive_int, default=None, help="only the first N cards without a source")
+    backfill.add_argument("--min-score", type=_score_value, default=None,
+                          help="skip proposals scoring below X (0..1; default 0.1)")
+    backfill.add_argument("--out", type=Path, default=None, help="output directory (default evals/reports/backfill)")
+    backfill.add_argument("--date", type=_review_date, default=None, help="YYYY-MM-DD in the file names (default: UTC today)")
+    backfill.add_argument("--offline", action="store_true", help="use cached pages only; never fetch")
+    backfill.add_argument("--apply", action="store_true",
+                          help="also write the SOURCE lines into the deck file (the owner's step, after review)")
+
+    embed = sub.add_parser(
+        "embed-cards",
+        help="embed a deck's cards locally with bge-small into $DC_EMBED_CACHE, optionally push them (V04)",
+    )
+    embed.add_argument("--deck", required=True, metavar="PATH_OR_SLUG",
+                       help="a deck file (.md or exported .jsonl) or a deck slug")
+    embed.add_argument("--out", type=Path, default=None,
+                       help="the embeddings JSONL (default $DC_EMBED_CACHE/<slug>.jsonl, "
+                            "$DC_EMBED_CACHE defaulting to ~/.cache/developercards/embeddings)")
+    embed.add_argument("--push", action="store_true",
+                       help="PUT the vectors to /api/v1/admin/card-embeddings (token from $DC_ADMIN_TOKEN)")
+    embed.add_argument("--api-base", default=None, metavar="URL", help="the API base URL for --push")
+
+    dupes = sub.add_parser(
+        "semantic-dupes",
+        help="offline nearest-pair report from the local card embeddings (V04; no network)",
+    )
+    dupes.add_argument("--deck", required=True, metavar="PATH_OR_SLUG",
+                       help="a deck file (.md or exported .jsonl) or a deck slug")
+    dupes.add_argument("--min-cosine", type=_score_value, default=0.90, help="pair threshold (default 0.90)")
+    dupes.add_argument("--embeddings", type=Path, default=None,
+                       help="the embeddings JSONL (default $DC_EMBED_CACHE/<slug>.jsonl)")
+    dupes.add_argument("--out", type=Path, default=REPORTS_DIR)
+    dupes.add_argument("--date", type=_review_date, default=None, help="YYYY-MM-DD (default: UTC today)")
 
     score = sub.add_parser("score", help="print the report JSON for a run file")
     score.add_argument("run_file", type=Path)
@@ -461,6 +603,50 @@ def _automation_gate(args: argparse.Namespace) -> int:
     return 0 if report["passed"] else 1
 
 
+def _review(args: argparse.Namespace) -> int:
+    from . import deck_review
+
+    return deck_review.run_review(args)
+
+
+def _fetch_sources(args: argparse.Namespace) -> int:
+    from .source_cache import run_fetch
+
+    return run_fetch(list(dict.fromkeys(args.deck or DECKS)), max_pages=args.max_pages, delay_s=max(args.delay_s, 0.0),
+                     retry_failed=args.retry_failed)
+
+
+def _retrieval(args: argparse.Namespace) -> int:
+    from .retrieval import run_retrieval, today
+
+    return run_retrieval(list(dict.fromkeys(args.deck or DECKS)), ks=args.k, methods=args.methods, out_dir=args.out,
+                         date=args.date or today())
+
+
+def _backfill_sources(args: argparse.Namespace) -> int:
+    from . import backfill
+
+    if args.min_score is None:
+        args.min_score = backfill.DEFAULT_MIN_SCORE
+    if args.out is None:
+        args.out = backfill.DEFAULT_OUT
+    return backfill.run_backfill(args)
+
+
+def _embed_cards(args: argparse.Namespace) -> int:
+    from . import embed_cards
+
+    if args.push and not args.api_base:
+        _parser().error("embed-cards --push needs --api-base URL")
+    return embed_cards.run_embed_cards(args)
+
+
+def _semantic_dupes(args: argparse.Namespace) -> int:
+    from . import embed_cards
+
+    return embed_cards.run_semantic_dupes(args)
+
+
 def _compare(args: argparse.Namespace) -> int:
     from .compare import compare
 
@@ -496,6 +682,12 @@ def main(argv: list[str] | None = None) -> int:
         "jury": _jury,
         "compare": _compare,
         "automation-gate": _automation_gate,
+        "review": _review,
+        "fetch-sources": _fetch_sources,
+        "retrieval": _retrieval,
+        "backfill-sources": _backfill_sources,
+        "embed-cards": _embed_cards,
+        "semantic-dupes": _semantic_dupes,
     }
     return handlers[args.command](args)
 

@@ -4,6 +4,8 @@ Thumbs.db
 
 # Node / Web
 node_modules/
+# a worktree's node_modules symlinked to the main checkout (a trailing-slash pattern skips symlinks)
+node_modules
 dist/
 build/
 *.log
@@ -73,3 +75,13 @@ __pycache__/
 .pytest_cache/
 *.pyc
 .ruff_cache/
+
+# dc-evals local caches (V01: dc-evals review writes evals/.cache/review/)
+evals/.cache/
+# V02: dc-evals fetch-sources caches pages under $DC_SOURCES_CACHE (default ~/.cache/developercards/sources,
+# outside the repo); a cache pointed inside the checkout, or fastembed's model cache, must never be committed.
+evals/.sources-cache/
+fastembed_cache/
+# V04: dc-evals embed-cards writes card vectors to $DC_EMBED_CACHE (default ~/.cache/developercards/embeddings,
+# outside the repo); a cache pointed inside the checkout must never be committed.
+evals/.embed-cache/

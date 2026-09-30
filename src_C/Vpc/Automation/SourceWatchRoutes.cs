@@ -142,7 +142,8 @@ public static class SourceWatchRoutes
   // POST /api/internal/source-watch/report (A00 §10.5)
   // ---------------------------------------------------------------------------------------------
 
-  private sealed record FeedItem(string Url, string? Title, string? PublishedAt);
+  /// <summary>One feed item; <see cref="Summary"/> (optional, R20 V07) only feeds the full-text query and is never stored.</summary>
+  private sealed record FeedItem(string Url, string? Title, string? PublishedAt, string? Summary = null);
 
   private sealed record Observation(long TargetId, string Url, string Status, int? HttpStatus, string? ContentSha256, string? Normalizer,
     string? Etag, string? LastModified, DateTimeOffset FetchedAt, string? ErrorCode, long[] MissingQuoteCardIds, FeedItem[] FeedItems,
@@ -186,6 +187,7 @@ public static class SourceWatchRoutes
       if (mode.Effective == AutomationMode.Off) return Answer(res, watchRunId, counts);
 
       var pageEvents = new List<PageEvent>();
+      var feedImpacts = new List<ChangeImpact.FeedItemImpact>();
       var failingEvents = new List<(long EventId, long TargetId, string Url, string? ErrorCode)>();
       await using (var tx = await conn.BeginTransactionAsync())
       {
@@ -203,7 +205,7 @@ public static class SourceWatchRoutes
             Log.Event("warn", new { tag = "source_watch", reason = "watch_unknown_target", watchRunId, targetId = o.TargetId });
             continue;
           }
-          await ApplyAsync(conn, tx, watchRunId, o, t, counts, pageEvents, failingEvents);
+          await ApplyAsync(conn, tx, watchRunId, o, t, counts, pageEvents, feedImpacts, failingEvents);
         }
         await tx.CommitAsync();
       }
@@ -247,6 +249,8 @@ public static class SourceWatchRoutes
         });
         if (raised is not null) await LinkNotificationAsync(conn, eventId, raised.NotificationId);
       }
+      // R20 V07: the possibly affected cards of each new release-notes item (full-text search; never edits a card).
+      await ChangeImpact.RecordFeedItemsAsync(conn, feedImpacts);
       if (counts.Applied > 0) await RecordLedgerAsync(conn, watchRunId, observations, counts);
 
       Log.Event("info", new
@@ -267,7 +271,7 @@ public static class SourceWatchRoutes
 
   /// <summary>One observation against its locked target row: the A00 §10.5 table.</summary>
   private static async Task ApplyAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Guid watchRunId, Observation o, Dictionary<string, object?> t,
-    ReportCounts counts, List<PageEvent> pageEvents, List<(long, long, string, string?)> failingEvents)
+    ReportCounts counts, List<PageEvent> pageEvents, List<ChangeImpact.FeedItemImpact> feedImpacts, List<(long, long, string, string?)> failingEvents)
   {
     counts.Applied++;
     var kind = (string)t["kind"]!;
@@ -361,6 +365,10 @@ public static class SourceWatchRoutes
       }
       var fresh = await RecordFeedItemsAsync(conn, tx, watchRunId, o, t);
       if (baseline || fresh.Count == 0) return;
+      var feedDeckId = t["deck_id"] is null ? (long?)null : RunnerRoutes.Long(t["deck_id"]);
+      var summaries = o.FeedItems.GroupBy(i => ItemKey(i.Url)).ToDictionary(g => g.Key, g => g.First().Summary, StringComparer.Ordinal);
+      feedImpacts.AddRange(fresh.Select(i => new ChangeImpact.FeedItemImpact(o.TargetId, i.ItemKey, i.Title,
+        summaries.GetValueOrDefault(i.ItemKey), feedDeckId)));
 
       long? feedEventId = null;
       if (lastStatus == "changed")
@@ -399,6 +407,8 @@ public static class SourceWatchRoutes
       .ToDictionary(g => g.Key, g => g.Select(r => RunnerRoutes.Long(r["id"])).ToList());
     var citingIds = citing.Select(r => RunnerRoutes.Long(r["id"])).ToHashSet();
     var missing = o.MissingQuoteCardIds.Distinct().Take(MaxQuotes).ToArray();
+    // R20 V07: the affected cards by exact URL; needsHumanReview is settled once the re-check outcome is known.
+    var affected = await ChangeImpact.AffectedCardsAsync(conn, tx, url, o.MissingQuoteCardIds.ToHashSet());
 
     var newSha = eventKind == "gone" ? null : o.ContentSha256;
     var eventId = await InsertEventAsync(conn, tx, o.TargetId, watchRunId, eventKind, storedHash, newSha, null,
@@ -430,6 +440,8 @@ public static class SourceWatchRoutes
         missingQuoteCardIds = missing,
         queueItemIds,
         recheckPendingDeckIds = deckIds,
+        affectedCards = affected.Select(ChangeImpact.ToJson),
+        needsHumanReview = false,
       })]);
     pageEvents.Add(new PageEvent(eventId, o.TargetId, url, eventKind, citingIds.Count, missing, queueItemIds, deckIds));
   }
@@ -583,7 +595,10 @@ public static class SourceWatchRoutes
       await DbUtil.ExecuteAsync(conn, null,
         """
         update source_watch_events set recheck_state = $2, recheck_run_ids = $3,
-          details = coalesce(details, '{}'::jsonb) || jsonb_build_object('recheckPendingDeckIds', $4::jsonb), updated_at = now()
+          details = coalesce(details, '{}'::jsonb) || jsonb_build_object('recheckPendingDeckIds', $4::jsonb,
+            'needsHumanReview', $2 = 'unavailable' and jsonb_typeof(details -> 'affectedCards') = 'array'
+              and jsonb_array_length(details -> 'affectedCards') > 0),
+          updated_at = now()
         where id = $1
         """, [eventId, state, runIds.ToArray(), JsonSerializer.Serialize(pending)]);
       return new RecheckOutcome(state, runIds, started);
@@ -735,6 +750,11 @@ public static class SourceWatchRoutes
           if (item.ValueKind != JsonValueKind.Object) throw new ValidationError("each feed item must be an object", "feedItems");
           var itemUrl = AutomationBody.RequiredString(item, "url", int.MaxValue);
           var title = AutomationBody.OptionalString(item, "title", int.MaxValue);
+          // summary (optional, R20 V07): release-note text for the full-text query only, capped, never stored or logged.
+          // The current watcher (services/source-watcher, feeds.py) sends url, title and publishedAt only, so in production
+          // the query is the title alone until it sends a summary (contract R20-00 §10.4).
+          var summary = AutomationBody.OptionalString(item, "summary", int.MaxValue);
+          if (summary is { Length: > ChangeImpact.MaxQueryTextLength }) summary = summary[..ChangeImpact.MaxQueryTextLength];
           // publishedAt is informational: a value that is not a timestamp (an RSS pubDate PostgreSQL cannot read) is stored as null.
           string? published = null;
           if (item.TryGetProperty("publishedAt", out var p) && p.ValueKind != JsonValueKind.Null)
@@ -745,7 +765,7 @@ public static class SourceWatchRoutes
               published = at.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
             }
           }
-          items.Add(new FeedItem(itemUrl, title, published));
+          items.Add(new FeedItem(itemUrl, title, published, summary));
         }
       }
 

@@ -5,6 +5,11 @@
 // on the page comes from the API response; the definitions at the bottom are
 // §9.1, so each number can be traced to a rule. Any console user may read; only
 // a super_admin may change a baseline.
+//
+// R20 V08/V10: a baseline row the server can measure (≥ 5 recorded draft
+// reviews) carries `suggestedMeasuredMinutes`, shown as "Suggested from N
+// reviews". A super_admin's "Use as measured" only pre-fills the edit form with
+// it; saving is still the existing PUT, so nothing changes until Save.
 import { useEffect, useMemo, useState } from 'react';
 
 import {
@@ -316,6 +321,24 @@ export function LedgerPage() {
       source: row.baselineSource === 'default' ? 'default' : 'measured',
       note: row.note ?? '',
     });
+  }
+
+  /**
+   * Pre-fills the edit form with the server's suggestion, marked measured; Save sends it.
+   * Rounded to 2 decimals: the suggestion is median(review_ms)/60000, and the input's
+   * step="0.01" would otherwise refuse to submit it.
+   */
+  function applySuggestion(row: AutomationBaseline) {
+    const minutes = row.suggestedMeasuredMinutes;
+    if (typeof minutes !== 'number') return;
+    setEditProblem(null);
+    setEditing({
+      automation: row.automation,
+      minutes: String(Math.round(minutes * 100) / 100),
+      source: 'measured',
+      note: row.note ?? '',
+    });
+    setAnnouncement(`Suggested baseline for ${labelFor(row.automation)} copied into the form. Save to apply it.`);
   }
 
   async function onSaveBaseline() {
@@ -683,7 +706,27 @@ export function LedgerPage() {
                 <tr key={row.automation} className="border-t border-slate-100">
                   <td className={TD_CLASS}>{labelFor(row.automation)}</td>
                   <td className={TD_CLASS}>{row.unit}</td>
-                  <td className={TD_CLASS}>{formatNumber(row.baselineMinutesPerUnit)}</td>
+                  <td className={TD_CLASS}>
+                    {formatNumber(row.baselineMinutesPerUnit)}
+                    {typeof row.suggestedMeasuredMinutes === 'number' ? (
+                      <div className="mt-1 text-xs text-slate-600" data-testid={`ledger-baseline-suggestion-${row.automation}`}>
+                        Suggested from {row.suggestedFromN ?? 0} reviews: {formatNumber(row.suggestedMeasuredMinutes)} min
+                        {superAdmin ? (
+                          <div className="mt-1">
+                            <Button
+                              variant="outline"
+                              size="xs"
+                              aria-label={`Use as measured: ${labelFor(row.automation)}`}
+                              disabled={saving}
+                              onClick={() => applySuggestion(row)}
+                            >
+                              Use as measured
+                            </Button>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </td>
                   <td className={TD_CLASS}>{sourceBadge(row.baselineSource)}</td>
                   <td className={TD_CLASS}>{orDash(row.note)}</td>
                   <td className={TD_CLASS}>{orDash(row.updatedAt)}</td>

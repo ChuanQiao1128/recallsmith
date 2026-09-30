@@ -358,6 +358,14 @@ public sealed class VpcFunction
       {
         return await Vpc.Automation.StatusRoutes.HandleStatus(req, res, auth);
       }
+      if (p.EndsWith("/api/v1/admin/automation/freshness", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Automation.Freshness.HandleFreshness(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/admin/analytics/usage", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Analytics.UsageAnalytics.HandleUsage(req, res, auth);
+      }
       if (p.EndsWith("/api/v1/admin/automation/runs", StringComparison.OrdinalIgnoreCase))
       {
         return await Vpc.Automation.StatusRoutes.HandleRuns(req, res, auth);
@@ -377,6 +385,32 @@ public sealed class VpcFunction
       if (RouteMatcher.Match("/api/v1/admin/automation/eval-gate/:gateId/revoke", p) is { } gateRevoke)
       {
         return await Vpc.Automation.EvalGate.HandleRevoke(req, res, auth, gateRevoke["gateId"]);
+      }
+      // R20 V05 — card reports: triage (console) and report-a-card (learner, under /api/v1/user/ for the gateway)
+      if (p.EndsWith("/api/v1/admin/card-reports", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Reports.CardReports.HandleAdminList(req, res, auth);
+      }
+      if (RouteMatcher.Match("/api/v1/admin/card-reports/:reportId/resolve", p) is { } cardReportResolve)
+      {
+        return await Vpc.Reports.CardReports.HandleResolve(req, res, auth, cardReportResolve["reportId"]);
+      }
+      if (p.EndsWith("/api/v1/user/card-reports", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Reports.CardReports.HandleUser(req, res, auth);
+      }
+      // R20 V06 — card embeddings (pushed from the owner's Mac) and semantic duplicates
+      if (p.EndsWith("/api/v1/admin/card-embeddings/status", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Authoring.CardEmbeddings.HandleStatus(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/admin/card-embeddings", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Authoring.CardEmbeddings.HandleUpsert(req, res, auth);
+      }
+      if (RouteMatcher.Match("/api/v1/admin/decks/:deckId/semantic-duplicates", p) is { } semanticDuplicates)
+      {
+        return await Vpc.Authoring.CardEmbeddings.HandleSemanticDuplicates(req, res, auth, semanticDuplicates["deckId"]);
       }
       // Runtime
       if (p.EndsWith("/api/v1/me", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))

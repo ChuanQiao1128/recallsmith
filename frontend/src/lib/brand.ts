@@ -34,6 +34,8 @@ const ROUTE_TITLES: Record<string, string> = {
   '/review': 'Review queue',
   '/decks/qa': 'AI QA',
   '/automation': 'Automation',
+  '/reports': 'Card reports',
+  '/usage': 'Usage',
 };
 
 /**

@@ -118,8 +118,13 @@ public static class WatchAdminRoutes
         order by e.id desc
         limit {RecentEvents}
         """, []);
-      var recentEvents = events.Select(ToWatchEvent).ToList();
-      return res.Ok(new { items, recentEvents, nextCursor });
+      // R20X F02 (contract R20-00 §10.4): the affected and possibly affected cards (slug, stable uid, question) are
+      // deck-scoped data, so a caller who is not super_admin sees only the cards of decks they may read.
+      var readableDecks = await Helpers.ReadableDeckIdsAsync(conn, auth);
+      var recentEvents = events.Select(e => ToWatchEvent(e, readableDecks)).ToList();
+      // R20 V07: the latest analysed release-notes items with their possibly affected cards.
+      var recentFeedItems = await ChangeImpact.RecentFeedItemsAsync(conn, readableDecks);
+      return res.Ok(new { items, recentEvents, nextCursor, recentFeedItems });
     }
     catch (Exception ex)
     {
@@ -310,14 +315,29 @@ public static class WatchAdminRoutes
     createdAt = RunnerRoutes.Timestamp(r["created_at"]),
   };
 
-  private static object ToWatchEvent(Dictionary<string, object?> r)
+  /// <summary>One event; with <paramref name="readableDecks"/> (not super_admin) its affected cards, also inside
+  /// <c>details</c>, are only those of readable decks.</summary>
+  private static object ToWatchEvent(Dictionary<string, object?> r, IReadOnlySet<long>? readableDecks)
   {
     JsonElement? details = null;
     var queueItemIds = new List<long>();
+    var affectedCards = new List<object>();
+    var needsHumanReview = false;
     if (r["details"] is string json)
     {
       using var doc = JsonDocument.Parse(json);
-      details = doc.RootElement.Clone();
+      var affected = ChangeImpact.ParseAffected(doc.RootElement);
+      if (readableDecks is null)
+      {
+        details = doc.RootElement.Clone();
+      }
+      else
+      {
+        affected = affected.Where(c => readableDecks.Contains(c.DeckId)).ToList();
+        details = ChangeImpact.WithAffectedCards(doc.RootElement, affected);
+      }
+      affectedCards.AddRange(affected.Select(ChangeImpact.ToJson));
+      needsHumanReview = ChangeImpact.ParseNeedsHumanReview(doc.RootElement);
       if (doc.RootElement.ValueKind == JsonValueKind.Object
           && doc.RootElement.TryGetProperty("queueItemIds", out var ids) && ids.ValueKind == JsonValueKind.Array)
       {
@@ -338,6 +358,8 @@ public static class WatchAdminRoutes
       queueItemIds,
       notificationId = r["notification_id"] as Guid?,
       createdAt = RunnerRoutes.Timestamp(r["created_at"]),
+      affectedCards,
+      needsHumanReview,
     };
   }
 }

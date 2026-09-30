@@ -44,6 +44,18 @@ vi.mock('../src/api/authoring', async importOriginal => {
   return { ...actual, ...authoring };
 });
 
+// R20 V10: the Semantic duplicates panel's two reads, answered as a server
+// without pgvector, so the panel settles on its neutral callout.
+const embeddings = vi.hoisted(() => ({
+  fetchEmbeddingsStatus: vi.fn(),
+  fetchSemanticDuplicates: vi.fn(),
+}));
+
+vi.mock('../src/api/embeddings', async importOriginal => {
+  const actual = await importOriginal<typeof import('../src/api/embeddings')>();
+  return { ...actual, ...embeddings };
+});
+
 const { DeckQaPage } = await import('../src/pages/DeckQaPage');
 
 const PAGE = `/decks/qa?deckId=${QA_DECK_ID}`;
@@ -57,6 +69,8 @@ function runsPage(items = [qaRun()], nextCursor: string | null = null) {
 }
 
 beforeEach(() => {
+  embeddings.fetchEmbeddingsStatus.mockResolvedValue(refused('VECTOR_NOT_READY', 'Vector search is not set up.'));
+  embeddings.fetchSemanticDuplicates.mockResolvedValue(refused('VECTOR_NOT_READY', 'Vector search is not set up.'));
   vi.useFakeTimers({ shouldAdvanceTime: true });
   signInAsSuperAdmin();
   authoring.fetchDecks.mockResolvedValue(ok([qaDeck]));
@@ -135,6 +149,7 @@ describe('DeckQaPage', () => {
       'Progress',
       'Findings',
       'Past runs',
+      'Semantic duplicates',
     ]);
 
     cleanup();

@@ -394,6 +394,149 @@ locals {
         ]
       }
     },
+    {
+      type   = "text"
+      x      = 0
+      y      = 54
+      width  = 24
+      height = 2
+      properties = {
+        markdown = "## AI QA (R20 V12) — ai-qa EMF, namespace ${var.metrics_namespace}, Service = ai-qa; usage metrics only when the model was called; p95 latency alarm per provider at 120 s"
+      }
+    },
+    {
+      type   = "metric"
+      x      = 0
+      y      = 56
+      width  = 12
+      height = 6
+      properties = {
+        region  = var.region
+        view    = "timeSeries"
+        stacked = false
+        period  = 300
+        title   = "AI QA cards reviewed by Provider"
+        metrics = [
+          [{ expression = "SEARCH('{${var.metrics_namespace},Provider,Service} Service=\"ai-qa\" MetricName=\"AiQaCardsReviewed\"', 'Sum', 300)", id = "cards" }],
+        ]
+      }
+    },
+    {
+      type   = "metric"
+      x      = 12
+      y      = 56
+      width  = 12
+      height = 6
+      properties = {
+        region  = var.region
+        view    = "timeSeries"
+        stacked = false
+        period  = 300
+        title   = "AI QA tokens by Provider (input / output / cache read)"
+        metrics = [
+          [{ expression = "SEARCH('{${var.metrics_namespace},Provider,Service} Service=\"ai-qa\" MetricName=\"AiQaInputTokens\"', 'Sum', 300)", label = "input", id = "tok_in" }],
+          [{ expression = "SEARCH('{${var.metrics_namespace},Provider,Service} Service=\"ai-qa\" MetricName=\"AiQaOutputTokens\"', 'Sum', 300)", label = "output", id = "tok_out" }],
+          [{ expression = "SEARCH('{${var.metrics_namespace},Provider,Service} Service=\"ai-qa\" MetricName=\"AiQaCacheReadTokens\"', 'Sum', 300)", label = "cache read", id = "tok_cache" }],
+        ]
+      }
+    },
+    {
+      # AiQaEstimatedCostMicroUsd is micro-USD; the expressions divide by 1 000 000. Same providers as the
+      # ai_qa_daily_cost alarm (alarms_r18.tf), whose threshold is the daily cap.
+      type   = "metric"
+      x      = 0
+      y      = 62
+      width  = 12
+      height = 6
+      properties = {
+        region  = var.region
+        view    = "timeSeries"
+        stacked = false
+        period  = 86400
+        title   = "AI QA estimated cost per day (USD)"
+        metrics = concat(
+          [for p in local.ai_qa_providers :
+            [var.metrics_namespace, "AiQaEstimatedCostMicroUsd", "Service", "ai-qa", "Provider", p, { id = "cost_${replace(p, "-", "_")}", visible = false, stat = "Sum", period = 86400 }]
+          ],
+          [for p in local.ai_qa_providers :
+            [{ expression = "FILL(cost_${replace(p, "-", "_")}, 0) / 1000000", label = "${p} USD", id = "usd_${replace(p, "-", "_")}" }]
+          ],
+          [[{ expression = "(${join(" + ", [for p in local.ai_qa_providers : "FILL(cost_${replace(p, "-", "_")}, 0)"])}) / 1000000", label = "total USD (daily cap: ${var.ai_qa_daily_cost_cap_micro_usd / 1000000})", id = "usd_total" }]],
+        )
+      }
+    },
+    {
+      type   = "metric"
+      x      = 12
+      y      = 62
+      width  = 12
+      height = 6
+      properties = {
+        region  = var.region
+        view    = "timeSeries"
+        stacked = false
+        period  = 300
+        title   = "AI QA latency p50 / p95 by Provider"
+        metrics = concat(
+          [for p in local.ai_qa_providers : [var.metrics_namespace, "AiQaLatency", "Service", "ai-qa", "Provider", p, { stat = "p50", id = "lat_p50_${replace(p, "-", "_")}" }]],
+          [for p in local.ai_qa_providers : [var.metrics_namespace, "AiQaLatency", "Service", "ai-qa", "Provider", p, { stat = "p95", id = "lat_p95_${replace(p, "-", "_")}" }]],
+        )
+        annotations = { horizontal = [{ label = "p95 alarm", value = 120000 }] }
+      }
+    },
+    {
+      type   = "metric"
+      x      = 0
+      y      = 68
+      width  = 12
+      height = 6
+      properties = {
+        region  = var.region
+        view    = "timeSeries"
+        stacked = false
+        period  = 300
+        title   = "AI QA errors by ErrorCode"
+        metrics = [
+          [{ expression = "SEARCH('{${var.metrics_namespace},ErrorCode,Service} Service=\"ai-qa\" MetricName=\"AiQaErrors\"', 'Sum', 300)", id = "errors" }],
+        ]
+      }
+    },
+    {
+      type   = "metric"
+      x      = 12
+      y      = 68
+      width  = 12
+      height = 6
+      properties = {
+        region  = var.region
+        view    = "timeSeries"
+        stacked = false
+        period  = 300
+        title   = "AI QA findings by Severity"
+        metrics = [
+          for s in ["blocker", "major", "minor"] :
+          [var.metrics_namespace, "AiQaFindings", "Service", "ai-qa", "Severity", s, { stat = "Sum", id = "findings_${s}" }]
+        ]
+      }
+    },
+    {
+      type   = "metric"
+      x      = 0
+      y      = 74
+      width  = 12
+      height = 6
+      properties = {
+        region  = var.region
+        view    = "timeSeries"
+        stacked = false
+        period  = 3600
+        title   = "AI QA refusals"
+        metrics = [
+          [var.metrics_namespace, "AiQaRefusals", "Service", "ai-qa", { stat = "Sum", id = "refusals" }],
+        ]
+        annotations = { horizontal = [{ label = "alarm (3 / h)", value = 3 }] }
+      }
+    },
   ]
 }
 

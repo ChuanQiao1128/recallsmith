@@ -189,6 +189,9 @@ public static class AutomationTick
     await Step("eval_gate", () => EvalGateAsync(conn, mode, a));
     await Step("live_quality", () => LiveQualityAsync(conn, a));
     await Step("resend", async () => a.NotificationsResent = await Notifications.ResendAsync(conn, StepBatch));
+    // R20 V08: once per UTC day, the usage rollups of the last 8 complete days (skips with a log line before 040).
+    // R20X F02 (§10.8): deferred to the next tick when less than half the budget remains; statement_timeout inside.
+    await Step("analytics_daily", () => Analytics.UsageAnalytics.RunIfDueAsync(conn, Budget - clock.Elapsed, Budget));
   }
 
   private static string UtcDate() => DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
@@ -629,9 +632,13 @@ public static class AutomationTick
       }).ToList();
 
       var missing = new List<long>();
+      var affected = new List<AffectedCard>();
+      var needsHumanReview = false;
       if (ev["details"] is string detailsJson)
       {
         using var details = JsonDocument.Parse(detailsJson);
+        affected = ChangeImpact.ParseAffected(details.RootElement);
+        needsHumanReview = ChangeImpact.ParseNeedsHumanReview(details.RootElement);
         if (details.RootElement.ValueKind == JsonValueKind.Object &&
             details.RootElement.TryGetProperty("missingQuoteCardIds", out var ids) && ids.ValueKind == JsonValueKind.Array)
         {
@@ -642,7 +649,7 @@ public static class AutomationTick
         "select id from authoring_queue_items where source_event_id = $1 order by id", [eventId]);
 
       var data = new SourceChangedData(eventId, Long(ev["target_id"]), (string)ev["url"]!, (string)ev["kind"]!, (string)ev["recheck_state"]!,
-        decks, missing, queueItems.Select(q => Long(q["id"])).ToList());
+        decks, missing, queueItems.Select(q => Long(q["id"])).ToList(), affected, needsHumanReview);
       var baseUrl = Notifications.ConsoleBaseUrl();
       var email = EmailTemplates.SourceChanged(mode, data, baseUrl);
       var result = await Notifications.EnqueueAsync(conn, new NotificationRequest("source_changed", null,
@@ -887,6 +894,12 @@ public static class AutomationTick
         where automation = 'source_watch' and occurred_at >= $1 and occurred_at < $2
         """, [start, end]));
 
+      // R20 V05: learner card reports (zeros before migration 037). "New this week" is the digest's own week.
+      var reportsOpen = (await Reports.CardReports.CountsAsync(conn)).Open;
+      var reportsNew = await Reports.CardReports.CreatedBetweenAsync(conn, start, end);
+      // R20 V07: the week's new release-notes items and those with possibly affected cards (zero before migration 039).
+      var (feedItemsNew, feedItems) = await ChangeImpact.DigestFeedItemsAsync(conn, start, end);
+
       static DateTimeOffset Ts(object? v) => v is DateTimeOffset dto ? dto : new(DateTime.SpecifyKind((DateTime)v!, DateTimeKind.Utc));
       var data = new WeeklyDigestData(from, to, totals.GetProperty("hoursSaved").GetDecimal(), totals.GetProperty("minutesSaved").GetDecimal(),
         totals.GetProperty("runs").GetInt64(), totals.GetProperty("units").GetInt64(), totals.GetProperty("defectsCaught").GetInt64(), automations,
@@ -899,7 +912,7 @@ public static class AutomationTick
         backlog.HumanPending, backlog.HumanPublishes, Long(shadow["blind_decided"]), Long(shadow["blind_accepted"]),
         new DigestLive(liveQuality.AutoAccepted30d, liveQuality.DeletedByPerson, liveQuality.EditedByPerson, liveQuality.OverrideRate,
           liveQuality.EditedAfterSourceChange),
-        Long(blindPending["drafts"]), Long(blindPending["runs"]));
+        Long(blindPending["drafts"]), Long(blindPending["runs"]), reportsOpen, reportsNew, feedItemsNew, feedItems);
 
       var baseUrl = Notifications.ConsoleBaseUrl();
       var email = EmailTemplates.WeeklyDigest(mode, data, baseUrl);
