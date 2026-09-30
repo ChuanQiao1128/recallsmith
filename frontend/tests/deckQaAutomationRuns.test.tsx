@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, screen, waitFor, within } from '@testing-library/react';
 
-import { ok } from './support/apiResult';
+import { ok, refused } from './support/apiResult';
 import { signInAsSuperAdmin, signOut } from './support/consoleSession';
 import { QA_DECK_ID, qaCards, qaDeck, qaRun, qaStatus } from './support/qaFixtures';
 import { renderAt } from './support/routerProbe';
@@ -39,6 +39,18 @@ vi.mock('../src/api/authoring', async importOriginal => {
   return { ...actual, ...authoring };
 });
 
+// R20 V10: the Semantic duplicates panel's two reads, answered as a server
+// without pgvector, so the panel settles on its neutral callout.
+const embeddings = vi.hoisted(() => ({
+  fetchEmbeddingsStatus: vi.fn(),
+  fetchSemanticDuplicates: vi.fn(),
+}));
+
+vi.mock('../src/api/embeddings', async importOriginal => {
+  const actual = await importOriginal<typeof import('../src/api/embeddings')>();
+  return { ...actual, ...embeddings };
+});
+
 const { DeckQaPage } = await import('../src/pages/DeckQaPage');
 const { normalizeQaRun } = await import('../src/api/qa');
 
@@ -53,6 +65,8 @@ function runsPage(items = [qaRun()], nextCursor: string | null = null) {
 }
 
 beforeEach(() => {
+  embeddings.fetchEmbeddingsStatus.mockResolvedValue(refused('VECTOR_NOT_READY', 'Vector search is not set up.'));
+  embeddings.fetchSemanticDuplicates.mockResolvedValue(refused('VECTOR_NOT_READY', 'Vector search is not set up.'));
   vi.useFakeTimers({ shouldAdvanceTime: true });
   signInAsSuperAdmin();
   authoring.fetchDecks.mockResolvedValue(ok([qaDeck]));
