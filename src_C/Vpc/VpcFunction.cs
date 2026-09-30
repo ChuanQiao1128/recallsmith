@@ -358,6 +358,14 @@ public sealed class VpcFunction
       {
         return await Vpc.Automation.StatusRoutes.HandleStatus(req, res, auth);
       }
+      if (p.EndsWith("/api/v1/admin/automation/freshness", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Automation.Freshness.HandleFreshness(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/admin/analytics/usage", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Analytics.UsageAnalytics.HandleUsage(req, res, auth);
+      }
       if (p.EndsWith("/api/v1/admin/automation/runs", StringComparison.OrdinalIgnoreCase))
       {
         return await Vpc.Automation.StatusRoutes.HandleRuns(req, res, auth);
