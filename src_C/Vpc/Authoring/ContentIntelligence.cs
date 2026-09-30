@@ -125,6 +125,7 @@ public static class ContentIntelligence
   /// The live (non-snapshot) query. withMcqFilter=true appends `and c.mcq is null` to event_scored's WHERE so
   /// MCQ answers never enter the Q/A user/difficulty baselines (MCQ plan §5.8: their dwell and verdict
   /// distribution are structurally different); false is today's text, for a database without migration 019.
+  /// Both variants drop focus-run practice ratings (M06), so they never skew the author-facing metrics.
   /// </summary>
   private static string BuildLiveSql(bool withMcqFilter)
   {
@@ -169,6 +170,7 @@ public static class ContentIntelligence
           and ($2::text is null or e.deck_slug = $2::text)
           and ($4::boolean or p.id is not null)
           and e.rating is not null
+          and coalesce(e.review_stage, '') <> 'focus_practice'
           {mcqFilter}
       ),
       user_baseline as (
