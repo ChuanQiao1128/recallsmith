@@ -9,6 +9,34 @@ public static class Migrate
 {
   private sealed record Migration(int Version, string Name, string File, string FullPath);
 
+  /// <summary>The migration that creates <c>card_embeddings</c> when the vector extension exists (R20 V06).</summary>
+  public const int VectorMigrationVersion = 38;
+
+  /// <summary>
+  /// The guarded <c>card_embeddings</c> block of 038, re-run on every migrate call once 038 is recorded (R20X F02,
+  /// contract R20-00 §10.2). Prod's app role cannot install <c>vector</c>, so 038 is recorded with only a notice; when
+  /// the owner later runs CREATE EXTENSION vector as the RDS master, the next Migrate creates the table here without
+  /// deleting any schema_migrations row. A no-op without the extension or with the table already there; the DDL must
+  /// stay identical to 038's (a test compares them).
+  /// </summary>
+  internal const string EnsureVectorObjectsSql = """
+    do $$
+    begin
+      if exists (select 1 from pg_extension where extname = 'vector') then
+        execute $ddl$
+          create table if not exists card_embeddings (
+            card_id bigint primary key references cards(id) on delete cascade,
+            model text not null,
+            dim int not null,
+            text_sha256 text not null,
+            embedding vector(384) not null,
+            updated_at timestamptz not null default now()
+          )
+        $ddl$;
+      end if;
+    end $$;
+    """;
+
   private static string MigrationsDir()
   {
     // Copied to output via csproj <CopyToOutputDirectory>.
@@ -98,6 +126,22 @@ public static class Migrate
     }
   }
 
+  /// <summary>
+  /// Runs <see cref="EnsureVectorObjectsSql"/> in its own transaction and answers whether the vector store is ready
+  /// (extension and table). Not audited and not recorded: it changes nothing unless the extension appeared.
+  /// </summary>
+  internal static async Task<bool> EnsureVectorObjectsAsync(NpgsqlConnection conn)
+  {
+    await using (var tx = await conn.BeginTransactionAsync())
+    {
+      await ExecuteAsync(conn, tx, EnsureVectorObjectsSql, []);
+      await tx.CommitAsync();
+    }
+    var ready = await ExecuteScalarAsync(conn, null,
+      "select exists(select 1 from pg_extension where extname = 'vector') and to_regclass('public.card_embeddings') is not null", []);
+    return ready is true;
+  }
+
   private static async Task<T> WithMigrationLock<T>(NpgsqlConnection conn, Func<Task<T>> fn)
   {
     const int lockId = 77889911;
@@ -182,12 +226,21 @@ public static class Migrate
         appliedNow.Add(new { version = m.Version, name = m.Name, file = m.File });
       }
 
+      // Every call, also when nothing is pending: the owner step is "CREATE EXTENSION vector, then press Migrate".
+      bool? vectorReady = null;
+      if (applied.Contains(VectorMigrationVersion) || pending.Any(m => m.Version == VectorMigrationVersion))
+      {
+        vectorReady = await EnsureVectorObjectsAsync(conn);
+        RecallSmith.Lambda.Vpc.Authoring.CardEmbeddings.ResetReadyCache();
+      }
+
       return (object)new
       {
         dryRun = false,
         applied = appliedNow,
         appliedCount = appliedNow.Count,
         latestAvailable = migrations[^1].Version,
+        vectorReady,
       };
     });
 

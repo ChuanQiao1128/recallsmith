@@ -283,6 +283,70 @@ public class ChangeImpactTests
   }
 
   [Fact]
+  public async Task WatchRoute_DeckScopedAdmin_SeesOnlyCardsOfReadableDecks()
+  {
+    // R20X F02 (s-security-1, contract §10.4): an editor who may read deck A only never gets deck B's slug, stable uid
+    // or question, neither in recentEvents[].affectedCards (nor inside details) nor in recentFeedItems.
+    await InScratchAsync(async (scope, sql) =>
+    {
+      scope.Set(QaGate.EnabledEnv, "0");
+      var deckA = await A05Kit.DeckAsync(sql, "v07-scope-a");
+      var deckB = await A05Kit.DeckAsync(sql, "v07-scope-b");
+      var slugB = (string)(await sql.ScalarAsync("select slug from decks where id = $1", deckB))!;
+      var url = Url("scope");
+      var a1 = await CardAsync(sql, deckA, "Synthetic readable question?", "Synthetic explanation.", url);
+      var b1 = await CardAsync(sql, deckB, "Synthetic hidden premium question?", "Synthetic explanation.", url);
+      var uidB = (string)(await sql.ScalarAsync("select stable_uid from cards where id = $1", b1))!;
+      var pageId = await BaselinedPageAsync(sql, url, "scope");
+      await A05Kit.ReportDataAsync(A05Kit.Obs(pageId, url, "ok", A05Kit.Sha("scope-v2")));
+
+      // A feed without a deck: its item's full-text search runs over every deck.
+      var ftsA = await CardAsync(sql, deckA, "What do S3 conditional writes prevent in deck A?", "Amazon S3 conditional writes use If-None-Match.");
+      var ftsB = await CardAsync(sql, deckB, "What do S3 conditional writes prevent in deck B?", "Amazon S3 conditional writes use If-None-Match.");
+      var feedUrl = Url("scope-feed");
+      var feedId = await A05Kit.FeedAsync(sql, feedUrl, null);
+      var oldItem = Url("scope-old");
+      await A05Kit.ReportDataAsync(A05Kit.Obs(feedId, feedUrl, "ok", A05Kit.Sha("scope-feed-1"), feedItems: [A05Kit.Item(oldItem, "Old item")]));
+      await A05Kit.ReportDataAsync(A05Kit.Obs(feedId, feedUrl, "ok", A05Kit.Sha("scope-feed-2"),
+        feedItems: [A05Kit.Item(oldItem, "Old item"), A05Kit.Item(Url("scope-new"), "Amazon S3 now supports conditional writes")]));
+
+      static long[] Ids(JsonElement arr) => arr.EnumerateArray().Select(c => c.GetProperty("cardId").GetInt64()).Order().ToArray();
+      JsonElement EventOf(JsonElement data) => data.GetProperty("recentEvents").EnumerateArray().First(e => e.GetProperty("targetId").GetInt64() == pageId);
+      JsonElement ItemOf(JsonElement data) => data.GetProperty("recentFeedItems").EnumerateArray().Single(i => i.GetProperty("id").GetString()!.StartsWith($"{feedId}:"));
+
+      // super_admin: everything.
+      var all = AutomationTestKit.Data(await WatchAsync());
+      Assert.Equal(new[] { a1, b1 }.Order().ToArray(), Ids(EventOf(all).GetProperty("affectedCards")));
+      Assert.Equal(new[] { a1, b1 }.Order().ToArray(), Ids(EventOf(all).GetProperty("details").GetProperty("affectedCards")));
+      Assert.Equal(new[] { ftsA, ftsB }.Order().ToArray(), Ids(ItemOf(all).GetProperty("possiblyAffectedCards")));
+
+      // An editor with read on deck A only.
+      var editorSub = $"it-f02-editor-{Guid.NewGuid():N}";
+      await sql.ScalarAsync("insert into admin_deck_permissions (admin_sub, deck_id, can_read, can_write) values ($1, $2, 1, 0)", editorSub, deckA);
+      var editor = new RecallSmith.Lambda.Common.AuthContext(Claims: new Dictionary<string, JsonElement>(), UserSub: editorSub, Username: null,
+        Groups: ["editor"], IsSuperAdmin: false, IsEditor: true, IsAdmin: true);
+      var response = await AutomationTestKit.CallAsync(WatchAdminRoutes.HandleWatch, "GET", "/api/v1/admin/automation/watch", null, editor);
+      var scoped = AutomationTestKit.Data(response);
+      Assert.Equal([a1], Ids(EventOf(scoped).GetProperty("affectedCards")));
+      Assert.Equal([a1], Ids(EventOf(scoped).GetProperty("details").GetProperty("affectedCards")));
+      Assert.Equal(2, EventOf(scoped).GetProperty("details").GetProperty("citingCards").GetInt32());
+      Assert.True(EventOf(scoped).GetProperty("needsHumanReview").GetBoolean());
+      Assert.Equal([ftsA], Ids(ItemOf(scoped).GetProperty("possiblyAffectedCards")));
+      Assert.DoesNotContain("Synthetic hidden premium question?", response.Body);
+      Assert.DoesNotContain("in deck B?", response.Body);
+      Assert.DoesNotContain(uidB, response.Body);
+      Assert.DoesNotContain(slugB, response.Body);
+
+      // No grant at all: the events and items are listed, without any card.
+      var none = new RecallSmith.Lambda.Common.AuthContext(Claims: new Dictionary<string, JsonElement>(), UserSub: $"it-f02-none-{Guid.NewGuid():N}",
+        Username: null, Groups: ["editor"], IsSuperAdmin: false, IsEditor: true, IsAdmin: true);
+      var empty = AutomationTestKit.Data(await AutomationTestKit.CallAsync(WatchAdminRoutes.HandleWatch, "GET", "/api/v1/admin/automation/watch", null, none));
+      Assert.Empty(EventOf(empty).GetProperty("affectedCards").EnumerateArray());
+      Assert.Empty(ItemOf(empty).GetProperty("possiblyAffectedCards").EnumerateArray());
+    });
+  }
+
+  [Fact]
   public async Task BeforeMigration039_ReportAndWatchStillWork()
   {
     await InScratchAsync(async (scope, sql) =>

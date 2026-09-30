@@ -751,6 +751,8 @@ public static class SourceWatchRoutes
           var itemUrl = AutomationBody.RequiredString(item, "url", int.MaxValue);
           var title = AutomationBody.OptionalString(item, "title", int.MaxValue);
           // summary (optional, R20 V07): release-note text for the full-text query only, capped, never stored or logged.
+          // The current watcher (services/source-watcher, feeds.py) sends url, title and publishedAt only, so in production
+          // the query is the title alone until it sends a summary (contract R20-00 §10.4).
           var summary = AutomationBody.OptionalString(item, "summary", int.MaxValue);
           if (summary is { Length: > ChangeImpact.MaxQueryTextLength }) summary = summary[..ChangeImpact.MaxQueryTextLength];
           // publishedAt is informational: a value that is not a timestamp (an RSS pubDate PostgreSQL cannot read) is stored as null.

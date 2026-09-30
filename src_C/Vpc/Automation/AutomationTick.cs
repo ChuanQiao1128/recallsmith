@@ -190,7 +190,8 @@ public static class AutomationTick
     await Step("live_quality", () => LiveQualityAsync(conn, a));
     await Step("resend", async () => a.NotificationsResent = await Notifications.ResendAsync(conn, StepBatch));
     // R20 V08: once per UTC day, the usage rollups of the last 8 complete days (skips with a log line before 040).
-    await Step("analytics_daily", () => Analytics.UsageAnalytics.RunIfDueAsync(conn));
+    // R20X F02 (§10.8): deferred to the next tick when less than half the budget remains; statement_timeout inside.
+    await Step("analytics_daily", () => Analytics.UsageAnalytics.RunIfDueAsync(conn, Budget - clock.Elapsed, Budget));
   }
 
   private static string UtcDate() => DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);

@@ -8,12 +8,12 @@ tests use synthetic unit vectors.
 
 | File | Change |
 |---|---|
-| `src_C/Vpc/Db/Migrations/038_card_embeddings.sql` | New. First block: when `vector` is not installed, it creates the extension only if the extension is available on the server AND `has_database_privilege(current_user, current_database(), 'CREATE')` is true. Otherwise it raises a NOTICE (`vector not installed: ...`). Second block: only `if exists (select 1 from pg_extension where extname='vector')` does it `execute` `create table if not exists card_embeddings (card_id bigint pk references cards(id) on delete cascade, model text not null, dim int not null, text_sha256 text not null, embedding vector(384) not null, updated_at timestamptz not null default now())`. There is no ANN index. Idempotent. |
+| `src_C/Vpc/Db/Migrations/038_card_embeddings.sql` | New. First block: when `vector` is not installed, it creates the extension only if the extension is available on the server AND `has_database_privilege(current_user, current_database(), 'CREATE')` is true. Otherwise it raises a NOTICE (`vector not installed: ...`). (Corrected in R20X F02: CREATE alone does not make the create succeed, because pgvector is not a trusted extension; a database owner that is not a superuser got `ERROR: permission denied to create extension "vector"`. The create now sits in an exception handler for insufficient_privilege, feature_not_supported and undefined_file, which raise the same NOTICE.) Second block: only `if exists (select 1 from pg_extension where extname='vector')` does it `execute` `create table if not exists card_embeddings (card_id bigint pk references cards(id) on delete cascade, model text not null, dim int not null, text_sha256 text not null, embedding vector(384) not null, updated_at timestamptz not null default now())`. There is no ANN index. Idempotent. |
 | `src_C/Vpc/Authoring/CardEmbeddings.cs` | New. Canonical text and `TextSha256`, the cached "vector ready" check, the three admin handlers, and `FindSimilarAsync` (the vector engine). |
 | `src_C/Vpc/Authoring/CardSimilarity.cs` | `HandleSimilar` parses an optional `embedding`. When one is present and the store is ready, it answers from `CardEmbeddings.FindSimilarAsync`; otherwise it takes the unchanged trigram path. `ScopeWhere` is now `internal` so both engines share the deck and exclude scope. `FindAsync` is unchanged, so the drafts and automation callers keep trigram. |
 | `src_C/Vpc/VpcFunction.cs` | Dispatch for the three new paths. They sit after the card reports block. `status` is matched before the bare `card-embeddings` path. |
 | `src_C/Shared/RecallSmith.Lambda.Common/RouteMetrics.cs` | Known routes: `/api/v1/admin/card-embeddings`, `/api/v1/admin/card-embeddings/status`, and the template `/api/v1/admin/decks/:deckId/semantic-duplicates`. |
-| `src_C/Tests/RecallSmith.Lambda.IntegrationTests/IntegrationTestBase.cs` | The Testcontainers image changes from `postgres:16-alpine` to `pgvector/pgvector:pg17`. This moves the suite from PostgreSQL 16 to 17 and from Alpine (musl) to Debian (glibc). |
+| `src_C/Tests/RecallSmith.Lambda.IntegrationTests/IntegrationTestBase.cs` | The Testcontainers image changes from `postgres:16-alpine` to `pgvector/pgvector:pg17` (a floating tag; R20X F02 pins it to the digest of `pgvector/pgvector:0.8.6-pg17`, PostgreSQL 17.11). This moves the suite from PostgreSQL 16 to 17 and from Alpine (musl) to Debian (glibc). |
 | `src_C/Tests/RecallSmith.Lambda.IntegrationTests/CardEmbeddingsTests.cs` | New, 10 tests (listed below). |
 | `docs/runbooks/automation-operations.md` | New section "Card embeddings and semantic duplicates (R20 V06)", covering the owner step, routes, batch size and rollback. |
 
@@ -27,7 +27,7 @@ All responses use the `Res` envelope. "Vector ready" means the `vector` extensio
 forgets the cached answer.
 
 - `PUT /api/v1/admin/card-embeddings` (`Auth.RequireSuperAdmin`; other methods → 405)
-  - Body `{model:"BAAI/bge-small-en-v1.5", dim:384, items:[{deckSlug, stableUid, textSha256, embedding:number[384]}]}`, 1..200 items.
+  - Body `{model:"BAAI/bge-small-en-v1.5", dim:384, items:[{deckSlug, stableUid, textSha256, embedding:number[384]}]}`, 1..100 items (was 1..200; R20X F02, contract §10.1: 200 full-precision vectors never fit the 1 MiB body cap).
   - `deckSlug` and `stableUid` are trimmed, 1..128 chars. `textSha256` is 64 hex chars in either case and is compared in lower case.
     `embedding` must be exactly 384 finite JSON numbers and not all zero. The same deckSlug/stableUid may not appear twice.
   - → `200 {upserted, unknownCards:[stableUid], staleText:[stableUid]}`. Both lists keep the request order.
@@ -35,8 +35,8 @@ forgets the cached answer.
     of the card's current canonical text. Neither kind is stored. The rest are upserted in one statement (`on conflict (card_id)
     do update`, `updated_at = now()`), with one `admin_audit` row `card_embeddings.upsert` (counts only).
   - `400 VALIDATION_ERROR` for a wrong model, a wrong dim, the wrong item count, a vector that is short, NaN, Infinity, a string,
-    or all zeros, a bad hash, or a duplicate item. `400 BAD_REQUEST` when the body is not JSON (this includes a bare `NaN`
-    literal, which Python's `json.dumps` writes by default). Validation runs before the readiness check.
+    or all zeros, a bad hash, or a duplicate item. `400 VALIDATION_ERROR` also when the body is not JSON (this includes a bare
+    `NaN` literal, which Python's `json.dumps` writes by default); it was `400 BAD_REQUEST` before R20X F02 (contract §10.6). Validation runs before the readiness check.
     `503 VECTOR_NOT_READY` when the store is not ready.
 - `GET /api/v1/admin/card-embeddings/status?deckId=` (`Auth.RequireAdmin`)
   - → `{engine:"vector"|"none", model:"BAAI/bge-small-en-v1.5", cards, embedded, stale}`.
@@ -101,17 +101,18 @@ Commands run (from `src_C`):
 
 ## Owner steps
 
-1. As the RDS master user, run `CREATE EXTENSION IF NOT EXISTS vector;`. If 038 already ran as the app role (NOTICE only),
-   also run `DELETE FROM schema_migrations WHERE version = 38;`, because the migrate route skips recorded versions. Then run
-   `POST /api/v1/admin/db/migrate` (`scripts/invoke-as-admin.sh`) so 038 creates `card_embeddings`, owned by the app role.
-   If the extension is installed before the first migrate, the delete is not needed. Details are in
+1. As the RDS master user, run `CREATE EXTENSION IF NOT EXISTS vector;`. Then press Migrate
+   (`POST /api/v1/admin/db/migrate`, `scripts/invoke-as-admin.sh`): since R20X F02 every migrate call re-runs the guarded
+   `card_embeddings` block, so the table appears, owned by the app role, without deleting any `schema_migrations` row
+   (the `DELETE FROM schema_migrations WHERE version = 38` step written here before is no longer needed). Details are in
    `docs/runbooks/automation-operations.md`.
 2. Push vectors with `dc-evals embed-cards --deck <slug> --push` (V04), with a super_admin console token in env.
 
 ## Deviations and decisions
 
-- The contract's "re-run the migration" needs the `schema_migrations` row for 38 removed first, because
+- The contract's "re-run the migration" needed the `schema_migrations` row for 38 removed first, because
   `Migrate.HandleDbMigrate` never re-applies a recorded version. I documented this rather than changing `Migrate.cs`.
+  Superseded by R20X F02: `Migrate.cs` now runs an "ensure vector objects" block on every call (contract §10.2).
 - 038 also checks `pg_available_extensions`, so a privileged role on a server without pgvector files gets a NOTICE
   rather than an error.
 - Validation, beyond the contract: the zero vector is rejected (it has no cosine), duplicate items are rejected, and
@@ -123,7 +124,8 @@ Commands run (from `src_C`):
 
 - No ANN (ivfflat/hnsw) index, per the contract. The exact scan is fine at about 900 rows.
 - The request body cap (1 MiB) can reject a 200-item push at full float precision. V04 should batch at 100 or fewer items, or
-  round to 6 decimals. See the runbook.
+  round to 6 decimals. See the runbook. (Resolved in R20X F02: the route now accepts at most 100 items, matching the
+  amended contract, and a test pushes 100 full-precision vectors through VpcFunction.)
 - The MCP `find_similar_cards` tool does not pass an embedding (per the contract).
 - Draft submit and the automation duplicate re-check still use trigram only.
 
@@ -132,3 +134,14 @@ Commands run (from `src_C`):
 - `dotnet test Tests/RecallSmith.Lambda.IntegrationTests` (full suite, `pgvector/pgvector:pg17`): 2797 passed, 0 failed, 0 skipped.
   No existing test needed a change for the PostgreSQL 16 → 17 (Alpine → Debian) image switch.
 - Targeted (`FullyQualifiedName~Embedding|FullyQualifiedName~CardSimilarity|FullyQualifiedName~RouteMetrics`): 87 passed.
+
+## R20X F02 corrections
+
+Independent review found overclaims in these notes; see `docs/delivery/r20-issues/F02-fixes.md`.
+- "The only non-privileged outcome is a NOTICE" was wrong: a role with CREATE on the database but no superuser got an
+  error from `create extension`. Fixed in 038 and covered by
+  `Embedding_Migration038_RoleWithCreateButNotSuperuser_NoticeOnly_NoError`.
+- The vector engine's deck scope and `excludeCardIds` were promised but untested; now covered in
+  `Embedding_Similar_WithEmbedding_UsesVectorEngine_WithoutKeepsTrigram`.
+- The Testcontainers image was a floating tag; it is now pinned by digest (pgvector 0.8.6, PostgreSQL 17.11). The pgvector
+  version that prod RDS PostgreSQL 17.9 offers is unverified (no AWS access from this worker).

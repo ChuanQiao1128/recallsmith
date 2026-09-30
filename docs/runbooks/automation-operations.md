@@ -423,7 +423,14 @@ goes to the reviewer, never the learner's note.
 
 **Deploy order.** Code first, then `POST /api/v1/admin/db/migrate` (applies `037_card_reports.sql`, which
 also lets webhook subscriptions pick `card.reported`). Until the migration runs every card report route
-answers `503 NOT_READY` ("Run the database migration") and the status/digest counts read zero.
+answers `503 NOT_READY` ("Run the database migration") and the status/digest counts read zero. The R20X fix
+round adds `041_card_reports_question.sql` (one nullable `question` column); between the code deploy and that
+migration the learner routes also answer `503 NOT_READY`.
+
+**What a learner can report.** Only a card they can see: a live deck (not `coming` or `retired`) that is free, or
+premium with an active entitlement in `user_premium_state` (the premium download rule). Anything else answers the
+same `404 CARD_NOT_FOUND` as an unknown card. *My reports* shows the question as it was when the report was created
+(first 200 characters), never later edits of the card; reports created before 041 show `question: null`.
 
 **Switches** (`src_C/env/prod.env.json`, read on every request, deploy to change):
 
@@ -457,34 +464,38 @@ pushed to the server. The server never calls a model. Everything here needs the 
 (pgvector); until it is installed, the routes below answer `503 VECTOR_NOT_READY`, the status route reports
 `engine: "none"`, and `POST /api/v1/authoring/cards/similar` keeps its trigram engine.
 
-**Why an owner step.** Migration `038_card_embeddings.sql` creates the extension only when the migrating role
-holds CREATE on the database. Prod migrates as the app role, which does not, so there 038 only raises a
-NOTICE ("vector not installed ...") and records itself as applied without creating `card_embeddings`.
+**Why an owner step.** pgvector is not a trusted extension: only a superuser (on RDS, the master user through
+`rds_superuser`) can create it. Migration `038_card_embeddings.sql` tries to create it only when the migrating role
+holds CREATE on the database, and turns every refusal into a NOTICE ("vector not installed ..."): no CREATE (the
+prod app role), CREATE but not a superuser (a role that owns its database, such as the staging app role:
+`insufficient_privilege`), or an extension the server does not allow or ship (`feature_not_supported`,
+`undefined_file`). In each case 038 records itself as applied without `card_embeddings`, and 039 and 040 still
+apply after it (R20X F02).
 
 **Turning it on (owner, once):**
 
 1. As the RDS master user: `CREATE EXTENSION IF NOT EXISTS vector;` in the app database.
-2. If 038 already ran (check `GET /api/v1/admin/db/migrations`), let it run again: as the master user,
-   `DELETE FROM schema_migrations WHERE version = 38;`. The migrate route skips versions it has recorded, and
-   038 is idempotent, so running it a second time is safe.
-3. `POST /api/v1/admin/db/migrate` through `scripts/invoke-as-admin.sh`. 038 now creates `card_embeddings`, owned
-   by the app role.
-4. Readiness is cached for 5 minutes per Lambda container. `GET /api/v1/admin/card-embeddings/status` shows
-   `engine: "vector"` once it has expired.
-5. Push the vectors: `dc-evals embed-cards --deck <slug> --push`, with a super_admin console token in the environment.
+2. `POST /api/v1/admin/db/migrate` through `scripts/invoke-as-admin.sh` (press Migrate). Every migrate call, also
+   one with nothing pending, re-runs the guarded `card_embeddings` block of 038 (`Migrate.EnsureVectorObjectsSql`),
+   so the table appears, owned by the app role. No `schema_migrations` row has to be deleted. The response carries
+   `vectorReady: true` once the extension and the table exist (`false` while the extension is missing).
+3. Readiness is cached for 5 minutes per Lambda container (the migrate call clears it in its own container).
+   `GET /api/v1/admin/card-embeddings/status` shows `engine: "vector"` once it has expired.
+4. Push the vectors: `dc-evals embed-cards --deck <slug> --push`, with a super_admin console token in the environment.
 
 **Routes:**
 
 | Route | Who | What |
 |---|---|---|
-| `PUT /api/v1/admin/card-embeddings` | super_admin | `{model, dim:384, items:[{deckSlug, stableUid, textSha256, embedding}]}`, 1..200 items → `{upserted, unknownCards, staleText}`. The server recomputes each card's `textSha256` from `question.Trim() + "\n\n" + explanation.Trim()`. An item whose hash differs (the card changed after it was embedded) is not stored and is listed in `staleText`. Re-embed those cards. |
+| `PUT /api/v1/admin/card-embeddings` | super_admin | `{model, dim:384, items:[{deckSlug, stableUid, textSha256, embedding}]}`, 1..100 items → `{upserted, unknownCards, staleText}`. The server recomputes each card's `textSha256` from `question.Trim() + "\n\n" + explanation.Trim()`. An item whose hash differs (the card changed after it was embedded) is not stored and is listed in `staleText`. Re-embed those cards. |
 | `GET /api/v1/admin/card-embeddings/status?deckId=` | admin (deck read) | `{engine, model, cards, embedded, stale}`. `stale` counts stored vectors whose card text changed since. |
 | `GET /api/v1/admin/decks/<deckId>/semantic-duplicates?minCosine=0.90&limit=50` | admin + deck read | Pairs of live cards with cosine ≥ minCosine, each pair once, highest first. |
 | `POST /api/v1/authoring/cards/similar` + `embedding` | admin | Engine `vector` (cosine, `likelyDuplicate` at ≥ 0.90) when the store is ready; otherwise the trigram answer is unchanged. |
 
 **Body size.** The API rejects bodies over 1 MiB (`413`). A 384-number vector printed at full float precision is
-about 8 KB, so a push with 200 items can exceed the limit. Push in batches of 100 or fewer, or round the values
-to 6 decimals.
+about 8.5 KB, so 200 items (about 1.7 MB) never fit; the route therefore accepts at most 100 items (contract
+R20-00 §10.1), and a 100-item full-precision batch fits (about 0.85 MB, covered by a test). A body that is not JSON
+(for example a bare `NaN` from Python's `json.dumps`) answers `400 VALIDATION_ERROR`, like any other invalid item.
 
 **Rollback.** The table only adds data. To stop using it, stop pushing vectors. To remove it, the master can run
 `DROP TABLE card_embeddings;`, and the routes return `503 VECTOR_NOT_READY` once the 5-minute cache expires. Do not
@@ -517,9 +528,17 @@ shared word such as "Amazon" does not qualify. The Monday digest lists the week'
 affected cards (one line each, with ranks and editor links) and a NEEDS YOU line with their count.
 
 **Where to look.** `GET /api/v1/admin/automation/watch`: each `recentEvents[]` entry has `affectedCards` and
-`needsHumanReview`; `recentFeedItems` holds the latest 20 analysed items with `possiblyAffectedCards`.
+`needsHumanReview`; `recentFeedItems` holds the latest 20 analysed items with `possiblyAffectedCards`. The cards
+are deck-scoped: an admin who is not super_admin sees only the cards of decks they may read (also inside
+`details.affectedCards`); the events and items themselves are listed for every admin (R20X F02).
 `GET /api/v1/admin/automation/status` → `watch.needsReview`: changed/gone events of the last 30 days flagged for
-a human review. The flag is informational; nothing clears it, so the 30-day window keeps the count current.
+a human review. The flag is informational; nothing clears it, so the 30-day window keeps the count current. An
+event older than 30 days drops out of the count whether or not someone checked its cards, and fixing the cards
+does not lower it: look at the watch route's events, not only the count (contract §10.4).
+
+**Title only in production.** The current source watcher (`services/source-watcher`) reports feed items as
+`{url, title, publishedAt}`, without a `summary`, so the full-text query is the item title alone. A card then
+needs two title-word hits to be listed.
 
 **Rollback.** Revert the code; the column and the extra `details` keys are ignored by older code.
 
@@ -536,10 +555,16 @@ logs `analytics_not_migrated` and skips (the tick reports no failed step) and
 **Usage.** The tick step `analytics_daily` runs on the first tick of each UTC day while the mode is not `off`
 and recomputes the 8 complete days before today from `user_progress_events` (reviews only). Rerunning is safe.
 `GET /api/v1/admin/analytics/usage?days=30` returns the stored days (DAU/WAU/MAU, reviews, new users, cards
-learned, D1/D7 retention) and per-deck numbers for the last 30 days. To keep test devices out, list their learner
+learned, D1/D7 retention) and per-deck numbers for the last 30 days (`decks[]`: every deck for a super_admin, only
+the decks the caller may read for anyone else; `days[]` is site-wide). To keep test devices out, list their learner
 subs in `ANALYTICS_EXCLUDED_SUBS` (comma-separated) in `src_C/env/prod.env.json` and redeploy; the next day's run
 recomputes the window without them. The route reports only how many subs are excluded, never which.
 With `AUTOMATION_MODE=off` the tick returns early and nothing is recomputed; the stored rows stay readable.
+The step is the last one of the tick and reads the whole review history, so it is bounded (R20X F02, contract
+§10.8): it is skipped with an `analytics_deferred` log line when less than half of the tick's 20 s budget is left
+(the next tick runs it), each of its statements runs under `set local statement_timeout = 3000` (3 s), and after a
+failure (for example `57014` statement timeout, counted once in `AutomationStepFailures`) the same Lambda container
+logs `analytics_backoff` and does not retry until the next UTC day. A new container may try once more.
 
 **Freshness.** `GET /api/v1/admin/automation/freshness?days=30` lists each changed/gone page and each matched
 release-notes item with the time it was detected, queued, drafted, decided and published, plus the median

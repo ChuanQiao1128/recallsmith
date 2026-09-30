@@ -10,7 +10,7 @@ no Terraform change, no webhook change. Every day and every window is **UTC**.
 | `src_C/Vpc/Db/Migrations/040_usage_analytics.sql` | New, additive, no extension: `analytics_daily` gains `wau int`, `new_users int`, `cards_learned int`, `d1_retention numeric(5,4)`, `d7_retention numeric(5,4)`, `computed_at timestamptz`; `analytics_deck_daily` gains `new_learners int`. All `add column if not exists`, all nullable. |
 | `src_C/Vpc/Analytics/UsageAnalytics.cs` | New. `RunIfDueAsync` (the tick step: once per UTC day), `ComputeAsync` (recompute the last 8 complete days in one transaction), `ExcludedSubs` (env parse), `HandleUsage` (the usage route), `DaysParam` (shared `days` validation). Missing table/column (42P01/42703) → the step logs `analytics_not_migrated` and returns `NotMigrated`; the route answers `503 NOT_READY`. |
 | `src_C/Vpc/Automation/Freshness.cs` | New. `HandleFreshness` (the freshness route), `LoadAsync` (the chain walk), `Median`, `StatusAsync` (the status block). |
-| `src_C/Vpc/Automation/AutomationTick.cs` | New last step `analytics_daily` in `RunStepsAsync`. The tick returns early when the effective mode is `off`, so the step runs in `dry_run` and `live`. |
+| `src_C/Vpc/Automation/AutomationTick.cs` | New last step `analytics_daily` in `RunStepsAsync`. The tick returns early when the effective mode is `off`, so the step runs in `dry_run` and `live`. (R20X F02: the step had no time bound of its own and a failed run retried on every tick; it now defers when less than half the 20 s budget remains, runs each statement under `set local statement_timeout` = 3 s, and backs off in the same container until the next UTC day after a failure, contract §10.8.) |
 | `src_C/Vpc/Automation/StatusRoutes.cs` | `automation/status` gains `freshness: {medianMinutesToPublish, n}`. |
 | `src_C/Vpc/Ledger/LedgerRoutes.cs` | `GET /api/v1/admin/automation/baselines` items gain `suggestedMeasuredMinutes` and `suggestedFromN` (`SuggestedReviewMinutesAsync`). The PUT is unchanged. |
 | `src_C/Vpc/VpcFunction.cs` | Two routes: `/api/v1/admin/automation/freshness`, `/api/v1/admin/analytics/usage`. |
@@ -80,7 +80,9 @@ in the `Res` envelope. `days` must be an integer in range, else `400 VALIDATION_
     computed are absent (no gap filling); a row written before 040 has null for the new keys.
   - `decks`: computed live from `user_progress_events` over the last 30 complete UTC days with the same exclusion:
     distinct users, reviews, and users whose first ever review in the deck falls in the window. Order: reviews
-    desc, then slug. Decks with no review in the window are absent.
+    desc, then slug. Decks with no review in the window are absent. Corrected in R20X F02: as shipped here every
+    admin saw every deck; per-deck numbers are deck-scoped data, so an admin who is not super_admin now gets only the
+    decks they may read (`days` stays site-wide; contract §10.4).
   - `excludedSubsCount`: the number of distinct non-empty entries in `ANALYTICS_EXCLUDED_SUBS`; the subs are never
     returned. `lastComputedAt`: `max(computed_at)`, null before the first run.
   - Before 040: `503 NOT_READY` "Run the database migration (040_usage_analytics)".

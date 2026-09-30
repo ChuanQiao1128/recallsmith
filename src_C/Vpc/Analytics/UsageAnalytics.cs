@@ -37,12 +37,33 @@ public static class UsageAnalytics
   /// <summary>The clock of the step and the route. Internal so a test can move "today".</summary>
   internal static Func<DateTime> UtcNow = () => DateTime.UtcNow;
 
+  /// <summary>
+  /// The <c>statement_timeout</c> of each rollup statement (<c>set local</c>, so only this transaction), R20X F02 /
+  /// contract R20-00 §10.8: the tick starts the step with at least half its 20 s budget left, and the three statements
+  /// together stay inside that. Internal so a test can shorten it.
+  /// </summary>
+  internal static TimeSpan StatementTimeout = TimeSpan.FromSeconds(3);
+
   public enum Outcome
   {
     Computed,
     NotDue,
     NotMigrated,
+
+    /// <summary>Due, but less than half the tick budget was left: the next tick runs it.</summary>
+    Deferred,
+
+    /// <summary>Due, but a run already failed today in this container: retried the next UTC day, not every tick.</summary>
+    BackedOff,
   }
+
+  /// <summary>
+  /// The UTC day a run last failed (a timeout or any other error), per Lambda container. A failing whole-history rollup
+  /// is not repeated on every 15-minute tick; a new container or the next UTC day tries again.
+  /// </summary>
+  private static DateOnly? _failedOn;
+
+  internal static void ResetBackoff() => _failedOn = null;
 
   /// <summary>The trimmed, non-empty, distinct subs of <see cref="ExcludedSubsEnv"/> (comma-separated, default none).</summary>
   public static string[] ExcludedSubs() =>
@@ -59,9 +80,12 @@ public static class UsageAnalytics
 
   /// <summary>
   /// The tick step: when no row was computed yet today (UTC), recomputes the last <see cref="RecomputeDays"/> complete
-  /// days. Before migration 040 it logs one line and skips; it never throws for a missing table or column.
+  /// days. Before migration 040 it logs one line and skips; it never throws for a missing table or column. With
+  /// <paramref name="remaining"/> and <paramref name="budget"/> (the tick's), it defers when less than half the budget
+  /// remains; after a failed run it backs off until the next UTC day (R20X F02, contract R20-00 §10.8). A failure is
+  /// still thrown, so the tick records the step as failed once.
   /// </summary>
-  public static async Task<Outcome> RunIfDueAsync(NpgsqlConnection conn)
+  public static async Task<Outcome> RunIfDueAsync(NpgsqlConnection conn, TimeSpan? remaining = null, TimeSpan? budget = null)
   {
     var today = Today();
     try
@@ -77,7 +101,27 @@ public static class UsageAnalytics
       Log.Event("info", new { tag = "analytics", reason = "analytics_not_migrated", step = "analytics_daily" });
       return Outcome.NotMigrated;
     }
-    return await ComputeAsync(conn, today);
+    if (remaining is { } left && budget is { } total && left < total / 2)
+    {
+      Log.Event("info", new { tag = "analytics", reason = "analytics_deferred", step = "analytics_daily", remainingMs = (long)left.TotalMilliseconds });
+      return Outcome.Deferred;
+    }
+    if (_failedOn == today)
+    {
+      Log.Event("info", new { tag = "analytics", reason = "analytics_backoff", step = "analytics_daily" });
+      return Outcome.BackedOff;
+    }
+    try
+    {
+      return await ComputeAsync(conn, today);
+    }
+    catch (Exception ex)
+    {
+      _failedOn = today;
+      Log.Event("warn", new { tag = "analytics", reason = "analytics_failed_backoff", step = "analytics_daily",
+        sqlState = (ex as PostgresException)?.SqlState });
+      throw;
+    }
   }
 
   /// <summary>
@@ -93,6 +137,9 @@ public static class UsageAnalytics
     await using var tx = await conn.BeginTransactionAsync();
     try
     {
+      // Each statement reads the whole review history: bounded, so a slow rollup fails fast instead of holding the tick.
+      var timeoutMs = Math.Max(1, (long)StatementTimeout.TotalMilliseconds).ToString(CultureInfo.InvariantCulture);
+      await DbUtil.ExecuteAsync(conn, tx, $"set local statement_timeout = {timeoutMs}", []);
       await DbUtil.ExecuteAsync(conn, tx,
         $"""
         with {EventsCte},
@@ -189,6 +236,9 @@ public static class UsageAnalytics
         order by day
         """, [today.AddDays(-days), today]);
       var lastComputedAt = await DbUtil.ExecuteScalarAsync(conn, null, "select max(computed_at) from analytics_daily", []);
+      // R20X F02 (contract R20-00 §10.4): per-deck numbers are deck-scoped, so a caller who is not super_admin gets the
+      // decks they may read only ($5 null = every deck). The site-wide days[] rollups stay unfiltered.
+      var readable = await Helpers.ReadableDeckIdsAsync(conn, auth);
       var deckRows = await DbUtil.QueryAsync(conn, null,
         $"""
         with {EventsCte},
@@ -197,9 +247,10 @@ public static class UsageAnalytics
           (select count(*) from first_deck f where f.deck_slug = ev.deck_slug and f.first_day >= $1::date) as new_learners
         from ev
         where ev.day >= $1::date and ev.day < $2::date
+          and ($5::bigint[] is null or ev.deck_slug in (select d.slug from decks d where d.id = any($5::bigint[])))
         group by ev.deck_slug
         order by count(*) desc, ev.deck_slug collate "C"
-        """, [today.AddDays(-DeckWindowDays), today, today, excluded]);
+        """, [today.AddDays(-DeckWindowDays), today, today, excluded, readable?.ToArray()]);
 
       return res.Ok(new
       {

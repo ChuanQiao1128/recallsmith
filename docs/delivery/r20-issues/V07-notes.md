@@ -35,7 +35,10 @@ No env key, no new route, no Terraform change, and no webhook change (`source.ch
   It is set to `[]` when nothing qualifies, and to `null` when the item was not analysed: a baseline item, a
   pattern mismatch, or an item recorded before 039.
 - `GET /api/v1/admin/automation/watch` (unchanged auth, `RequireAdmin`):
-  - `recentEvents[]` gains `affectedCards` and `needsHumanReview`.
+  - `recentEvents[]` gains `affectedCards` and `needsHumanReview`. Corrected in R20X F02: as shipped here the cards
+    (deck slug, stable uid, question) of every deck went to every admin; they are deck-scoped data, so an admin who
+    is not super_admin now sees only the cards of decks they may read, in `affectedCards`, in `details.affectedCards`
+    and in `recentFeedItems[].possiblyAffectedCards` (contract §10.4).
   - The response gains `recentFeedItems: [{id, title, url, firstSeenAt, possiblyAffectedCards}]`. It holds the
     latest 20 analysed items, newest `firstSeenAt` first, and is `[]` before 039.
   - `id` is the string `"<targetId>:<itemKey>"`, because the table has a composite key and no id column.
@@ -114,9 +117,11 @@ Tests first: `ChangeImpactTests.cs` was written before the implementation and do
 ## Deferred
 
 - The source watcher (`services/source-watcher`, outside this issue's scope) does not send `summary` yet, so the
-  query is the item title only until it does.
+  query is the item title only until it does. This contradicted the contract's "title + summary"; contract §10.4
+  now records it as the documented behaviour (R20X F02).
 - `needsHumanReview` has no "reviewed" action. The status count uses a 30-day window instead. A console action to
-  clear it would need a route, which is out of scope here.
+  clear it would need a route, which is out of scope here. So the count drops an unhandled event after 30 days and
+  does not fall when someone fixes the cards; contract §10.4 accepts this for this round (R20X F02).
 - The `source.changed` webhook payload does not carry the affected cards (that would change the A00 §13 payload
   contract).
 - The console rendering is V10.

@@ -258,7 +258,8 @@ public static class StatusRoutes
         failing = RunnerRoutes.Long(w["failing"]),
         lastCheckedAt = RunnerRoutes.Timestamp(w["last_checked_at"]),
         changes7d = RunnerRoutes.Long(w["changes_7d"]),
-        // R20 V07: changed/gone events of the last 30 days whose cited cards no AI QA re-check covered.
+        // R20 V07: changed/gone events of the last 30 days whose cited cards no AI QA re-check covered. The 30-day
+        // window and the lack of a "reviewed" action are the documented behaviour of this round (contract §10.4).
         needsReview = RunnerRoutes.Long(w["needs_review"]),
       };
 
