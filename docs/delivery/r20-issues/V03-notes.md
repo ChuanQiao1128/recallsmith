@@ -11,7 +11,8 @@ The deck files are not edited in this issue.
 | --- | --- |
 | `evals/src/dc_evals/backfill.py` | New. Candidate pages, chunk ranking, quote windows, SOURCE insertion, unified patch, patched-deck validation, report files, `--apply`. |
 | `evals/src/dc_evals/cli.py` | New subcommand `backfill-sources`. |
-| `evals/tests/test_backfill.py` | New, 15 tests. |
+| `evals/tests/test_backfill.py` | New, 16 tests. |
+| `evals/README.md` | New section "Citation backfill"; layout line. |
 | `evals/reports/backfill/<date>-<slug>-sources.{jsonl,md,patch}` | The real run output for both decks (see "The run"). |
 
 ## Surface shipped
@@ -35,7 +36,8 @@ dc-evals backfill-sources --deck SLUG [--limit N] [--min-score X] [--out DIR] [-
   are ordered by RRF (k = 60) of the BM25 and cosine orderings (`hybrid`), otherwise by BM25 alone.
   Query = question + explanation + code + keyed options (`mutations._answer_text`).
 - Quote window, in each of the best 3 chunks: sentences split at `.`/`?`/`!` followed by space
-  (not after e.g./i.e./etc., not before a lower-case word) and never across a line break. Seed =
+  (not after e.g./i.e./etc., not before a lower-case word) and never across a line break. A
+  window starts on a character that is neither lower-case nor `#` and ends with `.`, `?` or `!`. Seed =
   the sentence sharing the most answer terms (explanation + keyed options; tokens as V02, plural
   `s` stripped); grow by the same-line neighbour adding the most new answer terms (following one
   on a tie) while it adds at least one, up to 3 sentences and 1000 characters. A window whose
@@ -71,6 +73,7 @@ blocked or a fake embedder):
   A and a CODE body (after the code line, before the next header) and the last card of the file;
   refusal for a card that already has a SOURCE or does not exist;
 - the patch applies cleanly with `git apply` (also for a deck without a final newline);
+- chunk-edge fragments (lower-case start, no final stop) and Markdown headings are never quoted;
 - the command end to end: cards with a source skipped, fragment dropped, ledger CSV fallback,
   review table weakest first, deck untouched without `--apply`, patch reproduces the proposals;
   `--min-score` and `--limit`; uncached pages skipped; `--apply`; a patched deck that does not
@@ -80,7 +83,57 @@ Commands: `cd evals && uv lock --check && uv run --python 3.12 pytest -q` and `V
 
 ## The run
 
-RUN_RESULTS
+Run on the owner's Mac on 2026-10-01 (file date 2026-09-30, UTC), ranker `hybrid` (fastembed
+installed in `evals/.venv`), default `--min-score 0.1`. The fetch step added the ledger-fallback
+pages of aws-saa-c03 and the 72 claude-ccdv-f pages V02 had not fetched to the local cache
+(sequential, 1 s apart); the final runs used `--offline` on that cache. Outputs:
+`evals/reports/backfill/2026-09-30-{aws-saa-c03,claude-ccdv-f}-sources.{jsonl,md,patch}`.
+
+| deck | cards | already sourced | proposed | high | medium | low | skipped |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| aws-saa-c03 | 371 | 0 | 306 | 205 | 81 | 20 | 65: 61 no ledger URL (ledger rows without a URL), 4 no quotable sentence |
+| claude-ccdv-f | 441 | 0 | 439 | 317 | 105 | 17 | 2: below --min-score |
+| total | 812 | 0 | 745 | 522 | 186 | 37 | 67 |
+
+Longest quote: 713 characters (aws), 570 (ccdvf); every quote is one line and at most 1000
+characters. The patched decks parsed with zero errors through `parse-deck.mts`, and both
+`.patch` files pass `git apply --check` against this branch.
+
+### Spot-check (20 cards, done by hand)
+
+Sample: `random.Random(20)`, per deck 2 low, 3 medium and 5 high proposals. The question was:
+does the quote state (part of) what the card's answer asserts?
+
+| # | card | conf. | supports? | note |
+| ---: | --- | --- | --- | --- |
+| 1 | aws-api-gateway-caching-and-throttling | low | yes | token-bucket throttling (the rate/burst part) |
+| 2 | aws-shared-responsibility-model | low | yes | AWS host/virtualisation vs customer guest OS |
+| 3 | aws-sns-fanout-filtering | medium | no | "Amazon SQS FIFO queues." only |
+| 4 | aws-managed-vs-self-hosted-rule | medium | yes | EventBridge Scheduler replaces the cron box (one part) |
+| 5 | aws-alarm-on-healthy-host-count-mcq-29 | medium | yes | TargetGroup dimension of the metric |
+| 6 | aws-kinesis-shards-and-partition-keys | high | no | fragment about on-demand shard splits |
+| 7 | aws-kms-envelope-encryption | high | yes | Decrypt returns the plaintext data key (starts mid-sentence) |
+| 8 | aws-lex-service-card | high | no | publishing channels, not intents/slots |
+| 9 | aws-kinesis-video-streams-service-card | high | yes | retention period |
+| 10 | aws-aurora-vs-rds | high | no | engine list, not the storage/replica claims |
+| 11 | ccdvf-breaking-behavior-changes-releases | low | no | model feature list |
+| 12 | ccdvf-mcp-toolset-allowlist-denylist | low | yes | the denylist pattern |
+| 13 | ccdvf-mcp-connector-request-shape | medium | no | a newer beta header, not the request shape |
+| 14 | ccdvf-tool-result-content-types-mcq-01 | medium | yes | tool_result content block types |
+| 15 | ccdvf-cc-monorepo-rules-mcq-04 | medium | no | CLAUDE.local.md order, not path-scoped rules |
+| 16 | ccdvf-memory-tool-client-side | high | yes | client-side execution, /memories prefix |
+| 17 | ccdvf-high-signal-tool-responses | high | yes | high-signal responses, semantic identifiers |
+| 18 | ccdvf-adaptive-thinking-support-by-model | high | no | older models' thinking support only |
+| 19 | ccdvf-zero-one-multi-shot | high | yes | examples steer format; few-shot |
+| 20 | ccdvf-system-vs-user-placement | high | yes | system instructions take precedence |
+
+**Precision estimate: 12 / 20 = 60 %** (95 % Wilson interval about 39-78 %). By confidence:
+low 3/4, medium 3/6, high 6/10, so the lexical score is a weak predictor and every row needs the
+owner's review; the `.md` table already lists the weakest first. Two earlier passes of the same
+check (13/20 each) found quotes cut at chunk edges ("credentials for AWS STS ... in that the") and
+Markdown headings; both are now excluded (windows must start on a non-lower-case character that is
+not `#` and end with `.`, `?` or `!`), with tests. A remaining weakness: a chunk that starts
+mid-sentence on a capitalised word (row 7) still passes.
 
 ## Owner steps
 
@@ -95,4 +148,7 @@ RUN_RESULTS
 
 - Quotes spanning several lines of the page (lists, tables): kept to one line so the deck parser
   reads the quote back byte for byte.
+- Chunks that dc-ingest starts mid-sentence on a capitalised word can still give a fragment quote;
+  re-cutting windows on the reconstructed full page text would fix it.
+- The 61 aws-saa-c03 cards whose ledger rows carry no URL get no proposal.
 - A semantic support check (entailment) of the quote against the answer: the score is lexical.

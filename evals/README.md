@@ -48,8 +48,9 @@ evals/
   data/authored-v2.labels.jsonl  A15: its jury labels (dc-evals jury --dataset authored-v2), + .labels.summary.json
   src/dc_evals/                  cli, dataset, sources, seed, mutations, runner, score, report,
                                  author, jury, compare, automation_gate, drafts_import, deck_review,
-                                 source_cache and retrieval (V02)
+                                 source_cache and retrieval (V02), backfill (V03)
   reports/                       run files and reports (the owner commits them)
+  reports/backfill/              V03 SOURCE proposals: <date>-<deck>-sources.{jsonl,md,patch}
   .cache/review/                 dc-evals review output (git-ignored, never committed)
   tests/                         pytest with a FakeLlm; no test calls a model
 ```
@@ -305,7 +306,8 @@ uv run --python 3.12 [--extra embeddings] dc-evals retrieval [--deck <slug> ...]
 ```
 
 `dc-evals review` is described in [Local pre-publish review](#local-pre-publish-review);
-`fetch-sources` and `retrieval` in [Retrieval eval](#retrieval-eval).
+`fetch-sources` and `retrieval` in [Retrieval eval](#retrieval-eval); `backfill-sources` in
+[Citation backfill](#citation-backfill).
 
 The three Q03 commands (`author`, `jury`, `compare`) are described in
 [Agent-authored cards, model jury and configuration comparison](#agent-authored-cards-model-jury-and-configuration-comparison-q03).
@@ -989,6 +991,35 @@ uv run --python 3.12 dc-evals retrieval --methods bm25       # without the extra
 
 The tests use a fake fetcher, a fake embedder and a temporary cache; nothing in CI downloads a
 page or a model.
+
+## Citation backfill
+
+`dc-evals backfill-sources` (V03) proposes a `SOURCE:` line with a verbatim quote for each card
+that has none, for the owner to review. It never edits a deck unless `--apply` is given.
+
+```
+dc-evals backfill-sources --deck SLUG [--limit N] [--min-score X] [--out reports/backfill]
+    [--date YYYY-MM-DD] [--offline] [--apply]
+```
+
+- Candidate pages are the card's own citations: `data/sources-<deck>.jsonl` first, then the raw
+  ledger CSV rows as a fallback. Pages come from the fetch-sources cache, and missing ones are
+  fetched unless `--offline`.
+- The card's chunks are ranked with BM25, or with the RRF hybrid when `--extra embeddings` is
+  installed. In the best 3 chunks, a quote window is cut: whole sentences on one line of the
+  page, at most 1000 characters, grown from the sentence that shares the most terms with the
+  answer. The quote is checked to be a verbatim substring of the page. It never starts with a
+  deck marker, a lower-case fragment or a `#` heading, and it ends with a stop.
+- Score = (answer terms in the quote / distinct quote terms) x min(1, answer terms / 6).
+  Confidence is high at 0.5 or more, medium at 0.3 or more, and low below that. `--min-score`
+  defaults to 0.1.
+- Writes `<date>-<deck>-sources.jsonl` (`uid, url, quote, score, confidence, reason`), `.md` (the
+  review table, weakest first, plus the skipped cards) and `.patch`. The patch is a unified diff
+  that adds `SOURCE:` and the quote after each card's last line, the canonical position. Nothing
+  is written unless the patched deck parses with zero errors through `scripts/parse-deck.mts` and
+  every proposed card reads back its exact source.
+- The lexical score is only a rough guide: a hand check of 20 proposals found about 60 % that
+  support the answer (docs/delivery/r20-issues/V03-notes.md). Review every row before applying.
 
 ## Versioning
 
