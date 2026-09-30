@@ -12,6 +12,7 @@
 import type React from 'react';
 import * as Sentry from '@sentry/react-native';
 
+import { setTraceHeaderProvider } from '../api/apiClient';
 import { resolveApiBase, resolveApiFallback } from '../config/hosts';
 import { getFeatureFlags, subscribeFeatureFlags } from '../config/featureFlags';
 import { getExpoUpdatesModule } from '../updates/otaUpdateCheck';
@@ -21,6 +22,7 @@ import {
   SENTRY_MAX_EVENTS_PER_SESSION,
   SENTRY_SAMPLE_RATE,
   SENTRY_TRACES_SAMPLE_RATE,
+  apiErrorTags,
   buildOtaTags,
   buildTracePropagationTargets,
   decideSentry,
@@ -28,6 +30,7 @@ import {
   scrubBreadcrumb,
   scrubEvent,
   shouldDropEvent,
+  toDcTraceHeader,
   type SentryInactiveReason,
 } from './sentryPolicy';
 
@@ -86,6 +89,7 @@ function closeForKillSwitch(): void {
   if (closed || !status.active) return;
   closed = true;
   status = { active: false, reason: 'kill-switch' };
+  setTraceHeaderProvider(null);
   try {
     void Promise.resolve(Sentry.close()).catch(() => {});
   } catch {
@@ -152,6 +156,8 @@ async function run(deps: ObservabilityDeps): Promise<ObservabilityStatus> {
         if (shouldDropEvent(hint)) return null;
         if (passedEvents >= SENTRY_MAX_EVENTS_PER_SESSION) return null;
         passedEvents += 1;
+        const tags = apiErrorTags(hint?.originalException);
+        if (Object.keys(tags).length > 0) event.tags = { ...event.tags, ...tags };
         return scrubEvent(event);
       },
       beforeSendTransaction: scrubEvent,
@@ -167,6 +173,8 @@ async function run(deps: ObservabilityDeps): Promise<ObservabilityStatus> {
 
   // 5. Active; a same-launch remote flip to false closes the client once.
   status = { active: true, reason: 'active' };
+  // Only an active Sentry sends x-dc-trace-id; every inactive path returned above.
+  setTraceHeaderProvider(getDcTraceHeader);
   if (pendingNavigationRef) {
     const { ref } = pendingNavigationRef;
     pendingNavigationRef = null;
@@ -177,6 +185,18 @@ async function run(deps: ObservabilityDeps): Promise<ObservabilityStatus> {
   });
   if (getFeatureFlags().sentry.enabled === false) closeForKillSwitch();
   return status;
+}
+
+/** The active trace id (active span, else the scope's propagation context) as an
+ *  x-dc-trace-id value; null when absent, invalid or when the SDK throws. */
+export function getDcTraceHeader(): string | null {
+  try {
+    return toDcTraceHeader(
+      Sentry.getActiveSpan()?.spanContext().traceId ?? Sentry.getCurrentScope().getPropagationContext().traceId,
+    );
+  } catch {
+    return null;
+  }
 }
 
 /** Idempotent: later calls return the first promise. Never rejects. */
