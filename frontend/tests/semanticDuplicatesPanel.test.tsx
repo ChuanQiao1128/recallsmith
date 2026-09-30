@@ -118,10 +118,42 @@ describe('SemanticDuplicatesPanel', () => {
   });
 
   it('treats a status engine of none as not ready too', async () => {
+    // The duplicates read succeeds, so only the engine check can raise the callout.
     api.fetchEmbeddingsStatus.mockResolvedValue(ok({ ...STATUS, engine: 'none', model: null, embedded: 0 }));
-    api.fetchSemanticDuplicates.mockResolvedValue(refused('VECTOR_NOT_READY', 'x'));
+    api.fetchSemanticDuplicates.mockResolvedValue(ok({ ...DUPLICATES, pairs: [] }));
     mount();
     expect(await screen.findByTestId('qa-semantic-not-ready')).toBeTruthy();
+    expect(screen.queryByText(/No pair at or above/)).toBeNull();
+    expect(screen.queryByTestId('qa-semantic-status')).toBeNull();
+  });
+
+  it('shows a neutral callout, not an error, on a server that predates the routes', async () => {
+    const missing = <T,>(): ApiResult<T> => ({
+      success: false,
+      data: null,
+      error: { code: 'NOT_FOUND', message: 'Route not found', httpStatus: 404 },
+      traceId: '',
+    });
+    api.fetchEmbeddingsStatus.mockResolvedValue(missing<EmbeddingsStatus>());
+    api.fetchSemanticDuplicates.mockResolvedValue(missing<SemanticDuplicates>());
+    mount();
+    const callout = await screen.findByTestId('qa-semantic-older-server');
+    expect(callout.textContent).toContain('Semantic duplicates are not on this server yet');
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByTestId('qa-semantic-not-ready')).toBeNull();
+    expect(screen.queryByRole('table')).toBeNull();
+  });
+
+  it('still shows a missing deck as an error', async () => {
+    api.fetchSemanticDuplicates.mockResolvedValue({
+      success: false,
+      data: null,
+      error: { code: 'DECK_NOT_FOUND', message: 'Deck not found', httpStatus: 404 },
+      traceId: '',
+    });
+    mount();
+    expect((await screen.findByRole('alert')).textContent).toBe('Deck not found');
+    expect(screen.queryByTestId('qa-semantic-older-server')).toBeNull();
   });
 
   it('shows any other failure as an error', async () => {

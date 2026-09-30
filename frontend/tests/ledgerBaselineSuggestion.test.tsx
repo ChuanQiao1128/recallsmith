@@ -144,6 +144,33 @@ describe('the suggested measured baseline on the Ledger page', () => {
     });
   });
 
+  it('rounds a non-terminating suggestion to the input step, so the form can be submitted', async () => {
+    // median review 164,800 ms / 60,000 = 2.74666…
+    api.fetchAutomationBaselines.mockResolvedValue(
+      ok({ items: [{ ...DRAFT_REVIEW, suggestedMeasuredMinutes: 164_800 / 60_000 }, PUBLISH, TOO_FEW] }),
+    );
+    const user = userEvent.setup();
+    await mountLoaded();
+    expect(screen.getByTestId('ledger-baseline-suggestion-ai_draft_review').textContent).toContain(
+      'Suggested from 12 reviews: 2.75 min',
+    );
+    await user.click(screen.getByRole('button', { name: 'Use as measured: AI draft review' }));
+
+    const form = screen.getByRole('form', { name: 'Baseline for AI draft review' }) as HTMLFormElement;
+    const input = within(form).getByLabelText('Minutes per unit') as HTMLInputElement;
+    expect(input.value).toBe('2.75');
+    expect(input.step).toBe('0.01');
+    expect(input.validity.stepMismatch).toBe(false);
+    expect(form.checkValidity()).toBe(true);
+
+    await user.click(within(form).getByRole('button', { name: 'Save baseline' }));
+    expect(api.updateAutomationBaseline).toHaveBeenCalledWith('ai_draft_review', {
+      baselineMinutesPerUnit: 2.75,
+      baselineSource: 'measured',
+      note: 'seeded',
+    });
+  });
+
   it('shows an editor the suggestion but no button', async () => {
     signInAsEditor();
     await mountLoaded();
