@@ -240,6 +240,20 @@ def test_select_quote_respects_the_cap_and_skips_longer_sentences() -> None:
     assert full is not None and len(full.text) <= MAX_QUOTE_CHARS
 
 
+def test_select_quote_skips_chunk_edge_fragments_and_headings() -> None:
+    # A chunk from dc-ingest's overlap can start mid-sentence and end mid-sentence; a heading has no stop.
+    text = ("the path for traffic through the gateway. If one customer gateway device fails, the virtual "
+            "private gateway directs traffic to the working device.\n#### Customer gateway device failover\n"
+            "Customer gateway devices advertise routes over BGP so that the virtual private gateway can")
+    support = {"customer", "gateway", "device", "fail", "traffic", "virtual", "private", "working", "route", "bgp"}
+    quote = select_quote(text, support)
+    assert quote is not None
+    assert quote.text == ("If one customer gateway device fails, the virtual private gateway directs traffic to the "
+                          "working device.")
+    assert select_quote("#### Customer gateway device failover", support) is None
+    assert select_quote("Customer gateway devices advertise routes over BGP so the gateway can", support) is None
+
+
 def test_confidence_thresholds() -> None:
     assert confidence_for(backfill.HIGH_SCORE) == "high"
     assert confidence_for(backfill.HIGH_SCORE - 0.001) == "medium"

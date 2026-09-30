@@ -68,6 +68,8 @@ _SOURCE_LINE = re.compile(r"^SOURCE:")
 # The column-0 markers of FORMAT §1.1, matched case-insensitively to stay on the safe side.
 _MARKER = re.compile(r"^(##[ \t]|#\s*deck:|TOPIC:|QUALIFIER:|SOURCE:|OPT:|WHY:|Q:|A:|USAGE:|CODE:)", re.IGNORECASE)
 _SENTENCE_END = re.compile(r"[.!?][\"')\]]*(?=\s)")
+# A whole sentence ends with a stop; a heading, a table cell or a chunk cut mid-sentence does not.
+_ENDS_SENTENCE = re.compile(r"[.!?][\"')\]]*$")
 _ABBREVIATIONS = frozenset({"e.g", "i.e", "etc", "vs", "approx", "incl", "no", "fig", "cf", "u.s"})
 
 
@@ -152,7 +154,9 @@ def select_quote(
     """The best quote window of ``text`` for the answer terms ``support``, or None.
 
     Seed: the sentence sharing the most answer terms (the first one on a tie) that fits the cap and
-    does not begin with a deck marker. Growth: the neighbour on the same line that adds the most new
+    does not begin with a deck marker. A window starts on a character that is not lower-case and ends
+    with a stop, so a chunk that dc-ingest cut mid-sentence (overlap start, size-driven end) and a
+    heading never make a quote. Growth: the neighbour on the same line that adds the most new
     answer terms (the following one on a tie), while it adds at least one, the window stays within
     ``max_chars`` and ``max_sentences``, and the window's first sentence is not a marker line."""
     support = frozenset(_stem(t) for t in support)
@@ -163,7 +167,9 @@ def select_quote(
     overlap = [terms(text[a:b]) & support for a, b in spans]
 
     def fits(i: int, j: int) -> bool:
-        return spans[j][1] - spans[i][0] <= max_chars and not starts_with_marker(text[spans[i][0]:spans[j][1]])
+        window = text[spans[i][0]:spans[j][1]]
+        return (len(window) <= max_chars and not starts_with_marker(window) and not window[0].islower()
+                and _ENDS_SENTENCE.search(window) is not None)
 
     seeds = [i for i in range(len(spans)) if overlap[i] and fits(i, i)]
     if not seeds:
