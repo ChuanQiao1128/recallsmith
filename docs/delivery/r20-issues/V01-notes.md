@@ -95,3 +95,8 @@ API credits. F01 (e-correctness-1, e-security-1) removes `ANTHROPIC_API_KEY`,
 `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK` and
 `CLAUDE_CODE_USE_VERTEX` from every `claude -p` child (contract §10.7); the claim holds from F01 on.
 See `F01-fixes.md`.
+
+The parser behaviour promised above (the exported keys, stdin as `-`, `MISSING_DECK_HEADER`
+exit 1, usage exit 2, and `export-cards.mts --check` passing after the deck-lib refactor) was
+checked by no test or CI step when V01 shipped; F01 (e-tests-3) adds
+`frontend/tests/evalsParseDeck.test.ts`, which runs the real scripts in the frontend vitest job.
