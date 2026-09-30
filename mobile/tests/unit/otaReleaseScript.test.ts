@@ -13,6 +13,7 @@ const ALL_NAMES = [
   'EXPO_PUBLIC_COGNITO_USER_POOL_ID',
   'EXPO_PUBLIC_COGNITO_USER_POOL_CLIENT_ID',
   'EXPO_PUBLIC_RC_IOS_API_KEY',
+  'EXPO_PUBLIC_SENTRY_DSN',
 ];
 
 // The fake eas prints values that all contain this marker; ota.sh must never
@@ -84,5 +85,266 @@ describe('ota.sh', () => {
     expect(res.status).toBe(0);
     expect(res.stdout).toContain('DRY: eas update --channel production --environment production');
     expect(log).not.toContain('update');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// 1.9.0 release plumbing (M04): runtime guard, DSN name rule and the Sentry source-map upload.
+// Each case copies ota.sh into a temp mobile/scripts/release/ tree with fixture app.json,
+// package.json and eas.json, and puts fake eas, npx and security binaries first on PATH, so the
+// real CLIs and the real Keychain are never touched. The env starts from process.env with every
+// SENTRY_* name, EXPO_PUBLIC_SENTRY_DSN, OTA_KEYCHAIN* and DRY_RUN removed.
+
+type TreeOpts = {
+  version: string;
+  sentryDependency?: boolean;
+  org?: string;
+  project?: string;
+  names: string[];
+  env?: Record<string, string>;
+  npxExit?: number;
+};
+
+function writeExecutable(file: string, lines: string[]) {
+  fs.writeFileSync(file, [...lines, ''].join('\n'));
+  fs.chmodSync(file, 0o755);
+}
+
+function runOtaTree(opts: TreeOpts) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ota-tree-'));
+  const mobile = path.join(root, 'mobile');
+  const release = path.join(mobile, 'scripts', 'release');
+  fs.mkdirSync(release, { recursive: true });
+  fs.copyFileSync(OTA, path.join(release, 'ota.sh'));
+  fs.writeFileSync(
+    path.join(mobile, 'app.json'),
+    JSON.stringify({ expo: { version: opts.version, runtimeVersion: { policy: 'appVersion' } } }),
+  );
+  const dependencies: Record<string, string> = { expo: '~54.0.0' };
+  if (opts.sentryDependency) dependencies['@sentry/react-native'] = '~7.2.0';
+  fs.writeFileSync(path.join(mobile, 'package.json'), JSON.stringify({ name: 'mobile', version: opts.version, dependencies }));
+  fs.writeFileSync(
+    path.join(mobile, 'eas.json'),
+    JSON.stringify({
+      build: {
+        production: {
+          ios: {
+            env: {
+              EXPO_PUBLIC_ENV: 'production',
+              SENTRY_ALLOW_FAILURE: 'true',
+              SENTRY_ORG: opts.org ?? 'REPLACE_ME_SENTRY_ORG',
+              SENTRY_PROJECT: opts.project ?? 'REPLACE_ME_SENTRY_PROJECT',
+            },
+          },
+        },
+      },
+    }),
+  );
+
+  const bin = path.join(root, 'bin');
+  fs.mkdirSync(bin);
+  const easLog = path.join(root, 'eas.log');
+  const npxLog = path.join(root, 'npx.log');
+  const securityLog = path.join(root, 'security.log');
+  writeExecutable(path.join(bin, 'eas'), [
+    '#!/usr/bin/env bash',
+    `echo "$@" >> "${easLog}"`,
+    'case "$1" in',
+    '  whoami) exit 0 ;;',
+    `  env:list) for n in $FAKE_EAS_NAMES; do echo "$n=${MARKER}"; done ;;`,
+    '  update) exit 0 ;;',
+    'esac',
+  ]);
+  // Records its argv, SENTRY_ORG/SENTRY_PROJECT and only whether a token is set (never the value).
+  writeExecutable(path.join(bin, 'npx'), [
+    '#!/usr/bin/env bash',
+    `echo "argv=$*" >> "${npxLog}"`,
+    `echo "org=\${SENTRY_ORG:-} project=\${SENTRY_PROJECT:-}" >> "${npxLog}"`,
+    `if [ -n "\${SENTRY_AUTH_TOKEN:-}" ]; then echo "token=set" >> "${npxLog}"; else echo "token=unset" >> "${npxLog}"; fi`,
+    `exit ${opts.npxExit ?? 0}`,
+  ]);
+  writeExecutable(path.join(bin, 'security'), [
+    '#!/usr/bin/env bash',
+    `echo "$*" >> "${securityLog}"`,
+    'if [ "$*" = "find-generic-password -s developercards-sentry-auth-token -w" ]; then',
+    "  echo 'fake-sentry-token-not-real'",
+    '  exit 0',
+    'fi',
+    'exit 44',
+  ]);
+
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const k of Object.keys(env)) {
+    if (k.startsWith('SENTRY_') || k.startsWith('OTA_KEYCHAIN') || k === 'EXPO_PUBLIC_SENTRY_DSN' || k === 'DRY_RUN') delete env[k];
+  }
+  env.PATH = `${bin}:${process.env.PATH ?? ''}`;
+  env.FAKE_EAS_NAMES = opts.names.join(' ');
+  Object.assign(env, opts.env ?? {});
+
+  const res = spawnSync('bash', [path.join(release, 'ota.sh'), 'test message'], { env, encoding: 'utf8' });
+  const read = (f: string) => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '');
+  const out = `${res.stdout}${res.stderr}`;
+  return { res, out, eas: read(easLog), npx: read(npxLog), security: read(securityLog) };
+}
+
+const NAMES_180 = ALL_NAMES.filter((n) => n !== 'EXPO_PUBLIC_SENTRY_DSN');
+
+describe('ota.sh 1.9.0 release plumbing', () => {
+  it('runtime 1.9.0 without EXPO_PUBLIC_SENTRY_DSN refuses to publish (exit 3)', () => {
+    const r = runOtaTree({ version: '1.9.0', sentryDependency: true, names: NAMES_180 });
+    expect(r.res.status).toBe(3);
+    expect(r.res.stderr).toContain('EXPO_PUBLIC_SENTRY_DSN');
+    expect(r.eas).not.toContain('update');
+    expect(r.npx).toBe('');
+  });
+
+  it('runtime 1.8.0 without the DSN name publishes and skips the upload (skipped-runtime)', () => {
+    const r = runOtaTree({ version: '1.8.0', names: NAMES_180, env: { SENTRY_AUTH_TOKEN: 'fake-sentry-token-not-real' } });
+    expect(r.res.status).toBe(0);
+    expect(r.eas).toContain('update --channel production --environment production --platform ios');
+    expect(r.res.stdout).toContain('SENTRY_UPLOAD=skipped-runtime');
+    expect(r.npx).toBe('');
+    expect(r.out).not.toContain('fake-sentry-token-not-real');
+  });
+
+  it('runtime 1.8.0 with @sentry/react-native in dependencies exits 6 before any eas call', () => {
+    const r = runOtaTree({ version: '1.8.0', sentryDependency: true, names: ALL_NAMES });
+    expect(r.res.status).toBe(6);
+    expect(r.res.stderr).toContain('ota: runtime 1.8.0 has no RNSentry native module; publish runtime-1.8.0 OTAs from its release branch');
+    expect(r.eas).not.toContain('update');
+    expect(r.eas).toBe('');
+  });
+
+  it('1.9.0 with a token and example-org/example-project uploads the source maps (SENTRY_UPLOAD=ok)', () => {
+    const r = runOtaTree({
+      version: '1.9.0',
+      sentryDependency: true,
+      org: 'example-org',
+      project: 'example-project',
+      names: ALL_NAMES,
+      env: { SENTRY_AUTH_TOKEN: 'fake-sentry-token-not-real' },
+    });
+    expect(r.res.status).toBe(0);
+    expect(r.eas).toContain('update --channel production');
+    expect(r.npx).toContain('argv=sentry-expo-upload-sourcemaps dist');
+    expect(r.npx).toContain('org=example-org project=example-project');
+    expect(r.npx).toContain('token=set');
+    expect(r.res.stdout).toContain('SENTRY_TOKEN_SOURCE=env');
+    expect(r.res.stdout).toContain('SENTRY_UPLOAD=ok');
+    expect(r.security).toBe('');
+    expect(r.out).not.toContain('fake-sentry-token-not-real');
+    expect(r.out).not.toContain(MARKER);
+  });
+
+  it('SENTRY_ORG/SENTRY_PROJECT from the environment win over the eas.json placeholders', () => {
+    const r = runOtaTree({
+      version: '1.9.0',
+      sentryDependency: true,
+      names: ALL_NAMES,
+      env: { SENTRY_AUTH_TOKEN: 'fake-sentry-token-not-real', SENTRY_ORG: 'example-org', SENTRY_PROJECT: 'example-project' },
+    });
+    expect(r.res.status).toBe(0);
+    expect(r.npx).toContain('org=example-org project=example-project');
+    expect(r.res.stdout).toContain('SENTRY_UPLOAD=ok');
+    expect(r.out).not.toContain('fake-sentry-token-not-real');
+  });
+
+  it('1.9.0 without a token publishes and reports skipped-no-token', () => {
+    const r = runOtaTree({ version: '1.9.0', sentryDependency: true, org: 'example-org', project: 'example-project', names: ALL_NAMES });
+    expect(r.res.status).toBe(0);
+    expect(r.eas).toContain('update --channel production');
+    expect(r.res.stdout).toContain('SENTRY_UPLOAD=skipped-no-token');
+    expect(r.npx).toBe('');
+  });
+
+  it('placeholders report skipped-no-project before any token lookup (security never called)', () => {
+    const r = runOtaTree({ version: '1.9.0', sentryDependency: true, names: ALL_NAMES, env: { OTA_KEYCHAIN: '1' } });
+    expect(r.res.status).toBe(0);
+    expect(r.res.stdout).toContain('SENTRY_UPLOAD=skipped-no-project');
+    expect(r.security).toBe('');
+    expect(r.npx).toBe('');
+  });
+
+  it('OTA_KEYCHAIN=1 without an env token reads the Keychain item and uploads (SENTRY_TOKEN_SOURCE=keychain)', () => {
+    const r = runOtaTree({
+      version: '1.9.0',
+      sentryDependency: true,
+      org: 'example-org',
+      project: 'example-project',
+      names: ALL_NAMES,
+      env: { OTA_KEYCHAIN: '1' },
+    });
+    expect(r.res.status).toBe(0);
+    expect(r.security.trim()).toBe('find-generic-password -s developercards-sentry-auth-token -w');
+    expect(r.npx).toContain('argv=sentry-expo-upload-sourcemaps dist');
+    expect(r.npx).toContain('token=set');
+    expect(r.res.stdout).toContain('SENTRY_TOKEN_SOURCE=keychain');
+    expect(r.res.stdout).toContain('SENTRY_UPLOAD=ok');
+    expect(r.out).not.toContain('fake-sentry-token-not-real');
+  });
+
+  it('OTA_KEYCHAIN=0 never calls security and reports skipped-no-token', () => {
+    const r = runOtaTree({
+      version: '1.9.0',
+      sentryDependency: true,
+      org: 'example-org',
+      project: 'example-project',
+      names: ALL_NAMES,
+      env: { OTA_KEYCHAIN: '0' },
+    });
+    expect(r.res.status).toBe(0);
+    expect(r.security).toBe('');
+    expect(r.npx).toBe('');
+    expect(r.res.stdout).toContain('SENTRY_UPLOAD=skipped-no-token');
+  });
+
+  it('without OTA_KEYCHAIN a spawned run (stdin not a TTY) never calls security', () => {
+    const r = runOtaTree({ version: '1.9.0', sentryDependency: true, org: 'example-org', project: 'example-project', names: ALL_NAMES });
+    expect(r.res.status).toBe(0);
+    expect(r.security).toBe('');
+    expect(r.res.stdout).toContain('SENTRY_UPLOAD=skipped-no-token');
+  });
+
+  it('a failing upload reports SENTRY_UPLOAD=failed with a re-run hint and still exits 0', () => {
+    const r = runOtaTree({
+      version: '1.9.0',
+      sentryDependency: true,
+      org: 'example-org',
+      project: 'example-project',
+      names: ALL_NAMES,
+      env: { SENTRY_AUTH_TOKEN: 'fake-sentry-token-not-real' },
+      npxExit: 1,
+    });
+    expect(r.res.status).toBe(0);
+    expect(r.res.stdout).toContain('SENTRY_UPLOAD=failed');
+    expect(r.res.stderr).toContain('npx sentry-expo-upload-sourcemaps dist');
+    expect(r.out).not.toContain('fake-sentry-token-not-real');
+  });
+
+  it('DRY_RUN=1 never calls update or npx and prints the planned upload', () => {
+    const r = runOtaTree({
+      version: '1.9.0',
+      sentryDependency: true,
+      org: 'example-org',
+      project: 'example-project',
+      names: ALL_NAMES,
+      env: { SENTRY_AUTH_TOKEN: 'fake-sentry-token-not-real', DRY_RUN: '1' },
+    });
+    expect(r.res.status).toBe(0);
+    expect(r.res.stdout).toContain('DRY: eas update --channel production --environment production');
+    expect(r.res.stdout).toContain('DRY: SENTRY_UPLOAD=ok-planned');
+    expect(r.res.stdout).toContain('DRY: npx sentry-expo-upload-sourcemaps dist');
+    expect(r.eas).not.toContain('update');
+    expect(r.npx).toBe('');
+    expect(r.out).not.toContain('fake-sentry-token-not-real');
+  });
+
+  it('DRY_RUN=1 with placeholders plans skipped-no-project', () => {
+    const r = runOtaTree({ version: '1.9.0', sentryDependency: true, names: ALL_NAMES, env: { DRY_RUN: '1' } });
+    expect(r.res.status).toBe(0);
+    expect(r.res.stdout).toContain('DRY: SENTRY_UPLOAD=skipped-no-project');
+    expect(r.res.stdout).not.toContain('DRY: npx');
+    expect(r.eas).not.toContain('update');
+    expect(r.npx).toBe('');
   });
 });
