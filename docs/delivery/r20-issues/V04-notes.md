@@ -12,7 +12,7 @@ fake HTTP layer: no network, no model download.
 | --- | --- |
 | `evals/src/dc_evals/embed_cards.py` | New. Canonical text + textSha256, L2 normalisation, deck loading, the local vector cache, batching and the push, the nearest-pair report. |
 | `evals/src/dc_evals/cli.py` | New subcommands `embed-cards` and `semantic-dupes`. |
-| `evals/tests/test_embed_cards.py` | New, 28 tests. |
+| `evals/tests/test_embed_cards.py` | New, 26 tests. |
 | `evals/README.md` | New section "Card embeddings"; commands and layout lines. |
 | `evals/reports/semantic-dupes/2026-09-30-semantic-dupes-{aws-saa-c03,claude-ccdv-f}.{json,md}` | The real run for both decks (below). |
 | `.gitignore` | `evals/.embed-cache/`, for a `$DC_EMBED_CACHE` pointed inside the checkout. |
@@ -125,7 +125,7 @@ Reasonable as a "likely overlap, review it" flag; too low to call a pair a true 
 
 ## Tests
 
-`evals/tests/test_embed_cards.py` (28 tests, all offline):
+`evals/tests/test_embed_cards.py` (26 tests, all offline):
 
 - Canonical text (strip both parts, blank-line join, missing explanation); the pinned digest;
   UTF-8 bytes for non-ASCII text.
