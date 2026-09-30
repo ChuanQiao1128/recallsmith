@@ -414,3 +414,140 @@ auto-accepts or auto-publishes; the full emergency stop is infra/RUNBOOK.md §7.
 5. If the card was wrong, not just unwanted, treat it as a gate failure: look at its QA findings and the
    reviewer's verdict in the drawer, and do not restore `live` until a new gate (and the spot-check
    above) passes.
+
+## Card reports (R20 V05)
+
+Learners report a problem with a card from the mobile app; the reports wait for a person in the console.
+Nothing here calls a model unless the triage flag below is on *and* AI QA is on, and even then only the card
+goes to the reviewer, never the learner's note.
+
+**Deploy order.** Code first, then `POST /api/v1/admin/db/migrate` (applies `037_card_reports.sql`, which
+also lets webhook subscriptions pick `card.reported`). Until the migration runs every card report route
+answers `503 NOT_READY` ("Run the database migration") and the status/digest counts read zero.
+
+**Switches** (`src_C/env/prod.env.json`, read on every request, deploy to change):
+
+| Key | Default | Effect |
+|---|---|---|
+| `CARD_REPORTS_ENABLED` | `"1"` | `"0"` makes both learner routes answer `503 CARD_REPORTS_DISABLED`. The console routes keep working so the backlog can still be triaged. |
+| `CARD_REPORT_DAILY_LIMIT` | `"5"` | New reports per learner per UTC day; the next one is `429 REPORT_DAILY_LIMIT`. Re-reporting a card that already has an open report by the same learner returns that report (`duplicate: true`) and does not count. |
+| `CARD_REPORT_AI_TRIAGE` | `"0"` | `"1"` starts a one-card AI QA re-check (`scope=cards`, `requested_by_sub = card_report`) for every new report. With `AI_QA_ENABLED=0` it does nothing and records nothing. |
+
+The mobile report button has its own flag (`features.cardReport.enabled`, default off); the server switch
+does not turn it on.
+
+**Triage.** `GET /api/v1/admin/card-reports?status=open|resolved|all&deckId=&limit=&cursor=` lists the reports
+of the decks the admin may read (super_admin: all), newest first, with the learner's note. It never returns a
+user sub or an email. `POST /api/v1/admin/card-reports/<reportId>/resolve` with
+`{"resolution":"fixed|wont_fix|duplicate|invalid","note":"..."}` needs deck write; a second resolve is
+`409 ALREADY_RESOLVED`. The learner sees the resolution and its note in *My reports*.
+
+**Watching.** `GET /api/v1/admin/automation/status` → `cardReports: {open, openedLast7d}`; the Monday digest
+has a line `Card reports: N open (M new this week)`. There is no per-report email. Subscribe a webhook to
+`card.reported` (`{reportId, deckSlug, stableUid, reason, createdAt}`, no note, no user) for a chat ping.
+
+**The note is untrusted text.** It is capped at 500 characters, stored as is, shown only to console admins
+with deck read, and never logged. Treat it like any other learner input: do not paste it into a prompt or a
+shell.
+
+## Card embeddings and semantic duplicates (R20 V06)
+
+Semantic similarity uses vectors computed on the owner's Mac (`BAAI/bge-small-en-v1.5`, 384 dims, cosine) and
+pushed to the server. The server never calls a model. Everything here needs the PostgreSQL `vector` extension
+(pgvector); until it is installed, the routes below answer `503 VECTOR_NOT_READY`, the status route reports
+`engine: "none"`, and `POST /api/v1/authoring/cards/similar` keeps its trigram engine.
+
+**Why an owner step.** Migration `038_card_embeddings.sql` creates the extension only when the migrating role
+holds CREATE on the database. Prod migrates as the app role, which does not, so there 038 only raises a
+NOTICE ("vector not installed ...") and records itself as applied without creating `card_embeddings`.
+
+**Turning it on (owner, once):**
+
+1. As the RDS master user: `CREATE EXTENSION IF NOT EXISTS vector;` in the app database.
+2. If 038 already ran (check `GET /api/v1/admin/db/migrations`), let it run again: as the master user,
+   `DELETE FROM schema_migrations WHERE version = 38;`. The migrate route skips versions it has recorded, and
+   038 is idempotent, so running it a second time is safe.
+3. `POST /api/v1/admin/db/migrate` through `scripts/invoke-as-admin.sh`. 038 now creates `card_embeddings`, owned
+   by the app role.
+4. Readiness is cached for 5 minutes per Lambda container. `GET /api/v1/admin/card-embeddings/status` shows
+   `engine: "vector"` once it has expired.
+5. Push the vectors: `dc-evals embed-cards --deck <slug> --push`, with a super_admin console token in the environment.
+
+**Routes:**
+
+| Route | Who | What |
+|---|---|---|
+| `PUT /api/v1/admin/card-embeddings` | super_admin | `{model, dim:384, items:[{deckSlug, stableUid, textSha256, embedding}]}`, 1..200 items → `{upserted, unknownCards, staleText}`. The server recomputes each card's `textSha256` from `question.Trim() + "\n\n" + explanation.Trim()`. An item whose hash differs (the card changed after it was embedded) is not stored and is listed in `staleText`. Re-embed those cards. |
+| `GET /api/v1/admin/card-embeddings/status?deckId=` | admin (deck read) | `{engine, model, cards, embedded, stale}`. `stale` counts stored vectors whose card text changed since. |
+| `GET /api/v1/admin/decks/<deckId>/semantic-duplicates?minCosine=0.90&limit=50` | admin + deck read | Pairs of live cards with cosine ≥ minCosine, each pair once, highest first. |
+| `POST /api/v1/authoring/cards/similar` + `embedding` | admin | Engine `vector` (cosine, `likelyDuplicate` at ≥ 0.90) when the store is ready; otherwise the trigram answer is unchanged. |
+
+**Body size.** The API rejects bodies over 1 MiB (`413`). A 384-number vector printed at full float precision is
+about 8 KB, so a push with 200 items can exceed the limit. Push in batches of 100 or fewer, or round the values
+to 6 decimals.
+
+**Rollback.** The table only adds data. To stop using it, stop pushing vectors. To remove it, the master can run
+`DROP TABLE card_embeddings;`, and the routes return `503 VECTOR_NOT_READY` once the 5-minute cache expires. Do not
+drop the extension while the table exists.
+
+## Change impact of the source watch (R20 V07)
+
+The source watch now says which cards a change touches. Everything here is deterministic (SQL only), works with
+`AI_QA_ENABLED=0`, and never edits a card: the output is a list for a person to check.
+
+**Deploy order.** Code first, then `POST /api/v1/admin/db/migrate` (applies `039_source_watch_impact.sql`, one
+additive `possibly_affected_cards jsonb` column on `source_watch_feed_items`). Before the migration the page
+impact below already works (it lives in the event's `details` jsonb); the release-notes analysis is skipped with
+an `impact_not_migrated` log line, the watch route answers `recentFeedItems: []` and the digest counts zero.
+
+**Changed or gone page.** Each `changed`/`gone` event stores `details.affectedCards`: the live cards (card and
+deck not deleted) whose `source.url` is exactly the page URL, by card id, at most 200, each with
+`quoteMissing` when the watcher could not find its quote. `details.needsHumanReview` becomes `true` when such
+cards exist and the AI QA re-check is unavailable (AI QA off, or the re-check was given up). The
+`source_changed` email then lists up to 20 of them under NEEDS YOU with a console editor link
+(`<CONSOLE_BASE_URL>/decks/cards/edit?deckId=<id>&cardId=<id>`); when a re-check ran they are listed under
+DETAILS instead. A URL that differs in any character (query string, trailing slash) is a different page.
+
+**New release-notes item.** For each new item matching a feed's title pattern (not the first, baseline
+observation), core runs PostgreSQL full-text search over the live cards of the feed's deck (all decks when the
+feed has none): `to_tsvector('english', question || ' ' || explanation)` against the item's title (plus its
+`summary`, when the watcher sends one), the terms OR-ed, ranked with `ts_rank_cd`. The top 5 with rank ≥ 0.2
+are stored. Each occurrence of a query word in a card is worth 0.1, so 0.2 means at least two hits; a single
+shared word such as "Amazon" does not qualify. The Monday digest lists the week's items that have possibly
+affected cards (one line each, with ranks and editor links) and a NEEDS YOU line with their count.
+
+**Where to look.** `GET /api/v1/admin/automation/watch`: each `recentEvents[]` entry has `affectedCards` and
+`needsHumanReview`; `recentFeedItems` holds the latest 20 analysed items with `possiblyAffectedCards`.
+`GET /api/v1/admin/automation/status` → `watch.needsReview`: changed/gone events of the last 30 days flagged for
+a human review. The flag is informational; nothing clears it, so the 30-day window keeps the count current.
+
+**Rollback.** Revert the code; the column and the extra `details` keys are ignored by older code.
+
+## Usage analytics and freshness (R20 V08)
+
+Three read-only numbers for the console, all SQL, all UTC. Definitions are in
+`docs/delivery/r20-issues/V08-notes.md`.
+
+**Deploy order.** Code first, then `POST /api/v1/admin/db/migrate` (applies `040_usage_analytics.sql`: additive
+columns on `analytics_daily` and `analytics_deck_daily`). Before the migration the tick step `analytics_daily`
+logs `analytics_not_migrated` and skips (the tick reports no failed step) and
+`GET /api/v1/admin/analytics/usage` answers `503 NOT_READY`.
+
+**Usage.** The tick step `analytics_daily` runs on the first tick of each UTC day while the mode is not `off`
+and recomputes the 8 complete days before today from `user_progress_events` (reviews only). Rerunning is safe.
+`GET /api/v1/admin/analytics/usage?days=30` returns the stored days (DAU/WAU/MAU, reviews, new users, cards
+learned, D1/D7 retention) and per-deck numbers for the last 30 days. To keep test devices out, list their learner
+subs in `ANALYTICS_EXCLUDED_SUBS` (comma-separated) in `src_C/env/prod.env.json` and redeploy; the next day's run
+recomputes the window without them. The route reports only how many subs are excluded, never which.
+With `AUTOMATION_MODE=off` the tick returns early and nothing is recomputed; the stored rows stay readable.
+
+**Freshness.** `GET /api/v1/admin/automation/freshness?days=30` lists each changed/gone page and each matched
+release-notes item with the time it was detected, queued, drafted, decided and published, plus the median
+minutes to each stage. A null stage means the chain stopped there (not queued, no run, no decision yet, not
+published). `automation/status` → `freshness.medianMinutesToPublish` and `n` (items that reached a publish).
+
+**Measured baselines.** `GET /api/v1/admin/automation/baselines` → `ai_draft_review.suggestedMeasuredMinutes`
+is the median console review time once at least 5 decisions recorded one (`suggestedFromN`). It is only a
+suggestion: adopt it with the existing super_admin PUT and `baselineSource: "measured"`.
+
+**Rollback.** Revert the code; the new columns are nullable and ignored by older code.

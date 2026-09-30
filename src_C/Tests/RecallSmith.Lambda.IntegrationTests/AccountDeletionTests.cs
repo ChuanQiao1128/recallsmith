@@ -36,6 +36,7 @@ public class AccountDeletionTests
     ("user_deck_wallet", "user_sub"),
     ("user_premium_state", "app_user_id"),
     ("rc_webhook_events", "app_user_id"),
+    ("card_reports", "user_sub"),
   ];
 
   private static JsonElement Event(string method, string path, string? sub)
@@ -111,6 +112,8 @@ public class AccountDeletionTests
       "insert into user_premium_state (app_user_id) values ($1)", [sub]);
     await DbUtil.ExecuteAsync(conn, null,
       "insert into rc_webhook_events (event_id, mode, app_user_id, raw) values ('rc-' || $1, 'development', $1, '{}'::jsonb)", [sub]);
+    await DbUtil.ExecuteAsync(conn, null,
+      "insert into card_reports (user_sub, deck_slug, stable_uid, reason, note) values ($1, 'd', 'u', 'typo', 'synthetic note')", [sub]);
 
     return eventId;
   }
@@ -161,8 +164,8 @@ public class AccountDeletionTests
 
     Assert.Equal(204, resp.StatusCode);
     Assert.Equal(0, await CountsAsync(subA, eventA));
-    // All twelve of B's rows remain: eleven user-keyed tables plus the outbox row.
-    Assert.Equal(12, await CountsAsync(subB, eventB));
+    // All thirteen of B's rows remain: twelve user-keyed tables plus the outbox row.
+    Assert.Equal(13, await CountsAsync(subB, eventB));
   }
 
   [Fact]

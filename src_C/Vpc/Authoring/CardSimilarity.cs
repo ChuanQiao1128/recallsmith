@@ -17,7 +17,8 @@ public sealed record SimilarityResult(string Engine, double Threshold, IReadOnly
 /// POST /api/v1/authoring/cards/similar (contract §8.2) and the reusable similarity check behind it.
 /// With pg_trgm installed the database scores the cards; without it (prod's app role cannot create the
 /// extension, §14 #9) <see cref="Trigram.Similarity"/> scores them in process with identical results.
-/// Only the engine choice is cached, never a result.
+/// Only the engine choice is cached, never a result. With an optional <c>embedding</c> and the vector store ready
+/// (R20 V06) the route answers from <see cref="CardEmbeddings.FindSimilarAsync"/> instead, engine <c>"vector"</c>.
 /// </summary>
 public static class CardSimilarity
 {
@@ -94,7 +95,7 @@ public static class CardSimilarity
   }
 
   /// <summary>Scope clauses shared by both engines; parameters are appended after the ones already bound.</summary>
-  private static string ScopeWhere(SimilarityQuery query, List<object?> parameters)
+  internal static string ScopeWhere(SimilarityQuery query, List<object?> parameters)
   {
     var where = new List<string> { "c.is_deleted = 0", "d.is_deleted = 0" };
     if (query.DeckIds is not null)
@@ -241,6 +242,7 @@ public static class CardSimilarity
       var limit = (int)(limitRaw ?? DefaultLimit);
       var threshold = ParseThreshold(body);
       var exclude = ParseExcludeCardIds(body);
+      var embedding = CardEmbeddings.ParseOptionalEmbedding(body);
 
       IReadOnlyList<long>? deckIds;
       if (deckSlug is not null || deckId is not null)
@@ -277,7 +279,22 @@ public static class CardSimilarity
         deckIds = rows.Select(r => Convert.ToInt64(r["deck_id"], CultureInfo.InvariantCulture)).ToList();
       }
 
-      var result = await FindAsync(conn, new SimilarityQuery(text, deckIds, limit, threshold, exclude));
+      var query = new SimilarityQuery(text, deckIds, limit, threshold, exclude);
+      // R20 V06: a caller-supplied embedding switches to cosine over stored card embeddings, but only while the
+      // vector store is ready; otherwise the trigram answer below is exactly what it was without the embedding.
+      if (embedding is not null && await CardEmbeddings.IsReadyAsync(conn))
+      {
+        try
+        {
+          return res.Ok(await CardEmbeddings.FindSimilarAsync(conn, query, embedding));
+        }
+        catch (PostgresException ex) when (CardEmbeddings.IsMissingVectorObject(ex))
+        {
+          CardEmbeddings.ResetReadyCache();
+        }
+      }
+
+      var result = await FindAsync(conn, query);
       return res.Ok(result);
     }
     catch (Exception ex) when (ex is ValidationError)

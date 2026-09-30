@@ -39,7 +39,8 @@ public sealed record WeeklyDigestData(DateOnly From, DateOnly To, decimal HoursS
   IReadOnlyDictionary<string, long> PublishesByState, long WatchChecks, long WatchChanges, long WatchFailures,
   long EmailsSent, long EmailsFailed, IReadOnlyList<DigestRunner> Runners, decimal HumanQaSpendUsd, decimal AutomationQaSpendUsd,
   long HumanDraftsPending, long HumanPublishes, long ShadowBlindDecided = 0, long ShadowBlindAccepted = 0, DigestLive? Live = null,
-  long BlindPendingDrafts = 0, long BlindPendingRuns = 0);
+  long BlindPendingDrafts = 0, long BlindPendingRuns = 0, long CardReportsOpen = 0, long CardReportsNew = 0,
+  long FeedItemsNew = 0, IReadOnlyList<DigestFeedItem>? FeedItems = null);
 
 /// <summary>
 /// The live quality measurement the digest shows (R18D M2): the auto-accepts of the last 30 days and how many a person
@@ -55,9 +56,13 @@ public sealed record SourceFlaggedCard(long CardId, string StableUid, string Sev
 public sealed record SourceDeck(long DeckId, string DeckSlug, IReadOnlyList<Guid> RunIds, int CardsRechecked,
   IReadOnlyList<SourceFlaggedCard> Flagged);
 
-/// <summary>What the source-changed email shows (A00 §12.5, §12.6 step 8).</summary>
+/// <summary>
+/// What the source-changed email shows (A00 §12.5, §12.6 step 8); <see cref="AffectedCards"/> and
+/// <see cref="NeedsHumanReview"/> are the event's R20 V07 change impact.
+/// </summary>
 public sealed record SourceChangedData(long EventId, long TargetId, string Url, string Change, string RecheckState,
-  IReadOnlyList<SourceDeck> Decks, IReadOnlyList<long> MissingQuoteCardIds, IReadOnlyList<long> QueueItemIds);
+  IReadOnlyList<SourceDeck> Decks, IReadOnlyList<long> MissingQuoteCardIds, IReadOnlyList<long> QueueItemIds,
+  IReadOnlyList<AffectedCard>? AffectedCards = null, bool NeedsHumanReview = false);
 
 /// <summary>
 /// Every automation email, rendered by pure functions (R18A A04, contract A00 §12.2, §12.4, §12.5): no I/O, no clock,
@@ -460,6 +465,11 @@ public static class EmailTemplates
     }
     if (data.HumanPublishes > 0) needs.Add($"- {data.HumanPublishes} publish(es) need you — {AutomationUrl(consoleBaseUrl, "tab=runs")}");
     if (data.EmailsFailed > 0) needs.Add($"- {data.EmailsFailed} email(s) failed — {AutomationUrl(consoleBaseUrl, "tab=email")}");
+    var feedItems = data.FeedItems ?? [];
+    if (feedItems.Count > 0)
+    {
+      needs.Add($"- {feedItems.Count} release note(s) may affect existing cards — {AutomationUrl(consoleBaseUrl, "tab=watch")}");
+    }
     var live = data.Live ?? new DigestLive(0, 0, 0, null);
     if (live.AutoAccepted30d >= StatusRoutes.LiveOverrideMinAccepted && live.OverrideRate > StatusRoutes.LiveOverrideRateAlarm)
     {
@@ -498,7 +508,18 @@ public static class EmailTemplates
       $"{live.EditedAfterSourceChange} updated after a source change (not counted)");
     details.Add("Publishes by state: " + Pairs(data.PublishesByState));
     details.Add($"Source watch: {data.WatchChecks} check(s), {data.WatchChanges} change(s), {data.WatchFailures} failure(s)");
+    // R20 V07: new release-notes items and the cards full-text search found for them (possibly affected, never edited).
+    details.Add($"Release notes: {data.FeedItemsNew} new, {feedItems.Count} with possibly affected card(s)");
+    details.AddRange(feedItems.Take(ChangeImpact.MaxEmailCards).Select(i =>
+      $"Release note {Cap(OneLine(i.Title ?? "(untitled)"), MaxQuestionLength)} ({i.Url}): possibly affects " +
+      string.Join(", ", i.Cards.Select(c =>
+        $"{c.StableUid} ({c.DeckSlug}, rank {c.Rank.ToString("0.00", CultureInfo.InvariantCulture)}) — {ChangeImpact.EditUrl(consoleBaseUrl, c.DeckId, c.CardId)}"))));
+    if (feedItems.Count > ChangeImpact.MaxEmailCards)
+    {
+      details.Add($"Release notes not listed: {feedItems.Count - ChangeImpact.MaxEmailCards} more — {AutomationUrl(consoleBaseUrl, "tab=watch")}");
+    }
     details.Add($"Emails: {data.EmailsSent} sent, {data.EmailsFailed} failed");
+    details.Add($"Card reports: {data.CardReportsOpen} open ({data.CardReportsNew} new this week)");
     if (data.Runners.Count == 0) details.Add("Runners: none registered");
     details.AddRange(data.Runners.Select(r =>
       $"Runner {r.RunnerId}: state {OneLine(r.State)}, last heartbeat {Timestamp(r.LastHeartbeatAt)}, " +
@@ -514,9 +535,20 @@ public static class EmailTemplates
     var rechecked = data.Decks.Sum(d => d.CardsRechecked);
     var flagged = data.Decks.SelectMany(d => d.Flagged.Select(f => f.CardId)).Distinct().Count();
     var subject = $"Source changed: {HostPath(data.Url)} — {rechecked} card(s) re-checked, {flagged} flagged";
-    var summary = $"The cited source {data.Url} {(data.Change == "gone" ? "is gone" : "changed")}; {rechecked} card(s) were re-checked and {flagged} flagged.";
+    var affected = data.AffectedCards ?? [];
+    var review = data.NeedsHumanReview && affected.Count > 0;
+    var summary = $"The cited source {data.Url} {(data.Change == "gone" ? "is gone" : "changed")}; {rechecked} card(s) were re-checked and {flagged} flagged." +
+      (review ? $" The AI QA re-check is unavailable: {affected.Count} card(s) need a human review." : string.Empty);
     var console = AutomationUrl(consoleBaseUrl, $"tab=watch&targetId={data.TargetId.ToString(CultureInfo.InvariantCulture)}");
     var baseUrl = consoleBaseUrl.TrimEnd('/');
+
+    // R20 V07: the affected cards (at most 20 listed) with their console editor; under NEEDS YOU when no AI QA re-check
+    // covered them, else under DETAILS.
+    string AffectedLine(AffectedCard c) =>
+      $"{c.StableUid} ({c.DeckSlug}) — {Cap(OneLine(c.Question), MaxQuestionLength)}{(c.QuoteMissing ? " (quote missing)" : string.Empty)} — " +
+      ChangeImpact.EditUrl(consoleBaseUrl, c.DeckId, c.CardId);
+    var affectedShown = affected.Take(ChangeImpact.MaxEmailCards).ToList();
+    var affectedMore = affected.Count - affectedShown.Count;
 
     string RecheckLink(SourceDeck d) => d.RunIds.Count == 0
       ? $"{baseUrl}/decks/qa?deckId={d.DeckId.ToString(CultureInfo.InvariantCulture)}"
@@ -529,6 +561,11 @@ public static class EmailTemplates
     }
     needs.AddRange(data.MissingQuoteCardIds.Select(id =>
       $"- card {id.ToString(CultureInfo.InvariantCulture)} — its quote is no longer on the page — {console}"));
+    if (review)
+    {
+      needs.AddRange(affectedShown.Select(c => "- " + AffectedLine(c)));
+      if (affectedMore > 0) needs.Add($"- … and {affectedMore.ToString(CultureInfo.InvariantCulture)} more affected card(s) — {console}");
+    }
 
     var done = data.Decks.SelectMany(d => d.RunIds.Select(r =>
       $"- re-check run {r:D} of {d.DeckSlug} ({d.CardsRechecked} card(s)) — {baseUrl}/decks/qa?deckId={d.DeckId.ToString(CultureInfo.InvariantCulture)}&runId={r:D}")).ToList();
@@ -547,6 +584,12 @@ public static class EmailTemplates
     details.Add("Queue items: " + (data.QueueItemIds.Count == 0
       ? "none"
       : string.Join(", ", data.QueueItemIds.Select(i => i.ToString(CultureInfo.InvariantCulture)))));
+    details.Add($"Affected cards: {affected.Count.ToString(CultureInfo.InvariantCulture)} (needs human review: {(review ? "yes" : "no")})");
+    if (!review)
+    {
+      details.AddRange(affectedShown.Select(c => "Affected card " + AffectedLine(c)));
+      if (affectedMore > 0) details.Add($"Affected cards not listed: {affectedMore.ToString(CultureInfo.InvariantCulture)} more — {console}");
+    }
     return Render(mode, subject, summary, needs, done, details, console);
   }
 

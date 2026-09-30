@@ -119,7 +119,9 @@ public static class WatchAdminRoutes
         limit {RecentEvents}
         """, []);
       var recentEvents = events.Select(ToWatchEvent).ToList();
-      return res.Ok(new { items, recentEvents, nextCursor });
+      // R20 V07: the latest analysed release-notes items with their possibly affected cards.
+      var recentFeedItems = await ChangeImpact.RecentFeedItemsAsync(conn);
+      return res.Ok(new { items, recentEvents, nextCursor, recentFeedItems });
     }
     catch (Exception ex)
     {
@@ -314,10 +316,14 @@ public static class WatchAdminRoutes
   {
     JsonElement? details = null;
     var queueItemIds = new List<long>();
+    var affectedCards = new List<object>();
+    var needsHumanReview = false;
     if (r["details"] is string json)
     {
       using var doc = JsonDocument.Parse(json);
       details = doc.RootElement.Clone();
+      affectedCards.AddRange(ChangeImpact.ParseAffected(doc.RootElement).Select(ChangeImpact.ToJson));
+      needsHumanReview = ChangeImpact.ParseNeedsHumanReview(doc.RootElement);
       if (doc.RootElement.ValueKind == JsonValueKind.Object
           && doc.RootElement.TryGetProperty("queueItemIds", out var ids) && ids.ValueKind == JsonValueKind.Array)
       {
@@ -338,6 +344,8 @@ public static class WatchAdminRoutes
       queueItemIds,
       notificationId = r["notification_id"] as Guid?,
       createdAt = RunnerRoutes.Timestamp(r["created_at"]),
+      affectedCards,
+      needsHumanReview,
     };
   }
 }
