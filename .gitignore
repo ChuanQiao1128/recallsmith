@@ -78,3 +78,7 @@ __pycache__/
 
 # dc-evals local caches (V01: dc-evals review writes evals/.cache/review/)
 evals/.cache/
+# V02: dc-evals fetch-sources caches pages under $DC_SOURCES_CACHE (default ~/.cache/developercards/sources,
+# outside the repo); a cache pointed inside the checkout, or fastembed's model cache, must never be committed.
+evals/.sources-cache/
+fastembed_cache/
