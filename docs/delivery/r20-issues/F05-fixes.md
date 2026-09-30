@@ -151,4 +151,4 @@ Neither test calls a model: `dc-evals score` re-scores a committed file offline.
 | `terraform fmt -check -recursive infra` | OK |
 | `terraform -chdir=<scratch copy of infra/modules/observability> init -backend=false -input=false && ... test` | 2 passed, 0 failed |
 | `actionlint .github/workflows/ci.yml` | clean |
-| `F05.verify.sh` | see the worker report |
+| `BASE=delivery/r20x-p bash F05.verify.sh` | F05 VERIFY OK |
