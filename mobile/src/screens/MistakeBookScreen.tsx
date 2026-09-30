@@ -35,6 +35,12 @@ type Props = NativeStackScreenProps<RootStackParamList, 'MistakeBook'>;
 const FOCUS_MISTAKE_LIMIT = 10;
 /** Shown instead of a focus run once every mistake of the deck got today's correct answer. */
 export const DONE_FOR_TODAY_TEXT = 'Done for today, come back tomorrow.';
+/** Review button text once every mistake of the deck got today's correct answer. */
+export const REVIEW_DONE_LABEL = 'No mistakes due today';
+/** Spoken hint of the review button in that done state. */
+export const REVIEW_DONE_HINT = "Every mistake here already has today's correct answer. Come back tomorrow to keep clearing them.";
+/** Spoken hint of the review button while a mistake is still open today. */
+export const REVIEW_HINT = 'Starts a focus run with these mistakes';
 
 /** openToday: the deck's mistakes that can still earn a correct answer today. */
 type DeckGroup = { deck: DeckExport; rows: MistakeRow[]; openToday: number };
@@ -260,6 +266,7 @@ export function MistakeBookScreen({ navigation, route }: Props) {
                   <Pressable
                     testID={`mistake-review-${group.deck.Slug}`}
                     accessibilityRole="button"
+                    accessibilityHint={done ? REVIEW_DONE_HINT : REVIEW_HINT}
                     disabled={starting !== null}
                     accessibilityState={{ disabled: starting !== null, busy: starting === group.deck.Slug }}
                     style={({ pressed }) => [done ? styles.secondaryAction : styles.primaryAction, pressed && styles.pressed]}
@@ -274,7 +281,7 @@ export function MistakeBookScreen({ navigation, route }: Props) {
                         style={styles.primaryActionBusy}
                       />
                     ) : null}
-                    <Text style={styles.primaryActionText}>{reviewLabel}</Text>
+                    <Text style={styles.primaryActionText}>{done ? REVIEW_DONE_LABEL : reviewLabel}</Text>
                   </Pressable>
                   {done ? (
                     <Text
