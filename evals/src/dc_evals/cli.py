@@ -1,5 +1,6 @@
 """dc-evals command line: seed, run (paid, owner only), score, (Q03) author, jury and compare, and
-(V01) review, the local pre-publish self-check through the Claude CLI."""
+(V01) review, the local pre-publish self-check through the Claude CLI, and (V02) fetch-sources and
+retrieval, the retrieval eval over the pages the deck ledgers cite."""
 
 from __future__ import annotations
 
@@ -35,6 +36,7 @@ from .dataset import (
     AUTHORED_V2,
     AUTHORED_V2_SOURCES_PATH,
     DATASETS,
+    DECKS,
     REPORTS_DIR,
     RUN_DATASETS,
     load_rows,
@@ -69,6 +71,30 @@ def _review_date(text: str) -> str:
         return dt.date.fromisoformat(text).isoformat()
     except ValueError:
         raise argparse.ArgumentTypeError("expected YYYY-MM-DD") from None
+
+
+def _positive_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("expected a positive integer") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError("expected a positive integer")
+    return value
+
+
+def _ks(text: str) -> list[int]:
+    return sorted({_positive_int(part.strip()) for part in text.split(",") if part.strip()})
+
+
+def _methods(text: str) -> list[str]:
+    from .retrieval import METHODS
+
+    chosen = [part.strip() for part in text.split(",") if part.strip()]
+    unknown = [m for m in chosen if m not in METHODS]
+    if unknown or not chosen:
+        raise argparse.ArgumentTypeError(f"methods are a comma list of {', '.join(METHODS)}")
+    return list(dict.fromkeys(chosen))
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -238,6 +264,26 @@ def _parser() -> argparse.ArgumentParser:
     )
     review.add_argument("--review-date", type=_review_date, default=None, help="YYYY-MM-DD (default: UTC today)")
     review.add_argument("--dry-run", action="store_true", help="list the selected cards; no CLI call")
+
+    fetch = sub.add_parser(
+        "fetch-sources",
+        help="fetch the pages the deck ledgers cite into the local source cache (V02; $DC_SOURCES_CACHE)",
+    )
+    fetch.add_argument("--deck", action="append", choices=DECKS, default=None, help="a deck slug (repeatable; default both)")
+    fetch.add_argument("--max-pages", type=_positive_int, default=None, help="stop after N network fetches")
+    fetch.add_argument("--delay-s", type=float, default=1.0, help="seconds between network requests (default 1.0)")
+    fetch.add_argument("--retry-failed", action="store_true", help="fetch pages the manifest records as failed again")
+
+    retrieval = sub.add_parser(
+        "retrieval",
+        help="recall@k / MRR of finding a card's cited page among the cached pages (V02; no model call)",
+    )
+    retrieval.add_argument("--deck", action="append", choices=DECKS, default=None, help="a deck slug (repeatable; default both)")
+    retrieval.add_argument("--k", type=_ks, default=[1, 5, 10], help="comma list of cutoffs (default 1,5,10)")
+    retrieval.add_argument("--methods", type=_methods, default=["bm25", "embed", "hybrid"],
+                           help="comma list of bm25, embed, hybrid (default all three)")
+    retrieval.add_argument("--out", type=Path, default=REPORTS_DIR)
+    retrieval.add_argument("--date", type=_review_date, default=None, help="YYYY-MM-DD (default: UTC today)")
 
     score = sub.add_parser("score", help="print the report JSON for a run file")
     score.add_argument("run_file", type=Path)
@@ -505,6 +551,20 @@ def _review(args: argparse.Namespace) -> int:
     return deck_review.run_review(args)
 
 
+def _fetch_sources(args: argparse.Namespace) -> int:
+    from .source_cache import run_fetch
+
+    return run_fetch(list(dict.fromkeys(args.deck or DECKS)), max_pages=args.max_pages, delay_s=max(args.delay_s, 0.0),
+                     retry_failed=args.retry_failed)
+
+
+def _retrieval(args: argparse.Namespace) -> int:
+    from .retrieval import run_retrieval, today
+
+    return run_retrieval(list(dict.fromkeys(args.deck or DECKS)), ks=args.k, methods=args.methods, out_dir=args.out,
+                         date=args.date or today())
+
+
 def _compare(args: argparse.Namespace) -> int:
     from .compare import compare
 
@@ -541,6 +601,8 @@ def main(argv: list[str] | None = None) -> int:
         "compare": _compare,
         "automation-gate": _automation_gate,
         "review": _review,
+        "fetch-sources": _fetch_sources,
+        "retrieval": _retrieval,
     }
     return handlers[args.command](args)
 
