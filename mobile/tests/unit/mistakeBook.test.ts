@@ -422,7 +422,7 @@ describe('mistakeBook', () => {
       return raw ? (JSON.parse(raw) as MistakeBookState) : null;
     };
 
-    it('merges two books keeping the entry with the newer lastWrongAt, then applies the LRU cap', () => {
+    it('merges two books per key, summing counts, then applies the LRU cap', () => {
       const user = bookWith(
         entry({ stableUid: 'both-user-newer', lastWrongAt: T0 + 5, wrongCount: 3 }),
         entry({ stableUid: 'both-anon-newer', lastWrongAt: T0 + 1, wrongCount: 1 }),
@@ -443,9 +443,17 @@ describe('mistakeBook', () => {
       expect(Object.keys(merged.entries).sort()).toEqual(
         ['csharp::anon-only', 'csharp::both-anon-newer', 'csharp::both-user-newer', 'csharp::tie', 'csharp::user-only'],
       );
-      expect(merged.entries['csharp::both-user-newer'].wrongCount).toBe(3);
-      expect(merged.entries['csharp::both-anon-newer']).toEqual(anon.entries['csharp::both-anon-newer']);
-      expect(merged.entries['csharp::tie'].wrongCount).toBe(7);
+      // Both unresolved: counts sum, the newer lastWrongAt side supplies lastOutcome and the resolution.
+      expect(merged.entries['csharp::both-user-newer']).toEqual(
+        entry({ stableUid: 'both-user-newer', wrongCount: 4, firstWrongAt: T0, lastWrongAt: T0 + 5 }),
+      );
+      expect(merged.entries['csharp::both-anon-newer']).toEqual(
+        entry({ stableUid: 'both-anon-newer', wrongCount: 3, firstWrongAt: T0, lastWrongAt: T0 + 9, correctStreak: 1, lastCorrectAt: T0 + 3 }),
+      );
+      expect(merged.entries['csharp::both-anon-newer'].lastOutcome).toBe(anon.entries['csharp::both-anon-newer'].lastOutcome);
+      // Tie: the account wins, counts still sum.
+      expect(merged.entries['csharp::tie']).toEqual(entry({ stableUid: 'tie', wrongCount: 8, lastWrongAt: T0 }));
+      expect(merged.entries['csharp::user-only']).toEqual(user.entries['csharp::user-only']);
       expect(merged.entries['csharp::anon-only']).toEqual(anon.entries['csharp::anon-only']);
       expect(user).toEqual(userSnapshot);
       expect(anon).toEqual(anonSnapshot);
