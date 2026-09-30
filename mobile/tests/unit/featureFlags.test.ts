@@ -84,6 +84,7 @@ describe('feature flags', () => {
       mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook,
       cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
       sentry: DEFAULT_FEATURE_FLAGS.sentry,
+      cardReport: { enabled: false },
     });
     expect(Object.isFrozen(getFeatureFlags())).toBe(true);
     expect(Object.isFrozen(getFeatureFlags().mcq)).toBe(true);
@@ -116,6 +117,7 @@ describe('feature flags', () => {
       mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook,
       cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
       sentry: DEFAULT_FEATURE_FLAGS.sentry,
+      cardReport: DEFAULT_FEATURE_FLAGS.cardReport,
     });
   });
 
@@ -127,6 +129,7 @@ describe('feature flags', () => {
       mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook,
       cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
       sentry: DEFAULT_FEATURE_FLAGS.sentry,
+      cardReport: DEFAULT_FEATURE_FLAGS.cardReport,
     });
 
     expect(applyRemoteFeatures({ features: { mcq: { maxPerRun: 0 } } })).toEqual({
@@ -141,6 +144,7 @@ describe('feature flags', () => {
       mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook,
       cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
       sentry: DEFAULT_FEATURE_FLAGS.sentry,
+      cardReport: DEFAULT_FEATURE_FLAGS.cardReport,
     });
   });
 
@@ -155,7 +159,7 @@ describe('feature flags', () => {
           },
         }),
       ),
-    ).toEqual({ mcq: DEFAULT_FEATURE_FLAGS.mcq, paywall: { hidden: true }, ceremony: DEFAULT_FEATURE_FLAGS.ceremony, mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook, cardSource: DEFAULT_FEATURE_FLAGS.cardSource, sentry: DEFAULT_FEATURE_FLAGS.sentry });
+    ).toEqual({ mcq: DEFAULT_FEATURE_FLAGS.mcq, paywall: { hidden: true }, ceremony: DEFAULT_FEATURE_FLAGS.ceremony, mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook, cardSource: DEFAULT_FEATURE_FLAGS.cardSource, sentry: DEFAULT_FEATURE_FLAGS.sentry, cardReport: DEFAULT_FEATURE_FLAGS.cardReport });
     expect(
       applyRemoteFeatures(
         asRemoteConfig({
@@ -172,6 +176,7 @@ describe('feature flags', () => {
       mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook,
       cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
       sentry: DEFAULT_FEATURE_FLAGS.sentry,
+      cardReport: DEFAULT_FEATURE_FLAGS.cardReport,
     });
 
     expect(
@@ -188,7 +193,7 @@ describe('feature flags', () => {
           },
         }),
       ),
-    ).toEqual({ mcq: DEFAULT_FEATURE_FLAGS.mcq, paywall: { hidden: true }, ceremony: DEFAULT_FEATURE_FLAGS.ceremony, mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook, cardSource: DEFAULT_FEATURE_FLAGS.cardSource, sentry: DEFAULT_FEATURE_FLAGS.sentry });
+    ).toEqual({ mcq: DEFAULT_FEATURE_FLAGS.mcq, paywall: { hidden: true }, ceremony: DEFAULT_FEATURE_FLAGS.ceremony, mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook, cardSource: DEFAULT_FEATURE_FLAGS.cardSource, sentry: DEFAULT_FEATURE_FLAGS.sentry, cardReport: DEFAULT_FEATURE_FLAGS.cardReport });
 
     for (const maxPerRun of [null, 1.5, -1, Number.NaN]) {
       expect(
@@ -252,6 +257,7 @@ describe('feature flags', () => {
       mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook,
       cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
       sentry: DEFAULT_FEATURE_FLAGS.sentry,
+      cardReport: DEFAULT_FEATURE_FLAGS.cardReport,
     });
 
     await unmount(tree);
@@ -284,6 +290,7 @@ describe('feature flags', () => {
       mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook,
       cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
       sentry: DEFAULT_FEATURE_FLAGS.sentry,
+      cardReport: DEFAULT_FEATURE_FLAGS.cardReport,
     });
 
     await unmount(tree);
