@@ -24,6 +24,7 @@ import HomeScreen from './src/screens/HomeScreen';
 import LibraryScreen from './src/screens/LibraryScreen';
 import CardDetailScreen from './src/screens/CardDetailScreen';
 import MistakeBookScreen from './src/screens/MistakeBookScreen';
+import MyReportsScreen from './src/screens/MyReportsScreen';
 import MoreScreen from './src/screens/MoreScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 import HelpFAQScreen from './src/screens/HelpFAQScreen';
@@ -211,6 +212,7 @@ function App() {
         <Stack.Screen name="Library" component={LibraryScreen} />
         <Stack.Screen name="CardDetail" component={CardDetailScreen} />
         <Stack.Screen name="MistakeBook" component={MistakeBookScreen} />
+        <Stack.Screen name="MyReports" component={MyReportsScreen} />
         <Stack.Screen name="More" component={MoreScreen} />
         <Stack.Screen name="Profile" component={ProfileScreen} />
         <Stack.Screen name="HelpFAQ" component={HelpFAQScreen} />
