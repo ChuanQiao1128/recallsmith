@@ -4,6 +4,8 @@ Thumbs.db
 
 # Node / Web
 node_modules/
+# a worktree's node_modules symlinked to the main checkout (a trailing-slash pattern skips symlinks)
+node_modules
 dist/
 build/
 *.log
@@ -73,3 +75,6 @@ __pycache__/
 .pytest_cache/
 *.pyc
 .ruff_cache/
+
+# dc-evals local caches (V01: dc-evals review writes evals/.cache/review/)
+evals/.cache/

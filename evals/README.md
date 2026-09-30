@@ -26,6 +26,8 @@ in the Lambda) and the client from `ai_qa.providers.make_client`.
 evals/
   pyproject.toml, uv.lock        Python 3.12, hatchling, uv path source to ../services/ai-qa
   scripts/export-cards.mts       decks -> data/cards-<slug>.jsonl through the console parser
+  scripts/parse-deck.mts         one deck (file or stdin) -> QaCard JSON lines (V01, used by dc-evals review)
+  scripts/deck-lib.mts           the shared console-parser loader and exportCard of both scripts
   data/cards-aws-saa-c03.jsonl   exported cards (generated; do not edit)
   data/cards-claude-ccdv-f.jsonl
   data/mutations-v1.json         seed, class counts and the mutation templates
@@ -44,8 +46,9 @@ evals/
                                  B06 new-facts: dc-evals import-drafts from the author-runner's drafts)
   data/authored-v2.labels.jsonl  A15: its jury labels (dc-evals jury --dataset authored-v2), + .labels.summary.json
   src/dc_evals/                  cli, dataset, sources, seed, mutations, runner, score, report,
-                                 author, jury, compare, automation_gate, drafts_import
+                                 author, jury, compare, automation_gate, drafts_import, deck_review
   reports/                       run files and reports (the owner commits them)
+  .cache/review/                 dc-evals review output (git-ignored, never committed)
   tests/                         pytest with a FakeLlm; no test calls a model
 ```
 
@@ -291,7 +294,12 @@ uv run --python 3.12 dc-evals import-drafts --drafts <drafts>.jsonl --deck <deck
 uv run --python 3.12 dc-evals automation-gate --seeded reports/<v3 run>.jsonl --authored reports/<authored-v2 run>.jsonl \
     [--date YYYY-MM-DD] [--out reports/]
 uv run --python 3.12 dc-evals compare reports/<run>.jsonl ... --name <name> [--date YYYY-MM-DD] [--out reports/]
+uv run --python 3.12 dc-evals review --deck <deck.md> (--changed-since REF | --cards UID[,UID...] | --all) \
+    [--provider claude-cli] [--model claude-opus-5] [--concurrency 2] [--limit 60] [--out FILE] \
+    [--review-date YYYY-MM-DD] [--dry-run]
 ```
+
+`dc-evals review` is described in [Local pre-publish review](#local-pre-publish-review).
 
 The three Q03 commands (`author`, `jury`, `compare`) are described in
 [Agent-authored cards, model jury and configuration comparison](#agent-authored-cards-model-jury-and-configuration-comparison-q03).
@@ -353,6 +361,70 @@ on. As of 2026-09-27 no such run exists: the prompt that ships (`qa-v3`) has onl
 is also where the `MAX_TOKENS` and `REFUSAL` rates (`errors`) are checked: the proxy cannot
 observe them reliably (ai-agent-30), and at `MAX_TOKENS` = 16000 with effort `high` a truncation
 has only been ruled out for Bedrock once that run exists.
+
+## Local pre-publish review
+
+`dc-evals review` is the owner's self-check of new or edited cards **before** a deck is imported
+or published. It uses the same parser and the same reviewer as production AI QA: the cards come
+from the console parser (`frontend/src/lib/deckImport.ts` `parseDeckMarkdown`, through
+`scripts/parse-deck.mts`), and each card goes through `ai_qa.review.review_card` with the
+default profile's prompt (`ai_qa` SYSTEM_PROMPT / PROMPT_VERSION) exactly as
+`dc-evals run --provider claude-cli` sends it: structured outputs off (validated plain JSON and
+one repair turn), no second reviewer.
+
+The transport is the owner's local Claude Code CLI (`claude -p`, their subscription). **No paid
+provider is selectable:** `--provider` accepts only `claude-cli`; any other value exits 2 with
+"paid providers are not available here; use dc-evals run". It spends no API money, but it does use
+the owner's subscription, so it is run by the owner on their machine only: never in CI, a verify
+or a worker session (the tests replace the parser and the CLI with fakes).
+
+One-time setup (the parser needs esbuild from the frontend's dependencies):
+
+```
+test -d frontend/node_modules || (cd frontend && npm ci)
+```
+
+Then, from the repo root:
+
+```
+cd evals
+# the cards edited since main, listed only (no CLI call)
+uv run --python 3.12 dc-evals review --deck ../content/decks/claude-ccdv-f.md --changed-since main --dry-run
+# review them
+uv run --python 3.12 dc-evals review --deck ../content/decks/claude-ccdv-f.md --changed-since main
+# named cards, or the whole deck (a selection over 60 cards needs --limit)
+uv run --python 3.12 dc-evals review --deck ../content/decks/claude-ccdv-f.md --cards ccdvf-workflow-vs-agent-definition
+uv run --python 3.12 dc-evals review --deck ../content/decks/aws-saa-c03.md --all --limit 400
+```
+
+- **Selection, exactly one of:** `--changed-since REF` (cards whose stableUid is new, or whose
+  content differs from the deck at `git show REF:<path>`; content is the exported card as
+  sorted-key JSON, so any edit to a field the reviewer sees counts; a deck that is not in REF
+  selects every card), `--cards uid1,uid2` (an unknown uid exits 2), `--all`. No selection exits
+  2 and lists the three options.
+- `--model` (default `claude-opus-5`); a response served by another model is recorded as
+  `MODEL_MISMATCH`, as in `run`.
+- `--concurrency` (default 2) parallel CLI calls.
+- `--limit N` is a safety cap (default 60): a larger selection exits 2 before any call and asks
+  for `--limit`.
+- `--out FILE`: JSONL, a `{"type":"review", ...}` header (deck, selection, provider, model,
+  promptVersion, reviewDate, cards) and one `{"type":"item", "stableUid", ...}` line per card
+  with its status, errorCode and findings. Default `evals/.cache/review/<date>-<deck>.jsonl`,
+  which is git-ignored.
+- `--dry-run` lists the selected cards and exits 0 without calling the CLI.
+
+The command prints a table grouped by card (stableUid, severity, category, message,
+suggestedFix; blocker first; a clean card shows "no findings") and then the totals.
+
+| exit | meaning |
+| --- | --- |
+| 0 | no blocker or major finding (minor findings only, or none) |
+| 1 | at least one blocker or major finding: fix the card before publishing |
+| 2 | usage or configuration error (selection, provider, limit, a parse error, missing node/esbuild) |
+| 3 | at least one card's review errored (for example a CLI failure); rerun those cards with `--cards` |
+
+A parse error prints the parser's `file:line: CODE message` lines, the same as
+`node frontend/scripts/lint-deck.mts`, and exits 2 before any review.
 
 ## Agent-authored cards, model jury and configuration comparison (Q03)
 
