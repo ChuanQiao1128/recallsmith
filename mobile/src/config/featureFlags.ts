@@ -21,6 +21,9 @@ export type FeatureFlags = {
   mistakeBook: { enabled: boolean; relatedCount: number };
   // K03: hides the Source row under an opened answer on CardDetail.
   cardSource: { enabled: boolean };
+  // M02: remote kill switch read from the last-good cached config before init, so it takes
+  // effect on the next cold start; a same-launch flip closes the client.
+  sentry: { enabled: boolean };
 };
 
 export const DEFAULT_FEATURE_FLAGS: FeatureFlags = Object.freeze({
@@ -36,6 +39,7 @@ export const DEFAULT_FEATURE_FLAGS: FeatureFlags = Object.freeze({
   ceremony: Object.freeze({ seamOfLight: true, forceFallback: false }),
   mistakeBook: Object.freeze({ enabled: true, relatedCount: 3 }),
   cardSource: Object.freeze({ enabled: true }),
+  sentry: Object.freeze({ enabled: true }),
 });
 
 let snapshot = DEFAULT_FEATURE_FLAGS;
@@ -57,6 +61,7 @@ function snapshotsEqual(left: FeatureFlags, right: FeatureFlags): boolean {
     && left.mistakeBook.enabled === right.mistakeBook.enabled
     && left.mistakeBook.relatedCount === right.mistakeBook.relatedCount
     && left.cardSource.enabled === right.cardSource.enabled
+    && left.sentry.enabled === right.sentry.enabled
   );
 }
 
@@ -83,6 +88,8 @@ export function applyRemoteFeatures(config: RemoteConfig | null | undefined): Fe
   const mistakeBook = isRecord(remoteMistakeBook) ? remoteMistakeBook : undefined;
   const remoteCardSource = features?.cardSource;
   const cardSource = isRecord(remoteCardSource) ? remoteCardSource : undefined;
+  const remoteSentry = features?.sentry;
+  const sentry = isRecord(remoteSentry) ? remoteSentry : undefined;
 
   const maxPerRun = mcq?.maxPerRun;
   const relatedCount = mistakeBook?.relatedCount;
@@ -139,6 +146,12 @@ export function applyRemoteFeatures(config: RemoteConfig | null | undefined): Fe
         typeof cardSource?.enabled === 'boolean'
           ? cardSource.enabled
           : DEFAULT_FEATURE_FLAGS.cardSource.enabled,
+    }),
+    sentry: Object.freeze({
+      enabled:
+        typeof sentry?.enabled === 'boolean'
+          ? sentry.enabled
+          : DEFAULT_FEATURE_FLAGS.sentry.enabled,
     }),
   });
 

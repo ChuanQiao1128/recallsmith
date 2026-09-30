@@ -15,7 +15,8 @@
         "env": {
           "CLANG_CXX_LANGUAGE_STANDARD": "c++17",
           "CLANG_CXX_LIBRARY": "libc++",
-          "EXPO_PUBLIC_ENV": "development"
+          "EXPO_PUBLIC_ENV": "development",
+          "SENTRY_DISABLE_AUTO_UPLOAD": "true"
         }
       }
     },
@@ -31,7 +32,8 @@
         "env": {
           "CLANG_CXX_LANGUAGE_STANDARD": "c++17",
           "CLANG_CXX_LIBRARY": "libc++",
-          "EXPO_PUBLIC_ENV": "development"
+          "EXPO_PUBLIC_ENV": "development",
+          "SENTRY_DISABLE_AUTO_UPLOAD": "true"
         }
       }
     },
@@ -45,7 +47,8 @@
         "env": {
           "CLANG_CXX_LANGUAGE_STANDARD": "c++17",
           "CLANG_CXX_LIBRARY": "libc++",
-          "EXPO_PUBLIC_ENV": "development"
+          "EXPO_PUBLIC_ENV": "development",
+          "SENTRY_DISABLE_AUTO_UPLOAD": "true"
         }
       }
     },
@@ -59,7 +62,8 @@
         "env": {
           "CLANG_CXX_LANGUAGE_STANDARD": "c++17",
           "CLANG_CXX_LIBRARY": "libc++",
-          "EXPO_PUBLIC_ENV": "production"
+          "EXPO_PUBLIC_ENV": "production",
+          "SENTRY_DISABLE_AUTO_UPLOAD": "true"
         }
       }
     },
@@ -73,7 +77,10 @@
         "env": {
           "CLANG_CXX_LANGUAGE_STANDARD": "c++17",
           "CLANG_CXX_LIBRARY": "libc++",
-          "EXPO_PUBLIC_ENV": "production"
+          "EXPO_PUBLIC_ENV": "production",
+          "SENTRY_ALLOW_FAILURE": "true",
+          "SENTRY_ORG": "timeawake-limited",
+          "SENTRY_PROJECT": "developercards-mobile"
         }
       }
     },
@@ -82,7 +89,13 @@
       "distribution": "internal",
       "ios": {
         "simulator": true,
-        "buildConfiguration": "Release"
+        "buildConfiguration": "Release",
+        "env": {
+          "CLANG_CXX_LANGUAGE_STANDARD": "c++17",
+          "CLANG_CXX_LIBRARY": "libc++",
+          "EXPO_PUBLIC_ENV": "production",
+          "SENTRY_DISABLE_AUTO_UPLOAD": "true"
+        }
       }
     }
   },

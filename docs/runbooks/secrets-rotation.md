@@ -25,6 +25,7 @@ keeps a value for at most 5 minutes, so a new value reaches them without a deplo
 | — (never an env var; `SSM_NOT_ENV`) | `anthropic-api-key` | developercards-ai-qa, runtime, only with `AI_PROVIDER=anthropic` (`services/ai-qa/src/ai_qa/handler.py:240`) | Anthropic (the issuer) |
 | `RC_WEBHOOK_AUTH_PRODUCTION` | `rc-webhook-auth-production` | `src_C/Vpc/Webhooks/RevenuecatWebhook.cs` | RevenueCat dashboard (production Authorization header) |
 | `RC_WEBHOOK_AUTH_DEVELOPMENT` | `rc-webhook-auth-development` | `src_C/Vpc/Webhooks/RevenuecatWebhook.cs` | RevenueCat dashboard (development Authorization header) |
+| `SENTRY_AUTH_TOKEN` (release scripts / EAS Build only, never a Lambda) | — (not an SSM leaf) | `mobile/scripts/release/ota.sh` (OTA source-map upload), EAS Build's Sentry source-map upload for the `production` profile | EAS production environment variable (visibility secret); the owner's macOS Keychain, generic password service `developercards-sentry-auth-token`; Sentry (the issuer) |
 
 While a rotation is in progress some leaves have a `<leaf>-previous` companion, read in these
 cases only: `internal-shared-secret-previous`, `webhook-report-secret-previous` and
@@ -162,3 +163,29 @@ first pass. Supervisor order, after merge:
 Same procedure with the `/developercards/staging/*` parameters and `ENV=staging` (the staging env
 file and its wiring arrive with E10). `developercards_app_staging` owns `developercards_staging`,
 created during the E06 cut-over while master access still exists.
+
+## Sentry auth token
+
+`SENTRY_AUTH_TOKEN` is a Sentry **organization auth token** limited to release and source-map upload
+(added with 1.9.0, `docs/release-1.9.0-monitoring.md`). It is not in SSM and no Lambda reads it. It
+lives in two places only: the EAS `production` environment variable `SENTRY_AUTH_TOKEN` (visibility
+secret; EAS Build's Sentry plugin uploads the store build's source maps with it) and the owner's macOS
+Keychain as generic password service `developercards-sentry-auth-token`, which
+`mobile/scripts/release/ota.sh` reads when no `SENTRY_AUTH_TOKEN` is exported (on a terminal or with
+`OTA_KEYCHAIN=1`). Never in `mobile/.env.local`, a shell profile, git or a note: the checkout is
+iCloud-synced. `ota.sh` prints only `SENTRY_TOKEN_SOURCE=env|keychain`, never the value.
+
+Rotate:
+
+1. In Sentry (Settings > Auth Tokens of the organization) create a new org token `<new-token>` with
+   the same scopes (release + source-map upload).
+2. Update the EAS `production` variable `SENTRY_AUTH_TOKEN` to `<new-token>` (EAS dashboard or
+   `eas env:update`, typed by the owner, never logged), keeping visibility secret.
+3. Replace the Keychain item: `security add-generic-password -U -s developercards-sentry-auth-token -a <account> -w`
+   (prompts for the value; never pass it as an argument).
+4. From `main`, run one `DRY_RUN=1 mobile/scripts/release/ota.sh "<msg>"` on a terminal: it must print
+   `SENTRY_TOKEN_SOURCE=keychain` and `DRY: SENTRY_UPLOAD=ok-planned`.
+5. Revoke the old token in Sentry.
+
+On a leak: revoke the token in Sentry at once (revoke-only; source-map uploads report
+`SENTRY_UPLOAD=failed` or warn in EAS Build until the new token is in place), then do steps 1–4.

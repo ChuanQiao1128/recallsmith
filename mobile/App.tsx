@@ -55,6 +55,12 @@ import {
   configureClientErrorReporting,
   installGlobalErrorHandlers,
 } from './src/telemetry/clientErrorReporter';
+import {
+  captureException,
+  registerNavigationContainer,
+  startObservability,
+  wrapRootComponent,
+} from './src/telemetry/observability';
 
 configureAmplifyOnce();
 installAccessTokenRefresher();
@@ -87,10 +93,13 @@ const REMOTE_CONFIG_URL = 'https://raw.githubusercontent.com/ChuanQiao1128/recal
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const navigationRef = createNavigationContainerRef<RootStackParamList>();
 
-// Interim client error reporting (MSHELL-02 / MSHELL-12). The reporter imports
-// nothing at runtime; the token, device info and current screen are injected
-// here. `installGlobalErrorHandlers` chains RN's previous ErrorUtils handler and
-// (in production only) enables the Hermes unhandled-rejection tracker.
+// Client error reporting. Since 1.9.0 (M02) it is Sentry or the interim
+// /client-errors reporter (MSHELL-02 / MSHELL-12), never both, decided once per
+// launch by startObservability: an active Sentry takes every report through the
+// injected `captureException`; otherwise `installGlobalErrorHandlers` chains RN's
+// previous ErrorUtils handler and (in production only) enables the Hermes
+// unhandled-rejection tracker. The reporter imports nothing at runtime; the
+// token, device info and current screen are injected here.
 configureClientErrorReporting({
   getAccessToken: () => useAuthStore.getState().accessToken,
   getEnv: () => {
@@ -99,8 +108,9 @@ configureClientErrorReporting({
   },
   getCurrentScreen: () =>
     navigationRef.isReady() ? navigationRef.getCurrentRoute()?.name ?? null : null,
+  captureException,
 });
-installGlobalErrorHandlers();
+void startObservability({ installInterimHandlers: () => installGlobalErrorHandlers() });
 
 // Recovery target for a per-screen error boundary's "Back to Home".
 function goHomeAfterScreenError() {
@@ -140,7 +150,7 @@ function ForceUpdateOverlay(props: ForceUpdateGate) {
   );
 }
 
-export default function App() {
+function App() {
   const forceUpdate = useForceUpdateGate(REMOTE_CONFIG_URL);
   // The current route lives in an external store, not App state, so navigation
   // re-renders only TabBarHost (MSHELL-21) instead of the whole navigator tree.
@@ -177,7 +187,10 @@ export default function App() {
         <NavigationContainer
           ref={navigationRef}
           linking={linking}
-          onReady={() => routeStore.set(navigationRef.getCurrentRoute()?.name)}
+          onReady={() => {
+            routeStore.set(navigationRef.getCurrentRoute()?.name);
+            registerNavigationContainer(navigationRef);
+          }}
           onStateChange={() => routeStore.set(navigationRef.getCurrentRoute()?.name)}
         >
           <Stack.Navigator
@@ -246,6 +259,8 @@ export default function App() {
     </GestureHandlerRootView>
   );
 }
+
+export default wrapRootComponent(App);
 
 const styles = StyleSheet.create({
   appShell: { flex: 1, backgroundColor: '#F5F3FF' },
