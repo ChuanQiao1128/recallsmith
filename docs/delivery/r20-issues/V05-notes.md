@@ -85,7 +85,7 @@ golden gains the line), `RouteMetricsTests.cs` (the two static routes label them
 Commands run:
 
 - `dotnet test Tests/RecallSmith.Lambda.IntegrationTests --filter "FullyQualifiedName~CardReport"` (from `src_C`): 36 passed.
-- `dotnet test Tests/RecallSmith.Lambda.IntegrationTests` (from `src_C`): full suite, 2786 passed before the account-deletion test was added; re-run after.
+- `dotnet test Tests/RecallSmith.Lambda.IntegrationTests` (from `src_C`): full suite, 2787 passed, 0 failed.
 
 ## Owner steps
 
