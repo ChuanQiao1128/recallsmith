@@ -7,7 +7,9 @@
 // The vectors come from the owner's local embedding push, not from any model
 // call here. A server without the `vector` extension or the card_embeddings
 // table answers 503 VECTOR_NOT_READY; that is an owner step, not an error, so
-// it gets a neutral callout that names the steps.
+// it gets a neutral callout that names the steps. A server that predates these
+// routes answers 404 "Route not found" (code NOT_FOUND; a missing deck is
+// DECK_NOT_FOUND instead), which also gets a neutral callout, not an error.
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
@@ -22,7 +24,7 @@ import { CARD_CLASS, H2_CLASS, TD_CLASS, TH_CLASS } from '../../components/conso
 import { Callout } from '../../components/ui/Callout';
 import type { ApiError } from '../../types/api';
 
-type LoadError = { code: string; message: string };
+type LoadError = { code: string; message: string; httpStatus?: number };
 
 type PanelState = {
   forDeckId: number | null;
@@ -35,7 +37,12 @@ type PanelState = {
 const VECTOR_NOT_READY = 'VECTOR_NOT_READY';
 
 function toLoadError(error: ApiError | null, fallback: string): LoadError {
-  return { code: error?.code ?? 'UNKNOWN', message: error?.message ?? fallback };
+  return { code: error?.code ?? 'UNKNOWN', message: error?.message ?? fallback, httpStatus: error?.httpStatus };
+}
+
+/** True when the server has no such route: it predates R20 V06. */
+function isMissingRoute(error: LoadError | null): boolean {
+  return error?.httpStatus === 404 && (error.code === 'NOT_FOUND' || error.code === 'HTTP_404');
 }
 
 function editorHref(deckId: number, card: SemanticDuplicateCard): string {
@@ -93,6 +100,8 @@ export function SemanticDuplicatesPanel({ deckId }: { deckId: number }) {
     (state.statusError?.code === VECTOR_NOT_READY ||
       state.duplicatesError?.code === VECTOR_NOT_READY ||
       state.status?.engine === 'none');
+  const olderServer = !loading && !notReady && (isMissingRoute(state.statusError) || isMissingRoute(state.duplicatesError));
+  const neutral = notReady || olderServer;
   const status = state.status;
   const duplicates = state.duplicates;
 
@@ -120,7 +129,15 @@ export function SemanticDuplicatesPanel({ deckId }: { deckId: number }) {
         </div>
       ) : null}
 
-      {!loading && !notReady && state.statusError ? (
+      {olderServer ? (
+        <div className="mt-2" data-testid="qa-semantic-older-server">
+          <Callout tone="info" title="Semantic duplicates are not on this server yet">
+            <p>The server predates semantic duplicates. The panel fills in once the server is updated.</p>
+          </Callout>
+        </div>
+      ) : null}
+
+      {!loading && !neutral && state.statusError ? (
         <div className="mt-2">
           <Callout tone="danger" role="alert">
             {state.statusError.message}
@@ -128,7 +145,7 @@ export function SemanticDuplicatesPanel({ deckId }: { deckId: number }) {
         </div>
       ) : null}
 
-      {!loading && !notReady && status ? (
+      {!loading && !neutral && status ? (
         <p className="mt-2 text-sm text-slate-700" data-testid="qa-semantic-status">
           {status.embedded} of {status.cards} card(s) embedded
           {status.stale > 0 ? `, ${status.stale} stale (the card changed since it was embedded)` : ''}
@@ -136,7 +153,7 @@ export function SemanticDuplicatesPanel({ deckId }: { deckId: number }) {
         </p>
       ) : null}
 
-      {!loading && !notReady && state.duplicatesError ? (
+      {!loading && !neutral && state.duplicatesError ? (
         <div className="mt-2">
           <Callout tone="danger" role="alert">
             {state.duplicatesError.message}
@@ -144,7 +161,7 @@ export function SemanticDuplicatesPanel({ deckId }: { deckId: number }) {
         </div>
       ) : null}
 
-      {!loading && !notReady && duplicates ? (
+      {!loading && !neutral && duplicates ? (
         duplicates.pairs.length === 0 ? (
           <p className="mt-2 text-sm text-slate-500">
             No pair at or above cosine {duplicates.minCosine.toFixed(2)}.
