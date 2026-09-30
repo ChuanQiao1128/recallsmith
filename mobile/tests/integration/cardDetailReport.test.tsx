@@ -84,6 +84,7 @@ vi.mock('../../src/content/cardSource', () => ({
 vi.mock('../../src/api/apiClient', () => ({ apiJson: vi.fn() }));
 vi.mock('../../src/auth/freshToken', () => ({ getFreshAccessToken: vi.fn(async () => 'tok-1') }));
 
+import { apiJson } from '../../src/api/apiClient';
 import { CardDetailScreen } from '../../src/screens/CardDetailScreen';
 import { applyRemoteFeatures } from '../../src/config/featureFlags';
 import type { RemoteConfig } from '../../src/config/remoteConfig';
@@ -93,6 +94,7 @@ const flagOn = () => applyRemoteFeatures({ features: { cardReport: { enabled: tr
 
 beforeEach(() => {
   ownedFixture = null;
+  vi.mocked(apiJson).mockReset();
 });
 
 afterEach(() => {
@@ -109,19 +111,35 @@ function byTestId(tree: renderer.ReactTestRenderer, testID: string) {
   return tree.root.findAll((n) => typeof n.type === 'string' && n.props?.testID === testID);
 }
 
+const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() };
+
+function screen(cardId: string) {
+  return <CardDetailScreen navigation={navigation as any} route={{ key: 'k', name: 'CardDetail', params: { cardId } } as any} />;
+}
+
 async function renderScreen(cardId: string): Promise<renderer.ReactTestRenderer> {
-  const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() };
   let tree!: renderer.ReactTestRenderer;
   await act(async () => {
-    tree = renderer.create(
-      <CardDetailScreen
-        navigation={navigation as any}
-        route={{ key: 'k', name: 'CardDetail', params: { cardId } } as any}
-      />,
-    );
+    tree = renderer.create(screen(cardId));
   });
   await flush();
   return tree;
+}
+
+// Same screen instance, new route params: what a push/replace to another card does.
+async function showCard(tree: renderer.ReactTestRenderer, cardId: string) {
+  await act(async () => {
+    tree.update(screen(cardId));
+  });
+  await flush();
+}
+
+async function openSheetWithReason(tree: renderer.ReactTestRenderer) {
+  await press(tree, 'card-detail-show-answer');
+  await press(tree, 'card-detail-report');
+  await press(tree, 'report-reason-typo');
+  expect(byTestId(tree, 'report-card-sheet')).toHaveLength(1);
+  expect(byTestId(tree, 'report-reason-typo')[0].props.accessibilityState.selected).toBe(true);
 }
 
 async function press(tree: renderer.ReactTestRenderer, testID: string) {
@@ -180,11 +198,62 @@ describe('CardDetailScreen — report a problem', () => {
     expect(byTestId(tree, 'card-detail-report')).toHaveLength(0);
   });
 
-  it('hides the row on a locked card even with the flag on', async () => {
+  // Only proves the locked card never renders the answer body (where the row lives);
+  // the sheet mount's own gates are covered by the tests below.
+  it('renders no answer body and so no report row on a locked card', async () => {
     flagOn();
     ownedFixture = new Set(['cs-sourced']);
     const tree = await renderScreen('cs-locked');
     expect(byTestId(tree, 'card-detail-show-answer')).toHaveLength(0);
     expect(byTestId(tree, 'card-detail-report')).toHaveLength(0);
+  });
+
+  it('closes an open sheet when the screen moves on to a locked card', async () => {
+    flagOn();
+    ownedFixture = new Set(['cs-plain']);
+    const tree = await renderScreen('cs-plain');
+    await openSheetWithReason(tree);
+
+    await showCard(tree, 'cs-locked');
+    expect(byTestId(tree, 'card-detail-show-answer')).toHaveLength(0);
+    expect(byTestId(tree, 'report-card-sheet')).toHaveLength(0);
+    expect(apiJson).not.toHaveBeenCalled();
+  });
+
+  it('closes an open sheet on the next render once the flag is turned off', async () => {
+    flagOn();
+    ownedFixture = new Set(['cs-plain']);
+    const tree = await renderScreen('cs-plain');
+    await openSheetWithReason(tree);
+
+    applyRemoteFeatures(null);
+    await showCard(tree, 'cs-plain');
+    expect(byTestId(tree, 'card-detail-report')).toHaveLength(0);
+    expect(byTestId(tree, 'report-card-sheet')).toHaveLength(0);
+    expect(apiJson).not.toHaveBeenCalled();
+  });
+
+  it('does not carry an open sheet over to another card, so no report goes out for the wrong card', async () => {
+    flagOn();
+    ownedFixture = new Set(['cs-plain', 'cs-sourced']);
+    const tree = await renderScreen('cs-plain');
+    await openSheetWithReason(tree);
+
+    await showCard(tree, 'cs-sourced');
+    expect(byTestId(tree, 'report-card-sheet')).toHaveLength(0);
+    expect(apiJson).not.toHaveBeenCalled();
+
+    // Reporting the new card starts from a clean form and names the new card.
+    vi.mocked(apiJson).mockResolvedValue({ data: { reportId: 5, status: 'open', duplicate: false } });
+    await press(tree, 'card-detail-show-answer');
+    await press(tree, 'card-detail-report');
+    expect(byTestId(tree, 'report-reason-typo')[0].props.accessibilityState.selected).toBe(false);
+    await press(tree, 'report-reason-unclear');
+    await press(tree, 'report-card-submit');
+    expect(apiJson).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(apiJson).mock.calls[0][1]).toMatchObject({
+      method: 'POST',
+      body: { deckSlug: 'csharp', stableUid: 'cs-sourced', reason: 'unclear' },
+    });
   });
 });

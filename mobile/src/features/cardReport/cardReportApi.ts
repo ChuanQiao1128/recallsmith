@@ -5,9 +5,9 @@
 // lets mobile tokens through that prefix. The report POST itself is the server-side
 // record: there is no queue and no analytics event.
 //
-// freshToken is loaded with a guarded dynamic import() inside the function: a static
-// import would drag aws-amplify, zustand and the sync layer into every screen suite
-// that renders CardDetail, SessionCard or More (same pattern as clientCapabilities).
+// freshToken and authStore are loaded with a guarded dynamic import() inside the function:
+// a static import would drag aws-amplify, zustand and the sync layer into every screen
+// suite that renders CardDetail, SessionCard or More (same pattern as clientCapabilities).
 import { apiJson } from '../../api/apiClient';
 import { classifyError, FRIENDLY_ERROR_COPY } from '../../api/errorKind';
 
@@ -72,20 +72,56 @@ export class CardReportSignedOutError extends Error {
   }
 }
 
-/** The current access token, or null when signed out (or auth cannot load). */
-export async function getCardReportToken(): Promise<string | null> {
+/**
+ * Thrown before any request when the learner is signed in but no access token could be
+ * read (fetchAuthSession threw: offline or a temporary failure). Tagged `offline` so
+ * cardReportErrorMessage shows FRIENDLY_ERROR_COPY.offline, never the sign-in copy.
+ */
+export class CardReportTokenUnavailableError extends Error {
+  readonly kind = 'offline' as const;
+  constructor() {
+    super('card_report_token_unavailable');
+    this.name = 'CardReportTokenUnavailableError';
+  }
+}
+
+export type CardReportAuth = { kind: 'token'; token: string } | { kind: 'signed_out' } | { kind: 'unavailable' };
+
+// One shared import for every caller, so concurrent calls (a double tap) reuse it.
+let freshTokenModule: Promise<typeof import('../../auth/freshToken')> | null = null;
+
+function loadFreshToken(): Promise<typeof import('../../auth/freshToken')> {
+  if (!freshTokenModule) {
+    freshTokenModule = import('../../auth/freshToken');
+    freshTokenModule.catch(() => {
+      freshTokenModule = null;
+    });
+  }
+  return freshTokenModule;
+}
+
+/**
+ * The current access token, or why there is none. getFreshAccessToken returns null both
+ * when signed out and when a signed-in refresh failed (fetchAuthSession threw); the auth
+ * store tells them apart, and a refresh that finds the session really expired flips it
+ * to anonymous first. If auth cannot load at all there is no session, so: signed out.
+ */
+export async function getCardReportAuth(): Promise<CardReportAuth> {
   try {
-    const mod = await import('../../auth/freshToken');
-    return (await mod.getFreshAccessToken()) ?? null;
+    const token = (await (await loadFreshToken()).getFreshAccessToken()) ?? null;
+    if (token) return { kind: 'token', token };
+    const { useAuthStore } = await import('../../auth/authStore');
+    return useAuthStore.getState().status === 'signed_in' ? { kind: 'unavailable' } : { kind: 'signed_out' };
   } catch {
-    return null;
+    return { kind: 'signed_out' };
   }
 }
 
 async function requireToken(): Promise<string> {
-  const token = await getCardReportToken();
-  if (!token) throw new CardReportSignedOutError();
-  return token;
+  const auth = await getCardReportAuth();
+  if (auth.kind === 'signed_out') throw new CardReportSignedOutError();
+  if (auth.kind === 'unavailable') throw new CardReportTokenUnavailableError();
+  return auth.token;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

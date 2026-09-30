@@ -4,10 +4,11 @@
 // no navigation, so it is safe over SessionCard whose unmount resets the session).
 // Callers mount it only while it is open, so every open starts from a clean form.
 // The note is untrusted learner text: it is only ever sent as a JSON string field.
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import appJson from '../../../app.json';
+import { FRIENDLY_ERROR_COPY } from '../../api/errorKind';
 import { colors } from '../../theme/colors';
 import { a11y } from '../../theme/a11y';
 import { CHROME_MAX_FONT_SCALE } from '../../theme/dynamicType';
@@ -19,7 +20,7 @@ import {
   CARD_REPORT_REASONS,
   CardReportSignedOutError,
   cardReportErrorMessage,
-  getCardReportToken,
+  getCardReportAuth,
   submitCardReport,
   type CardReportReason,
 } from './cardReportApi';
@@ -38,11 +39,22 @@ export function ReportCardSheet({ deckSlug, stableUid, onClose, visible = true }
   const [reason, setReason] = useState<CardReportReason | null>(null);
   const [note, setNote] = useState('');
   const [error, setError] = useState<string | null>(null);
+  // Set synchronously before the first await: two taps in one frame both see the
+  // render-time `phase === 'form'`, so the state alone cannot stop a second POST.
+  const inFlight = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
-    void getCardReportToken().then((token) => {
-      if (!cancelled) setPhase(token ? 'form' : 'signed_out');
+    void getCardReportAuth().then((auth) => {
+      if (cancelled) return;
+      if (auth.kind === 'signed_out') {
+        setPhase('signed_out');
+        return;
+      }
+      // Signed in but the token could not be read (offline): keep the form so the
+      // learner can retry, and say why instead of asking them to sign in.
+      if (auth.kind === 'unavailable') setError(FRIENDLY_ERROR_COPY.offline);
+      setPhase('form');
     });
     return () => {
       cancelled = true;
@@ -52,7 +64,8 @@ export function ReportCardSheet({ deckSlug, stableUid, onClose, visible = true }
   const onChangeNote = (text: string) => setNote(text.slice(0, CARD_REPORT_NOTE_MAX));
 
   const onSubmit = async () => {
-    if (!reason || phase !== 'form') return;
+    if (!reason || phase !== 'form' || inFlight.current) return;
+    inFlight.current = true;
     setPhase('submitting');
     setError(null);
     try {
@@ -71,6 +84,8 @@ export function ReportCardSheet({ deckSlug, stableUid, onClose, visible = true }
       }
       setError(cardReportErrorMessage(e));
       setPhase('form');
+    } finally {
+      inFlight.current = false;
     }
   };
 

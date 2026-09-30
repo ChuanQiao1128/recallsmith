@@ -22,6 +22,8 @@ vi.mock('react-native', () => {
 
 vi.mock('../../src/api/apiClient', () => ({ apiJson: vi.fn() }));
 vi.mock('../../src/auth/freshToken', () => ({ getFreshAccessToken: vi.fn() }));
+const authState = vi.hoisted(() => ({ status: 'signed_in' as string }));
+vi.mock('../../src/auth/authStore', () => ({ useAuthStore: { getState: () => authState } }));
 
 import { apiJson } from '../../src/api/apiClient';
 import { getFreshAccessToken } from '../../src/auth/freshToken';
@@ -35,11 +37,19 @@ beforeEach(() => {
   vi.mocked(apiJson).mockReset();
   vi.mocked(getFreshAccessToken).mockReset();
   vi.mocked(getFreshAccessToken).mockResolvedValue('tok-abc');
+  authState.status = 'signed_in';
 });
 
 async function flush() {
   await act(async () => {
     for (let i = 0; i < 8; i++) await Promise.resolve();
+  });
+}
+
+// Lets every in-flight submit (dynamic import + token + POST) run to completion.
+async function settle() {
+  await act(async () => {
+    for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0));
   });
 }
 
@@ -159,7 +169,50 @@ describe('ReportCardSheet', () => {
     expect(textOf(one(tree, 'report-card-error'))).toBe(FRIENDLY_ERROR_COPY.offline);
   });
 
+  it('sends one POST and ends on success when Submit is tapped twice in the same frame', async () => {
+    let resolvePost!: (value: unknown) => void;
+    vi.mocked(apiJson)
+      .mockImplementationOnce(() => new Promise((resolve) => (resolvePost = resolve)))
+      .mockResolvedValue({ data: { reportId: 1, status: 'open', duplicate: true } });
+    const tree = await renderSheet();
+    await press(one(tree, 'report-reason-typo'));
+    const submit = one(tree, 'report-card-submit');
+    await act(async () => {
+      submit.props.onPress();
+      submit.props.onPress();
+    });
+    await settle();
+    await act(async () => {
+      resolvePost({ data: { reportId: 1, status: 'open', duplicate: false } });
+    });
+    await settle();
+    expect(apiJson).toHaveBeenCalledTimes(1);
+    expect(textOf(one(tree, 'report-card-success'))).toBe('Thanks — the author will review it');
+    expect(hosts(tree, 'report-card-duplicate')).toHaveLength(0);
+  });
+
+  it('shows offline copy with the form, not the sign-in message, when signed in but the token refresh failed', async () => {
+    vi.mocked(getFreshAccessToken).mockResolvedValue(null);
+    const tree = await renderSheet();
+    expect(hosts(tree, 'report-card-signed-out')).toHaveLength(0);
+    expect(hosts(tree, 'report-card-form')).toHaveLength(1);
+    expect(textOf(one(tree, 'report-card-error'))).toBe(FRIENDLY_ERROR_COPY.offline);
+
+    await press(one(tree, 'report-reason-typo'));
+    await press(one(tree, 'report-card-submit'));
+    expect(apiJson).not.toHaveBeenCalled();
+    expect(hosts(tree, 'report-card-signed-out')).toHaveLength(0);
+    expect(textOf(one(tree, 'report-card-error'))).toBe(FRIENDLY_ERROR_COPY.offline);
+
+    vi.mocked(getFreshAccessToken).mockResolvedValue('tok-abc');
+    vi.mocked(apiJson).mockResolvedValue({ data: { reportId: 2, status: 'open', duplicate: false } });
+    await press(one(tree, 'report-card-submit'));
+    expect(apiJson).toHaveBeenCalledTimes(1);
+    expect(hosts(tree, 'report-card-success')).toHaveLength(1);
+  });
+
   it('shows the sign-in message and no form when signed out', async () => {
+    authState.status = 'anonymous';
     vi.mocked(getFreshAccessToken).mockResolvedValue(null);
     const onClose = vi.fn();
     const tree = await renderSheet(onClose);

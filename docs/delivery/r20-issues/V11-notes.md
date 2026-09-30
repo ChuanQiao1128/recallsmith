@@ -11,7 +11,7 @@ call, no analytics event: the report POST is the only record.
 | File | Change |
 |---|---|
 | `mobile/src/config/featureFlags.ts` | New `cardReport: { enabled }` key: type, frozen default `false`, `snapshotsEqual`, `applyRemoteFeatures` (boolean only, anything else → default). |
-| `mobile/src/features/cardReport/cardReportApi.ts` | New. `submitCardReport`, `listMyCardReports`, `cardReportErrorMessage`, `getCardReportToken`, reasons, copy. |
+| `mobile/src/features/cardReport/cardReportApi.ts` | New. `submitCardReport`, `listMyCardReports`, `cardReportErrorMessage`, `getCardReportAuth` (was `getCardReportToken`, see F04), reasons, copy. |
 | `mobile/src/features/cardReport/ReportCardSheet.tsx` | New. React Native `Modal` with the report form. |
 | `mobile/src/features/cardReport/SessionReportButton.tsx` | New. The small "Report" text button used in a review session; opens the sheet in place. |
 | `mobile/src/screens/MyReportsScreen.tsx` | New stack screen listing the learner's own reports. |
@@ -35,7 +35,10 @@ API (`mobile/src/features/cardReport/cardReportApi.ts`), both via `apiJson` with
 - `listMyCardReports()` → `GET /api/v1/user/card-reports?limit=50`, returns the normalised
   `items` (items with an unknown reason or missing ids are dropped).
 - Both accept either the `{ success, data: {...} }` envelope or a bare payload.
-- No token → `CardReportSignedOutError` before any request.
+- No token and not signed in → `CardReportSignedOutError` before any request. No token while the
+  auth store still says `signed_in` (offline refresh failure) → `CardReportTokenUnavailableError`,
+  shown as `FRIENDLY_ERROR_COPY.offline` (F04 m-correctness-1; the R20 text treated both as
+  signed out).
 - `cardReportErrorMessage(err)`: 429 → "You have reached today's report limit"; 503 (either code)
   → "Reporting is unavailable right now"; 404 → "This card can't be reported right now";
   400/409/422 → "We couldn't send this report. Please try again."; everything else (offline,
@@ -46,9 +49,10 @@ out of date", `unclear` "It is hard to understand", `typo` "There is a typo", `o
 "Something else".
 
 Sheet states: checking token → signed out ("Sign in to report a problem", no form, Close only) or
-form (5 radio chips, optional note with `n/500` counter, Cancel / Submit, Submit disabled until a
+form (with the offline copy when signed in but no token could be read, F04) (5 radio chips, optional note with `n/500` counter, Cancel / Submit, Submit disabled until a
 reason is chosen) → success ("Thanks — the author will review it") or duplicate ("You already
-reported this card"). Errors keep the form and show the mapped copy with `accessibilityRole="alert"`.
+reported this card"). A synchronous in-flight ref stops a double tap from sending two POSTs
+(F04 m-correctness-2). Errors keep the form and show the mapped copy with `accessibilityRole="alert"`.
 
 My reports: loading skeleton, signed-out text, error text + "Try again", empty state, or a list
 with badge (Open / Fixed / Won't fix / Duplicate / Invalid; Closed if resolved without a
@@ -75,7 +79,9 @@ question text are not clamped beyond that.
 - `mobile/tests/unit/reportCardSheet.test.tsx` — five reasons, note cap + counter, submit body,
   success, duplicate, 429 and 503/offline copy, signed-out (no form), Cancel, a11y props.
 - `mobile/tests/integration/cardDetailReport.test.tsx` — row after Source with the flag on, opens
-  the sheet in place, hidden with the flag off, hidden on a locked card.
+  the sheet in place, hidden with the flag off, no answer body on a locked card. The R20 "hidden on
+  a locked card" test did not check the sheet's lock gate. F04 adds tests for closing the sheet
+  on a move to a locked card, on a flag flip, and on a card change (no POST for the wrong card).
 - `mobile/tests/integration/sessionCardReport.test.tsx` — button only after reveal with the flag
   on, not in the rating dock, opens the Modal without any navigation, hidden with the flag off.
 - `mobile/tests/integration/session-card-mcq.screen.test.tsx` — MCQ: button only at the verdict
