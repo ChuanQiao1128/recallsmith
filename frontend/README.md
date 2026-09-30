@@ -70,6 +70,51 @@ deleted chunk would come back as HTML and break the lazy import instead of
 loading. Leaving the old assets in place lets those open tabs finish loading
 until they reload.
 
+### Error reporting (Sentry)
+
+`deploy.sh` sources `scripts/resolve-sentry-dsn.sh` right before `npm run build`.
+The resolver takes `VITE_SENTRY_DSN` from the environment when it is set, and
+otherwise reads the SSM **String** parameter
+`/developercards/prod/console-sentry-dsn` (override the name with
+`CONSOLE_SENTRY_DSN_PARAM`), read without decryption. A value that does not look
+like a DSN is dropped with a warning. It prints only `VITE_SENTRY_DSN: set` or
+`VITE_SENTRY_DSN: unset (Sentry disabled in this build)`, never the value, and
+never fails the deploy. With no DSN the build has no active Sentry code path: the
+SDK is never loaded and nothing leaves the browser.
+
+- `VITE_SENTRY_ENVIRONMENT` (optional) is the Sentry environment; default
+  `production`.
+- `VITE_BUILD_ID` (default: the 12-character commit, set by the resolver) becomes
+  the release `console@<id>`.
+- The SDK is loaded lazily, in its own chunk, after the page has decided to use
+  it: the first-load and eager budgets in `tests/bundleFirstLoad.test.ts` have no
+  room for it.
+- What is sent: uncaught window errors and unhandled rejections (Sentry's own
+  handlers), render errors from `ChunkErrorBoundary`, and performance spans at
+  `tracesSampleRate 0.05`. Each report carries the tags `console.source` and
+  `console.route` (the pathname only).
+- What is scrubbed before sending (`src/lib/sentryScrub.ts`): bearer tokens, JWTs
+  and email addresses in any text; query strings and fragments of every URL
+  (the Cognito `code` on `/auth/callback`, signed CloudFront URLs); the `user`,
+  request cookies, query string and body; credential- or email-named keys at any
+  depth; console breadcrumbs.
+- `sendDefaultPii: false`; no session replay, no feedback widget, no profiling.
+- No trace propagation to the API (`tracePropagationTargets: []`): the API's
+  CORS `allow_headers` does not list `sentry-trace` or `baggage`.
+
+Creating the parameter is a supervisor step, not part of `deploy.sh`: an SSM
+parameter of type String named `/developercards/prod/console-sentry-dsn`, in the
+deploy region, holding the console project's DSN. Afterwards
+`DRY_RUN=1 ./deploy.sh` should print `VITE_SENTRY_DSN: set`.
+
+Sentry project settings the owner turns on: the server-side Data Scrubber,
+"Prevent Storing of IP Addresses", spike protection, and Allowed Domains set to
+the console origin.
+
+There is no Content-Security-Policy on the console today. A future CSP needs
+`connect-src` to include the DSN's ingest origin
+(`https://o<org-id>.ingest.<region>.sentry.io`), or every report is blocked.
+
 ### Pruning old assets
 
 Because nothing is deleted on deploy, `assets/` grows over time and must be

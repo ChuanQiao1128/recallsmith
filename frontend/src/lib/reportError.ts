@@ -10,18 +10,22 @@
 // whoever happens to have devtools open. All three now arrive here.
 //
 // ---------------------------------------------------------------------------
-// WHAT THIS IS AND IS NOT
+// WHERE A REPORT GOES
 // ---------------------------------------------------------------------------
-// It is not an error-tracking product and does not pretend to be one: no
-// batching, no retry, no offline queue, no breadcrumbs, no sampling, no
-// dependency. There is also, today, NO SERVER COLLECTING THIS. That is stated
-// rather than hidden, because it decides the design: with no endpoint
-// configured the module makes zero network calls, so the honest default is
-// "wired and silent" rather than "posting into the void" or "a TODO nobody
-// wires up later". The value now is that the three entry points exist, funnel
-// into one function, and are pinned by tests — so turning it on later is
-// setting one environment variable, not writing this again under pressure
-// during an incident.
+// To Sentry, through src/lib/sentry.ts, and only when the build was made with a
+// build-time DSN (frontend/deploy.sh resolves one; see the README's Deployment
+// section). Without one, sentry.ts never becomes active, reportError returns
+// false, and nothing leaves the browser from any of the three entry points.
+//
+// ---------------------------------------------------------------------------
+// WHY THE LISTENERS ARE NOT ATTACHED WHILE SENTRY IS ACTIVE
+// ---------------------------------------------------------------------------
+// Sentry installs its own global handlers for `error` and `unhandledrejection`
+// and reports those failures with better stacks than an event listener sees.
+// Attaching ours as well would send every window-level failure twice. So when
+// Sentry is active installErrorReporting() attaches nothing, and the funnel's
+// remaining caller on that path is ChunkErrorBoundary, whose render-time errors
+// never reach `window`.
 //
 // ---------------------------------------------------------------------------
 // WHY THE ROUTE IS THE PATH AND NOT THE URL
@@ -29,92 +33,46 @@
 // `location.search` is deliberately NOT sent. On /auth/callback the query
 // string carries the Cognito authorization `code`, and a failure on that route
 // is exactly when a report would fire — so the obvious "send the full URL"
-// would ship a live credential to whatever host the endpoint names. The
-// pathname answers the only question a report needs ("which screen"), and
-// cannot carry one.
+// would ship a live credential to the error tracker. The pathname answers the
+// only question a report needs ("which screen"), and cannot carry one. The tag
+// is set in sentry.ts, and the event's own URLs are cut at the query by
+// sentryScrub.ts.
 
-/** Where a report is POSTed. Blank or unset means: do not send anything. */
-function endpoint(): string {
-  // Read per call rather than at module scope so a test can set it without
-  // re-importing the module. This costs nothing in production: Vite replaces
-  // `import.meta.env.VITE_*` with a string literal at build time wherever it
-  // appears, so the shipped code has no property access here at all.
-  return (import.meta.env.VITE_ERROR_REPORT_URL ?? '').trim();
-}
-
-/**
- * Which build produced this error.
- *
- * Injected at build time from the environment — CI passes the commit sha as
- * VITE_BUILD_ID — because the one question an error report has to answer before
- * any other is "is this still happening on the current build". Falls back to the
- * mode rather than to a fake hash: "development" is useless but true, while a
- * placeholder that looks like a sha would send someone to check out a commit
- * that does not exist.
- */
-function buildId(): string {
-  return (import.meta.env.VITE_BUILD_ID ?? '').trim() || import.meta.env.MODE;
-}
-
-/** Where the failure happened, and never anything from the query string. */
-function route(): string {
-  return typeof window === 'undefined' ? '' : window.location.pathname;
-}
-
-/** Bounds one field. sendBeacon refuses payloads over the UA's limit and a
- *  refusal is silent, so a stack from a deep React tree must not be the reason
- *  a report is dropped. */
-function clip(value: string, max: number): string {
-  return value.length <= max ? value : `${value.slice(0, max)}…`;
-}
+import { captureConsoleError, isConsoleSentryActive } from './sentry';
 
 export type ErrorSource = 'window.onerror' | 'unhandledrejection' | 'react';
 
 /**
  * The funnel. Every entry point below, and ChunkErrorBoundary, calls this.
  *
- * Returns whether a report was handed to the browser, so the tests can tell
- * "sent" from "deliberately silent" without reading a global.
+ * Returns whether a report was handed to Sentry (or queued for it while the SDK
+ * loads), so the tests can tell "sent" from "deliberately silent" without
+ * reading a global. Never throws: reporting a failure must not become a second
+ * failure, least of all inside componentDidCatch.
  */
 export function reportError(error: unknown, source: ErrorSource, detail?: string): boolean {
-  const url = endpoint();
-  if (url === '') return false;
-  if (typeof navigator === 'undefined' || typeof navigator.sendBeacon !== 'function') return false;
-
-  const asError = error instanceof Error ? error : undefined;
-  const payload = {
-    source,
-    build: buildId(),
-    route: route(),
-    at: new Date().toISOString(),
-    name: asError?.name ?? typeof error,
-    message: clip(asError?.message ?? String(error), 500),
-    stack: clip(asError?.stack ?? '', 4000),
-    detail: detail === undefined ? undefined : clip(detail, 2000),
-  };
-
-  try {
-    return navigator.sendBeacon(url, JSON.stringify(payload));
-  } catch {
-    // Reporting a failure must never become a second failure — a throw here
-    // would propagate out of a window listener, or out of componentDidCatch and
-    // straight past the boundary that was handling the first error.
-    return false;
-  }
+  return captureConsoleError(error, source, detail);
 }
 
 let uninstall: (() => void) | null = null;
 
 /**
- * Attach the two window-level entry points. Called once from main.tsx.
+ * Attach the two window-level entry points. Called once from main.tsx, right
+ * after initConsoleSentry().
  *
- * addEventListener rather than assigning `window.onerror`: that property has a
- * single owner, and taking it means silently replacing whatever else set it.
- * Idempotent, and returns its own removal, so a second call cannot double every
- * report.
+ * With Sentry active this attaches nothing and returns a no-op (see the header).
+ * Otherwise: addEventListener rather than assigning `window.onerror`, because
+ * that property has a single owner, and taking it means silently replacing
+ * whatever else set it. Idempotent, and returns its own removal, so a second
+ * call cannot double every report.
  */
 export function installErrorReporting(): () => void {
   if (uninstall !== null) return uninstall;
+
+  if (isConsoleSentryActive()) {
+    uninstall = () => {};
+    return uninstall;
+  }
 
   const onError = (event: ErrorEvent): void => {
     // event.error is null for cross-origin script errors, where the browser
