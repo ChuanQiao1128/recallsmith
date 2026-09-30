@@ -76,7 +76,8 @@ public class ChangeImpactTests
       var details = await LastEventDetailsAsync(sql, pageId);
       var affected = details.GetProperty("affectedCards").EnumerateArray().ToList();
       Assert.Equal([a1, a2, b1], affected.Select(c => c.GetProperty("cardId").GetInt64()).ToArray());
-      Assert.All(affected, c => Assert.Equal(AffectedKeys, A05Kit.Keys(c)));
+      // jsonb stores keys in its own order; the watch route answers them in the contract order.
+      Assert.All(affected, c => Assert.Equal(AffectedKeys.Order(), A05Kit.Keys(c).Order()));
       Assert.Equal([false, true, false], affected.Select(c => c.GetProperty("quoteMissing").GetBoolean()).ToArray());
       var slugA = (string)(await sql.ScalarAsync("select slug from decks where id = $1", deckA))!;
       Assert.Equal((deckA, slugA, "Synthetic question one?"), (affected[0].GetProperty("deckId").GetInt64(),
@@ -161,6 +162,7 @@ public class ChangeImpactTests
         .First(e => e.GetProperty("targetId").GetInt64() == pageId);
       Assert.True(watchEvent.GetProperty("needsHumanReview").GetBoolean());
       Assert.Equal(2, watchEvent.GetProperty("affectedCards").GetArrayLength());
+      Assert.All(watchEvent.GetProperty("affectedCards").EnumerateArray(), c => Assert.Equal(AffectedKeys, A05Kit.Keys(c)));
 
       var after = await sql.QueryAsync("select id, question, updated_at, revision from cards order by id");
       Assert.Equal(before.Select(r => string.Join('|', r.Values)), after.Select(r => string.Join('|', r.Values)));
@@ -253,7 +255,7 @@ public class ChangeImpactTests
       var freshCards = A05Kit.Json(stored[A05Kit.Sha(fresh)]).EnumerateArray().ToList();
       Assert.Equal(cards.Relevant, freshCards[0].GetProperty("cardId").GetInt64());
       Assert.DoesNotContain(freshCards, c => c.GetProperty("cardId").GetInt64() is var id && (id == cards.Unrelated || id == cards.Deleted));
-      Assert.All(freshCards, c => Assert.Equal(PossiblyAffectedKeys, A05Kit.Keys(c)));
+      Assert.All(freshCards, c => Assert.Equal(PossiblyAffectedKeys.Order(), A05Kit.Keys(c).Order()));
       Assert.True(freshCards.Count <= ChangeImpact.MaxPossiblyAffectedCards);
       Assert.Empty(A05Kit.Json(stored[A05Kit.Sha(bedrock)]).EnumerateArray());
 
@@ -266,6 +268,7 @@ public class ChangeImpactTests
       Assert.Equal(($"{feedId}:{A05Kit.Sha(fresh)}", "Amazon S3 update"), (listed.GetProperty("id").GetString(), listed.GetProperty("title").GetString()));
       Assert.EndsWith("Z", listed.GetProperty("firstSeenAt").GetString());
       Assert.Equal(cards.Relevant, listed.GetProperty("possiblyAffectedCards")[0].GetProperty("cardId").GetInt64());
+      Assert.Equal(PossiblyAffectedKeys, A05Kit.Keys(listed.GetProperty("possiblyAffectedCards")[0]));
 
       // The weekly digest lists the item with its possibly affected cards.
       await sql.ScalarAsync("update source_watch_feed_items set first_seen_at = now() - interval '2 days' where target_id = $1", feedId);
