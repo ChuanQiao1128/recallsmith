@@ -66,7 +66,8 @@ terraform -chdir=infra/modules/observability init -backend=false -input=false
 terraform -chdir=infra/modules/observability test
 ```
 
-The last two were run on a scratch copy of the module. `init` there writes a
+The last two were run on a scratch copy of the module. Correction (R20X F05, p-tests-1): as
+shipped by V12 nothing ran this test automatically; since F05 the CI `infra` job runs both commands. `init` there writes a
 `.terraform.lock.hcl` into the module directory, which is not gitignored and should not be
 committed.
 

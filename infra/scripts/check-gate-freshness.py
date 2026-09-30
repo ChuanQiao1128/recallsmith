@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
 """AI QA gate freshness: a shipping-config change needs committed, passing rollout evidence.
 
-Given --base REF, compare HEAD with the merge base of REF and HEAD. The check applies only when
-services/ai-qa/env/prod.env.json or services/ai-qa/src/ai_qa/prompts.py changed on this side AND
-the HEAD env file has AI_QA_ENABLED truthy (the ai_qa.settings.is_truthy rule). Then a committed
-evals/reports/**/*.jsonl run file must exist whose run header matches the shipping configuration
-(provider, model, promptVersion, effort, structuredOutputsAtStart) and whose
+Given --base REF (a pull request), compare HEAD with the merge base of REF and HEAD. Given
+--before SHA (a push: github.event.before), compare HEAD with that commit, or with HEAD~1 when SHA
+is empty, all zeros or not in the clone. The check applies when services/ai-qa/env/prod.env.json or
+any file under services/ai-qa/src/ai_qa/ (prompts, settings, providers, profiles, ...) changed.
+
+A prompts.py change whose prompt text changed must bump the version label evidence is matched on:
+PROMPT_VERSION when SYSTEM_PROMPT (or anything it is built from) changed, PROMPT_VERSION_AUTOMATION
+when that or the automation addendum changed. Comments and the docstring do not count. This rule
+applies whether AI QA is on or off, because a later enable would match the old label.
+
+Then, only when the HEAD env file has AI_QA_ENABLED truthy (the ai_qa.settings.is_truthy rule), a
+committed evals/reports/**/*.jsonl run file must exist whose run header matches the shipping
+configuration (provider, model, promptVersion, effort, structuredOutputsAtStart) and whose
 `dc-evals score <file> --gate` exits 0. Otherwise it prints why it passes (unchanged / AI QA off).
 
 The decision logic is stdlib only. The shipping configuration (dc_evals.score.shipping_config) and
@@ -16,6 +24,7 @@ Exit codes: 0 pass, 1 fail, 2 usage or unreadable input.
 """
 
 import argparse
+import ast
 import json
 import pathlib
 import subprocess
@@ -23,7 +32,12 @@ import sys
 
 ENV_PATH = "services/ai-qa/env/prod.env.json"
 PROMPTS_PATH = "services/ai-qa/src/ai_qa/prompts.py"
-TRIGGER_PATHS = (ENV_PATH, PROMPTS_PATH)
+AI_QA_SRC = "services/ai-qa/src/ai_qa/"
+TRIGGER_PATHS = (ENV_PATH, AI_QA_SRC)
+VERSION_NAMES = ("PROMPT_VERSION", "PROMPT_VERSION_AUTOMATION")
+# Top-level names of prompts.py that only the automation prompt is built from.
+AUTOMATION_ONLY_NAMES = ("AUTOMATION_ADDENDUM", "SYSTEM_PROMPT_AUTOMATION")
+NULL_SHA = "0" * 40
 REPORTS_DIR = "evals/reports"
 MATCH_KEYS = ("provider", "model", "promptVersion", "effort", "structuredOutputsAtStart")
 EVALS_RUN = ["uv", "run", "--quiet", "--project", "evals", "--python", "3.12"]
@@ -42,6 +56,49 @@ def is_truthy(value):
     return text == "1" or text.lower() in ("true", "yes")
 
 
+def is_trigger(path):
+    return path == ENV_PATH or path.startswith(AI_QA_SRC)
+
+
+def _prompt_parts(source, label):
+    """(versions, shared, automation) of a prompts.py source: the two version labels, and the
+    ast dumps (no comments, no positions) of every other top-level statement except the docstring,
+    split into what only the automation prompt uses and everything else."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        raise UsageError(f"{label} {PROMPTS_PATH} does not parse: {exc}")
+    body = tree.body
+    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str):
+        body = body[1:]
+    versions, shared, automation = {}, [], []
+    for stmt in body:
+        targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target] if isinstance(stmt, ast.AnnAssign) else []
+        names = [t.id for t in targets if isinstance(t, ast.Name)]
+        name = names[0] if len(names) == 1 == len(targets) else None
+        if name in VERSION_NAMES:
+            versions[name] = ast.dump(stmt.value) if stmt.value is not None else None
+        elif name in AUTOMATION_ONLY_NAMES:
+            automation.append(ast.dump(stmt))
+        else:
+            shared.append(ast.dump(stmt))
+    return versions, shared, automation
+
+
+def prompt_bump_problems(base_source, head_source):
+    """One line per version label that must change between the two prompts.py sources and did not.
+    Only labels present at HEAD are required."""
+    base_versions, base_shared, base_auto = _prompt_parts(base_source, "merge-base")
+    head_versions, head_shared, head_auto = _prompt_parts(head_source, "HEAD")
+    shared_changed = base_shared != head_shared
+    auto_changed = shared_changed or base_auto != head_auto
+    problems = []
+    for name, changed in (("PROMPT_VERSION", shared_changed), ("PROMPT_VERSION_AUTOMATION", auto_changed)):
+        if changed and name in head_versions and base_versions.get(name) == head_versions[name]:
+            problems.append(f"{PROMPTS_PATH}: the prompt text changed but {name} did not; bump it")
+    return problems
+
+
 def header_mismatches(header, shipping):
     """One line per MATCH_KEYS field where the run header differs from the shipping config."""
     return [
@@ -51,13 +108,16 @@ def header_mismatches(header, shipping):
     ]
 
 
-def evaluate(changed, head_env, reports, load_shipping, run_gate):
+def evaluate(changed, head_env, reports, load_shipping, run_gate, prompt_problems=()):
     """(exit code, lines to print). reports = [(repo-relative path, run header)] of committed files;
-    load_shipping() -> shipping config dict; run_gate(path) -> exit code of `dc-evals score --gate`.
-    Both callables are invoked only when the check applies."""
-    touched = [p for p in TRIGGER_PATHS if p in changed]
+    load_shipping() -> shipping config dict; run_gate(path) -> exit code of `dc-evals score --gate`;
+    prompt_problems = prompt_bump_problems() lines. Both callables are invoked only when the check
+    applies."""
+    touched = [p for p in changed if is_trigger(p)]
     if not touched:
-        return 0, ["GATE FRESHNESS PASS: unchanged (neither " + " nor ".join(TRIGGER_PATHS) + " changed vs the merge base)"]
+        return 0, ["GATE FRESHNESS PASS: unchanged (neither " + " nor ".join(TRIGGER_PATHS) + " changed vs the base)"]
+    if prompt_problems:
+        return 1, list(prompt_problems) + ["GATE FRESHNESS FAIL: evidence is matched on the prompt version, so a prompt text change needs a version bump"]
     if not is_truthy(head_env.get("AI_QA_ENABLED")):
         return 0, [
             "GATE FRESHNESS PASS: AI QA off (AI_QA_ENABLED=" + repr(head_env.get("AI_QA_ENABLED"))
@@ -116,9 +176,34 @@ def git(repo, *args):
     return result.stdout
 
 
+def resolve_before(repo, before):
+    """A push's base: the before commit when the clone has it, else HEAD~1 (first push of a
+    branch, a force push whose old tip was not fetched, or no before at all)."""
+    if before and before != NULL_SHA:
+        probe = subprocess.run(["git", "-C", str(repo), "cat-file", "-e", before + "^{commit}"], capture_output=True)
+        if probe.returncode == 0:
+            return before, before
+    return "HEAD~1", f"HEAD~1 (before commit {before!r} is not usable)"
+
+
 def changed_paths(repo, base):
+    """(merge base, trigger paths changed between it and HEAD)."""
     merge_base = git(repo, "merge-base", base, "HEAD").strip()
-    return git(repo, "diff", "--name-only", merge_base, "HEAD", "--", *TRIGGER_PATHS).split()
+    return merge_base, git(repo, "diff", "--name-only", merge_base, "HEAD", "--", *TRIGGER_PATHS).split()
+
+
+def show_or_none(repo, rev, path):
+    result = subprocess.run(["git", "-C", str(repo), "show", f"{rev}:{path}"], capture_output=True, text=True)
+    return result.stdout if result.returncode == 0 else None
+
+
+def prompt_problems(repo, merge_base, changed):
+    if PROMPTS_PATH not in changed:
+        return []
+    base_source, head_source = show_or_none(repo, merge_base, PROMPTS_PATH), show_or_none(repo, "HEAD", PROMPTS_PATH)
+    if base_source is None or head_source is None:
+        return []
+    return prompt_bump_problems(base_source, head_source)
 
 
 def head_env(repo):
@@ -147,7 +232,16 @@ def evals_shipping_config(repo):
     result = subprocess.run(EVALS_RUN + ["python", "-c", SHIPPING_SNIPPET], cwd=repo, capture_output=True, text=True)
     if result.returncode != 0:
         raise UsageError("could not read the shipping config through the evals venv: " + result.stderr.strip())
-    return json.loads(result.stdout)
+    try:
+        shipping = json.loads(result.stdout)
+    except ValueError as exc:
+        raise UsageError(f"shipping config is not JSON: {exc}; stdout was {result.stdout[:200]!r}")
+    if not isinstance(shipping, dict):
+        raise UsageError(f"shipping config is not a JSON object: {result.stdout[:200]!r}")
+    missing = [key for key in MATCH_KEYS if key not in shipping]
+    if missing:
+        raise UsageError("shipping config lacks " + ", ".join(missing))
+    return shipping
 
 
 def evals_score_gate(repo, rel):
@@ -161,21 +255,32 @@ def evals_score_gate(repo, rel):
 
 def main(argv=None, load_shipping=None, run_gate=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--base", required=True, help="the ref to compare against (its merge base with HEAD)")
+    where = parser.add_mutually_exclusive_group(required=True)
+    where.add_argument("--base", help="pull request: the ref to compare against (its merge base with HEAD)")
+    where.add_argument("--before", help="push: the commit before the push (github.event.before); HEAD~1 when unusable")
     parser.add_argument("--repo", default=str(pathlib.Path(__file__).resolve().parents[2]))
     args = parser.parse_args(argv)
     repo = args.repo
     load_shipping = load_shipping or (lambda: evals_shipping_config(repo))
     run_gate = run_gate or (lambda rel: evals_score_gate(repo, rel))
+    lines = []
     try:
-        changed = changed_paths(repo, args.base)
+        if args.base is not None:
+            base = args.base
+        else:
+            base, described = resolve_before(repo, args.before)
+            lines.append("push: comparing with " + described)
+        merge_base, changed = changed_paths(repo, base)
+        problems = prompt_problems(repo, merge_base, changed)
         env = head_env(repo) if changed else {}
         reports = committed_reports(repo) if changed and is_truthy(env.get("AI_QA_ENABLED")) else []
-        code, lines = evaluate(changed, env, reports, load_shipping, run_gate)
+        code, result = evaluate(changed, env, reports, load_shipping, run_gate, problems)
     except UsageError as exc:
+        for line in lines:
+            print(line)
         sys.stderr.write("GATE FRESHNESS: " + str(exc) + "\n")
         return 2
-    for line in lines:
+    for line in lines + result:
         print(line)
     return code
 

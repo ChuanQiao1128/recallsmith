@@ -206,17 +206,28 @@ jobs:
           [ "$found" = 1 ] || { echo "no Python package found" >&2; exit 1; }
       - name: unit tests for infra/scripts (stdlib unittest)
         run: python3 -m unittest discover -s infra/scripts/tests -v
-      # A change to the ai-qa prod env or prompts, with AI_QA_ENABLED on at HEAD, needs a committed
-      # evals/reports run that matches the shipping config and passes `dc-evals score --gate`
-      # (offline re-score, no model call). Prints why it passes otherwise. See infra/README.md §3.
-      # The base goes through env, not straight into the script, so a ref name is never shell text.
+      # A change to the ai-qa prod env or any file under services/ai-qa/src/ai_qa/, with AI_QA_ENABLED
+      # on at HEAD, needs a committed evals/reports run that matches the shipping config and passes
+      # `dc-evals score --gate` (offline re-score, no model call); a prompt text change also needs a
+      # PROMPT_VERSION / PROMPT_VERSION_AUTOMATION bump. Prints why it passes otherwise. See
+      # infra/README.md §3. A pull request compares with the merge base of its base branch; a push
+      # (main included) compares with the commit before the push, or HEAD~1 when that is unusable.
+      # Refs and SHAs go through env, not straight into the script, so they are never shell text.
       - name: AI QA gate freshness (check-gate-freshness.py)
         env:
+          EVENT_NAME: ${{ github.event_name }}
           BASE_REF: origin/${{ github.base_ref || 'main' }}
-        run: python3 infra/scripts/check-gate-freshness.py --base "$BASE_REF"
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          if [ "$EVENT_NAME" = pull_request ]; then
+            python3 infra/scripts/check-gate-freshness.py --base "$BASE_REF"
+          else
+            python3 infra/scripts/check-gate-freshness.py --before "$BEFORE_SHA"
+          fi
 
   # Terraform and deploy-script checks that need no AWS: fmt, an offline init (-backend=false, the
-  # provider comes from the public registry) and validate, the agent-route census, bash -n on the
+  # provider comes from the public registry) and validate, the observability module's terraform
+  # test (mocked provider), the agent-route census, bash -n on the
   # deploy scripts and the merge-env.sh unit tests. Never plan or apply: both need AWS credentials,
   # and this job has none.
   infra:
@@ -234,6 +245,11 @@ jobs:
       # add a linux one; readonly verifies against the zh: hashes and never rewrites the lock.
       - run: terraform -chdir=infra/envs/prod init -backend=false -input=false -lockfile=readonly
       - run: terraform -chdir=infra/envs/prod validate
+      # Offline `terraform test` of the observability module (mocked aws provider): the V12 AI QA
+      # dashboard row and p95 alarms. The module has no committed lock; the one init writes here is
+      # never committed.
+      - run: terraform -chdir=infra/modules/observability init -backend=false -input=false
+      - run: terraform -chdir=infra/modules/observability test
       - run: python3 infra/scripts/check-agent-routes.py
       - name: bash -n the deploy scripts
         run: |
