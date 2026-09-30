@@ -520,6 +520,32 @@ describe('SessionCardScreen MCQ branch', () => {
     expect(useSessionStore.getState().streakEarned).toBe(true);
   });
 
+  it('shows the V11 Report button only at the verdict stage when cardReport is on', async () => {
+    featureFlagsMock.mockReturnValue({ ...flags(), cardReport: { enabled: true } });
+    serve(CARD_1, NEW_PROGRESS(CARD_1.StableUid));
+    const { tree } = await mount();
+
+    expect(byTestID(tree, 'session-card-report')).toHaveLength(0);
+    await press(tree, 'mcq-show-options');
+    expect(byTestID(tree, 'session-card-report')).toHaveLength(0);
+    await press(tree, 'mcq-option-b');
+    await press(tree, 'mcq-submit-sure');
+    expect(idText(tree, 'mcq-verdict-banner')).toBe('Correct');
+    expect(byTestID(tree, 'session-card-report')).toHaveLength(1);
+    const dock = byTestID(tree, 'review-rating-dock')[0];
+    expect(dock.findAll((n) => n.props?.testID === 'session-card-report')).toHaveLength(0);
+  });
+
+  it('never shows the Report button when the flags omit cardReport', async () => {
+    serve(CARD_1, NEW_PROGRESS(CARD_1.StableUid));
+    const { tree } = await mount();
+    await press(tree, 'mcq-show-options');
+    await press(tree, 'mcq-option-b');
+    await press(tree, 'mcq-submit-sure');
+    expect(idText(tree, 'mcq-verdict-banner')).toBe('Correct');
+    expect(byTestID(tree, 'session-card-report')).toHaveLength(0);
+  });
+
   it('rates a wrong pick again and reports zero landed picks', async () => {
     serve(CARD_1, NEW_PROGRESS(CARD_1.StableUid));
     const { tree, navigation } = await mount();

@@ -66,6 +66,7 @@ import SessionProgressHeader from '../features/gacha/components/SessionProgressH
 import RatingBar from '../features/gacha/components/RatingBar';
 import ReviewBody from '../features/gacha/components/ReviewBody';
 import { getFeatureFlags } from '../config/featureFlags';
+import { SessionReportButton } from '../features/cardReport/SessionReportButton';
 import { loadExpoHaptics } from '../components/ceremonyHaptics';
 import { getFeedbackPrefsSync } from '../features/gacha/settings/feedbackPrefs';
 import { studyHaptic } from '../features/gacha/session/studyHaptics';
@@ -1108,6 +1109,16 @@ export function SessionCardScreen({ navigation, route }: Props) {
                 onFlip={handleFlip}
               />
             )}
+            {/* V11: default-off flag, read defensively (older suites mock flags without the key). */}
+            {current
+            && getFeatureFlags().cardReport?.enabled === true
+            && (mcqState.mcq ? mcqState.stage === 'verdict' : showAnswer) ? (
+              <SessionReportButton
+                key={current.card.StableUid}
+                deckSlug={deck.Slug}
+                stableUid={current.card.StableUid}
+              />
+            ) : null}
           </ScrollView>
           {current ? (
             <View
