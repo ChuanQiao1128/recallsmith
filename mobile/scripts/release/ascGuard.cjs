@@ -23,3 +23,16 @@ exports.checkEditableVersion = (attrs, target) => {
   }
   return { ok: true };
 };
+
+// versions: the attributes of every App Store version that could hold the release (the editable one,
+// the one in review and the one pending release; null/undefined entries are skipped). The editable
+// version alone is not enough: apple-utils' getEditAppStoreVersionAsync filters out IN_REVIEW and
+// PENDING_*_RELEASE versions, so those have to be read separately and checked here.
+// Returns { ok: true } or the first refusal of checkEditableVersion plus the held versionString.
+exports.firstHeldVersion = (versions, target) => {
+  for (const attrs of versions || []) {
+    const r = exports.checkEditableVersion(attrs, target);
+    if (!r.ok) return Object.assign({ versionString: String(attrs.versionString) }, r);
+  }
+  return { ok: true };
+};
