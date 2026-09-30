@@ -30,7 +30,8 @@ SSM_PLACEHOLDER_CHECKED_ENV="$(jq -c '[.[]]' <<<"$SSM_TO_ENV_INTERNAL")"
 # README runbook); deploy.sh reads the whole path, so it must be skipped here or every deploy in that
 # window fails (Y01 cloud-security-resilience-10). R18A: notify-recipient (created by A11) is read by the
 # notifier only and must never become a core env var.
-SSM_NOT_ENV='["webhook-signing-secret","webhook-signing-secret-previous","anthropic-api-key","notify-recipient"]'
+# R19M M05: console-sentry-dsn is read by frontend/deploy.sh (scripts/resolve-sentry-dsn.sh), never by a Lambda.
+SSM_NOT_ENV='["webhook-signing-secret","webhook-signing-secret-previous","anthropic-api-key","notify-recipient","console-sentry-dsn"]'
 # Leaf patterns skipped as well (Z01 cloud-security-resilience-15), so a runbook that creates a rotation or
 # per-subscription leaf does not need a new row here first: any unmapped *-previous leaf, and the dispatcher's
 # per-subscription signing secrets webhook-signing-secret-sub-<id>[-previous]. A mapped leaf wins over a
