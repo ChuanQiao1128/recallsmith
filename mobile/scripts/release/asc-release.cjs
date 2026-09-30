@@ -21,7 +21,7 @@
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
-const { checkEditableVersion } = require('./ascGuard.cjs');
+const { firstHeldVersion } = require('./ascGuard.cjs');
 const { execSync } = require('node:child_process');
 
 function argv() {
@@ -90,9 +90,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   // 2. the editable App Store version
   let version = await app.getEditAppStoreVersionAsync({ platform: 'IOS' });
   console.log('VERSION(edit)', version ? version.attributes.versionString + ' ' + (version.attributes.appVersionState || version.attributes.appStoreState) : 'none');
-  const guard = checkEditableVersion(version ? version.attributes : null, o.version);
+  // The edit read filters out IN_REVIEW and PENDING_*_RELEASE versions, so read those too: a version
+  // App Review holds blocks this run even when there is no editable version.
+  const inReview = await app.getInReviewAppStoreVersionAsync({ platform: 'IOS' });
+  const pending = await app.getPendingReleaseAppStoreVersionAsync({ platform: 'IOS' });
+  const guard = firstHeldVersion([version, inReview, pending].map((v) => (v ? v.attributes : null)), o.version);
   if (!guard.ok) {
-    console.log('BLOCKED ' + version.attributes.versionString + ' is ' + guard.state + ': ' + guard.reason);
+    console.log('BLOCKED ' + guard.versionString + ' is ' + guard.state + ': ' + guard.reason);
     process.exit(4);
   }
   const whatsNew = o.whatsNew ? fs.readFileSync(o.whatsNew, 'utf8').trim() : null;

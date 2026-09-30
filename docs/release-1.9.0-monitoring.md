@@ -9,8 +9,8 @@ are always `<…>` placeholders.
 
 - **M01** — Mistake Book: a per-key merge that keeps (sums) counts when a signed-out book is adopted at sign-in, replay-safe adoption, and a clear "No mistakes due today" done state (label + hint). OTA-safe; also published to runtime 1.8.0 from `release/1.8.x`.
 - **M02** — Sentry crash and performance reporting in the app (`@sentry/react-native` ~7.2.0, JS init): only on the `production` channel with a DSN, remote kill switch, PII scrubbing, `sendDefaultPii: false`, no replay/screenshots/profiling, DebugMenu status line and "Send test event".
-- **M03** — `x-dc-trace-id` header on API calls from the active Sentry trace (only while Sentry is active), and API status/error code/request id as event tags, so a Sentry event can be matched to the core-vpc log line.
-- **M04** — Release plumbing: `eas.json` Sentry env (store builds upload source maps, other profiles never), `ios-build.sh` placeholder guard (exit 5), `ota.sh` runtime guard (exit 6), DSN name rule and OTA source-map upload (`SENTRY_UPLOAD=`), `asc-release.cjs` App Review state guard (exit 4) and MANUAL release default, version 1.9.0 (23), store texts, CI `expo export`, this document.
+- **M03** — `x-dc-trace-id` header on sync API calls (`apiJson`: progress and draw-state sync) from the active Sentry trace (only while Sentry is active), and API status/error code/request id as event tags on those calls, so a Sentry event can be matched to the core-vpc log line. Premium/entitlement calls use plain `fetch` and carry neither the header nor the `api.*` tags.
+- **M04** — Release plumbing: `eas.json` Sentry env (store builds upload source maps, other profiles never), `ios-build.sh` placeholder guard (exit 5) and, for `production`, the `EXPO_PUBLIC_SENTRY_DSN` / `SENTRY_AUTH_TOKEN` names check in the EAS production environment (exit 3, names only; added in N02), `ota.sh` runtime guard (exit 6), DSN name rule and OTA source-map upload (`SENTRY_UPLOAD=`), `asc-release.cjs` App Review state guard (exit 4; since N02 it also reads the in-review and pending-release versions) and MANUAL release default, version 1.9.0 (23), store texts, CI `expo export`, this document.
 - **M05** — Console (web) errors to Sentry with `@sentry/react` instead of the old beacon, with the same PII scrubbing; DSN read at deploy time.
 - **M06** — Content Intelligence live scores ignore `review_stage = 'focus_practice'` events (server only, deploy first).
 
@@ -26,7 +26,7 @@ has accounts, sync and purchases. Declare:
 | Data type | What it is in DeveloperCards |
 | --- | --- |
 | Crash Data | JS error stack traces and error messages (scrubbed of emails, tokens, signed URL parameters) |
-| Performance Data | screen-load and API call timings (20 % of sessions sampled), release health sessions |
+| Performance Data | screen-load and API call timings (20 % of screen-load/app-start traces sampled); release-health sessions for every launch |
 | Other Diagnostic Data | device model, OS version, app version, OTA update id/channel, screen names, API status/error code/request id tags |
 
 **Data already collected that the current label omits** — each: *linked to the user*, *not used for tracking*,
@@ -37,14 +37,22 @@ purpose **App Functionality**:
 | Contact Info | Email Address | account sign-in (Cognito) and password reset |
 | Identifiers | User ID | the account id that cloud sync and purchases are keyed on |
 | Purchases | Purchase History | the Premium subscription state (StoreKit / RevenueCat) |
-| Usage Data | Product Interaction | study progress, reviews, wallet and Mistake Book synced to the account |
+| Usage Data | Product Interaction | study progress, reviews (including Mistake Book focus-practice events) and wallet synced to the account |
 
-**Caveat (owner decision, not decided here):** the interim `/client-errors` sink that 1.6.1 and 1.8.0 still use
-logs `userSubHash`, an **unsalted** SHA-256 prefix of the Cognito sub (`src_C/Vpc/Runtime/ClientErrors.cs:160`,
-`HashSub` `:181-183`). An unsalted hash of a stable id can be re-identified by anyone holding the sub, so
-"Other Diagnostic Data – not linked" is accurate **for the Sentry data only**. Either declare Other Diagnostic
-Data as *linked* while 1.6.1/1.8.0 clients remain, or schedule the server change that salts or drops that hash
-(not part of R19M). Active 1.9.0 builds send their errors to Sentry and no longer post to `/client-errors`.
+The Mistake Book itself stays on the device (AsyncStorage, `mobile/src/features/gacha/mistakes/mistakeBook.ts`;
+`mobile/src/sync/drawStateSync.ts` adds nothing for it to the push); only the review events of its focus
+practice reach the account.
+
+**Caveat (owner decision, not decided here):** the interim `/client-errors` sink logs `userSubHash`, an
+**unsalted** SHA-256 prefix of the Cognito sub (`src_C/Vpc/Runtime/ClientErrors.cs:160`, `HashSub` `:181-185`).
+An unsalted hash of a stable id can be re-identified by anyone holding the sub, so "Other Diagnostic Data – not
+linked" is accurate **for the Sentry data only**. The sink is not only used by 1.6.1 and 1.8.0: **any 1.9.0 build
+with Sentry inactive** falls back to it for signed-in users (`mobile/src/telemetry/observability.ts` installs the
+interim handlers, and `mobile/src/telemetry/clientErrorReporter.ts` posts when `captureException` returns false):
+the kill switch `features.sentry.enabled:false` (cached at cold start, or flipped in the same launch), a build
+without `EXPO_PUBLIC_SENTRY_DSN`, a failed Sentry init, and the short window before init settles. Retiring
+1.6.1/1.8.0 is therefore **not** enough to answer *not linked*: declare Other Diagnostic Data as *linked* until the
+server change that salts or drops `userSubHash` ships (not part of R19M), and only then switch it to *not linked*.
 
 ## 3. Privacy policy paragraph
 
@@ -62,10 +70,26 @@ Add this to the Notion privacy policy (the page the app and the description link
 
 ## 4. Sentry runbook
 
-**Project settings** (once, per project `developercards-ios` and `developercards-console`, Developer plan):
+**Project settings** (once, per project `developercards-mobile` (React Native; the project `eas.json` uploads to)
+and `developercards-console` (React), Developer plan):
 
-- Security & Privacy: **Data Scrubber** on (with default scrubbers), **"Prevent Storing of IP Addresses"** on.
+- Security & Privacy: **Data Scrubber** on (with default scrubbers), **"Prevent Storing of IP Addresses"** on. These
+  are enforced org-wide (organization Settings > Security & Privacy: Require Data Scrubber, Require Default
+  Scrubbers and Prevent Storing of IP Addresses on; Global Sensitive Fields `email`, `authorization`, `idToken`,
+  `accessToken`, `refreshToken`, `x-amz-security-token`), so every project inherits them.
+- Project `developercards-mobile` > Security & Privacy > Advanced Data Scrubbing (set by the supervisor): **mask**
+  email addresses in any string, and **remove** breadcrumb `http.query` / `http.fragment` data.
 - Spike protection on (organization Settings > Spike Protection), so a crash loop cannot use up the monthly quota.
+
+**Native-origin events.** Native crashes, watchdog terminations and app hangs are built and sent by the native
+SDK (sentry-cocoa) alone. `@sentry/react-native` does not forward the JS `beforeSend` / `beforeBreadcrumb` to the
+native SDK, so these events **skip the app's JS scrubbers** (`scrubEvent`, `scrubBreadcrumb`), the
+**25-events-per-session cap** and the offline/timeout drop, and the native SDK's own breadcrumbs (NSURLSession
+requests, UI/lifecycle) go out as recorded. What covers them is server-side: the org-level Data Scrubber with the
+default scrubbers, the Global Sensitive Fields and "Prevent Storing of IP Addresses", the project-level Advanced
+Data Scrubbing rules above (emails masked in any string, breadcrumb `http.query` / `http.fragment` removed), and
+spike protection for volume. JS-origin events still pass `scrubEvent`, which also scrubs the native breadcrumbs
+merged into them.
 
 **Alert rules** (email to the owner):
 
@@ -85,11 +109,13 @@ owner's macOS Keychain (generic password service `developercards-sentry-auth-tok
 `ota.sh` reads when no token is exported. Never put it in `mobile/.env.local` (the checkout is iCloud-synced),
 a shell profile, git or a note. Rotation and leak steps: `docs/runbooks/secrets-rotation.md` > "Sentry auth token".
 
-**Placeholder fill (supervisor, once, M00 §9.2 #2).** `mobile/eas.json` ships `SENTRY_ORG: REPLACE_ME_SENTRY_ORG`
-and `SENTRY_PROJECT: REPLACE_ME_SENTRY_PROJECT` in `build.production.ios.env`. `ios-build.sh` refuses a store
-build (exit 5) and `ota.sh` reports `SENTRY_UPLOAD=skipped-no-project` until both are replaced with the real
-org and project slugs in one commit on `main`. The DSN (`EXPO_PUBLIC_SENTRY_DSN`, plaintext) and the token are
-EAS environment variables, never `eas.json` values.
+**Placeholder fill (supervisor, M00 §9.2 #2) — done in 9c3dd9d.** `mobile/eas.json` `build.production.ios.env`
+now carries the real org slug and `SENTRY_PROJECT: developercards-mobile`. The `ios-build.sh` exit-5 guard and
+`ota.sh`'s `SENTRY_UPLOAD=skipped-no-project` stay only as regression guards against a placeholder or empty slug
+coming back. The DSN (`EXPO_PUBLIC_SENTRY_DSN`, plaintext) and the token (`SENTRY_AUTH_TOKEN`, secret) are EAS
+production environment variables, never `eas.json` values; `ios-build.sh production` (also under `DRY_RUN=1`)
+exits 3 with the missing name(s) when either is absent from `eas env:list --environment production`, and prints
+names only.
 
 **Source maps.** Store builds upload them from EAS Build (`SENTRY_ALLOW_FAILURE=true` turns an upload failure into
 a warning, never a failed paid build); every other profile sets `SENTRY_DISABLE_AUTO_UPLOAD=true`. An OTA from
@@ -108,13 +134,14 @@ production environment (exit 3 when missing). Runtime 1.6.1 has no OTA branch; r
 
 **Budget (M00 §10, Sentry free Developer plan).** 5k errors/month org-wide (expected well under 1k), 5M spans
 (mobile traces sample rate 0.2, console 0.05), no Session Replay, no screenshots or view hierarchy, no profiling,
-one user, 30-day lookback. Guards: at most 25 error events per app session, offline/timeout errors dropped,
-spike protection, the kill switch. Upgrade to the Team plan (USD 26/month) only if errors exceed 5k/month or
+one user, 30-day lookback. Guards: at most 25 JS error events per app session (native-origin events are not
+counted, see "Native-origin events"), offline/timeout JS errors dropped, spike protection (the only volume guard
+for native events), the kill switch. Upgrade to the Team plan (USD 26/month) only if errors exceed 5k/month or
 metric alerts are wanted.
 
 ## 5. TestFlight upgrade matrix
 
-Run on the one production build **1.9.0 (23)** after the placeholders and EAS variables are filled. For each row,
+Run on the one production build **1.9.0 (23)**, built after the EAS production variables `EXPO_PUBLIC_SENTRY_DSN` and `SENTRY_AUTH_TOKEN` exist (`ios-build.sh` checks the names). For each row,
 check that **study progress**, **wallet** (pulls/coins), **Mistake Book entries and their counts**, and the
 **sign-in state** survive, and that expo-updates discards the runtime-1.8.0 OTA cleanly (no crash, no stale bundle).
 
@@ -127,7 +154,9 @@ check that **study progress**, **wallet** (pulls/coins), **Mistake Book entries 
 
 Then, on any of these devices: Settings > tap the version label 7 times > DebugMenu shows **`Sentry: active`**;
 **Send test event** shows `Sent: <id>`, and the event arrives in Sentry symbolicated (readable file/line) with
-tags `ota.update_id=embedded` and `ota.channel=production`. One API call's `x-dc-trace-id` appears as
+tags `ota.update_id=embedded`, `ota.is_embedded=true` and `ota.channel=production` (the app derives
+`ota.update_id=embedded` from `isEmbeddedLaunch`, because expo-updates reports the embedded update's UUID as its
+`updateId`). One sync API call's (`apiJson`) `x-dc-trace-id` appears as
 `upstreamTraceId` in the core-vpc logs. Finally, `node mobile/scripts/release/asc-release.cjs --version 1.9.0 --build 23 …`
 (plan mode) prints `releaseType=MANUAL`.
 

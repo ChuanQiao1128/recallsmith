@@ -21,11 +21,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** First failing gate wins: dev, channel, no-dsn, kill-switch. */
+// Shape of a Sentry DSN (https://<public key>@<host>/<numeric project id>). The SDK
+// rejects anything else without throwing and then sends nothing (R19N M02-R1).
+const SENTRY_DSN_SHAPE = /^https:\/\/[^@\s/]+@[^/\s]+\/\d+$/;
+
+/** First failing gate wins: dev, channel, no-dsn (absent, blank or malformed), kill-switch. */
 export function decideSentry(i: { isDev: boolean; channel: unknown; dsn: unknown; killed: boolean }): SentryGate {
   if (i.isDev) return { enabled: false, reason: 'dev' };
   if (String(i.channel).trim().toLowerCase() !== 'production') return { enabled: false, reason: 'channel' };
-  if (typeof i.dsn !== 'string' || i.dsn.trim() === '') return { enabled: false, reason: 'no-dsn' };
+  if (typeof i.dsn !== 'string' || !SENTRY_DSN_SHAPE.test(i.dsn.trim())) return { enabled: false, reason: 'no-dsn' };
   if (i.killed) return { enabled: false, reason: 'kill-switch' };
   return { enabled: true, dsn: i.dsn.trim(), environment: 'production' };
 }
@@ -203,10 +207,12 @@ export function buildOtaTags(
   u: { updateId?: unknown; channel?: unknown; runtimeVersion?: unknown; isEmbeddedLaunch?: unknown } | null,
 ): Record<string, string> {
   const updateId = u?.updateId;
-  let id = 'unknown';
-  if (typeof updateId === 'string' && updateId.trim() !== '') id = updateId.trim();
-  else if (u && (updateId === null || typeof updateId === 'string')) id = 'embedded';
   const embedded = u?.isEmbeddedLaunch;
+  let id = 'unknown';
+  // expo-updates reports the embedded update's UUID on an embedded launch (R19N M02-R4).
+  if (embedded === true) id = 'embedded';
+  else if (typeof updateId === 'string' && updateId.trim() !== '') id = updateId.trim();
+  else if (u && (updateId === null || typeof updateId === 'string')) id = 'embedded';
   return {
     'ota.update_id': id,
     'ota.channel': tagValue(u?.channel),

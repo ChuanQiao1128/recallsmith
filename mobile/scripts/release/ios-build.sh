@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # ios-build.sh [profile] — production iOS build on EAS, non-interactive.
 # Prints "BUILD_ID=<id>" and "ARTIFACT=<url>" on success; exits non-zero otherwise.
-# DRY_RUN=1 prints the command without running it.
+# DRY_RUN=1 prints the command without running it (the production checks still run).
+# Exit codes: 0 ok · 1 build failed · 2 eas-cli missing or not logged in · 3 production is missing
+# EXPO_PUBLIC_SENTRY_DSN / SENTRY_AUTH_TOKEN in the EAS production environment · 5 Sentry org/project placeholders.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"; MOBILE="$(cd "$HERE/../.." && pwd)"; cd "$MOBILE"
 PROFILE="${1:-production}"
@@ -21,6 +23,21 @@ if [ "$PROFILE" = production ]; then
 fi
 command -v eas >/dev/null || { echo "eas-cli missing" >&2; exit 2; }
 eas whoami >/dev/null 2>&1 || { echo "eas not logged in (eas login)" >&2; exit 2; }
+# A store build also needs the Sentry names in the EAS production environment: without the DSN no Sentry
+# code initialises, and without the token SENTRY_ALLOW_FAILURE turns the dSYM/source-map upload into a
+# warning. Names only, like ota.sh: eas prints NAME=value (the name possibly in ANSI bold); strip the codes,
+# keep what is before the first '=' and never echo the output or the lines the names came from.
+if [ "$PROFILE" = production ]; then
+  NAMES=$(eas env:list --environment production --format short --non-interactive 2>/dev/null | tr -d '\033' | sed -E 's/\[[0-9;]*m//g' | sed -nE 's/^[[:space:]]*([A-Z][A-Z0-9_]*)=.*/\1/p' | sort -u || true)
+  MISSING=()
+  for name in EXPO_PUBLIC_SENTRY_DSN SENTRY_AUTH_TOKEN; do
+    printf '%s\n' "$NAMES" | grep -qx "$name" || MISSING+=("$name")
+  done
+  if [ "${#MISSING[@]}" -gt 0 ]; then
+    echo "ios-build: missing name(s) in the EAS production environment: ${MISSING[*]} (eas env:create --environment production)" >&2
+    exit 3
+  fi
+fi
 if [ "${DRY_RUN:-0}" = 1 ]; then
   echo "DRY: eas build --platform ios --profile $PROFILE --non-interactive --json --wait"; exit 0
 fi
