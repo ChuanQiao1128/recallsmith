@@ -7,12 +7,16 @@ import App from './App';
 import { AuthProvider } from './auth/AuthContext';
 import { queryClient } from './api/queryClient';
 import { installErrorReporting } from './lib/reportError';
+import { initConsoleSentry } from './lib/sentry';
 import './index.css';
 
 // Before createRoot, so a failure while the tree is first mounting is already
-// being listened for. The two listeners it attaches cover what React cannot: a
-// throw outside a component and a promise nobody awaited. The third entry point,
-// a component throwing during render, is reported by ChunkErrorBoundary.
+// being listened for. Sentry is decided first, so the listeners know whether to
+// attach: with Sentry active its own global handlers own a throw outside a
+// component and a promise nobody awaited; without it the two listeners cover
+// them. The third entry point, a component throwing during render, is reported
+// by ChunkErrorBoundary.
+initConsoleSentry();
 installErrorReporting();
 
 // A data router rather than the plain BrowserRouter this file used to mount:
