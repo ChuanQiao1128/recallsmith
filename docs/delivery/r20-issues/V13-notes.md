@@ -28,7 +28,7 @@ only. Nothing was planned, applied or deployed, no AWS call was made, and nothin
 
 **`python` job additions:**
 - `python3 -m unittest discover -s infra/scripts/tests -v`
-- `python3 infra/scripts/check-gate-freshness.py --base "$BASE_REF"`, with `BASE_REF: origin/${{ github.base_ref || 'main' }}`. The ref is passed through `env`, so it is never interpolated into the shell script.
+- `python3 infra/scripts/check-gate-freshness.py --base "$BASE_REF"`, with `BASE_REF: origin/${{ github.base_ref || 'main' }}`. The ref is passed through `env`, so it is never interpolated into the shell script. Superseded by R20X F05 (p-security-2): a pull request still uses `--base`, a push uses `--before "$BEFORE_SHA"` (`github.event.before`).
 
 **`infra/scripts/check-gate-freshness.py`:**
 
@@ -36,7 +36,7 @@ only. Nothing was planned, applied or deployed, no AWS call was made, and nothin
 python3 infra/scripts/check-gate-freshness.py --base REF [--repo ROOT]
 ```
 
-- **Trigger.** It takes `git merge-base REF HEAD`, then `git diff --name-only <mb> HEAD` restricted to `services/ai-qa/env/prod.env.json` and `services/ai-qa/src/ai_qa/prompts.py`.
+- **Trigger.** It takes `git merge-base REF HEAD`, then `git diff --name-only <mb> HEAD` restricted to `services/ai-qa/env/prod.env.json` and `services/ai-qa/src/ai_qa/prompts.py`. Correction (R20X F05, p-security-1 / p-tests-2): these two files were not the whole shipping config (settings.py, providers.py and profiles.py also decide it), and a prompt text change without a PROMPT_VERSION bump matched old evidence. The trigger is now the env file or any file under `services/ai-qa/src/ai_qa/`, and a prompt text change must bump the version labels; see F05-fixes.md.
 - **Neither file changed:** prints `GATE FRESHNESS PASS: unchanged ...` and exits 0.
 - **A file changed, but AI QA is off:** the HEAD env (`git show HEAD:services/ai-qa/env/prod.env.json`) has `AI_QA_ENABLED` not truthy. Truthy uses the `ai_qa.settings.is_truthy` rule: trimmed `1`, or `true`/`yes` in any case. Prints `GATE FRESHNESS PASS: AI QA off ...` and exits 0.
 - **A file changed and AI QA is on:**
@@ -48,7 +48,7 @@ python3 infra/scripts/check-gate-freshness.py --base REF [--repo ROOT]
 - **Exit codes:**
   - 0: pass
   - 1: fail
-  - 2: usage error, an unknown ref, a HEAD env that is not a JSON object, or a failure reading the shipping config
+  - 2: usage error, an unknown ref, a HEAD env that is not a JSON object, or a failure reading the shipping config. Correction (R20X F05, p-correctness-2): as shipped, shipping-config output that was not JSON raised a traceback (exit 1); it is exit 2 since F05.
 - **Dependencies.** The script itself uses only the standard library. The evals venv is used only on the path where the check applies, which is why `verify` can run it with a bare `python3`.
 - **What the gate itself adds.** `dc-evals score --gate` also checks `secondProvider`/`secondModel`, the gate provider set, the dataset and its sha, reps and the thresholds. The header match here is only a filter that picks which runs to re-score.
 
@@ -77,6 +77,6 @@ The unit tests were written first and failed on the base (the module was missing
 
 ## Deferred
 
-- **Push events to `main` compare `main` with `origin/main`.** The diff is empty there, so the check only bites on PRs and on pushes to feature branches. That is intended: the PR is where the evidence has to be.
+- **Push events to `main` compare `main` with `origin/main`.** The diff is empty there, so the check only bites on PRs and on pushes to feature branches. That is intended: the PR is where the evidence has to be. Correction (R20X F05, p-security-2): this left a direct push to main unchecked; pushes now compare with `github.event.before` (HEAD~1 when unusable).
 - **The automation reviewer (`AI_QA_AUTOMATION_*`, `PROMPT_VERSION_AUTOMATION`) is not covered.** Its evidence is the `dc-evals automation-gate` pair. The issue scopes this check to the console QA shipping config, so a matching check for the automation pair is left for a later issue.
 - **The terraform version pin (1.16.3) must be bumped by hand.** `fmt -check` output can change between releases, which is why it is pinned.
