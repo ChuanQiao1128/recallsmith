@@ -522,3 +522,32 @@ affected cards (one line each, with ranks and editor links) and a NEEDS YOU line
 a human review. The flag is informational; nothing clears it, so the 30-day window keeps the count current.
 
 **Rollback.** Revert the code; the column and the extra `details` keys are ignored by older code.
+
+## Usage analytics and freshness (R20 V08)
+
+Three read-only numbers for the console, all SQL, all UTC. Definitions are in
+`docs/delivery/r20-issues/V08-notes.md`.
+
+**Deploy order.** Code first, then `POST /api/v1/admin/db/migrate` (applies `040_usage_analytics.sql`: additive
+columns on `analytics_daily` and `analytics_deck_daily`). Before the migration the tick step `analytics_daily`
+logs `analytics_not_migrated` and skips (the tick reports no failed step) and
+`GET /api/v1/admin/analytics/usage` answers `503 NOT_READY`.
+
+**Usage.** The tick step `analytics_daily` runs on the first tick of each UTC day while the mode is not `off`
+and recomputes the 8 complete days before today from `user_progress_events` (reviews only). Rerunning is safe.
+`GET /api/v1/admin/analytics/usage?days=30` returns the stored days (DAU/WAU/MAU, reviews, new users, cards
+learned, D1/D7 retention) and per-deck numbers for the last 30 days. To keep test devices out, list their learner
+subs in `ANALYTICS_EXCLUDED_SUBS` (comma-separated) in `src_C/env/prod.env.json` and redeploy; the next day's run
+recomputes the window without them. The route reports only how many subs are excluded, never which.
+With `AUTOMATION_MODE=off` the tick returns early and nothing is recomputed; the stored rows stay readable.
+
+**Freshness.** `GET /api/v1/admin/automation/freshness?days=30` lists each changed/gone page and each matched
+release-notes item with the time it was detected, queued, drafted, decided and published, plus the median
+minutes to each stage. A null stage means the chain stopped there (not queued, no run, no decision yet, not
+published). `automation/status` → `freshness.medianMinutesToPublish` and `n` (items that reached a publish).
+
+**Measured baselines.** `GET /api/v1/admin/automation/baselines` → `ai_draft_review.suggestedMeasuredMinutes`
+is the median console review time once at least 5 decisions recorded one (`suggestedFromN`). It is only a
+suggestion: adopt it with the existing super_admin PUT and `baselineSource: "measured"`.
+
+**Rollback.** Revert the code; the new columns are nullable and ignored by older code.

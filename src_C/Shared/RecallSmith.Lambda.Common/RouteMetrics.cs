@@ -184,6 +184,8 @@ public static class RouteMetrics
     "/api/v1/user/card-reports",
     "/api/v1/admin/card-embeddings",
     "/api/v1/admin/card-embeddings/status",
+    "/api/v1/admin/automation/freshness",
+    "/api/v1/admin/analytics/usage",
 
     // edge-public
     "/api/v1/billing/verify",

@@ -284,6 +284,9 @@ public static class StatusRoutes
       var reports = await Reports.CardReports.CountsAsync(conn);
       var cardReports = new { open = reports.Open, openedLast7d = reports.OpenedLast7d };
 
+      // R20 V08: the median minutes from a detected documentation change to a published card (last 30 days).
+      var freshness = await Freshness.StatusAsync(conn);
+
       var evalGate = await EvalGate.LoadCurrentAsync(conn);
       var open = await LoadBacklogAsync(conn);
       var backlog = new
@@ -322,6 +325,7 @@ public static class StatusRoutes
         notifications,
         backlog,
         cardReports,
+        freshness,
       });
     }
     catch (Exception ex)

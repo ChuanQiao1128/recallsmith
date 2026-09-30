@@ -784,7 +784,7 @@ public class AutomationLedgerTests
     var items = Data(resp).GetProperty("items").EnumerateArray().ToList();
     Assert.Equal(AllAutomations, items.Select(i => i.GetProperty("automation").GetString()).ToArray());
     Assert.Equal(
-      new[] { "automation", "unit", "baselineMinutesPerUnit", "baselineSource", "note", "updatedAt" },
+      new[] { "automation", "unit", "baselineMinutesPerUnit", "baselineSource", "note", "updatedAt", "suggestedMeasuredMinutes", "suggestedFromN" },
       items[0].EnumerateObject().Select(p => p.Name).ToArray());
     var bulk = items.Single(i => i.GetProperty("automation").GetString() == "bulk_import");
     Assert.Equal("card", bulk.GetProperty("unit").GetString());

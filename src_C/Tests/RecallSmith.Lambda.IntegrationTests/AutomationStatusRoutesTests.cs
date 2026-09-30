@@ -30,7 +30,7 @@ public sealed class AutomationStatusRoutesTests
 
   // A00 §16.2, verbatim except that the runner item (whose keys carry no values there) is listed in RunnerKeys, plus
   // the R18C additions: shadow.blindDecided/blindAccepted (automation-4) and backlog.humanPublishItems (L4), and the
-  // R18D M2 live block (automation-22), R20 V05's cardReports and R20 V07's watch.needsReview.
+  // R18D M2 live block (automation-22), R20 V05's cardReports, R20 V07's watch.needsReview and R20 V08's freshness.
   private const string StatusContractJson = """
     { "serverTime": "ISO",
       "mode": { "configured": "dry_run", "effective": "dry_run", "liveBlockedReason": null, "autoPublish": true },
@@ -46,7 +46,8 @@ public sealed class AutomationStatusRoutesTests
       "watch": { "targets": 0, "active": 0, "failing": 0, "lastCheckedAt": null, "changes7d": 0, "needsReview": 0 },
       "notifications": { "sent24h": 0, "failed24h": 0, "queued": 0, "unconfirmed": 0, "lastSentAt": null },
       "backlog": { "humanPending": 0, "oldestHumanPendingAt": null, "humanPublishes": 0, "humanPublishItems": [] },
-      "cardReports": { "open": 0, "openedLast7d": 0 } }
+      "cardReports": { "open": 0, "openedLast7d": 0 },
+      "freshness": { "medianMinutesToPublish": null, "n": 0 } }
     """;
 
   private static readonly string[] RunnerKeys =
@@ -362,7 +363,7 @@ public sealed class AutomationStatusRoutesTests
       using var contract = JsonDocument.Parse(StatusContractJson);
       var c = contract.RootElement;
       Assert.Equal(Keys(c), Keys(data));
-      foreach (var key in new[] { "mode", "queue", "shadow", "live", "spend", "watch", "notifications", "backlog", "cardReports" })
+      foreach (var key in new[] { "mode", "queue", "shadow", "live", "spend", "watch", "notifications", "backlog", "cardReports", "freshness" })
       {
         Assert.Equal(Keys(c.GetProperty(key)), Keys(data.GetProperty(key)));
       }
