@@ -130,3 +130,9 @@ Then, on any of these devices: Settings > tap the version label 7 times > DebugM
 tags `ota.update_id=embedded` and `ota.channel=production`. One API call's `x-dc-trace-id` appears as
 `upstreamTraceId` in the core-vpc logs. Finally, `node mobile/scripts/release/asc-release.cjs --version 1.9.0 --build 23 …`
 (plan mode) prints `releaseType=MANUAL`.
+
+<!-- paths-not-on-disk
+     Named above only to say the Sentry token must never be stored there; it deliberately does not exist
+     (rule: frontend/tests/docsPaths.test.ts).
+- mobile/.env.local
+-->
