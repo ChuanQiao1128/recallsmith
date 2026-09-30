@@ -23,7 +23,11 @@ public static class CardEmbeddings
 {
   public const string Model = "BAAI/bge-small-en-v1.5";
   public const int Dim = 384;
-  public const int MaxItems = 200;
+  /// <summary>
+  /// At most 100 items per PUT (contract R20-00 §10.1): one 384-dim full-precision vector as Python json.dumps writes it
+  /// is about 8.5 KB, so 200 items (about 1.7 MB) would always exceed the 1 MiB request body cap in VpcFunction.
+  /// </summary>
+  public const int MaxItems = 100;
   public const int MaxKeyLength = 128;
   public const double SemanticDuplicateThreshold = 0.90;
   public const int DefaultDuplicateLimit = 50;
@@ -165,7 +169,7 @@ public static class CardEmbeddings
 
   /// <summary>
   /// <c>PUT /api/v1/admin/card-embeddings</c> (super_admin): <c>{model, dim, items:[{deckSlug, stableUid, textSha256,
-  /// embedding}]}</c>, 1..200 items. The server recomputes each card's <see cref="TextSha256"/>: an item whose hash
+  /// embedding}]}</c>, 1..<see cref="MaxItems"/> items. The server recomputes each card's <see cref="TextSha256"/>: an item whose hash
   /// differs is not stored (<c>staleText</c>), an item naming no live card is not stored (<c>unknownCards</c>).
   /// </summary>
   public static async Task<APIGatewayProxyResponse> HandleUpsert(LambdaRequest req, Res res, AuthContext auth)
@@ -181,7 +185,7 @@ public static class CardEmbeddings
     try
     {
       using var doc = Validation.ParseJsonBody(req);
-      if (doc is null) return res.BadRequest("BAD_REQUEST", "Invalid JSON body");
+      if (doc is null) return res.BadRequest("VALIDATION_ERROR", "Invalid JSON body");
       var items = ParseUpsertBody(doc.RootElement);
 
       if (!await IsReadyAsync(conn)) return NotReady(res);

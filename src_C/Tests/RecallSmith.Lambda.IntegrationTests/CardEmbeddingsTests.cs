@@ -235,7 +235,204 @@ public sealed class CardEmbeddingsTests
     }
   }
 
+  [Fact]
+  public async Task Embedding_Migration038_RoleWithCreateButNotSuperuser_NoticeOnly_NoError()
+  {
+    // R20X F02 (s-tests-1, s-security-4): CREATE on the database passes the has_database_privilege guard, but pgvector
+    // is not a trusted extension, so create extension raises insufficient_privilege. 038 must turn that into a notice.
+    var scratch = await _db.CreateScratchDatabaseAsync("it_f02_create_not_super");
+    var role = $"it_f02_creator_{Guid.NewGuid():N}";
+    var sql = await File.ReadAllTextAsync(System.IO.Path.Combine(AppContext.BaseDirectory, "Db", "Migrations", "038_card_embeddings.sql"));
+
+    await using (var admin = await _db.OpenAsync())
+    {
+      await DbUtil.ExecuteAsync(admin, null, $"create role \"{role}\" nologin nosuperuser", []);
+      await DbUtil.ExecuteAsync(admin, null, $"grant create on database it_f02_create_not_super to \"{role}\"", []);
+    }
+    try
+    {
+      await using var conn = new NpgsqlConnection(scratch);
+      await conn.OpenAsync();
+      await PostgresFixture.ApplyMigrationsAsync(conn, 37);
+      var notices = new List<string>();
+      conn.Notice += (_, e) => notices.Add(e.Notice.MessageText);
+
+      await DbUtil.ExecuteAsync(conn, null, $"set role \"{role}\"", []);
+      Assert.Equal(true, await DbUtil.ExecuteScalarAsync(conn, null, "select has_database_privilege(current_user, current_database(), 'CREATE')", []));
+      await DbUtil.ExecuteAsync(conn, null, sql, []);
+      await DbUtil.ExecuteAsync(conn, null, sql, []);
+      await DbUtil.ExecuteAsync(conn, null, "reset role", []);
+
+      Assert.Equal(2, notices.Count);
+      Assert.All(notices, n => Assert.Contains("vector not installed", n, StringComparison.Ordinal));
+      Assert.All(notices, n => Assert.Contains("cannot create the extension", n, StringComparison.Ordinal));
+      Assert.Equal(0L, AutomationTestKit.Long(await DbUtil.ExecuteScalarAsync(conn, null, "select count(*) from pg_extension where extname = 'vector'", [])));
+      Assert.Null(await DbUtil.ExecuteScalarAsync(conn, null, "select to_regclass('public.card_embeddings')::text", []));
+    }
+    finally
+    {
+      await using var admin = await _db.OpenAsync();
+      await DbUtil.ExecuteAsync(admin, null, "drop database if exists it_f02_create_not_super with (force)", []);
+      await DbUtil.ExecuteAsync(admin, null, $"drop role if exists \"{role}\"", []);
+    }
+  }
+
+  [Fact]
+  public async Task Embedding_Migrate_ExtensionInstalledAfter038WasRecorded_NextMigrateCreatesTheTable()
+  {
+    // R20X F02 (s-correctness-2, contract §10.2): the whole chain runs as a non-superuser that owns its database (the
+    // staging app role), so 038 is recorded with only a notice. The owner step is CREATE EXTENSION vector as a
+    // superuser, then Migrate again: nothing is pending, yet card_embeddings appears. A third call changes nothing.
+    const string db = "it_f02_ensure_vector";
+    var role = $"it_f02_app_{Guid.NewGuid():N}";
+    var pw = new string('b', 32);
+    await using (var admin = await _db.OpenAsync())
+    {
+      await DbUtil.ExecuteAsync(admin, null, $"drop database if exists {db} with (force)", []);
+      await DbUtil.ExecuteAsync(admin, null, $"create role \"{role}\" login nosuperuser nocreatedb nocreaterole password '{pw}'", []);
+      await DbUtil.ExecuteAsync(admin, null, $"create database {db} owner \"{role}\"", []);
+    }
+    var superScratch = new NpgsqlConnectionStringBuilder(_db.ConnectionString) { Database = db, Pooling = false }.ConnectionString;
+
+    var names = new[] { "PGDATABASE", "PGUSER", "PGPASSWORD", "API_ENV", "MIGRATE_SECRET" };
+    var saved = names.ToDictionary(n => n, Environment.GetEnvironmentVariable);
+    try
+    {
+      Environment.SetEnvironmentVariable("PGDATABASE", db);
+      Environment.SetEnvironmentVariable("PGUSER", role);
+      Environment.SetEnvironmentVariable("PGPASSWORD", pw);
+      Environment.SetEnvironmentVariable("API_ENV", null);
+      Environment.SetEnvironmentVariable("MIGRATE_SECRET", null);
+      RecallSmith.Lambda.Db.Pg.Reset();
+      RecallSmith.Lambda.Vpc.Db.Pg.Reset();
+      var sa = SuperAdmin();
+      Task<APIGatewayProxyResponse> MigrateAsync() =>
+        AutomationTestKit.CallAsync(RecallSmith.Lambda.Vpc.Db.Migrate.HandleDbMigrate, "POST", "/api/v1/admin/db/migrate", null, sa);
+
+      var first = AutomationTestKit.Data(await MigrateAsync());
+      Assert.Contains(first.GetProperty("applied").EnumerateArray(), m => m.GetProperty("version").GetInt32() == 38);
+      Assert.Contains(first.GetProperty("applied").EnumerateArray(), m => m.GetProperty("version").GetInt32() == 40);
+      Assert.False(first.GetProperty("vectorReady").GetBoolean());
+
+      await using (var conn = new NpgsqlConnection(superScratch))
+      {
+        await conn.OpenAsync();
+        Assert.Equal(1L, AutomationTestKit.Long(await DbUtil.ExecuteScalarAsync(conn, null, "select count(*) from schema_migrations where version = 38", [])));
+        Assert.Null(await DbUtil.ExecuteScalarAsync(conn, null, "select to_regclass('public.card_embeddings')::text", []));
+        // Migrate again without the extension: the ensure block is a no-op.
+        Assert.False(AutomationTestKit.Data(await MigrateAsync()).GetProperty("vectorReady").GetBoolean());
+        Assert.Null(await DbUtil.ExecuteScalarAsync(conn, null, "select to_regclass('public.card_embeddings')::text", []));
+
+        // The owner step, as a superuser (the RDS master in prod).
+        await DbUtil.ExecuteAsync(conn, null, "create extension if not exists vector", []);
+      }
+
+      var second = AutomationTestKit.Data(await MigrateAsync());
+      Assert.Equal(0, second.GetProperty("appliedCount").GetInt32());
+      Assert.True(second.GetProperty("vectorReady").GetBoolean());
+      var third = AutomationTestKit.Data(await MigrateAsync());
+      Assert.Equal((0, true), (third.GetProperty("appliedCount").GetInt32(), third.GetProperty("vectorReady").GetBoolean()));
+
+      await using (var conn = new NpgsqlConnection(superScratch))
+      {
+        await conn.OpenAsync();
+        var columns = await DbUtil.QueryAsync(conn, null,
+          """
+          select a.attname as name, format_type(a.atttypid, a.atttypmod) as type, a.attnotnull as notnull
+          from pg_attribute a where a.attrelid = 'public.card_embeddings'::regclass and a.attnum > 0 and not a.attisdropped
+          order by a.attnum
+          """, []);
+        Assert.Equal(
+          [("card_id", "bigint", true), ("model", "text", true), ("dim", "integer", true), ("text_sha256", "text", true),
+           ("embedding", "vector(384)", true), ("updated_at", "timestamp with time zone", true)],
+          columns.Select(c => ((string)c["name"]!, (string)c["type"]!, (bool)c["notnull"]!)).ToList());
+        Assert.Equal(role, await DbUtil.ExecuteScalarAsync(conn, null,
+          "select tableowner::text from pg_tables where schemaname = 'public' and tablename = 'card_embeddings'", []));
+      }
+
+      // The ensure block is 038's table block, not a copy that drifted.
+      var file = await File.ReadAllTextAsync(System.IO.Path.Combine(AppContext.BaseDirectory, "Db", "Migrations", "038_card_embeddings.sql"));
+      static string Squash(string s) => System.Text.RegularExpressions.Regex.Replace(s, "\\s+", " ").Trim();
+      Assert.Contains(Squash(RecallSmith.Lambda.Vpc.Db.Migrate.EnsureVectorObjectsSql), Squash(file), StringComparison.Ordinal);
+    }
+    finally
+    {
+      foreach (var (name, value) in saved) Environment.SetEnvironmentVariable(name, value);
+      RecallSmith.Lambda.Db.Pg.Reset();
+      RecallSmith.Lambda.Vpc.Db.Pg.Reset();
+      CardEmbeddings.ResetReadyCache();
+      await using var admin = await _db.OpenAsync();
+      await DbUtil.ExecuteAsync(admin, null, $"drop database if exists {db} with (force)", []);
+      await DbUtil.ExecuteAsync(admin, null, $"drop role if exists \"{role}\"", []);
+    }
+  }
+
   // ---------------------------------------------------------------- PUT /card-embeddings
+
+  /// <summary>
+  /// A request body the way Python's json.dumps writes it by default (", " and ": " separators, shortest round-trip
+  /// floats): what V04's <c>dc-evals embed-cards --push</c> sends.
+  /// </summary>
+  private static string PythonJsonBody(IEnumerable<(string Slug, string Uid, string Sha, double[] Vector)> items) =>
+    "{\"model\": \"" + CardEmbeddings.Model + "\", \"dim\": " + CardEmbeddings.Dim.ToString(CultureInfo.InvariantCulture) + ", \"items\": [" +
+    string.Join(", ", items.Select(i =>
+      "{\"deckSlug\": \"" + i.Slug + "\", \"stableUid\": \"" + i.Uid + "\", \"textSha256\": \"" + i.Sha + "\", \"embedding\": [" +
+      string.Join(", ", i.Vector.Select(v => v.ToString("R", CultureInfo.InvariantCulture))) + "]}")) +
+    "]}";
+
+  /// <summary>A random L2-normalised vector with full-precision components, like a real model's output.</summary>
+  private static double[] RandomUnitVector(Random rng)
+  {
+    var v = Enumerable.Range(0, CardEmbeddings.Dim).Select(_ => rng.NextDouble() * 2 - 1).ToArray();
+    var norm = Math.Sqrt(v.Sum(x => x * x));
+    return v.Select(x => x / norm).ToArray();
+  }
+
+  [Fact]
+  public async Task Embedding_Upsert_ContractMaxBatch_OfFullPrecisionVectors_FitsTheBodyCap()
+  {
+    // R20X F02 (s-correctness-1, contract §10.1): the contract maximum is 100 items, and 100 realistic vectors fit under
+    // VpcFunction's 1 MiB body cap end to end; 200 would not, which is why the maximum is not 200.
+    const int bodyCap = 1_048_576;
+    Assert.Equal(100, CardEmbeddings.MaxItems);
+    var (deckId, slug) = await DeckAsync("batch");
+    await _db.QueryAsync(
+      """
+      insert into cards (deck_id, stable_uid, question, explanation, difficulty, order_in_deck)
+      select $1, 'v06-batch-' || g, 'Synthetic batch question ' || g || '?', 'synthetic explanation', 2, g * 10
+      from generate_series(1, 100) g
+      """, deckId);
+    var rng = new Random(20261001);
+    var items = Enumerable.Range(1, 100)
+      .Select(g => (slug, $"v06-batch-{g}", CardEmbeddings.TextSha256($"Synthetic batch question {g}?", "synthetic explanation"), RandomUnitVector(rng)))
+      .ToList();
+    var body = PythonJsonBody(items);
+    Assert.InRange(body.Length, 700_000, bodyCap);
+    Assert.True(PythonJsonBody(items.Concat(items)).Length > bodyCap, "200 full-precision vectors exceed the body cap");
+
+    var evt = JsonSerializer.SerializeToElement(new
+    {
+      rawPath = UpsertPath,
+      requestContext = new
+      {
+        requestId = Guid.NewGuid().ToString(),
+        http = new { method = "PUT" },
+        authorizer = new { jwt = new { claims = new Dictionary<string, object> { ["sub"] = Sub("batch"), ["cognito:groups"] = new[] { "super_admin" } } } },
+      },
+      headers = new Dictionary<string, string>(),
+      queryStringParameters = new Dictionary<string, string>(),
+      body,
+      isBase64Encoded = false,
+    });
+    var response = await new RecallSmith.Lambda.VpcFunction().Handler(evt);
+    Assert.True(response.StatusCode == 200, $"PUT returned {response.StatusCode}: {response.Body}");
+    var data = AutomationTestKit.Data(response);
+    Assert.Equal(100, data.GetProperty("upserted").GetInt32());
+    Assert.Empty(data.GetProperty("unknownCards").EnumerateArray());
+    Assert.Empty(data.GetProperty("staleText").EnumerateArray());
+    Assert.Equal(100L, AutomationTestKit.Long(await _db.ScalarAsync(
+      "select count(*) from card_embeddings e join cards c on c.id = e.card_id where c.deck_id = $1", deckId)));
+  }
 
   [Fact]
   public async Task Embedding_Upsert_StoresFresh_ReportsStaleAndUnknown_ThenUpdatesInPlace()
@@ -311,7 +508,7 @@ public sealed class CardEmbeddingsTests
       new { model = CardEmbeddings.Model, dim = 383, items = new[] { good } },
       new { model = CardEmbeddings.Model, items = new[] { good } },
       new { model = CardEmbeddings.Model, dim = 384, items = Array.Empty<object>() },
-      new { model = CardEmbeddings.Model, dim = 384, items = Enumerable.Range(0, 201).Select(i => Item("d", $"u{i}", sha, Vec(0))).ToArray() },
+      new { model = CardEmbeddings.Model, dim = 384, items = Enumerable.Range(0, CardEmbeddings.MaxItems + 1).Select(i => Item("d", $"u{i}", sha, Vec(0))).ToArray() },
       UpsertBody(Item("some-deck", "some-uid", sha, Vec(0).Take(383).ToArray())),
       UpsertBody(Item("some-deck", "some-uid", sha, nanVector)),
       UpsertBody(Item("some-deck", "some-uid", sha, zero)),
@@ -322,10 +519,10 @@ public sealed class CardEmbeddingsTests
     ];
     foreach (var body in bad) AutomationTestKit.AssertError(await PutAsync(sa, body), 400, "VALIDATION_ERROR");
 
-    // A NaN literal (what Python's json.dumps writes by default) is not JSON at all.
+    // A NaN literal (what Python's json.dumps writes by default) is not JSON at all: still 400 VALIDATION_ERROR (§10.6).
     var nanLiteral = JsonSerializer.Serialize(UpsertBody(good)).Replace("[1,0,", "[NaN,0,", StringComparison.Ordinal);
     Assert.Contains("NaN", nanLiteral, StringComparison.Ordinal);
-    Assert.Equal(400, (await PutAsync(sa, nanLiteral)).StatusCode);
+    AutomationTestKit.AssertError(await PutAsync(sa, nanLiteral), 400, "VALIDATION_ERROR");
   }
 
   // ---------------------------------------------------------------- GET /card-embeddings/status
@@ -438,15 +635,31 @@ public sealed class CardEmbeddingsTests
     await StoreAsync(near.Id, Vec(30, 0.92));
     await StoreAsync(mid.Id, Vec(30, 0.5));
     await StoreAsync(far.Id, Vec(40));
+    // R20X F02 (s-tests-2): a card of another deck on the very same axis, so only the deck scope keeps it out.
+    var (otherDeck, otherSlug) = await DeckAsync("similar-other");
+    var outside = await CardAsync(otherDeck, "mo", "glacier restore tier alpha in another deck");
+    await StoreAsync(outside.Id, Vec(30));
     var sa = SuperAdmin();
+
+    static List<(long, double, bool)> Matches(JsonElement data) => data.GetProperty("matches").EnumerateArray()
+      .Select(m => (m.GetProperty("cardId").GetInt64(), m.GetProperty("similarity").GetDouble(), m.GetProperty("likelyDuplicate").GetBoolean()))
+      .ToList();
 
     var vector = AutomationTestKit.Data(await SimilarAsync(sa, new { text = "glacier restore tier alpha", deckSlug = slug, embedding = Vec(30) }));
     Assert.Equal("vector", vector.GetProperty("engine").GetString());
-    var matches = vector.GetProperty("matches").EnumerateArray()
-      .Select(m => (m.GetProperty("cardId").GetInt64(), m.GetProperty("similarity").GetDouble(), m.GetProperty("likelyDuplicate").GetBoolean()))
-      .ToList();
     // Cosine over cards that have an embedding, at least the default threshold 0.3; duplicate at >= 0.90.
-    Assert.Equal([(same.Id, 1.0, true), (near.Id, 0.92, true), (mid.Id, 0.5, false)], matches);
+    Assert.Equal([(same.Id, 1.0, true), (near.Id, 0.92, true), (mid.Id, 0.5, false)], Matches(vector));
+
+    // The other deck's card scores 1.0 too: without a deck it is there, with the deck scope it is not.
+    Assert.Contains((outside.Id, 1.0, true), Matches(AutomationTestKit.Data(await SimilarAsync(sa, new { text = "glacier restore tier alpha", embedding = Vec(30) }))));
+    Assert.Equal([(outside.Id, 1.0, true)],
+      Matches(AutomationTestKit.Data(await SimilarAsync(sa, new { text = "glacier restore tier alpha", deckSlug = otherSlug, embedding = Vec(30) }))));
+
+    // excludeCardIds: the card being edited is never its own likely duplicate.
+    var excluded = AutomationTestKit.Data(await SimilarAsync(sa,
+      new { text = "glacier restore tier alpha", deckSlug = slug, embedding = Vec(30), excludeCardIds = new[] { same.Id } }));
+    Assert.Equal("vector", excluded.GetProperty("engine").GetString());
+    Assert.Equal([(near.Id, 0.92, true), (mid.Id, 0.5, false)], Matches(excluded));
 
     var trigram = AutomationTestKit.Data(await SimilarAsync(sa, new { text = "glacier restore tier alpha", deckSlug = slug }));
     Assert.Equal(CardSimilarity.EnginePgTrgm, trigram.GetProperty("engine").GetString());
