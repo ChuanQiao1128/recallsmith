@@ -87,43 +87,34 @@ export class CardReportTokenUnavailableError extends Error {
 
 export type CardReportAuth = { kind: 'token'; token: string } | { kind: 'signed_out' } | { kind: 'unavailable' };
 
-type AuthModules = [typeof import('../../auth/freshToken'), typeof import('../../auth/authStore')];
-
 // One shared import for every caller, so concurrent calls (a double tap) reuse it.
-let authModules: Promise<AuthModules> | null = null;
+let freshTokenModule: Promise<typeof import('../../auth/freshToken')> | null = null;
 
-function loadAuthModules(): Promise<AuthModules> {
-  if (!authModules) {
-    authModules = Promise.all([import('../../auth/freshToken'), import('../../auth/authStore')]);
-    authModules.catch(() => {
-      authModules = null;
+function loadFreshToken(): Promise<typeof import('../../auth/freshToken')> {
+  if (!freshTokenModule) {
+    freshTokenModule = import('../../auth/freshToken');
+    freshTokenModule.catch(() => {
+      freshTokenModule = null;
     });
   }
-  return authModules;
+  return freshTokenModule;
 }
 
 /**
  * The current access token, or why there is none. getFreshAccessToken returns null both
- * when signed out and when a signed-in refresh failed; the auth store tells them apart
- * (a refresh that finds the session really expired flips it to anonymous first).
- * If auth cannot load at all there is no session to use, so that counts as signed out.
+ * when signed out and when a signed-in refresh failed (fetchAuthSession threw); the auth
+ * store tells them apart, and a refresh that finds the session really expired flips it
+ * to anonymous first. If auth cannot load at all there is no session, so: signed out.
  */
 export async function getCardReportAuth(): Promise<CardReportAuth> {
-  let mods: AuthModules;
   try {
-    mods = await loadAuthModules();
+    const token = (await (await loadFreshToken()).getFreshAccessToken()) ?? null;
+    if (token) return { kind: 'token', token };
+    const { useAuthStore } = await import('../../auth/authStore');
+    return useAuthStore.getState().status === 'signed_in' ? { kind: 'unavailable' } : { kind: 'signed_out' };
   } catch {
     return { kind: 'signed_out' };
   }
-  const [freshToken, authStore] = mods;
-  let token: string | null = null;
-  try {
-    token = (await freshToken.getFreshAccessToken()) ?? null;
-  } catch {
-    token = null;
-  }
-  if (token) return { kind: 'token', token };
-  return authStore.useAuthStore.getState().status === 'signed_in' ? { kind: 'unavailable' } : { kind: 'signed_out' };
 }
 
 async function requireToken(): Promise<string> {
