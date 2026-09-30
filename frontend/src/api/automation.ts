@@ -81,7 +81,15 @@ export type AutomationStatus = {
   live: AutomationLive | null;
   publishes7d: { byState: Record<string, number> };
   spend: { todayUsd: number; automationTodayUsd: number; reservedUsd: number; dailyCapUsd: number };
-  watch: { targets: number; active: number; failing: number; lastCheckedAt: string | null; changes7d: number };
+  watch: {
+    targets: number;
+    active: number;
+    failing: number;
+    lastCheckedAt: string | null;
+    changes7d: number;
+    /** R20 V07: changes whose affected cards need a person. Absent when the server predates the field. */
+    needsReview?: number;
+  };
   notifications: {
     sent24h: number;
     failed24h: number;
@@ -92,7 +100,23 @@ export type AutomationStatus = {
   };
   /** K7: the open exceptions. Null when the server predates the field. */
   backlog: AutomationBacklog | null;
+  /**
+   * R20 V05: learner card reports. Absent (not null) when the server predates
+   * the field, so the Overview hides its tile; zeros when the table is missing.
+   */
+  cardReports?: AutomationCardReports;
+  /**
+   * R20 V08: the median minutes from a detected source change to its publish,
+   * over `n` changes that reached a publish. Absent when the server predates the field.
+   */
+  freshness?: AutomationFreshness;
 };
+
+/** R20 V08: null median when no change reached a publish in the window. */
+export type AutomationFreshness = { medianMinutesToPublish: number | null; n: number };
+
+/** R20 V05: open learner card reports and those opened in the last 7 days. */
+export type AutomationCardReports = { open: number; openedLast7d: number };
 
 /** M2 (R18D): auto-accepted cards a person later deleted or edited, over the last 30 days. */
 export type AutomationLive = {
@@ -268,6 +292,38 @@ export type WatchTarget = {
   createdAt: string;
 };
 
+/**
+ * R20 V07: a card that cites a changed or gone page. `quoteMissing` is true
+ * when the card's supporting quote is no longer on the page.
+ */
+export type WatchAffectedCard = {
+  cardId: number;
+  deckId: number | null;
+  deckSlug: string | null;
+  stableUid: string;
+  question: string;
+  quoteMissing: boolean;
+};
+
+/** R20 V07: a card a new release-notes item may touch, ranked by full-text search. */
+export type WatchPossiblyAffectedCard = {
+  cardId: number;
+  deckId: number | null;
+  deckSlug: string | null;
+  stableUid: string;
+  question: string;
+  rank: number;
+};
+
+/** R20 V07: one recent release-notes/feed item. */
+export type WatchFeedItem = {
+  id: number;
+  title: string;
+  url: string;
+  firstSeenAt: string | null;
+  possiblyAffectedCards: WatchPossiblyAffectedCard[];
+};
+
 export type WatchEvent = {
   eventId: number;
   targetId: number;
@@ -281,9 +337,19 @@ export type WatchEvent = {
   queueItemIds: number[];
   notificationId: string | null;
   createdAt: string;
+  /** R20 V07: absent when the server predates the field (the tab then shows no list). */
+  affectedCards?: WatchAffectedCard[];
+  /** R20 V07: true when the AI QA re-check is unavailable and a person must look. Absent on an older server. */
+  needsHumanReview?: boolean;
 };
 
-export type WatchPage = { items: WatchTarget[]; recentEvents: WatchEvent[]; nextCursor: string | null };
+export type WatchPage = {
+  items: WatchTarget[];
+  recentEvents: WatchEvent[];
+  nextCursor: string | null;
+  /** R20 V07: the latest release-notes items. Absent when the server predates the field. */
+  recentFeedItems?: WatchFeedItem[];
+};
 
 export type AutomationNotification = {
   notificationId: string;
@@ -441,6 +507,9 @@ function normalizeStatus(data: unknown): AutomationStatus | null {
       failing: toNumber(watch.failing),
       lastCheckedAt: toNullableText(watch.lastCheckedAt),
       changes7d: toNumber(watch.changes7d),
+      ...(watch.needsReview !== undefined && watch.needsReview !== null
+        ? { needsReview: toNumber(watch.needsReview) }
+        : {}),
     },
     notifications: {
       sent24h: toNumber(notifications.sent24h),
@@ -450,7 +519,17 @@ function normalizeStatus(data: unknown): AutomationStatus | null {
       lastSentAt: toNullableText(notifications.lastSentAt),
     },
     backlog: normalizeBacklog(data.backlog),
+    ...(isRecord(data.cardReports) ? { cardReports: normalizeCardReports(data.cardReports) } : {}),
+    ...(isRecord(data.freshness) ? { freshness: normalizeFreshness(data.freshness) } : {}),
   };
+}
+
+function normalizeFreshness(value: Raw): AutomationFreshness {
+  return { medianMinutesToPublish: toNumber(value.medianMinutesToPublish, true), n: toNumber(value.n) };
+}
+
+function normalizeCardReports(value: Record<string, unknown>): AutomationCardReports {
+  return { open: toNumber(value.open), openedLast7d: toNumber(value.openedLast7d) };
 }
 
 function normalizeLive(value: unknown): AutomationLive | null {
@@ -701,7 +780,88 @@ function normalizeWatchEvent(value: unknown): WatchEvent {
     queueItemIds: Array.isArray(raw.queueItemIds) ? raw.queueItemIds.map(v => toNumber(v)) : [],
     notificationId: toNullableText(raw.notificationId),
     createdAt: toText(raw.createdAt),
+    ...watchEventImpact(raw),
   };
+}
+
+/** R20 V07: the server caps affected cards at 200 per event and 5 per feed item. */
+export const WATCH_AFFECTED_CARDS_MAX = 200;
+export const WATCH_FEED_CARDS_MAX = 5;
+
+/**
+ * The change-impact keys of an event, read from the event and, for a server
+ * that only stores them, from `details`. A key neither place has stays absent.
+ */
+function watchEventImpact(raw: Raw): Pick<WatchEvent, 'affectedCards' | 'needsHumanReview'> {
+  const details = asRecord(raw.details);
+  const cards = Array.isArray(raw.affectedCards)
+    ? raw.affectedCards
+    : Array.isArray(details.affectedCards)
+      ? details.affectedCards
+      : null;
+  const review = typeof raw.needsHumanReview === 'boolean' ? raw.needsHumanReview : details.needsHumanReview;
+  return {
+    ...(cards
+      ? {
+          affectedCards: cards
+            .map(normalizeAffectedCard)
+            .filter((c): c is WatchAffectedCard => c !== null)
+            .slice(0, WATCH_AFFECTED_CARDS_MAX),
+        }
+      : {}),
+    ...(typeof review === 'boolean' ? { needsHumanReview: review } : {}),
+  };
+}
+
+function normalizeAffectedCard(value: unknown): WatchAffectedCard | null {
+  if (!isRecord(value)) return null;
+  const cardId = idOf(value.cardId);
+  if (cardId === null) return null;
+  return {
+    cardId,
+    deckId: idOf(value.deckId),
+    deckSlug: toNullableText(value.deckSlug),
+    stableUid: toText(value.stableUid),
+    question: toText(value.question),
+    quoteMissing: value.quoteMissing === true,
+  };
+}
+
+function normalizePossiblyAffectedCard(value: unknown): WatchPossiblyAffectedCard | null {
+  if (!isRecord(value)) return null;
+  const cardId = idOf(value.cardId);
+  if (cardId === null) return null;
+  return {
+    cardId,
+    deckId: idOf(value.deckId),
+    deckSlug: toNullableText(value.deckSlug),
+    stableUid: toText(value.stableUid),
+    question: toText(value.question),
+    rank: toNumber(value.rank),
+  };
+}
+
+function normalizeFeedItem(value: unknown): WatchFeedItem | null {
+  if (!isRecord(value)) return null;
+  const id = idOf(value.id);
+  if (id === null) return null;
+  return {
+    id,
+    title: toText(value.title),
+    url: toText(value.url),
+    firstSeenAt: toNullableText(value.firstSeenAt),
+    possiblyAffectedCards: Array.isArray(value.possiblyAffectedCards)
+      ? value.possiblyAffectedCards
+          .map(normalizePossiblyAffectedCard)
+          .filter((c): c is WatchPossiblyAffectedCard => c !== null)
+          .slice(0, WATCH_FEED_CARDS_MAX)
+      : [],
+  };
+}
+
+/** The card editor's deep link for an affected card, or null when its deck is unknown. */
+export function watchCardEditorHref(card: { deckId: number | null; cardId: number }): string | null {
+  return card.deckId === null ? null : `/decks/cards/edit?deckId=${card.deckId}&cardId=${card.cardId}`;
 }
 
 function normalizeNotification(value: unknown): AutomationNotification {
@@ -894,6 +1054,13 @@ export async function fetchWatch(
         items: data.items.map(normalizeWatchTarget),
         recentEvents: Array.isArray(data.recentEvents) ? data.recentEvents.map(normalizeWatchEvent) : [],
         nextCursor: nextCursorOf(data),
+        ...(Array.isArray(data.recentFeedItems)
+          ? {
+              recentFeedItems: data.recentFeedItems
+                .map(normalizeFeedItem)
+                .filter((f): f is WatchFeedItem => f !== null),
+            }
+          : {}),
       };
     });
   } catch (err) {
