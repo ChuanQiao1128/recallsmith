@@ -9,7 +9,7 @@ or `asc-release.cjs` run was made; the scripts ran only inside vitest under fake
    `staging` `:51`, `staging-internal-release` `:66`; `production` `:81-83` adds `SENTRY_ALLOW_FAILURE`,
    `SENTRY_ORG: REPLACE_ME_SENTRY_ORG`, `SENTRY_PROJECT: REPLACE_ME_SENTRY_PROJECT`; `release-simulator` gets an
    explicit `ios.env` `:93-98`. Every `"image": "latest"` kept (`:14,31,46,61,76`). No DSN/token key.
-2. `mobile/scripts/release/ios-build.sh:11-22` — placeholder guard after the version echo, before the first
+2. `mobile/scripts/release/ios-build.sh:11-21` — placeholder guard after the version echo, before the first
    `eas` call: `PROFILE=production` and an empty or `REPLACE_ME_*` org/project ⇒ stderr
    `ios-build: fill SENTRY_ORG/SENTRY_PROJECT in eas.json (production) before a store build`, `exit 5` (also under
    `DRY_RUN=1`). Other profiles are not checked.
