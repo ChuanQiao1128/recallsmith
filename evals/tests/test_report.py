@@ -213,7 +213,8 @@ def test_no_committed_run_is_rollout_evidence_and_the_readmes_say_so() -> None:
     gate refuses it; the qa-v3 holdout run also fails on substance. The READMEs must not claim a
     passing or pending-in-this-folder run."""
     runs = sorted(REPORTS_DIR.rglob("*.jsonl"))
-    runs = [p for p in runs if not p.name.startswith("split-")]
+    # reports/backfill holds V03 source proposals, not run files.
+    runs = [p for p in runs if not p.name.startswith("split-") and "backfill" not in p.relative_to(REPORTS_DIR).parts]
     assert runs
     for path in runs:
         header, records = read_run(path)

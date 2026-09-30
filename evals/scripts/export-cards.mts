@@ -9,71 +9,14 @@
 //   node evals/scripts/export-cards.mts           write evals/data/cards-<slug>.jsonl
 //   node evals/scripts/export-cards.mts --check   exit 1 when a committed file differs
 //
-// The parser is loaded like frontend/scripts/lint-deck.mts: esbuild bundles the library in
-// memory and the bundle is imported from a data: URL. esbuild lives in frontend/node_modules,
-// and Node resolves bare imports relative to the importing file, so it is resolved through a
-// require anchored at frontend/package.json.
+// The parser loader and exportCard live in deck-lib.mts (shared with parse-deck.mts).
 
 import { readFileSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 
-const here = dirname(fileURLToPath(import.meta.url));
-const repo = resolve(here, '../..');
-const frontendRequire = createRequire(resolve(repo, 'frontend/package.json'));
-const { build } = frontendRequire('esbuild') as typeof import('esbuild');
+import { exportCard, loadDeckLib, repo } from './deck-lib.mts';
 
 const DECKS = ['aws-saa-c03', 'claude-ccdv-f'] as const;
-
-interface ParsedDeckLike {
-  deckSlug: string | null;
-  cards: Array<Record<string, unknown>>;
-  errors: Array<{ line: number; code: string; message: string }>;
-}
-
-interface DeckLib {
-  parseDeckMarkdown(text: string): ParsedDeckLike;
-}
-
-async function loadDeckLib(): Promise<DeckLib> {
-  const libDir = resolve(repo, 'frontend/src/lib');
-  const entry = resolve(libDir, 'deckImport.ts');
-  const result = await build({
-    stdin: {
-      contents: `export { parseDeckMarkdown } from ${JSON.stringify(entry)};`,
-      resolveDir: libDir,
-      loader: 'ts',
-    },
-    bundle: true,
-    write: false,
-    platform: 'node',
-    format: 'esm',
-    target: 'node22',
-    logLevel: 'silent',
-  });
-  const code = result.outputFiles[0].text;
-  const url = `data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}`;
-  return (await import(url)) as DeckLib;
-}
-
-/** One exported card, keys in the contract order (a QaCard without cardId/contentSha256). */
-function exportCard(deckSlug: string, card: Record<string, unknown>): Record<string, unknown> {
-  return {
-    sourceUid: card.stableUid,
-    deckSlug,
-    stableUid: card.stableUid,
-    difficulty: card.difficulty,
-    topic: card.topic ?? null,
-    question: card.question,
-    explanation: card.explanation,
-    codeSnippet: card.codeSnippet ?? null,
-    codeLanguage: card.codeLanguage ?? null,
-    realWorldUsage: card.realWorldUsage ?? null,
-    mcq: card.mcq ?? null,
-    source: card.source ?? null,
-  };
-}
 
 async function main(): Promise<number> {
   const check = process.argv.slice(2).includes('--check');

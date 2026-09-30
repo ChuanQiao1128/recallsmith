@@ -1,0 +1,597 @@
+{
+  "v": 1,
+  "kind": "semantic-dupes",
+  "date": "2026-09-30",
+  "deckSlug": "claude-ccdv-f",
+  "model": "BAAI/bge-small-en-v1.5",
+  "dim": 384,
+  "similarity": "cosine of the L2-normalised canonical-text vectors (question + explanation)",
+  "cards": 441,
+  "minCosine": 0.9,
+  "pairsAtOrAboveThreshold": 38,
+  "pairs": [
+    {
+      "cosine": 0.95,
+      "a": {
+        "stableUid": "ccdvf-cache-min-prefix-by-model",
+        "question": "A team adds cache_control to a 3,000-token system prompt on Claude Haiku 4.5 and never sees cache_read_input_tokens above zero, although the same prompt caches fine on Claude Opus 5. Why?"
+      },
+      "b": {
+        "stableUid": "ccdvf-cache-silently-not-written-mcq-03",
+        "question": "A team moves a summarization route from Claude Opus 5 to Claude Haiku 4.5 to cut cost. The 2,800-token system prompt carries cache_control; on Opus 5 it showed cache_read_input_tokens in the thousands, but on Haiku 4.5 every request shows zero cache reads and zero cache writes, with no error. What is the MOST likely cause?"
+      }
+    },
+    {
+      "cosine": 0.9456,
+      "a": {
+        "stableUid": "ccdvf-fast-mode-scope",
+        "question": "A team wants Claude Opus 5 responses to stream faster and considers fast mode. As of 2026-09, what does it change, what does it cost, and where is it unavailable?"
+      },
+      "b": {
+        "stableUid": "ccdvf-fast-mode-facts-mcq-23",
+        "question": "A platform team is writing internal guidance on when to enable fast mode for Claude Opus 5 as of 2026-09. Which two statements are the MOST accurate? (Choose two.)"
+      }
+    },
+    {
+      "cosine": 0.9453,
+      "a": {
+        "stableUid": "ccdvf-aws-bedrock-vs-claude-platform",
+        "question": "An enterprise on AWS must choose between Claude in Amazon Bedrock and Claude Platform on AWS. One team needs Batches, Files, Agent Skills and beta headers; another must satisfy FedRAMP High with AWS as sole data processor. Which offering fits each, and what else differs?"
+      },
+      "b": {
+        "stableUid": "ccdvf-aws-compliance-choice-mcq",
+        "question": "A public-sector contractor on AWS must show FedRAMP High authorization and that AWS, not Anthropic, is the sole processor of inference data. Which TWO facts make Claude in Amazon Bedrock the MOST appropriate offering over Claude Platform on AWS? (Choose two.)"
+      }
+    },
+    {
+      "cosine": 0.9422,
+      "a": {
+        "stableUid": "ccdvf-instruction-placement-tool-result-vs-user-turn",
+        "question": "A harness injects \"Now summarize your findings in French\" inside the tool_result block of the last tool call, and Claude keeps replying in English. Why, and where should application instructions be placed instead?"
+      },
+      "b": {
+        "stableUid": "ccdvf-own-instructions-not-in-tool-result",
+        "question": "A developer appends \"Now summarize in French\" to the end of a search tool's result string to steer Claude, and notices the instruction is sometimes ignored or flagged. Why, and where should such instructions go instead?"
+      }
+    },
+    {
+      "cosine": 0.9398,
+      "a": {
+        "stableUid": "ccdvf-model-lifecycle-states",
+        "question": "An engineer sees \"Legacy\" next to one model and \"Deprecated\" next to another in the docs and asks whether either will stop working next week. What do the lifecycle states mean and what notice is promised?"
+      },
+      "b": {
+        "stableUid": "ccdvf-model-deprecation-lifecycle",
+        "question": "An alert says a model your service depends on is deprecated. What does each lifecycle state mean, how much notice do you get, and how do you find every place still using it?"
+      }
+    },
+    {
+      "cosine": 0.9337,
+      "a": {
+        "stableUid": "ccdvf-prefill-removed-4-6",
+        "question": "An app forced JSON output by prefilling the assistant turn with \"{\". After upgrading to Claude Sonnet 4.6 every request returns a 400. What changed, and what are the replacements?"
+      },
+      "b": {
+        "stableUid": "ccdvf-prefill-removed-mcq-01",
+        "question": "An extraction service forces JSON output by ending messages with an assistant turn containing \"{\" and parsing the continuation. After moving from Claude Sonnet 4.5 to Claude Sonnet 5 every request returns a 400. Which fix requires the LEAST amount of change while keeping guaranteed JSON?"
+      }
+    },
+    {
+      "cosine": 0.9296,
+      "a": {
+        "stableUid": "ccdvf-parallel-tool-results-single-message",
+        "question": "Claude returns three tool_use blocks in one turn. A harness runs them concurrently and, to show progress, appends a separate user message as each finishes. Over time Claude stops making parallel calls. What is the correct reply shape?"
+      },
+      "b": {
+        "stableUid": "ccdvf-parallel-tool-calls-execution",
+        "question": "Claude returns three tool_use blocks in one assistant turn. Does the API require you to run them in any order, and what shape must your reply take so parallelism keeps working?"
+      }
+    },
+    {
+      "cosine": 0.9271,
+      "a": {
+        "stableUid": "ccdvf-batch-cache-seed-1h",
+        "question": "A nightly batch of 50,000 requests shares a 40,000-token policy manual in the system prompt. Cache hit rates are poor because requests run concurrently in any order. What is the documented way to get most of the batch to hit the cache?"
+      },
+      "b": {
+        "stableUid": "ccdvf-batch-shared-prefix-cache-mcq",
+        "question": "A weekly batch of 60,000 requests shares a 30,000-token rulebook. Cache hit rates hover near 20% because requests are processed concurrently in arbitrary order. Which change is the MOST cost-effective way to raise hits?"
+      }
+    },
+    {
+      "cosine": 0.9244,
+      "a": {
+        "stableUid": "ccdvf-vertex-request-differences",
+        "question": "A raw HTTP integration that works against api.anthropic.com is pointed at Google Cloud's Agent Platform and every call fails. What are the two request-format differences, how does the SDK hide them, and which endpoint types exist?"
+      },
+      "b": {
+        "stableUid": "ccdvf-vertex-model-in-body-mcq",
+        "question": "A developer ports raw HTTP calls from api.anthropic.com to Google Cloud's Agent Platform by changing the base URL and the Authorization header. The body still contains \"model\": \"claude-opus-5\" and the request sends an anthropic-version header. Requests fail. What is the MOST likely cause?"
+      }
+    },
+    {
+      "cosine": 0.9206,
+      "a": {
+        "stableUid": "ccdvf-batch-cache-seed-1h",
+        "question": "A nightly batch of 50,000 requests shares a 40,000-token policy manual in the system prompt. Cache hit rates are poor because requests run concurrently in any order. What is the documented way to get most of the batch to hit the cache?"
+      },
+      "b": {
+        "stableUid": "ccdvf-batch-plus-cache-stacking",
+        "question": "A batch of 30,000 requests shares a 50k-token reference document. How do batch and caching discounts combine, and what makes cache hits inside a batch reliable?"
+      }
+    },
+    {
+      "cosine": 0.9186,
+      "a": {
+        "stableUid": "ccdvf-read-deny-sensitive-files",
+        "question": "A repository keeps API secrets in .env and a secrets/ folder. Which settings rule stops Claude Code's file tools from reading them, and what side effect does that rule have on edits?"
+      },
+      "b": {
+        "stableUid": "ccdvf-env-file-protection-mcq",
+        "question": "A monorepo stores production credentials in .env files at several levels. The team wants Claude Code, in any permission mode, to be unable to read or overwrite those files with its built-in file tools. Which configuration is the MOST reliable way to achieve this?"
+      }
+    },
+    {
+      "cosine": 0.9181,
+      "a": {
+        "stableUid": "ccdvf-tool-result-first-rule",
+        "question": "After running a tool, a harness sends a user message with a text block (\"Here are the results:\") followed by the tool_result, and the API returns a 400 about tool_use ids without tool_result blocks. What are the ordering rules?"
+      },
+      "b": {
+        "stableUid": "ccdvf-tool-result-400-mcq-01",
+        "question": "A harness receives stop_reason \"tool_use\", runs the tool, then appends two messages: a user text message \"Tool finished, here is the output\" and a second user message with the tool_result block. The next request fails with a 400 saying tool_use ids were found without tool_result blocks immediately after. What is the MOST likely fix?"
+      }
+    },
+    {
+      "cosine": 0.9177,
+      "a": {
+        "stableUid": "ccdvf-hook-exit-code-2-blocks",
+        "question": "A Claude Code PreToolUse hook is meant to stop any Bash command containing \"rm -rf\". During a test the script printed \"dangerous\" and exited with code 1, yet the command ran. Which exit code semantics did the author get wrong?"
+      },
+      "b": {
+        "stableUid": "ccdvf-hook-exit-code-mcq",
+        "question": "A Claude Code PreToolUse hook for the Bash tool checks for \"DROP TABLE\", prints \"Blocked: no DDL\" to stderr and exits with code 1. In testing, Claude Code shows a hook error notice but the command still runs. Which fix requires the LEAST amount of change while making the hook actually block the command?"
+      }
+    },
+    {
+      "cosine": 0.9159,
+      "a": {
+        "stableUid": "ccdvf-cc-local-vs-shared-settings",
+        "question": "A team commits .claude/settings.json with a Sonnet default model and an allow list. One developer wants Opus and a few extra allow rules for herself only, and a CI job needs hooks off for one run. Where does each setting go so nothing leaks into the repository?"
+      },
+      "b": {
+        "stableUid": "ccdvf-settings-local-model-override-mcq",
+        "question": "A team's committed .claude/settings.json sets \"model\": \"claude-sonnet-5\". One developer wants Opus for their own sessions in this repository only, without affecting teammates or other projects. Which approach needs the LEAST amount of change?"
+      }
+    },
+    {
+      "cosine": 0.9153,
+      "a": {
+        "stableUid": "ccdvf-prefill-removed-mcq-01",
+        "question": "An extraction service forces JSON output by ending messages with an assistant turn containing \"{\" and parsing the continuation. After moving from Claude Sonnet 4.5 to Claude Sonnet 5 every request returns a 400. Which fix requires the LEAST amount of change while keeping guaranteed JSON?"
+      },
+      "b": {
+        "stableUid": "ccdvf-prefill-400-mcq-09",
+        "question": "A classification service upgraded from Claude Sonnet 4.5 to Claude Sonnet 4.6 and every call now returns HTTP 400. The request ends with an assistant message containing \"{\" to force JSON. Which fix requires the LEAST amount of change while keeping guaranteed JSON?"
+      }
+    },
+    {
+      "cosine": 0.9132,
+      "a": {
+        "stableUid": "ccdvf-cache-prewarm-max-tokens-zero",
+        "question": "A support desk sees slow first responses each morning because its 20k-token system prompt is no longer cached. How do you warm the cache without generating text, and which request settings make the warm-up request invalid?"
+      },
+      "b": {
+        "stableUid": "ccdvf-prewarm-cache-mcq-01",
+        "question": "A latency-sensitive assistant wants its 15k-token system prompt cached before the first user of the day arrives. Which approach is the MOST cost-effective way to warm the cache?"
+      }
+    },
+    {
+      "cosine": 0.9128,
+      "a": {
+        "stableUid": "ccdvf-model-id-pinning-dateless",
+        "question": "A release checklist says \"pin the model with a dated ID so it cannot change under us\", but the team uses claude-sonnet-5, which has no date. Is the deployment pinned, and what could still make behavior change?"
+      },
+      "b": {
+        "stableUid": "ccdvf-dateless-id-not-alias",
+        "question": "A platform team assumes claude-sonnet-5 is an evergreen pointer that will silently pick up improvements, and plans no regression testing. What is the actual guarantee?"
+      }
+    },
+    {
+      "cosine": 0.9126,
+      "a": {
+        "stableUid": "ccdvf-context-window-accounting",
+        "question": "A request holds 30k tokens of cached system prompt, 40k of tool definitions and a 900k-token transcript on a 1M-context model, and the developer expects the cached tokens \"not to count\". What counts toward the context window, and what happens on overflow?"
+      },
+      "b": {
+        "stableUid": "ccdvf-context-window-what-counts",
+        "question": "A team estimates context usage by counting only the user's messages and is surprised when a request fails with \"prompt is too long\". Which parts of a Messages API request count toward the context window, and where does the response report what was actually consumed?"
+      }
+    },
+    {
+      "cosine": 0.912,
+      "a": {
+        "stableUid": "ccdvf-usage-input-token-fields",
+        "question": "After enabling prompt caching, a cost report built on usage.input_tokens shows a 200k-token document costing almost nothing. Which fields is the report missing, and how are total input tokens computed?"
+      },
+      "b": {
+        "stableUid": "ccdvf-usage-object-fields",
+        "question": "A cost dashboard sums usage.input_tokens and usage.output_tokens, and the totals are far below the invoice for a cached workload. Which usage fields exist, and what does input_tokens really mean?"
+      }
+    },
+    {
+      "cosine": 0.9119,
+      "a": {
+        "stableUid": "ccdvf-files-limits-expiration",
+        "question": "A compliance rule says uploaded evidence PDFs may exist in Anthropic storage for at most 30 days. What are the Files API size and storage limits, and how do you make a file expire on its own (as of 2026-09)?"
+      },
+      "b": {
+        "stableUid": "ccdvf-files-auto-expiry-mcq",
+        "question": "Policy requires that customer PDFs uploaded to the Files API disappear from Anthropic storage within 14 days. Which implementation has the LEAST operational overhead?"
+      }
+    },
+    {
+      "cosine": 0.9117,
+      "a": {
+        "stableUid": "ccdvf-claude-md-context-not-enforcement",
+        "question": "A team writes \"Never run destructive git commands\" in CLAUDE.md and is surprised when Claude Code still proposes a forced push once. Why did the instruction not hold, and what is CLAUDE.md actually for?"
+      },
+      "b": {
+        "stableUid": "ccdvf-permission-rules-not-model",
+        "question": "A team wrote \"Never run git push --force\" in CLAUDE.md and was surprised when Claude Code did it anyway after a user insisted. Which layer actually decides what Claude Code may execute?"
+      }
+    },
+    {
+      "cosine": 0.9115,
+      "a": {
+        "stableUid": "ccdvf-claude-md-context-not-enforcement",
+        "question": "A team writes \"Never run destructive git commands\" in CLAUDE.md and is surprised when Claude Code still proposes a forced push once. Why did the instruction not hold, and what is CLAUDE.md actually for?"
+      },
+      "b": {
+        "stableUid": "ccdvf-cc-hook-vs-claude-md-enforcement",
+        "question": "CLAUDE.md says \"never run destructive git commands\", yet late in a long session Claude proposed git reset --hard, the developer approved the prompt on reflex, and uncommitted work was lost. What is the right place for a rule that must hold every time, and how is it configured?"
+      }
+    },
+    {
+      "cosine": 0.9111,
+      "a": {
+        "stableUid": "ccdvf-server-tools-mixed-turn",
+        "question": "Claude calls web_fetch and your run_command tool in the same parallel group. What does the response look like, how do you continue, and how does this differ from pause_turn?"
+      },
+      "b": {
+        "stableUid": "ccdvf-mixed-turn-400-mcq-03",
+        "question": "A developer enables web_fetch_20250910 and a user-defined run_command tool. One response comes back with stop_reason \"tool_use\", a server_tool_use block for web_fetch with no result block, and a tool_use block for run_command. The developer replies with the run_command tool_result followed by a text block saying \"continue\", and the API returns a 400 stating that the web_fetch tool use has no corresponding web_fetch_tool_result. What should the developer change FIRST?"
+      }
+    },
+    {
+      "cosine": 0.9094,
+      "a": {
+        "stableUid": "ccdvf-dateless-id-not-alias",
+        "question": "A platform team assumes claude-sonnet-5 is an evergreen pointer that will silently pick up improvements, and plans no regression testing. What is the actual guarantee?"
+      },
+      "b": {
+        "stableUid": "ccdvf-model-pin-snapshot-mcq",
+        "question": "A change-control board refuses to approve claude-opus-5 in production because \"an ID without a date must be an alias that Anthropic can update at any time\". Which response is MOST accurate?"
+      }
+    },
+    {
+      "cosine": 0.9092,
+      "a": {
+        "stableUid": "ccdvf-sampling-params-removed",
+        "question": "A service moves from Claude Sonnet 4.5 to Claude Opus 5 and every request now fails with a 400 that mentions temperature, although the code has not changed. What changed in the API contract, and what is the replacement?"
+      },
+      "b": {
+        "stableUid": "ccdvf-sampling-parameters-removed",
+        "question": "A request that sets temperature to 0.2 works on Claude Sonnet 4.6 but returns a 400 on Claude Opus 5. Why, and what replaces sampling parameters?"
+      }
+    },
+    {
+      "cosine": 0.9084,
+      "a": {
+        "stableUid": "ccdvf-adaptive-vs-manual-thinking",
+        "question": "A team migrating from Claude Sonnet 4.6 to Claude Sonnet 5 asks whether to keep budget_tokens or switch to adaptive thinking. What are the tradeoffs and the mechanical mapping?"
+      },
+      "b": {
+        "stableUid": "ccdvf-budget-tokens-400-mcq-02",
+        "question": "A service that sent thinking: {type: \"enabled\", budget_tokens: 8000} on Claude Sonnet 4.6 now targets Claude Sonnet 5, and every request returns a 400 saying thinking.type.enabled is not supported. Which fix requires the LEAST amount of change while keeping reasoning depth under control?"
+      }
+    },
+    {
+      "cosine": 0.9082,
+      "a": {
+        "stableUid": "ccdvf-zdr-eligibility",
+        "question": "A startup negotiated zero data retention (ZDR) and plans to use the Files API, the Message Batches API and code execution. Which of these fall outside the ZDR arrangement, and does the API stop them from being used?"
+      },
+      "b": {
+        "stableUid": "ccdvf-zdr-feature-choice-mcq",
+        "question": "A legal-tech company has a zero data retention (ZDR) arrangement and requires that every request stays inside it. Engineers are choosing features for a new contract-review pipeline. Which two features MUST be avoided because they are not ZDR-eligible? (Choose two.)"
+      }
+    },
+    {
+      "cosine": 0.9067,
+      "a": {
+        "stableUid": "ccdvf-files-workspace-scope",
+        "question": "A multi-tenant SaaS uploads each customer's contracts through the Files API using one API key per customer, all in the Default Workspace. A security review flags this design. What is the actual isolation boundary for files, and what should change?"
+      },
+      "b": {
+        "stableUid": "ccdvf-files-tenant-isolation-mcq-01",
+        "question": "A SaaS product on the Files API serves many customers from one Claude workspace. Each customer's browser sends the file_id of the document to analyze, and the backend forwards it straight into the Messages request. Which design is the MOST secure?"
+      }
+    },
+    {
+      "cosine": 0.9065,
+      "a": {
+        "stableUid": "ccdvf-cache-aware-itpm",
+        "question": "A service is hitting 429 input-token rate limits on Claude Opus 5 even though most of each request is a repeated 150k-token document. Which tokens count toward the limit, and how do the three limits work?"
+      },
+      "b": {
+        "stableUid": "ccdvf-rate-limit-cache-mcq-16",
+        "question": "A document Q&A service on Claude Opus 5 sends a 150k-token manual with each of hundreds of questions per minute and now gets 429 errors on input tokens per minute. Which change is the MOST effective at raising throughput without a tier change?"
+      }
+    },
+    {
+      "cosine": 0.9053,
+      "a": {
+        "stableUid": "ccdvf-extended-thinking-budget-tokens",
+        "question": "A workload on Claude Haiku 4.5 needs a predictable thinking cost. How is manual extended thinking configured, and what rules does budget_tokens follow?"
+      },
+      "b": {
+        "stableUid": "ccdvf-budget-tokens-max-tokens-mcq-01",
+        "question": "On Claude Haiku 4.5 a request sets thinking type \"enabled\" with budget_tokens 20000 and max_tokens 16000, and it fails with a 400. What is the MOST likely cause?"
+      }
+    },
+    {
+      "cosine": 0.905,
+      "a": {
+        "stableUid": "ccdvf-data-conversation-history-resend",
+        "question": "A 30-turn support agent sends an image on turn 1. On turn 25 the developer notices every request is 9 MB and slow. Why does this happen, and which data pattern fixes it without losing the image from context?"
+      },
+      "b": {
+        "stableUid": "ccdvf-files-multiturn-image-mcq",
+        "question": "A visual inspection agent receives a 6 MB photo on turn one and then exchanges 40 tool-use turns about it. Every request now carries the photo again and p95 latency has doubled. Which change is the MOST efficient fix that keeps the photo in the model's context?"
+      }
+    },
+    {
+      "cosine": 0.9037,
+      "a": {
+        "stableUid": "ccdvf-batch-async-lifecycle",
+        "question": "A service submits 5,000 Messages requests to the Message Batches API and immediately calls the results endpoint, which returns nothing useful. Walk through what the API actually does with a batch and when results become readable."
+      },
+      "b": {
+        "stableUid": "ccdvf-batch-api-limits",
+        "question": "A nightly job wants to send 150,000 requests in one batch and read the results a month later. Which Batch API limits does that violate, and what does the API guarantee?"
+      }
+    },
+    {
+      "cosine": 0.9036,
+      "a": {
+        "stableUid": "ccdvf-settings-file-scopes",
+        "question": "Claude Code reads settings from several JSON files. A team lead asks which file to commit for shared hooks, which one holds a developer's private overrides, and which one nobody on the team can override. What does each file cover?"
+      },
+      "b": {
+        "stableUid": "ccdvf-cc-local-vs-shared-settings",
+        "question": "A team commits .claude/settings.json with a Sonnet default model and an allow list. One developer wants Opus and a few extra allow rules for herself only, and a CI job needs hooks off for one run. Where does each setting go so nothing leaks into the repository?"
+      }
+    },
+    {
+      "cosine": 0.9034,
+      "a": {
+        "stableUid": "ccdvf-redacted-thinking-block",
+        "question": "In a tool-use loop the harness copies only thinking, text and tool_use blocks back into the assistant message. Occasionally a request fails with a 400 saying thinking blocks cannot be modified. Which block type is being dropped, and what is the rule?"
+      },
+      "b": {
+        "stableUid": "ccdvf-thinking-blocks-tool-loop-mcq-19",
+        "question": "A tool-use loop on Claude Opus 5 works for single-step calls but intermittently fails with a 400 saying thinking or redacted_thinking blocks in the latest assistant message cannot be modified. The loop rebuilds the assistant message from blocks where block.type is \"thinking\" or \"tool_use\". What is the MOST likely cause?"
+      }
+    },
+    {
+      "cosine": 0.9031,
+      "a": {
+        "stableUid": "ccdvf-prompt-cache-prefix-hierarchy",
+        "question": "An assistant caches its tool definitions, system prompt and transcript with three breakpoints. Deploying a one-word change to one tool's description drops every cache read to zero, while switching tool_choice only partially hurts. What is the rule?"
+      },
+      "b": {
+        "stableUid": "ccdvf-cache-invalidators-mcq-17",
+        "question": "A harness on Claude Opus 5 caches its tools and system prompt and sees near-100% cache reads. A release ships several changes at once and cache reads drop to zero on every request. Which two changes are the MOST likely causes of the lost cache hits? (Choose two.)"
+      }
+    },
+    {
+      "cosine": 0.903,
+      "a": {
+        "stableUid": "ccdvf-foundry-deployment-and-auth",
+        "question": "An Azure team deploys Claude in Microsoft Foundry and their first request fails with \"Deployment not found\" even though the model ID is correct. What does the model parameter mean on Foundry, how do requests authenticate, and what does the hosting choice change?"
+      },
+      "b": {
+        "stableUid": "ccdvf-foundry-hosting-option-choice",
+        "question": "A Foundry admin can deploy Claude \"Hosted on Azure\" or \"Hosted on Anthropic\". Which factors decide, and what does each option give up?"
+      }
+    },
+    {
+      "cosine": 0.9024,
+      "a": {
+        "stableUid": "ccdvf-guardrail-hook-vs-prompt-vs-rule",
+        "question": "An Agent SDK application must guarantee a policy check on every tool call, including calls that are auto-approved. Compare enforcing it with a prompt instruction, an allow/deny rule, the canUseTool callback, and a PreToolUse hook."
+      },
+      "b": {
+        "stableUid": "ccdvf-hook-vs-canusetool-mcq",
+        "question": "An Agent SDK service auto-approves Read, Grep, and Bash(npm test *) through allowed_tools for speed. Compliance requires that every tool invocation, including those auto-approved ones, be checked against a per-tenant policy before it runs. Where is the MOST secure place to put that check?"
+      }
+    },
+    {
+      "cosine": 0.9014,
+      "a": {
+        "stableUid": "ccdvf-cc-rules-path-scoped",
+        "question": "A monorepo's CLAUDE.md has grown past 800 lines because it holds TypeScript API rules, Python worker rules and Terraform rules that rarely apply at the same time. Which Claude Code component keeps each rule set out of context until it is needed, and how is it scoped?"
+      },
+      "b": {
+        "stableUid": "ccdvf-cc-monorepo-rules-mcq-04",
+        "question": "A monorepo's root CLAUDE.md has reached 900 lines: TypeScript API conventions, Python worker conventions and Terraform standards. Engineers report Claude increasingly ignores instructions, and /context shows the file consuming a large share of the window before any work starts. Which restructuring keeps every instruction available while causing the LEAST context usage per session?"
+      }
+    }
+  ],
+  "nearMisses": [
+    {
+      "cosine": 0.8982,
+      "a": {
+        "stableUid": "ccdvf-memory-tool-notes",
+        "question": "An agent runs across several sessions and must remember decisions and progress without keeping everything in context. What does the memory tool provide, who executes its operations, and what security rule is mandatory?"
+      },
+      "b": {
+        "stableUid": "ccdvf-memory-tool-client-side",
+        "question": "How does the memory_20250818 tool persist knowledge across conversations when the API is stateless, and what does your handler have to enforce?"
+      }
+    },
+    {
+      "cosine": 0.8981,
+      "a": {
+        "stableUid": "ccdvf-mcp-toolset-denylist",
+        "question": "A read-only reporting assistant connects to a remote calendar MCP server through the Messages API MCP connector. The server also exposes delete_all_events and share_calendar_publicly. How is the tool surface restricted, and who supplies the server's OAuth token?"
+      },
+      "b": {
+        "stableUid": "ccdvf-readonly-assistant-allowlist-mcq-07",
+        "question": "A read-only support assistant on the Messages API uses a Google Calendar MCP server through the MCP connector. It must never delete or share calendars, even if a user or a fetched page instructs it to. Which configuration is the MOST secure?"
+      }
+    },
+    {
+      "cosine": 0.8978,
+      "a": {
+        "stableUid": "ccdvf-response-validation-layers",
+        "question": "A pipeline parses Claude's reply straight into a database row and occasionally writes garbage. What ordered set of checks does a defensively written consumer apply to a Messages API response before trusting its content?"
+      },
+      "b": {
+        "stableUid": "ccdvf-structured-outputs-invalid-cases",
+        "question": "A service uses structured outputs and treats every reply as schema-valid. In which cases can the output still fail to match the schema, and how does each show up?"
+      }
+    },
+    {
+      "cosine": 0.8977,
+      "a": {
+        "stableUid": "ccdvf-cache-lookback-window",
+        "question": "An agent puts a single breakpoint on the last block of each request. Turn 3 grows the transcript from 15 to 35 blocks and the cache read count falls to zero although nothing earlier changed. Why?"
+      },
+      "b": {
+        "stableUid": "ccdvf-cache-lookback-second-breakpoint-mcq-01",
+        "question": "An agent on Claude Opus 5 uses a single cache_control breakpoint on the last block of each request. Each turn adds roughly 25 new blocks across a dozen sequential tool round-trips. Cache reads are high during turn 2 but fall to zero from turn 3 onward, while the transcript itself never changes. Which change MOST reliably restores cache hits?"
+      }
+    },
+    {
+      "cosine": 0.8961,
+      "a": {
+        "stableUid": "ccdvf-model-id-pinning-dateless",
+        "question": "A release checklist says \"pin the model with a dated ID so it cannot change under us\", but the team uses claude-sonnet-5, which has no date. Is the deployment pinned, and what could still make behavior change?"
+      },
+      "b": {
+        "stableUid": "ccdvf-model-pin-snapshot-mcq",
+        "question": "A change-control board refuses to approve claude-opus-5 in production because \"an ID without a date must be an alias that Anthropic can update at any time\". Which response is MOST accurate?"
+      }
+    },
+    {
+      "cosine": 0.8959,
+      "a": {
+        "stableUid": "ccdvf-stream-error-after-200",
+        "question": "A streaming chat backend wraps the request in a try/except that inspects the HTTP status code. During peak traffic some streams end abruptly, nothing is logged, and users see half an answer. Where does the failure actually surface, and how should the consumer handle it?"
+      },
+      "b": {
+        "stableUid": "ccdvf-stream-error-handling-mcq-01",
+        "question": "A streaming endpoint uses client.messages.stream() and catches anthropic.APIStatusError around the call. In load tests some responses stop mid-sentence with no exception logged; the raw SSE log shows an \"error\" event of type \"overloaded_error\" arriving after several content_block_delta events. Which change is the MOST robust fix?"
+      }
+    },
+    {
+      "cosine": 0.8941,
+      "a": {
+        "stableUid": "ccdvf-agent-sdk-what-it-is",
+        "question": "What exactly does the Claude Agent SDK provide that a plain Messages API client does not, and which languages can use it directly?"
+      },
+      "b": {
+        "stableUid": "ccdvf-agent-sdk-vs-client-sdk-vs-managed",
+        "question": "A team is choosing between the Claude Agent SDK, the Client SDK (Messages API), and Claude Managed Agents. What does each one make you own, and which situation selects each?"
+      }
+    },
+    {
+      "cosine": 0.8932,
+      "a": {
+        "stableUid": "ccdvf-thinking-blocks-and-signature",
+        "question": "A response from Claude Opus 5 contains a thinking block whose thinking text is empty but whose signature is hundreds of characters long. Is anything wrong, and what is the signature for?"
+      },
+      "b": {
+        "stableUid": "ccdvf-thinking-display-omitted-default",
+        "question": "After upgrading to Claude Opus 5 the thinking field in every thinking block is an empty string, but the bill did not drop. What does thinking.display control?"
+      }
+    },
+    {
+      "cosine": 0.8929,
+      "a": {
+        "stableUid": "ccdvf-batch-plus-cache-stacking",
+        "question": "A batch of 30,000 requests shares a 50k-token reference document. How do batch and caching discounts combine, and what makes cache hits inside a batch reliable?"
+      },
+      "b": {
+        "stableUid": "ccdvf-batch-shared-prefix-cache-mcq",
+        "question": "A weekly batch of 60,000 requests shares a 30,000-token rulebook. Cache hit rates hover near 20% because requests are processed concurrently in arbitrary order. Which change is the MOST cost-effective way to raise hits?"
+      }
+    },
+    {
+      "cosine": 0.8927,
+      "a": {
+        "stableUid": "ccdvf-claude-md-scope-levels",
+        "question": "A developer has organization coding standards, personal editor preferences, team build commands and a private sandbox URL, and wants to put all four somewhere Claude Code will read them. Which CLAUDE.md location does each belong in, and how are they combined?"
+      },
+      "b": {
+        "stableUid": "ccdvf-claude-md-hierarchy",
+        "question": "A developer starts Claude Code in repo/packages/api/ and wants to know which instruction files are already in context before the first prompt, and which ones will only appear later. How does the CLAUDE.md hierarchy load?"
+      }
+    }
+  ],
+  "distribution": {
+    "cards": 441,
+    "cardsAtOrAboveThreshold": 71,
+    "nearestNeighbourCosine": {
+      "min": 0.7116,
+      "p50": 0.8507,
+      "p90": 0.9092,
+      "p99": 0.9453,
+      "max": 0.95
+    },
+    "buckets": [
+      {
+        "range": "< 0.70",
+        "cards": 0
+      },
+      {
+        "range": "0.70-0.75",
+        "cards": 5
+      },
+      {
+        "range": "0.75-0.80",
+        "cards": 42
+      },
+      {
+        "range": "0.80-0.85",
+        "cards": 170
+      },
+      {
+        "range": "0.85-0.88",
+        "cards": 101
+      },
+      {
+        "range": "0.88-0.90",
+        "cards": 52
+      },
+      {
+        "range": "0.90-0.92",
+        "cards": 52
+      },
+      {
+        "range": "0.92-0.95",
+        "cards": 17
+      },
+      {
+        "range": "0.95-0.98",
+        "cards": 2
+      },
+      {
+        "range": ">= 0.98",
+        "cards": 0
+      }
+    ]
+  }
+}

@@ -24,8 +24,11 @@ in the Lambda) and the client from `ai_qa.providers.make_client`.
 
 ```
 evals/
-  pyproject.toml, uv.lock        Python 3.12, hatchling, uv path source to ../services/ai-qa
+  pyproject.toml, uv.lock        Python 3.12, hatchling, uv path sources to ../services/ai-qa and
+                                 ../tools/ingest (V02); optional extra `embeddings` (fastembed)
   scripts/export-cards.mts       decks -> data/cards-<slug>.jsonl through the console parser
+  scripts/parse-deck.mts         one deck (file or stdin) -> QaCard JSON lines (V01, used by dc-evals review)
+  scripts/deck-lib.mts           the shared console-parser loader and exportCard of both scripts
   data/cards-aws-saa-c03.jsonl   exported cards (generated; do not edit)
   data/cards-claude-ccdv-f.jsonl
   data/mutations-v1.json         seed, class counts and the mutation templates
@@ -44,8 +47,12 @@ evals/
                                  B06 new-facts: dc-evals import-drafts from the author-runner's drafts)
   data/authored-v2.labels.jsonl  A15: its jury labels (dc-evals jury --dataset authored-v2), + .labels.summary.json
   src/dc_evals/                  cli, dataset, sources, seed, mutations, runner, score, report,
-                                 author, jury, compare, automation_gate, drafts_import
+                                 author, jury, compare, automation_gate, drafts_import, deck_review,
+                                 source_cache and retrieval (V02), backfill (V03), embed_cards (V04)
   reports/                       run files and reports (the owner commits them)
+  reports/backfill/              V03 SOURCE proposals: <date>-<deck>-sources.{jsonl,md,patch}
+  reports/semantic-dupes/        V04 nearest-pair reports: <date>-semantic-dupes-<deck>.{json,md}
+  .cache/review/                 dc-evals review output (git-ignored, never committed)
   tests/                         pytest with a FakeLlm; no test calls a model
 ```
 
@@ -291,7 +298,22 @@ uv run --python 3.12 dc-evals import-drafts --drafts <drafts>.jsonl --deck <deck
 uv run --python 3.12 dc-evals automation-gate --seeded reports/<v3 run>.jsonl --authored reports/<authored-v2 run>.jsonl \
     [--date YYYY-MM-DD] [--out reports/]
 uv run --python 3.12 dc-evals compare reports/<run>.jsonl ... --name <name> [--date YYYY-MM-DD] [--out reports/]
+uv run --python 3.12 dc-evals review --deck <deck.md> (--changed-since REF | --cards UID[,UID...] | --all) \
+    [--provider claude-cli] [--model claude-opus-5] [--concurrency 2] [--limit 60] [--out FILE] \
+    [--review-date YYYY-MM-DD] [--dry-run]
+uv run --python 3.12 dc-evals fetch-sources [--deck <slug> ...] [--max-pages N] [--delay-s 1.0] [--retry-failed]
+uv run --python 3.12 [--extra embeddings] dc-evals retrieval [--deck <slug> ...] [--k 1,5,10] \
+    [--methods bm25,embed,hybrid] [--date YYYY-MM-DD] [--out reports/]
+uv run --python 3.12 --extra embeddings dc-evals embed-cards --deck PATH_OR_SLUG [--out FILE] \
+    [--push --api-base URL]
+uv run --python 3.12 --extra embeddings dc-evals semantic-dupes --deck PATH_OR_SLUG [--min-cosine 0.90] \
+    [--embeddings FILE] [--date YYYY-MM-DD] [--out reports/semantic-dupes]
 ```
+
+`dc-evals review` is described in [Local pre-publish review](#local-pre-publish-review);
+`fetch-sources` and `retrieval` in [Retrieval eval](#retrieval-eval); `backfill-sources` in
+[Citation backfill](#citation-backfill); `embed-cards` and `semantic-dupes` in
+[Card embeddings](#card-embeddings).
 
 The three Q03 commands (`author`, `jury`, `compare`) are described in
 [Agent-authored cards, model jury and configuration comparison](#agent-authored-cards-model-jury-and-configuration-comparison-q03).
@@ -353,6 +375,70 @@ on. As of 2026-09-27 no such run exists: the prompt that ships (`qa-v3`) has onl
 is also where the `MAX_TOKENS` and `REFUSAL` rates (`errors`) are checked: the proxy cannot
 observe them reliably (ai-agent-30), and at `MAX_TOKENS` = 16000 with effort `high` a truncation
 has only been ruled out for Bedrock once that run exists.
+
+## Local pre-publish review
+
+`dc-evals review` is the owner's self-check of new or edited cards **before** a deck is imported
+or published. It uses the same parser and the same reviewer as production AI QA: the cards come
+from the console parser (`frontend/src/lib/deckImport.ts` `parseDeckMarkdown`, through
+`scripts/parse-deck.mts`), and each card goes through `ai_qa.review.review_card` with the
+default profile's prompt (`ai_qa` SYSTEM_PROMPT / PROMPT_VERSION) exactly as
+`dc-evals run --provider claude-cli` sends it: structured outputs off (validated plain JSON and
+one repair turn), no second reviewer.
+
+The transport is the owner's local Claude Code CLI (`claude -p`, their subscription). **No paid
+provider is selectable:** `--provider` accepts only `claude-cli`; any other value exits 2 with
+"paid providers are not available here; use dc-evals run". It spends no API money, but it does use
+the owner's subscription, so it is run by the owner on their machine only: never in CI, a verify
+or a worker session (the tests replace the parser and the CLI with fakes).
+
+One-time setup (the parser needs esbuild from the frontend's dependencies):
+
+```
+test -d frontend/node_modules || (cd frontend && npm ci)
+```
+
+Then, from the repo root:
+
+```
+cd evals
+# the cards edited since main, listed only (no CLI call)
+uv run --python 3.12 dc-evals review --deck ../content/decks/claude-ccdv-f.md --changed-since main --dry-run
+# review them
+uv run --python 3.12 dc-evals review --deck ../content/decks/claude-ccdv-f.md --changed-since main
+# named cards, or the whole deck (a selection over 60 cards needs --limit)
+uv run --python 3.12 dc-evals review --deck ../content/decks/claude-ccdv-f.md --cards ccdvf-workflow-vs-agent-definition
+uv run --python 3.12 dc-evals review --deck ../content/decks/aws-saa-c03.md --all --limit 400
+```
+
+- **Selection, exactly one of:** `--changed-since REF` (cards whose stableUid is new, or whose
+  content differs from the deck at `git show REF:<path>`; content is the exported card as
+  sorted-key JSON, so any edit to a field the reviewer sees counts; a deck that is not in REF
+  selects every card), `--cards uid1,uid2` (an unknown uid exits 2), `--all`. No selection exits
+  2 and lists the three options.
+- `--model` (default `claude-opus-5`); a response served by another model is recorded as
+  `MODEL_MISMATCH`, as in `run`.
+- `--concurrency` (default 2) parallel CLI calls.
+- `--limit N` is a safety cap (default 60): a larger selection exits 2 before any call and asks
+  for `--limit`.
+- `--out FILE`: JSONL, a `{"type":"review", ...}` header (deck, selection, provider, model,
+  promptVersion, reviewDate, cards) and one `{"type":"item", "stableUid", ...}` line per card
+  with its status, errorCode and findings. Default `evals/.cache/review/<date>-<deck>.jsonl`,
+  which is git-ignored.
+- `--dry-run` lists the selected cards and exits 0 without calling the CLI.
+
+The command prints a table grouped by card (stableUid, severity, category, message,
+suggestedFix; blocker first; a clean card shows "no findings") and then the totals.
+
+| exit | meaning |
+| --- | --- |
+| 0 | no blocker or major finding (minor findings only, or none) |
+| 1 | at least one blocker or major finding: fix the card before publishing |
+| 2 | usage or configuration error (selection, provider, limit, a parse error, missing node/esbuild) |
+| 3 | at least one card's review errored (for example a CLI failure); rerun those cards with `--cards` |
+
+A parse error prints the parser's `file:line: CODE message` lines, the same as
+`node frontend/scripts/lint-deck.mts`, and exits 2 before any review.
 
 ## Agent-authored cards, model jury and configuration comparison (Q03)
 
@@ -859,6 +945,127 @@ humanValid, humanInvalid, unadjudicated}, perEvidence{<class>: {self-evidenced, 
 recall, recallCi95}}, excludedRows[]}, proxyFidelity (null unless claude-cli){outcomes[], note}, gate{thresholds, expected{datasetSha256, rows, shipping{provider,
 model, promptVersion, effort, structuredOutputsAtStart}}, passes, failures[]}`. `perClass` lists the classes the run's dataset seeds (six for v1, seven for v2 and v3).
 
+## Retrieval eval
+
+`dc-evals retrieval` measures whether the official page that supports a card can be found from
+the card's own text, the retrieval step a cited-authoring or source-check flow would rely on. It
+calls no model API: BM25 is pure Python and the embeddings run locally.
+
+**Ground truth.** The distinct (uid, page) pairs of `data/sources-<deck>.jsonl`: the fact-check
+ledgers say card `uid` was verified against that page. The URL's `#fragment` is dropped, so two
+anchors on one page are one page.
+
+**Fetching** (`dc-evals fetch-sources`). Every distinct https page the ledgers cite goes through
+dc-ingest (`dc_ingest.core.ingest`, its https-only redirects, `DC_INGEST_ALLOWED_HOSTS` and 10 MB
+cap unchanged), chunked at 1500 characters with 150 of overlap. One request at a time,
+`--delay-s` (default 1.0) seconds between network requests, User-Agent
+`developercards-evals-retrieval/1.0 (...) developercards-ingest/<version>`. Each page is cached
+as `<sha256(url)>.json` under `$DC_SOURCES_CACHE` (default `~/.cache/developercards/sources`,
+outside the repo; fetched documentation is copyrighted and is never committed). `manifest.json`
+in the same directory records each page's status, HTTP status and a one-line reason; a failed
+page never stops the run, and a re-run skips cached pages and recorded failures
+(`--retry-failed` fetches failures again). `--max-pages N` stops after N network fetches.
+
+**Ranking.** For each pair whose page is cached, the query is the card's question plus the text
+it asserts (explanation, code, keyed options; `mutations._answer_text`), the corpus is every
+chunk (page title + chunk text) of every cached page the same deck cites, and pages are ranked
+by their best chunk. A pair's rank counts every page tied with the gold page as ahead of it.
+
+| method | what |
+| --- | --- |
+| `bm25` | Okapi BM25, pure Python, k1 = 1.5, b = 0.75, idf ln(1 + (N - df + 0.5) / (df + 0.5)); tokens are lower-case `[a-z0-9]+` minus a short stop list; each distinct query term once |
+| `embed` | cosine similarity of `BAAI/bge-small-en-v1.5` vectors through fastembed (optional extra `embeddings`; the model, about 130 MB, downloads to fastembed's own cache on first use); no query prefix, because the queries are passage-length. Without fastembed it is reported as skipped |
+| `hybrid` | reciprocal rank fusion of the bm25 and embed page rankings, sum of 1 / (60 + rank); skipped when embed is |
+
+**Metrics**, per deck and overall: recall@k for each `--k` and MRR over the pairs, the same over
+cards (best rank across the card's cited pages), the pair and card counts, and the pages cited,
+cached, failed and not fetched. The report is `reports/<date>-retrieval.json` and `.md`: metrics,
+method configuration and counts, never page text.
+
+The existing lexical chooser (`mutations.supporting_source`) is **not** a comparable baseline and
+is not reported: it only chooses among the card's own ledger URLs (one to a few candidates, all
+correct by construction) and it scores the ledger's `fact_checked` summary notes rather than the
+page text, so its hit rate measures agreement between two notes about the same card, not
+retrieval.
+
+```
+cd evals
+uv run --python 3.12 dc-evals fetch-sources                 # ~611 pages, about 15 minutes
+uv run --python 3.12 --extra embeddings dc-evals retrieval   # bm25, embed and hybrid
+uv run --python 3.12 dc-evals retrieval --methods bm25       # without the extra: bm25 only
+```
+
+The tests use a fake fetcher, a fake embedder and a temporary cache; nothing in CI downloads a
+page or a model.
+
+## Citation backfill
+
+`dc-evals backfill-sources` (V03) proposes a `SOURCE:` line with a verbatim quote for each card
+that has none, for the owner to review. It never edits a deck unless `--apply` is given.
+
+```
+dc-evals backfill-sources --deck SLUG [--limit N] [--min-score X] [--out reports/backfill]
+    [--date YYYY-MM-DD] [--offline] [--apply]
+```
+
+- Candidate pages are the card's own citations: `data/sources-<deck>.jsonl` first, then the raw
+  ledger CSV rows as a fallback. Pages come from the fetch-sources cache, and missing ones are
+  fetched unless `--offline`.
+- The card's chunks are ranked with BM25, or with the RRF hybrid when `--extra embeddings` is
+  installed. In the best 3 chunks, a quote window is cut: whole sentences on one line of the
+  page, at most 1000 characters, grown from the sentence that shares the most terms with the
+  answer. The quote is checked to be a verbatim substring of the page. It never starts with a
+  deck marker, a lower-case fragment or a `#` heading, and it ends with a stop.
+- Score = (answer terms in the quote / distinct quote terms) x min(1, answer terms / 6).
+  Confidence is high at 0.5 or more, medium at 0.3 or more, and low below that. `--min-score`
+  defaults to 0.1.
+- Writes `<date>-<deck>-sources.jsonl` (`uid, url, quote, score, confidence, reason`), `.md` (the
+  review table, weakest first, plus the skipped cards) and `.patch`. The patch is a unified diff
+  that adds `SOURCE:` and the quote after each card's last line, the canonical position. Nothing
+  is written unless the patched deck parses with zero errors through `scripts/parse-deck.mts` and
+  every proposed card reads back its exact source.
+- The lexical score is only a rough guide: a hand check of 20 proposals found about 60 % that
+  support the answer (docs/delivery/r20-issues/V03-notes.md). Review every row before applying.
+
+## Card embeddings
+
+`dc-evals embed-cards` (V04) embeds a deck's cards on the owner's machine with the open-source
+`BAAI/bge-small-en-v1.5` (fastembed, the optional `embeddings` extra; no paid model) and can push
+the vectors to the API's pgvector store. `dc-evals semantic-dupes` reports near-duplicate pairs
+from the same local vectors, offline.
+
+```
+cd evals
+uv run --python 3.12 --extra embeddings dc-evals embed-cards --deck aws-saa-c03
+DC_ADMIN_TOKEN=... uv run --python 3.12 --extra embeddings dc-evals embed-cards \
+    --deck ../content/decks/aws-saa-c03.md --push --api-base https://<api host>
+uv run --python 3.12 --extra embeddings dc-evals semantic-dupes --deck aws-saa-c03 --out reports/semantic-dupes
+```
+
+- `--deck` takes a deck file (`.md` through `scripts/parse-deck.mts`, or an exported `.jsonl`) or
+  a slug: the exported `data/cards-<slug>.jsonl` for the two known decks, else
+  `../content/decks/<slug>.md`. Push the `.md` file when the export may be older than the
+  published deck; cards whose text differs from the server's come back as `staleText`.
+- Canonical text is `question.strip() + "\n\n" + explanation.strip()`; `textSha256` is the lower
+  hex SHA-256 of its UTF-8 bytes (the server computes the same digest and refuses a stale one).
+  Vectors are L2-normalised, 384 dims.
+- Vectors are written to `$DC_EMBED_CACHE/<slug>.jsonl` (default
+  `~/.cache/developercards/embeddings`, outside the repo), one `{deckSlug, stableUid, textSha256,
+  model, dim, embedding}` per line, or to `--out FILE`. A card with unchanged text keeps its cached
+  vector; only new or edited cards are embedded.
+- `--push --api-base URL` sends `PUT /api/v1/admin/card-embeddings` in batches of at most 100
+  (the API rejects bodies over 1 MiB) with `Authorization: Bearer $DC_ADMIN_TOKEN`. The token is
+  read from the environment only, never printed (it is redacted from any error text), and the
+  command refuses to run without it. `--api-base` must be https (plain http only to localhost).
+  It prints the upserted / unknownCards / staleText counts. Exit codes: 0 ok, 1 failed, 2 usage,
+  3 when the API answers `503 VECTOR_NOT_READY` (the owner must CREATE EXTENSION vector and re-run
+  the migration).
+- `semantic-dupes` writes `<date>-semantic-dupes-<slug>.{json,md}`: every unordered pair with
+  cosine >= `--min-cosine` (default 0.90), highest first, at most 50, shown by stableUid and
+  question only; the 10 closest pairs below the threshold; and the distribution of each card's
+  nearest-neighbour cosine. It reuses the cached vectors, so it needs fastembed only for cards not
+  yet embedded.
+
 ## Versioning
 
 The report name and body carry the model and `promptVersion`; a prompt change bumps
@@ -880,6 +1087,6 @@ uv lock --check
 uv run --python 3.12 pytest -q
 ```
 
-Every test uses `tests/conftest.py`'s `FakeLlm` (a copy of the ai-qa test fake's shape; packages
+`tests/test_retrieval.py` uses a fake fetcher and a fake embedder. Every model-reviewer test uses `tests/conftest.py`'s `FakeLlm` (a copy of the ai-qa test fake's shape; packages
 never import each other's tests). Nothing in the test suite constructs a real client or calls a
 model.
