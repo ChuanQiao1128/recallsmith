@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+# Read-only token for every job: nothing here pushes, comments, deploys or reads a secret.
+permissions:
+  contents: read
+
 jobs:
   mobile:
     name: mobile (typecheck + vitest + expo export)
@@ -178,6 +182,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          # Full history so check-gate-freshness.py can find the merge base with the base branch.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -197,6 +204,45 @@ jobs:
             echo "::endgroup::"
           done
           [ "$found" = 1 ] || { echo "no Python package found" >&2; exit 1; }
+      - name: unit tests for infra/scripts (stdlib unittest)
+        run: python3 -m unittest discover -s infra/scripts/tests -v
+      # A change to the ai-qa prod env or prompts, with AI_QA_ENABLED on at HEAD, needs a committed
+      # evals/reports run that matches the shipping config and passes `dc-evals score --gate`
+      # (offline re-score, no model call). Prints why it passes otherwise. See infra/README.md §3.
+      # The base goes through env, not straight into the script, so a ref name is never shell text.
+      - name: AI QA gate freshness (check-gate-freshness.py)
+        env:
+          BASE_REF: origin/${{ github.base_ref || 'main' }}
+        run: python3 infra/scripts/check-gate-freshness.py --base "$BASE_REF"
+
+  # Terraform and deploy-script checks that need no AWS: fmt, an offline init (-backend=false, the
+  # provider comes from the public registry) and validate, the agent-route census, bash -n on the
+  # deploy scripts and the merge-env.sh unit tests. Never plan or apply: both need AWS credentials,
+  # and this job has none.
+  infra:
+    name: infra (terraform fmt/validate + agent routes + deploy scripts)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          # versions.tf asks for >= 1.10; pinned so a new terraform release cannot change fmt output.
+          terraform_version: 1.16.3
+          terraform_wrapper: false
+      - run: terraform fmt -check -recursive infra
+      # -lockfile=readonly: the committed lock carries only two h1: hashes (not linux), so init would otherwise
+      # add a linux one; readonly verifies against the zh: hashes and never rewrites the lock.
+      - run: terraform -chdir=infra/envs/prod init -backend=false -input=false -lockfile=readonly
+      - run: terraform -chdir=infra/envs/prod validate
+      - run: python3 infra/scripts/check-agent-routes.py
+      - name: bash -n the deploy scripts
+        run: |
+          bash -n src_C/deploy.sh
+          bash -n frontend/deploy.sh
+          bash -n services/lambda-release.sh
+          bash -n src_C/scripts/merge-env.sh
+      # Pure jq, no aws, no network (jq ships on ubuntu-latest).
+      - run: bash src_C/scripts/merge-env.test.sh
 
   mcp-server:
     name: tools/mcp-server (build + vitest)
