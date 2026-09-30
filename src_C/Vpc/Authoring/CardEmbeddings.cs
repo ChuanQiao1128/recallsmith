@@ -502,7 +502,7 @@ public static class CardEmbeddings
     }
   }
 
-  /// <summary>404 DECK_NOT_FOUND for a missing or deleted deck, then the deck-read grant (super_admin bypasses it).</summary>
+  /// <summary>404 DECK_NOT_FOUND for a missing or deleted deck, then the deck-read grant (super_admin always passes).</summary>
   private static async Task<APIGatewayProxyResponse?> RequireLiveDeckReadAsync(NpgsqlConnection conn, AuthContext auth, long deckId, Res res)
   {
     var rows = await DbUtil.QueryAsync(conn, null, "select id from decks where id = $1 and is_deleted = 0", [deckId]);
