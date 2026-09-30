@@ -617,6 +617,11 @@ async function stubHitlContentApi(page: Page): Promise<{ unexpected: string[] }>
         }),
       );
     if (path === '/api/v1/authoring/qa/runs') return body(ok({ items: [QA_RUN], nextCursor: null }));
+    // R20 V10: the Semantic duplicates panel under the runs.
+    if (path === '/api/v1/admin/card-embeddings/status')
+      return body(ok({ engine: 'vector', model: 'BAAI/bge-small-en-v1.5', cards: 1, embedded: 1, stale: 0 }));
+    if (path === `/api/v1/admin/decks/${DECK.id}/semantic-duplicates`)
+      return body(ok({ engine: 'vector', minCosine: 0.9, pairs: [] }));
     if (path === `/api/v1/authoring/qa/runs/${QA_RUN.runId}`)
       return body(
         ok({
