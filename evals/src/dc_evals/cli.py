@@ -1,4 +1,5 @@
-"""dc-evals command line: seed, run (paid, owner only), score, and (Q03) author, jury and compare."""
+"""dc-evals command line: seed, run (paid, owner only), score, (Q03) author, jury and compare, and
+(V01) review, the local pre-publish self-check through the Claude CLI."""
 
 from __future__ import annotations
 
@@ -22,6 +23,12 @@ from ai_qa.settings import (
 )
 
 from .author import DEFAULT_AUTHOR_MODEL
+from .deck_review import (
+    DEFAULT_CONCURRENCY,
+    DEFAULT_LIMIT,
+    DEFAULT_REVIEW_MODEL,
+    REVIEW_PROVIDER,
+)
 from .dataset import (
     AUTHORED,
     AUTHORED_SOURCES_PATH,
@@ -200,6 +207,37 @@ def _parser() -> argparse.ArgumentParser:
     gate.add_argument("--date", type=_review_date, default=None, help="YYYY-MM-DD (default: UTC today)")
     gate.add_argument("--out", type=Path, default=REPORTS_DIR)
     gate.add_argument("--ai-qa-env", type=Path, default=SHIPPING_ENV_PATH, help=argparse.SUPPRESS)
+
+    review = sub.add_parser(
+        "review",
+        help=(
+            "pre-publish AI QA self-check of a deck's cards through the local Claude CLI (the owner's "
+            "subscription; no paid provider)"
+        ),
+    )
+    review.add_argument("--deck", required=True, type=Path, help="the deck markdown file (content/decks/<slug>.md)")
+    selection = review.add_mutually_exclusive_group()
+    selection.add_argument(
+        "--changed-since", metavar="REF", default=None,
+        help="cards whose stableUid is new or whose content differs from the deck at git ref REF",
+    )
+    selection.add_argument("--cards", metavar="UID[,UID...]", default=None, help="these stableUids")
+    selection.add_argument("--all", action="store_true", help="every card in the deck")
+    review.add_argument(
+        "--provider", default=REVIEW_PROVIDER,
+        help=f"only {REVIEW_PROVIDER} (the local Claude Code CLI); paid providers are refused",
+    )
+    review.add_argument("--model", default=DEFAULT_REVIEW_MODEL, help=f"default {DEFAULT_REVIEW_MODEL}")
+    review.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
+    review.add_argument(
+        "--limit", type=int, default=None,
+        help=f"safety cap on the cards reviewed (default {DEFAULT_LIMIT}; a larger selection needs --limit)",
+    )
+    review.add_argument(
+        "--out", type=Path, default=None, help="JSONL of the review items (default evals/.cache/review/<date>-<deck>.jsonl)"
+    )
+    review.add_argument("--review-date", type=_review_date, default=None, help="YYYY-MM-DD (default: UTC today)")
+    review.add_argument("--dry-run", action="store_true", help="list the selected cards; no CLI call")
 
     score = sub.add_parser("score", help="print the report JSON for a run file")
     score.add_argument("run_file", type=Path)
@@ -461,6 +499,12 @@ def _automation_gate(args: argparse.Namespace) -> int:
     return 0 if report["passed"] else 1
 
 
+def _review(args: argparse.Namespace) -> int:
+    from . import deck_review
+
+    return deck_review.run_review(args)
+
+
 def _compare(args: argparse.Namespace) -> int:
     from .compare import compare
 
@@ -496,6 +540,7 @@ def main(argv: list[str] | None = None) -> int:
         "jury": _jury,
         "compare": _compare,
         "automation-gate": _automation_gate,
+        "review": _review,
     }
     return handlers[args.command](args)
 

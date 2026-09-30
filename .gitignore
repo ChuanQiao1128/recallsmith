@@ -73,3 +73,6 @@ __pycache__/
 .pytest_cache/
 *.pyc
 .ruff_cache/
+
+# dc-evals local caches (V01: dc-evals review writes evals/.cache/review/)
+evals/.cache/
