@@ -887,6 +887,10 @@ public static class AutomationTick
         where automation = 'source_watch' and occurred_at >= $1 and occurred_at < $2
         """, [start, end]));
 
+      // R20 V05: learner card reports (zeros before migration 037). "New this week" is the digest's own week.
+      var reportsOpen = (await Reports.CardReports.CountsAsync(conn)).Open;
+      var reportsNew = await Reports.CardReports.CreatedBetweenAsync(conn, start, end);
+
       static DateTimeOffset Ts(object? v) => v is DateTimeOffset dto ? dto : new(DateTime.SpecifyKind((DateTime)v!, DateTimeKind.Utc));
       var data = new WeeklyDigestData(from, to, totals.GetProperty("hoursSaved").GetDecimal(), totals.GetProperty("minutesSaved").GetDecimal(),
         totals.GetProperty("runs").GetInt64(), totals.GetProperty("units").GetInt64(), totals.GetProperty("defectsCaught").GetInt64(), automations,
@@ -899,7 +903,7 @@ public static class AutomationTick
         backlog.HumanPending, backlog.HumanPublishes, Long(shadow["blind_decided"]), Long(shadow["blind_accepted"]),
         new DigestLive(liveQuality.AutoAccepted30d, liveQuality.DeletedByPerson, liveQuality.EditedByPerson, liveQuality.OverrideRate,
           liveQuality.EditedAfterSourceChange),
-        Long(blindPending["drafts"]), Long(blindPending["runs"]));
+        Long(blindPending["drafts"]), Long(blindPending["runs"]), reportsOpen, reportsNew);
 
       var baseUrl = Notifications.ConsoleBaseUrl();
       var email = EmailTemplates.WeeklyDigest(mode, data, baseUrl);

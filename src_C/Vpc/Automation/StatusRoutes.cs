@@ -276,6 +276,9 @@ public static class StatusRoutes
         lastSentAt = RunnerRoutes.Timestamp(n["last_sent_at"]),
       };
 
+      var reports = await Reports.CardReports.CountsAsync(conn);
+      var cardReports = new { open = reports.Open, openedLast7d = reports.OpenedLast7d };
+
       var evalGate = await EvalGate.LoadCurrentAsync(conn);
       var open = await LoadBacklogAsync(conn);
       var backlog = new
@@ -313,6 +316,7 @@ public static class StatusRoutes
         watch,
         notifications,
         backlog,
+        cardReports,
       });
     }
     catch (Exception ex)

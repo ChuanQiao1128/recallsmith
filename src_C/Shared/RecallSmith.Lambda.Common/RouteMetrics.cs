@@ -180,6 +180,8 @@ public static class RouteMetrics
     "/api/v1/admin/automation/runs",
     "/api/v1/admin/automation/decisions",
     "/api/v1/admin/automation/eval-gate",
+    "/api/v1/admin/card-reports",
+    "/api/v1/user/card-reports",
 
     // edge-public
     "/api/v1/billing/verify",
@@ -218,6 +220,7 @@ public static class RouteMetrics
     "/api/v1/admin/automation/watch/targets/:targetId",
     "/api/v1/admin/automation/decisions/:draftId",
     "/api/v1/admin/automation/eval-gate/:gateId/revoke",
+    "/api/v1/admin/card-reports/:reportId/resolve",
 
     // Internal machine-caller routes: the dispatcher matches these exactly (no suffix match, see
     // VpcFunction), so they are labelled by exact match too.
