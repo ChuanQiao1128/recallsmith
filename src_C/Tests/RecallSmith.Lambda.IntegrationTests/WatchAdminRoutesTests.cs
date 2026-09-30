@@ -32,6 +32,8 @@ public class WatchAdminRoutesTests
   private static readonly string[] WatchEventKeys =
   [
     "eventId", "targetId", "url", "kind", "oldSha256", "newSha256", "details", "recheckState", "recheckRunIds", "queueItemIds", "notificationId", "createdAt",
+    // R20 V07 change impact.
+    "affectedCards", "needsHumanReview",
   ];
 
   private static string Url(string tag) => $"https://docs.example.com/a05/admin/{tag}/{Guid.NewGuid():N}";
@@ -78,7 +80,7 @@ public class WatchAdminRoutesTests
         """, pageId, Guid.NewGuid(), A05Kit.Sha("a"), A05Kit.Sha("b"), """{"citingCards": 2, "queueItemIds": [7, 9]}""", new[] { runId }));
 
       var data = AutomationTestKit.Data(await ListAsync(Owner("it-a05-admin")));
-      Assert.Equal(["items", "recentEvents", "nextCursor"], A05Kit.Keys(data));
+      Assert.Equal(["items", "recentEvents", "nextCursor", "recentFeedItems"], A05Kit.Keys(data));
       var items = data.GetProperty("items").EnumerateArray().ToList();
       // The two seeded feeds of migration 034 are listed too; newest first.
       Assert.Equal(feedId, items[0].GetProperty("targetId").GetInt64());
@@ -97,6 +99,10 @@ public class WatchAdminRoutesTests
       Assert.Equal([7L, 9L], ev.GetProperty("queueItemIds").EnumerateArray().Select(i => i.GetInt64()).ToArray());
       Assert.Equal(runId, ev.GetProperty("recheckRunIds")[0].GetGuid());
       Assert.Equal(2, ev.GetProperty("details").GetProperty("citingCards").GetInt32());
+      // An event recorded before R20 V07 has no impact keys in its details: an empty list, no review flag.
+      Assert.Empty(ev.GetProperty("affectedCards").EnumerateArray());
+      Assert.False(ev.GetProperty("needsHumanReview").GetBoolean());
+      Assert.Empty(data.GetProperty("recentFeedItems").EnumerateArray());
 
       // Filters and keyset paging.
       var pages = AutomationTestKit.Data(await ListAsync(Owner("it-a05-admin"), new Dictionary<string, string> { ["kind"] = "page" }));

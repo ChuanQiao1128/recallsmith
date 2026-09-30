@@ -393,6 +393,7 @@ Dry-run agreement: 6 would-accept, 4 decided by a human (3 accepted, 1 edited, 0
 Live quality (30 days): 25 auto-accepted, 1 deleted by a person, 1 edited by a person, override rate 0.0800; 0 updated after a source change (not counted)
 Publishes by state: would_publish 2
 Source watch: 36 check(s), 2 change(s), 1 failure(s)
+Release notes: 0 new, 0 with possibly affected card(s)
 Emails: 9 sent, 0 failed
 Card reports: 0 open (0 new this week)
 Runner owner-mac: state idle, last heartbeat 2026-09-27T22:05Z, login expires 2026-10-20T00:00Z
@@ -426,6 +427,7 @@ Change: changed, event 77, re-check done
 Deck aws-saa-c03: 3 card(s) re-checked, 1 flagged — https://console.developercards.app/decks/qa?deckId=12&runId=aaaaaaaa-0000-4000-8000-000000000002
 Cards whose quote vanished: 902
 Queue items: 31
+Affected cards: 0 (needs human review: no)
 
 Console: https://console.developercards.app/automation?tab=watch&targetId=5
 Mode: dry_run. Sent by developercards-notifier to the owner alert address; replies are not read.

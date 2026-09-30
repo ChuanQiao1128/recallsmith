@@ -245,7 +245,10 @@ public static class StatusRoutes
           count(*) filter (where consecutive_failures >= $1) as failing,
           max(last_checked_at) as last_checked_at,
           (select count(*) from source_watch_events
-           where kind in ('changed', 'gone') and created_at >= now() - interval '7 days') as changes_7d
+           where kind in ('changed', 'gone') and created_at >= now() - interval '7 days') as changes_7d,
+          (select count(*) from source_watch_events
+           where kind in ('changed', 'gone') and details ->> 'needsHumanReview' = 'true'
+             and created_at >= now() - interval '30 days') as needs_review
         from source_watch_targets
         """, [WatchFailingThreshold]))[0];
       var watch = new
@@ -255,6 +258,8 @@ public static class StatusRoutes
         failing = RunnerRoutes.Long(w["failing"]),
         lastCheckedAt = RunnerRoutes.Timestamp(w["last_checked_at"]),
         changes7d = RunnerRoutes.Long(w["changes_7d"]),
+        // R20 V07: changed/gone events of the last 30 days whose cited cards no AI QA re-check covered.
+        needsReview = RunnerRoutes.Long(w["needs_review"]),
       };
 
       var n = (await DbUtil.QueryAsync(conn, null,

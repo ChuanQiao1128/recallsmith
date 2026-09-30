@@ -30,7 +30,7 @@ public sealed class AutomationStatusRoutesTests
 
   // A00 §16.2, verbatim except that the runner item (whose keys carry no values there) is listed in RunnerKeys, plus
   // the R18C additions: shadow.blindDecided/blindAccepted (automation-4) and backlog.humanPublishItems (L4), and the
-  // R18D M2 live block (automation-22), and R20 V05's cardReports.
+  // R18D M2 live block (automation-22), R20 V05's cardReports and R20 V07's watch.needsReview.
   private const string StatusContractJson = """
     { "serverTime": "ISO",
       "mode": { "configured": "dry_run", "effective": "dry_run", "liveBlockedReason": null, "autoPublish": true },
@@ -43,7 +43,7 @@ public sealed class AutomationStatusRoutesTests
       "live": { "autoAccepted30d": 0, "deletedByPerson": 0, "editedByPerson": 0, "overrideRate": null },
       "publishes7d": { "byState": { "<state>": 0 } },
       "spend": { "todayUsd": 0, "automationTodayUsd": 0, "reservedUsd": 0, "dailyCapUsd": 10 },
-      "watch": { "targets": 0, "active": 0, "failing": 0, "lastCheckedAt": null, "changes7d": 0 },
+      "watch": { "targets": 0, "active": 0, "failing": 0, "lastCheckedAt": null, "changes7d": 0, "needsReview": 0 },
       "notifications": { "sent24h": 0, "failed24h": 0, "queued": 0, "unconfirmed": 0, "lastSentAt": null },
       "backlog": { "humanPending": 0, "oldestHumanPendingAt": null, "humanPublishes": 0, "humanPublishItems": [] },
       "cardReports": { "open": 0, "openedLast7d": 0 } }
@@ -423,6 +423,8 @@ public sealed class AutomationStatusRoutesTests
       Assert.Equal(1, watch.GetProperty("failing").GetInt64());
       Assert.EndsWith("Z", watch.GetProperty("lastCheckedAt").GetString());
       Assert.Equal(2, watch.GetProperty("changes7d").GetInt64());
+      // R20 V07: these events carry no details, so none needs a human review.
+      Assert.Equal(0, watch.GetProperty("needsReview").GetInt64());
 
       var notifications = data.GetProperty("notifications");
       Assert.Equal(1, notifications.GetProperty("sent24h").GetInt64());
