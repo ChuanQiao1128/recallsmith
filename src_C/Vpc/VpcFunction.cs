@@ -378,6 +378,19 @@ public sealed class VpcFunction
       {
         return await Vpc.Automation.EvalGate.HandleRevoke(req, res, auth, gateRevoke["gateId"]);
       }
+      // R20 V05 — card reports: triage (console) and report-a-card (learner, under /api/v1/user/ for the gateway)
+      if (p.EndsWith("/api/v1/admin/card-reports", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Reports.CardReports.HandleAdminList(req, res, auth);
+      }
+      if (RouteMatcher.Match("/api/v1/admin/card-reports/:reportId/resolve", p) is { } cardReportResolve)
+      {
+        return await Vpc.Reports.CardReports.HandleResolve(req, res, auth, cardReportResolve["reportId"]);
+      }
+      if (p.EndsWith("/api/v1/user/card-reports", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Reports.CardReports.HandleUser(req, res, auth);
+      }
       // Runtime
       if (p.EndsWith("/api/v1/me", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))
       {

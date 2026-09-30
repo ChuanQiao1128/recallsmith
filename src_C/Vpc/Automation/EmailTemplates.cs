@@ -39,7 +39,7 @@ public sealed record WeeklyDigestData(DateOnly From, DateOnly To, decimal HoursS
   IReadOnlyDictionary<string, long> PublishesByState, long WatchChecks, long WatchChanges, long WatchFailures,
   long EmailsSent, long EmailsFailed, IReadOnlyList<DigestRunner> Runners, decimal HumanQaSpendUsd, decimal AutomationQaSpendUsd,
   long HumanDraftsPending, long HumanPublishes, long ShadowBlindDecided = 0, long ShadowBlindAccepted = 0, DigestLive? Live = null,
-  long BlindPendingDrafts = 0, long BlindPendingRuns = 0);
+  long BlindPendingDrafts = 0, long BlindPendingRuns = 0, long CardReportsOpen = 0, long CardReportsNew = 0);
 
 /// <summary>
 /// The live quality measurement the digest shows (R18D M2): the auto-accepts of the last 30 days and how many a person
@@ -499,6 +499,7 @@ public static class EmailTemplates
     details.Add("Publishes by state: " + Pairs(data.PublishesByState));
     details.Add($"Source watch: {data.WatchChecks} check(s), {data.WatchChanges} change(s), {data.WatchFailures} failure(s)");
     details.Add($"Emails: {data.EmailsSent} sent, {data.EmailsFailed} failed");
+    details.Add($"Card reports: {data.CardReportsOpen} open ({data.CardReportsNew} new this week)");
     if (data.Runners.Count == 0) details.Add("Runners: none registered");
     details.AddRange(data.Runners.Select(r =>
       $"Runner {r.RunnerId}: state {OneLine(r.State)}, last heartbeat {Timestamp(r.LastHeartbeatAt)}, " +

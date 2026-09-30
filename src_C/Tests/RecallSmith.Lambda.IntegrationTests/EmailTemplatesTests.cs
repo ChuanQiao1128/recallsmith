@@ -394,6 +394,7 @@ Live quality (30 days): 25 auto-accepted, 1 deleted by a person, 1 edited by a p
 Publishes by state: would_publish 2
 Source watch: 36 check(s), 2 change(s), 1 failure(s)
 Emails: 9 sent, 0 failed
+Card reports: 0 open (0 new this week)
 Runner owner-mac: state idle, last heartbeat 2026-09-27T22:05Z, login expires 2026-10-20T00:00Z
 AI QA spend: $1.2500 human runs, $0.4000 automation
 

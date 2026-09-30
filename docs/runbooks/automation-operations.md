@@ -414,3 +414,38 @@ auto-accepts or auto-publishes; the full emergency stop is infra/RUNBOOK.md §7.
 5. If the card was wrong, not just unwanted, treat it as a gate failure: look at its QA findings and the
    reviewer's verdict in the drawer, and do not restore `live` until a new gate (and the spot-check
    above) passes.
+
+## Card reports (R20 V05)
+
+Learners report a problem with a card from the mobile app; the reports wait for a person in the console.
+Nothing here calls a model unless the triage flag below is on *and* AI QA is on, and even then only the card
+goes to the reviewer, never the learner's note.
+
+**Deploy order.** Code first, then `POST /api/v1/admin/db/migrate` (applies `037_card_reports.sql`, which
+also lets webhook subscriptions pick `card.reported`). Until the migration runs every card report route
+answers `503 NOT_READY` ("Run the database migration") and the status/digest counts read zero.
+
+**Switches** (`src_C/env/prod.env.json`, read on every request, deploy to change):
+
+| Key | Default | Effect |
+|---|---|---|
+| `CARD_REPORTS_ENABLED` | `"1"` | `"0"` makes both learner routes answer `503 CARD_REPORTS_DISABLED`. The console routes keep working so the backlog can still be triaged. |
+| `CARD_REPORT_DAILY_LIMIT` | `"5"` | New reports per learner per UTC day; the next one is `429 REPORT_DAILY_LIMIT`. Re-reporting a card that already has an open report by the same learner returns that report (`duplicate: true`) and does not count. |
+| `CARD_REPORT_AI_TRIAGE` | `"0"` | `"1"` starts a one-card AI QA re-check (`scope=cards`, `requested_by_sub = card_report`) for every new report. With `AI_QA_ENABLED=0` it does nothing and records nothing. |
+
+The mobile report button has its own flag (`features.cardReport.enabled`, default off); the server switch
+does not turn it on.
+
+**Triage.** `GET /api/v1/admin/card-reports?status=open|resolved|all&deckId=&limit=&cursor=` lists the reports
+of the decks the admin may read (super_admin: all), newest first, with the learner's note. It never returns a
+user sub or an email. `POST /api/v1/admin/card-reports/<reportId>/resolve` with
+`{"resolution":"fixed|wont_fix|duplicate|invalid","note":"..."}` needs deck write; a second resolve is
+`409 ALREADY_RESOLVED`. The learner sees the resolution and its note in *My reports*.
+
+**Watching.** `GET /api/v1/admin/automation/status` → `cardReports: {open, openedLast7d}`; the Monday digest
+has a line `Card reports: N open (M new this week)`. There is no per-report email. Subscribe a webhook to
+`card.reported` (`{reportId, deckSlug, stableUid, reason, createdAt}`, no note, no user) for a chat ping.
+
+**The note is untrusted text.** It is capped at 500 characters, stored as is, shown only to console admins
+with deck read, and never logged. Treat it like any other learner input: do not paste it into a prompt or a
+shell.

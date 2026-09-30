@@ -152,6 +152,8 @@ public class RouteMetricsTests
   [InlineData("/api/internal/subscriptions/upsert")]
   [InlineData("/api/v1/billing/webhook/apple")]
   [InlineData("/api/v1/ai/explain-card")]
+  [InlineData("/api/v1/admin/card-reports")]
+  [InlineData("/api/v1/user/card-reports")]
   public void Route_KnownPaths_LabelThemselves(string path)
   {
     // The pairs matter more than the singles: /cards and /cards/page, /publish and

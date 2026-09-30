@@ -28,14 +28,15 @@ namespace RecallSmith.Lambda.Vpc.Runtime;
 /// </summary>
 public static class AccountDeletion
 {
-  public sealed record AccountDeletionResult(int OutboxRows, int PremiumStateRows, int WebhookEventRows, int UserRows);
+  public sealed record AccountDeletionResult(int OutboxRows, int PremiumStateRows, int WebhookEventRows, int UserRows, int CardReportRows = 0);
 
   /// <summary>
   /// Deletes every row keyed by <paramref name="userSub"/> in one transaction, in a fixed order:
   /// the outbox rows (through the caller's events) first, then user_premium_state and
   /// rc_webhook_events by app_user_id, then the users row -- whose <c>on delete cascade</c> removes
   /// user_entitlements, user_subscriptions, user_progress_events, user_progress, user_draw_owned,
-  /// user_draw_meta, user_wallet and user_deck_wallet. A failure rolls the whole thing back, so the
+  /// user_draw_meta, user_wallet and user_deck_wallet. The learner's card reports (R20 V05, migration 037) go too;
+  /// before 037 the table does not exist and that step is skipped. A failure rolls the whole thing back, so the
   /// phone keeps the account and can retry.
   /// </summary>
   public static async Task<AccountDeletionResult> DeleteUserDataAsync(NpgsqlConnection conn, string userSub)
@@ -54,13 +55,18 @@ public static class AccountDeletion
       "delete from rc_webhook_events where app_user_id = $1",
       [userSub]);
 
+    // Checked first so a missing table (code deployed before migration 037) never aborts the transaction.
+    var cardReportRows = await DbUtil.ExecuteScalarAsync(conn, tx, "select to_regclass('card_reports') is not null", []) is true
+      ? await DbUtil.ExecuteAsync(conn, tx, "delete from card_reports where user_sub = $1", [userSub])
+      : 0;
+
     var userRows = await DbUtil.ExecuteAsync(conn, tx,
       "delete from users where user_sub = $1",
       [userSub]);
 
     await tx.CommitAsync();
 
-    return new AccountDeletionResult(outboxRows, premiumStateRows, webhookEventRows, userRows);
+    return new AccountDeletionResult(outboxRows, premiumStateRows, webhookEventRows, userRows, cardReportRows);
   }
 
   public static async Task<APIGatewayProxyResponse> HandleDeleteMe(LambdaRequest req, Res res, AuthContext auth)
@@ -89,6 +95,7 @@ public static class AccountDeletion
       premiumStateRows = r.PremiumStateRows,
       webhookEventRows = r.WebhookEventRows,
       userRows = r.UserRows,
+      cardReportRows = r.CardReportRows,
     });
 
     return res.Raw(204, string.Empty);
