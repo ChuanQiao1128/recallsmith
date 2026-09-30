@@ -14,6 +14,7 @@ triage hook only starts an existing AI QA run, which stays off while `AI_QA_ENAB
 | `src_C/Shared/RecallSmith.Lambda.Common/RouteMetrics.cs` | Known routes: `/api/v1/admin/card-reports`, `/api/v1/user/card-reports`, template `/api/v1/admin/card-reports/:reportId/resolve`. |
 | `src_C/Vpc/Automation/StatusRoutes.cs` | `automation/status` gains `cardReports: {open, openedLast7d}`. |
 | `src_C/Vpc/Automation/EmailTemplates.cs`, `src_C/Vpc/Automation/AutomationTick.cs` | `WeeklyDigestData` gains `CardReportsOpen`, `CardReportsNew` (default 0); the digest DETAILS gain `Card reports: N open (M new this week)` after the Emails line. |
+| `src_C/Vpc/Runtime/AccountDeletion.cs` | `DELETE /api/v1/me` also deletes the learner's `card_reports` rows (the user-keyed-table guard test requires it). The table is checked with `to_regclass` first, so a pre-037 database skips the step instead of failing the transaction. `AccountDeletionResult` gains a trailing `CardReportRows = 0`, logged as a count. |
 | `src_C/env/prod.env.json` | `CARD_REPORTS_ENABLED "1"`, `CARD_REPORT_DAILY_LIMIT "5"`, `CARD_REPORT_AI_TRIAGE "0"`. |
 | `docs/runbooks/automation-operations.md` | New section "Card reports (R20 V05)". |
 
@@ -66,7 +67,7 @@ resolution note and the user sub are never logged.
 
 ## Tests
 
-`src_C/Tests/RecallSmith.Lambda.IntegrationTests/CardReportsTests.cs` (35 cases incl. an 11-row invalid-body theory):
+`src_C/Tests/RecallSmith.Lambda.IntegrationTests/CardReportsTests.cs` (36 cases incl. an 11-row invalid-body theory):
 happy path with a hostile note stored as is; empty note → null and the 500-after-trim cap; validation; 404 for unknown
 deck, unknown uid, deleted card, deleted deck; duplicates (same id, `duplicate:true`, not counted, answered at the
 limit, other learners unaffected, re-report after resolve); daily limit (yesterday's reports ignored, resolved-today
@@ -76,15 +77,15 @@ paging, status filter, validation; deck scoping (grant, 403 on other deck, no gr
 401/403 (incl. a non-console token); resolve 403 without write, validation, happy path, 409, 404; webhook data keys
 with no note/user and no event for a duplicate; the widened CHECK; triage off, on with AI QA off (no run, returns null,
 no throw), on with AI QA on (one `scope=cards` run of that card, message without note or sub); status field counts;
-digest line; digest week counter; the pre-037 scratch database (all four routes 503 NOT_READY, status and counters zero).
+digest line; digest week counter; account deletion removes only the learner's reports; the pre-037 scratch database (all four routes 503 NOT_READY, status and counters zero, account deletion skips the table).
 
 Updated: `AutomationStatusRoutesTests.cs` (status contract gains `cardReports`), `EmailTemplatesTests.cs` (digest
-golden gains the line), `RouteMetricsTests.cs` (the two static routes label themselves).
+golden gains the line), `RouteMetricsTests.cs` (the two static routes label themselves), `WebhookAdminRoutesTests.cs` (nine subscribable events; the too-many case is now ten), `AccountDeletionTests.cs` (`card_reports` is a user-keyed table; seeded and counted).
 
 Commands run:
 
-- `dotnet test Tests/RecallSmith.Lambda.IntegrationTests --filter "FullyQualifiedName~CardReport"` (from `src_C`): 35 passed.
-- `dotnet test Tests/RecallSmith.Lambda.IntegrationTests` (from `src_C`): full suite, see the worker report.
+- `dotnet test Tests/RecallSmith.Lambda.IntegrationTests --filter "FullyQualifiedName~CardReport"` (from `src_C`): 36 passed.
+- `dotnet test Tests/RecallSmith.Lambda.IntegrationTests` (from `src_C`): full suite, 2786 passed before the account-deletion test was added; re-run after.
 
 ## Owner steps
 

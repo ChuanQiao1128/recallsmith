@@ -655,6 +655,24 @@ public sealed class CardReportsTests
     Assert.Equal(baseline + 1, await CardReports.CreatedBetweenAsync(conn, start, end));
   }
 
+  // ---------------------------------------------------------------- account deletion
+
+  [Fact]
+  public async Task CardReport_AccountDeletion_RemovesTheLearnersReports()
+  {
+    using var scope = new Scope();
+    var (_, slug, _, uid) = await CardAsync("delete");
+    var sub = Sub("delete");
+    var other = Sub("delete-other");
+    await CreateAsync(Learner(sub), slug, uid, note: "to be deleted");
+    await CreateAsync(Learner(other), slug, uid);
+    await using var conn = new NpgsqlConnection(_db.ConnectionString);
+    await conn.OpenAsync();
+    Assert.Equal(1, (await RecallSmith.Lambda.Vpc.Runtime.AccountDeletion.DeleteUserDataAsync(conn, sub)).CardReportRows);
+    Assert.Equal(0L, AutomationTestKit.Long(await _db.ScalarAsync("select count(*) from card_reports where user_sub = $1", sub)));
+    Assert.Equal(1L, AutomationTestKit.Long(await _db.ScalarAsync("select count(*) from card_reports where user_sub = $1", other)));
+  }
+
   // ---------------------------------------------------------------- before migration 037
 
   [Fact]
@@ -677,6 +695,9 @@ public sealed class CardReportsTests
 
       Assert.Equal(new CardReports.Counts(0, 0), await CardReports.CountsAsync(conn));
       Assert.Equal(0L, await CardReports.CreatedBetweenAsync(conn, DateTime.UtcNow.AddDays(-7), DateTime.UtcNow));
+      // Account deletion skips the missing table instead of failing its transaction.
+      var deleted = await RecallSmith.Lambda.Vpc.Runtime.AccountDeletion.DeleteUserDataAsync(conn, Sub("nr-delete"));
+      Assert.Equal(0, deleted.CardReportRows);
     }
 
     var savedDb = Environment.GetEnvironmentVariable("PGDATABASE");
