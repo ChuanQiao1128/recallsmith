@@ -37,15 +37,19 @@ public class UsageAnalyticsTests
   {
     var savedClock = UsageAnalytics.UtcNow;
     var savedExcluded = Environment.GetEnvironmentVariable(UsageAnalytics.ExcludedSubsEnv);
+    var savedTimeout = UsageAnalytics.StatementTimeout;
     try
     {
       UsageAnalytics.UtcNow = () => Now;
+      UsageAnalytics.ResetBackoff();
       Environment.SetEnvironmentVariable(UsageAnalytics.ExcludedSubsEnv, excluded);
       await A05Kit.InScratchAsync(_db, Scratch, body, maxVersion);
     }
     finally
     {
       UsageAnalytics.UtcNow = savedClock;
+      UsageAnalytics.StatementTimeout = savedTimeout;
+      UsageAnalytics.ResetBackoff();
       Environment.SetEnvironmentVariable(UsageAnalytics.ExcludedSubsEnv, savedExcluded);
     }
   }
@@ -246,6 +250,60 @@ public class UsageAnalyticsTests
   }
 
   [Fact]
+  public async Task Analytics_Step_DefersWhenLessThanHalfTheTickBudgetRemains()
+  {
+    // R20X F02 (x-deploy-1, contract §10.8).
+    await InScratchAsync(async sql =>
+    {
+      await SeedAsync(sql);
+      var budget = TimeSpan.FromSeconds(20);
+      await using var conn = await sql.OpenAsync();
+      Assert.Equal(UsageAnalytics.Outcome.Deferred, await UsageAnalytics.RunIfDueAsync(conn, TimeSpan.FromSeconds(9.9), budget));
+      Assert.Equal(0L, await sql.CountAsync("select count(*) from analytics_daily"));
+      Assert.Equal(UsageAnalytics.Outcome.Computed, await UsageAnalytics.RunIfDueAsync(conn, TimeSpan.FromSeconds(10), budget));
+      Assert.Equal(8L, await sql.CountAsync("select count(*) from analytics_daily"));
+      Assert.Equal(UsageAnalytics.Outcome.NotDue, await UsageAnalytics.RunIfDueAsync(conn, TimeSpan.FromSeconds(1), budget));
+    }, excluded: "v08-e");
+  }
+
+  [Fact]
+  public async Task Analytics_Step_StatementTimeout_FailsOnce_ThenBacksOffUntilTheNextUtcDay()
+  {
+    // R20X F02 (x-deploy-1, contract §10.8): a rollup statement stuck behind a lock is cancelled by the statement_timeout
+    // set inside the transaction (57014), nothing is written, and later ticks the same UTC day do not retry it.
+    await InScratchAsync(async sql =>
+    {
+      await SeedAsync(sql);
+      UsageAnalytics.StatementTimeout = TimeSpan.FromMilliseconds(300);
+      await using var conn = await sql.OpenAsync();
+      await using (var blocker = await sql.OpenAsync())
+      {
+        await using var hold = await blocker.BeginTransactionAsync();
+        await RecallSmith.Lambda.Db.DbUtil.ExecuteAsync(blocker, hold, "lock table analytics_deck_daily in access exclusive mode", []);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var ex = await Assert.ThrowsAsync<Npgsql.PostgresException>(() => UsageAnalytics.RunIfDueAsync(conn));
+        Assert.Equal("57014", ex.SqlState);
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10), $"took {clock.Elapsed}");
+        await hold.RollbackAsync();
+      }
+      Assert.Equal(0L, await sql.CountAsync("select count(*) from analytics_daily"));
+      // set local: the connection's own setting is untouched after the transaction.
+      Assert.NotEqual("300ms", await RecallSmith.Lambda.Db.DbUtil.ExecuteScalarAsync(conn, null, "show statement_timeout", []) as string);
+
+      // The same UTC day: backed off, even with the lock gone and a long timeout.
+      UsageAnalytics.StatementTimeout = TimeSpan.FromSeconds(3);
+      UsageAnalytics.UtcNow = () => Now.AddHours(5);
+      Assert.Equal(UsageAnalytics.Outcome.BackedOff, await UsageAnalytics.RunIfDueAsync(conn));
+      Assert.Equal(0L, await sql.CountAsync("select count(*) from analytics_daily"));
+
+      // The next UTC day computes again.
+      UsageAnalytics.UtcNow = () => Now.AddDays(1);
+      Assert.Equal(UsageAnalytics.Outcome.Computed, await UsageAnalytics.RunIfDueAsync(conn));
+      Assert.Equal(8L, await sql.CountAsync("select count(*) from analytics_daily"));
+    }, excluded: "v08-e");
+  }
+
+  [Fact]
   public async Task Analytics_BeforeMigration040_StepSkips_RouteAnswers503()
   {
     await using var scope = new A04Kit.Scope();
@@ -277,7 +335,7 @@ public class UsageAnalyticsTests
       await SeedAsync(sql);
       await ComputeAsync(sql);
 
-      var data = AutomationTestKit.Data(await UsageAsync(Editor("it-v08-editor")));
+      var data = AutomationTestKit.Data(await UsageAsync(Admin("it-v08-admin")));
       Assert.Equal(["days", "decks", "excludedSubsCount", "lastComputedAt"], A04Kit.Keys(data));
       Assert.Equal(1, data.GetProperty("excludedSubsCount").GetInt32());
       Assert.Equal("2026-03-20T10:00:00.000Z", data.GetProperty("lastComputedAt").GetString());
@@ -301,6 +359,35 @@ public class UsageAnalyticsTests
       var two = AutomationTestKit.Data(await UsageAsync(Admin("it-v08-admin"), "2")).GetProperty("days").EnumerateArray()
         .Select(d => d.GetProperty("day").GetString()).ToList();
       Assert.Equal(["2026-03-18", "2026-03-19"], two);
+    }, excluded: "v08-e");
+  }
+
+  [Fact]
+  public async Task Usage_Route_DeckScopedAdmin_SeesOnlyReadableDecks_AndEveryDay()
+  {
+    // R20X F02 (s-security-3, contract §10.4): decks[] is deck-scoped data; days[] stays site-wide.
+    await InScratchAsync(async sql =>
+    {
+      await SeedAsync(sql);
+      await ComputeAsync(sql);
+      var deckX = A04Kit.Long(await sql.ScalarAsync("insert into decks (slug, title, author) values ('x', 'deck x', 'tests') returning id"));
+      await sql.ScalarAsync("insert into decks (slug, title, author) values ('y', 'deck y', 'tests')");
+      await sql.ScalarAsync("insert into admin_deck_permissions (admin_sub, deck_id, can_read, can_write) values ('it-v08-scoped', $1, 1, 0)", deckX);
+
+      static string Deck(JsonElement d) =>
+        $"{d.GetProperty("deckSlug").GetString()} {d.GetProperty("activeUsers30d").GetInt64()} {d.GetProperty("reviews30d").GetInt64()} {d.GetProperty("newLearners30d").GetInt64()}";
+
+      var all = AutomationTestKit.Data(await UsageAsync(Admin("it-v08-admin")));
+      Assert.Equal(["x 3 8 3", "y 2 3 2"], all.GetProperty("decks").EnumerateArray().Select(Deck));
+
+      var scopedResponse = await UsageAsync(Editor("it-v08-scoped"));
+      var scoped = AutomationTestKit.Data(scopedResponse);
+      Assert.Equal(["x 3 8 3"], scoped.GetProperty("decks").EnumerateArray().Select(Deck));
+      Assert.Equal(all.GetProperty("days").GetRawText(), scoped.GetProperty("days").GetRawText());
+
+      var none = AutomationTestKit.Data(await UsageAsync(Editor("it-v08-no-grant")));
+      Assert.Empty(none.GetProperty("decks").EnumerateArray());
+      Assert.Equal(Expected.Length, none.GetProperty("days").GetArrayLength());
     }, excluded: "v08-e");
   }
 
