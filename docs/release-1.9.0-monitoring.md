@@ -65,6 +65,9 @@ Add this to the Notion privacy policy (the page the app and the description link
 **Project settings** (once, per project `developercards-ios` and `developercards-console`, Developer plan):
 
 - Security & Privacy: **Data Scrubber** on (with default scrubbers), **"Prevent Storing of IP Addresses"** on.
+- Project `developercards-mobile` > Security & Privacy > Advanced Data Scrubbing (set by the supervisor; covers
+  native-origin events, which never pass the app's JS `beforeSend` scrubber): **mask** email addresses in any
+  string, and **remove** breadcrumb `http.query` / `http.fragment` data.
 - Spike protection on (organization Settings > Spike Protection), so a crash loop cannot use up the monthly quota.
 
 **Alert rules** (email to the owner):
@@ -127,7 +130,9 @@ check that **study progress**, **wallet** (pulls/coins), **Mistake Book entries 
 
 Then, on any of these devices: Settings > tap the version label 7 times > DebugMenu shows **`Sentry: active`**;
 **Send test event** shows `Sent: <id>`, and the event arrives in Sentry symbolicated (readable file/line) with
-tags `ota.update_id=embedded` and `ota.channel=production`. One API call's `x-dc-trace-id` appears as
+tags `ota.update_id=embedded`, `ota.is_embedded=true` and `ota.channel=production` (the app derives
+`ota.update_id=embedded` from `isEmbeddedLaunch`, because expo-updates reports the embedded update's UUID as its
+`updateId`). One API call's `x-dc-trace-id` appears as
 `upstreamTraceId` in the core-vpc logs. Finally, `node mobile/scripts/release/asc-release.cjs --version 1.9.0 --build 23 …`
 (plan mode) prints `releaseType=MANUAL`.
 
