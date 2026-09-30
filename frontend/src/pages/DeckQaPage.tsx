@@ -10,6 +10,10 @@
 // with Mark fixed / Dismiss, and lists past runs. It never starts a run on its
 // own and offers no way to publish past the gate: AI_QA_ENABLED and
 // AI_QA_REQUIRED are server flags the owner sets.
+//
+// R20 V10: the last panel lists the deck's semantic duplicates (card pairs whose
+// pushed embeddings are ≥ 0.90 cosine) with the embeddings status; see
+// src/features/qa/SemanticDuplicatesPanel.tsx.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 
@@ -27,6 +31,7 @@ import { consoleNav } from '../components/console/consoleNav';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { Callout } from '../components/ui/Callout';
+import { SemanticDuplicatesPanel } from '../features/qa/SemanticDuplicatesPanel';
 import {
   CARD_CLASS,
   H1_CLASS,
@@ -1047,6 +1052,8 @@ export function DeckQaPage() {
               </div>
             ) : null}
           </section>
+
+          <SemanticDuplicatesPanel deckId={deckId} />
         </>
       )}
     </ConsoleShell>

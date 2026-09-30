@@ -110,6 +110,13 @@ export type AutomationBaseline = {
   baselineSource: string;
   note: string | null;
   updatedAt: string | null;
+  /**
+   * R20 V08: the median measured review minutes (ai_draft_review, n ≥ 5), null
+   * below that. Both keys are absent when the server predates them.
+   */
+  suggestedMeasuredMinutes?: number | null;
+  /** R20 V08: how many reviews the suggestion is the median of. */
+  suggestedFromN?: number;
 };
 
 export type AutomationEventRow = {
@@ -264,7 +271,16 @@ function normalizeBaseline(value: unknown): AutomationBaseline {
     baselineSource: toText(raw.baselineSource),
     note: toNullableText(raw.note),
     updatedAt: toNullableText(raw.updatedAt),
+    ...('suggestedMeasuredMinutes' in raw ? { suggestedMeasuredMinutes: suggestedMinutes(raw.suggestedMeasuredMinutes) } : {}),
+    ...('suggestedFromN' in raw ? { suggestedFromN: toNumber(raw.suggestedFromN) } : {}),
   };
+}
+
+/** A positive finite suggestion, or null. */
+function suggestedMinutes(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 function normalizeEvent(value: unknown): AutomationEventRow {

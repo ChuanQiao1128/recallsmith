@@ -10,9 +10,25 @@
 // not on the loaded pages says so (C07 frontend-console-19). Edit moves focus
 // into the editor, and Save or Cancel returns it to the row's Edit button
 // (C07 frontend-console-18).
-import { useEffect, useRef, useState } from 'react';
+//
+// Change impact (R20 V07/V10): an event may list its affected cards (the cards
+// citing the changed page, each linked to the editor, with a "Quote missing"
+// badge when the supporting quote left the page) and carry "Needs review" when
+// the AI QA re-check was unavailable. "Recent release notes" lists new feed
+// items with the cards they may touch. Every one of these is optional: a server
+// that predates them sends none, and the tab looks as it did.
+import { Fragment, useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 
-import { addWatchTarget, fetchWatch, updateWatchTarget, type WatchPage } from '../../api/automation';
+import {
+  addWatchTarget,
+  fetchWatch,
+  updateWatchTarget,
+  watchCardEditorHref,
+  type WatchAffectedCard,
+  type WatchFeedItem,
+  type WatchPage,
+} from '../../api/automation';
 import {
   CARD_CLASS,
   FIELD_ERROR_CLASS,
@@ -23,6 +39,7 @@ import {
   TD_CLASS,
   TH_CLASS,
 } from '../../components/console/consoleStyles';
+import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Callout } from '../../components/ui/Callout';
 import {
@@ -55,6 +72,67 @@ const PATTERN_ID = 'automation-watch-pattern';
 const INTERVAL_ID = 'automation-watch-interval';
 const PROBLEMS_ID = 'automation-watch-problems';
 const EDIT_PROBLEM_ID = 'automation-watch-edit-problem';
+
+const EVENT_COLUMNS = 6;
+
+/** The card's question (or its stable uid) linked to the editor; plain text when its deck is unknown. */
+function CardLink({ card }: { card: { cardId: number; deckId: number | null; question: string; stableUid: string } }) {
+  const name = card.question || card.stableUid || `Card ${card.cardId}`;
+  const href = watchCardEditorHref(card);
+  return href ? (
+    <Link to={href} className="text-indigo-700 underline" aria-label={`Open in editor: ${name}`}>
+      {name}
+    </Link>
+  ) : (
+    <span>{name}</span>
+  );
+}
+
+function AffectedCardList({ eventId, cards }: { eventId: number; cards: WatchAffectedCard[] }) {
+  return (
+    <div data-testid={`automation-watch-affected-${eventId}`}>
+      <div className="text-xs font-semibold text-slate-700">Affected cards ({cards.length})</div>
+      <ul className="mt-1 space-y-1" aria-label={`Cards affected by event ${eventId}`}>
+        {cards.map(c => (
+          <li key={c.cardId} className="flex flex-wrap items-center gap-2">
+            <CardLink card={c} />
+            {c.deckSlug ? <span className="text-xs text-slate-500">{c.deckSlug}</span> : null}
+            {c.quoteMissing ? <Badge tone="warning">Quote missing</Badge> : null}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function FeedItemRow({ item }: { item: WatchFeedItem }) {
+  return (
+    <li className="border-t border-slate-100 pt-2" data-testid={`automation-watch-feed-item-${item.id}`}>
+      <div className="flex flex-wrap items-baseline gap-2">
+        {item.url ? (
+          <a href={item.url} target="_blank" rel="noreferrer" className="text-indigo-700 underline">
+            {item.title || urlLabel(item.url)}
+          </a>
+        ) : (
+          <span>{item.title || `Item ${item.id}`}</span>
+        )}
+        <span className="text-xs text-slate-500">First seen {formatTimestamp(item.firstSeenAt)}</span>
+      </div>
+      {item.possiblyAffectedCards.length === 0 ? (
+        <p className="text-xs text-slate-500 mt-1">No card matched this item.</p>
+      ) : (
+        <ul className="mt-1 ml-4 list-disc space-y-1" aria-label={`Cards possibly affected by ${item.title || `item ${item.id}`}`}>
+          {item.possiblyAffectedCards.map(c => (
+            <li key={c.cardId}>
+              <CardLink card={c} />
+              {c.deckSlug ? <span className="text-xs text-slate-500"> · {c.deckSlug}</span> : null}
+            </li>
+          ))}
+        </ul>
+      )}
+    </li>
+  );
+}
 
 /** Each problem's own id, so a field announces only its own message (D07 frontend-console-28). */
 function problemId(field: WatchField): string {
@@ -257,6 +335,7 @@ export function WatchTab({
 
   const targets = watch.data?.items ?? [];
   const events = watch.data?.recentEvents ?? [];
+  const feedItems = watch.data?.recentFeedItems;
   const markedLoaded = targetId !== null && targets.some(t => t.targetId === targetId);
 
   // Once per linked target: the row the source.changed link names, in view.
@@ -567,22 +646,54 @@ export function WatchTab({
               </thead>
               <tbody>
                 {events.map(e => (
-                  <tr key={e.eventId} className="border-t border-slate-100 align-top">
-                    <td className={TD_CLASS}>{codeLabel(WATCH_EVENT_KIND_LABELS, e.kind)}</td>
-                    <td className={TD_CLASS}>{urlLabel(e.url)}</td>
-                    <td className={TD_CLASS}>{codeLabel(RECHECK_STATE_LABELS, e.recheckState)}</td>
-                    <td className={`${TD_CLASS} font-mono`}>
-                      {e.recheckRunIds.length === 0 ? '—' : e.recheckRunIds.map(shortId).join(', ')}
-                    </td>
-                    <td className={TD_CLASS}>{e.queueItemIds.length === 0 ? '—' : e.queueItemIds.join(', ')}</td>
-                    <td className={TD_CLASS}>{formatTimestamp(e.createdAt)}</td>
-                  </tr>
+                  <Fragment key={e.eventId}>
+                    <tr className="border-t border-slate-100 align-top">
+                      <td className={TD_CLASS}>
+                        {codeLabel(WATCH_EVENT_KIND_LABELS, e.kind)}
+                        {e.needsHumanReview === true ? (
+                          <>
+                            {' '}
+                            <Badge tone="warning">Needs review</Badge>
+                          </>
+                        ) : null}
+                      </td>
+                      <td className={TD_CLASS}>{urlLabel(e.url)}</td>
+                      <td className={TD_CLASS}>{codeLabel(RECHECK_STATE_LABELS, e.recheckState)}</td>
+                      <td className={`${TD_CLASS} font-mono`}>
+                        {e.recheckRunIds.length === 0 ? '—' : e.recheckRunIds.map(shortId).join(', ')}
+                      </td>
+                      <td className={TD_CLASS}>{e.queueItemIds.length === 0 ? '—' : e.queueItemIds.join(', ')}</td>
+                      <td className={TD_CLASS}>{formatTimestamp(e.createdAt)}</td>
+                    </tr>
+                    {e.affectedCards && e.affectedCards.length > 0 ? (
+                      <tr className="align-top">
+                        <td className={TD_CLASS} colSpan={EVENT_COLUMNS}>
+                          <AffectedCardList eventId={e.eventId} cards={e.affectedCards} />
+                        </td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
           </div>
         ) : null}
       </section>
+
+      {feedItems ? (
+        <section className={CARD_CLASS} aria-label="Recent release notes">
+          <h2 className={H2_CLASS}>Recent release notes</h2>
+          {feedItems.length === 0 ? (
+            <p className="text-sm text-slate-600 mt-2">No release-notes item yet.</p>
+          ) : (
+            <ul className="mt-2 space-y-2 text-sm">
+              {feedItems.map(item => (
+                <FeedItemRow key={item.id} item={item} />
+              ))}
+            </ul>
+          )}
+        </section>
+      ) : null}
     </div>
   );
 }

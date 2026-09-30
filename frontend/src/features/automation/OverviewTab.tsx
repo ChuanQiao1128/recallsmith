@@ -32,11 +32,17 @@
 //
 // Card reports (R20 V09) shows the open learner reports and those opened in the
 // last 7 days, linked to /reports, when the server sends status.cardReports.
+//
+// Freshness (R20 V10) shows the median minutes from a detected source change to
+// its publish and how many changes that median covers, linked to the freshness
+// list on the Usage page, when the server sends status.freshness. The Watched
+// sources tile adds "Needs review" when the server sends watch.needsReview.
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { HUMAN_PUBLISH_ITEMS_MAX, type AutomationStatus } from '../../api/automation';
 import { CARD_CLASS, H2_CLASS, TD_CLASS, TH_CLASS } from '../../components/console/consoleStyles';
+import { FRESHNESS_HREF, formatMinutes } from '../../lib/usageView';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import {
@@ -428,6 +434,9 @@ export function OverviewTab({
                 <Stat label="Failing" value={String(status.watch.failing)} />
                 <Stat label="Changes (7 days)" value={String(status.watch.changes7d)} />
                 <Stat label="Last checked" value={age(status.watch.lastCheckedAt)} />
+                {status.watch.needsReview !== undefined ? (
+                  <Stat label="Needs review" value={String(status.watch.needsReview)} />
+                ) : null}
               </dl>
             </section>
 
@@ -486,6 +495,20 @@ export function OverviewTab({
               </dl>
               <Link to="/reports" className="mt-2 inline-block text-sm text-indigo-700 underline">
                 Open card reports
+              </Link>
+            </section>
+          ) : null}
+
+          {/* R20 V10: detected change to publish; hidden when the server predates the field. */}
+          {status.freshness ? (
+            <section className={CARD_CLASS} aria-label="Freshness">
+              <h2 className={H2_CLASS}>Freshness</h2>
+              <dl className="mt-2 grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <Stat label="Median time to publish" value={formatMinutes(status.freshness.medianMinutesToPublish)} />
+                <Stat label="Changes measured (n)" value={String(status.freshness.n)} />
+              </dl>
+              <Link to={FRESHNESS_HREF} className="mt-2 inline-block text-sm text-indigo-700 underline">
+                Open the freshness list
               </Link>
             </section>
           ) : null}
