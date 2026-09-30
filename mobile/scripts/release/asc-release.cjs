@@ -2,7 +2,7 @@
 // asc-release.cjs — App Store Connect steps that `eas submit` does not do, with the LOCAL Apple
 // session (the one `eas credentials --platform ios` refreshes into ~/.app-store/auth): wait for the
 // uploaded build to finish processing, ensure the App Store version exists, set What's New, attach
-// the build, set release-after-approval and, with --submit, create and submit the review submission.
+// the build, set the release type and, with --submit, create and submit the review submission.
 //
 // Uses @expo/apple-utils from the global eas-cli install (same library, same cookie). Reads no
 // secret and prints none. Default is a plan (read-only); --apply mutates; --submit also submits.
@@ -10,21 +10,22 @@
 //   node asc-release.cjs --version 1.6.0 --build 16 [--wait-build] [--whats-new FILE]
 //                        [--description FILE] [--keywords FILE] [--promo FILE] [--subtitle FILE]
 //                        [--review-notes FILE]
-//                        [--release-type AFTER_APPROVAL|MANUAL] [--apply] [--submit]
+//                        [--release-type MANUAL|AFTER_APPROVAL] [--apply] [--submit]
 //   description/keywords/promo live on the version's en-US localization; subtitle lives on the
 //   App Info localization (Apple limits: subtitle 30, promo 170, keywords 100, description 4000).
 //   --review-notes sets the Notes of the version's App Review Information (limit 4000); the other
 //   review fields (contact, demo account) are left as they are and never printed.
 //                        [--bundle-id com.timeawake.recallsmith] [--username info@timeawake.co.nz]
 //
-// Exit codes: 0 ok · 1 error · 3 Apple session expired (re-run `eas credentials --platform ios`).
+// Exit codes: 0 ok · 1 error · 3 Apple session expired (re-run `eas credentials --platform ios`) · 4 version held by App Review.
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
+const { checkEditableVersion } = require('./ascGuard.cjs');
 const { execSync } = require('node:child_process');
 
 function argv() {
-  const a = process.argv.slice(2), o = { apply: false, submit: false, waitBuild: false, releaseType: 'AFTER_APPROVAL', bundleId: 'com.timeawake.recallsmith', username: 'info@timeawake.co.nz' };
+  const a = process.argv.slice(2), o = { apply: false, submit: false, waitBuild: false, releaseType: 'MANUAL', bundleId: 'com.timeawake.recallsmith', username: 'info@timeawake.co.nz' };
   for (let i = 0; i < a.length; i++) {
     const k = a[i], v = a[i + 1];
     if (k === '--apply') o.apply = true;
@@ -89,6 +90,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   // 2. the editable App Store version
   let version = await app.getEditAppStoreVersionAsync({ platform: 'IOS' });
   console.log('VERSION(edit)', version ? version.attributes.versionString + ' ' + (version.attributes.appVersionState || version.attributes.appStoreState) : 'none');
+  const guard = checkEditableVersion(version ? version.attributes : null, o.version);
+  if (!guard.ok) {
+    console.log('BLOCKED ' + version.attributes.versionString + ' is ' + guard.state + ': ' + guard.reason);
+    process.exit(4);
+  }
   const whatsNew = o.whatsNew ? fs.readFileSync(o.whatsNew, 'utf8').trim() : null;
   const readOpt = (f, max, name) => { if (!f) return null; const t = fs.readFileSync(f, 'utf8').trim(); if (t.length > max) throw new Error(name + ' is ' + t.length + ' chars (max ' + max + ')'); return t; };
   const description = readOpt(o.description, 4000, 'description');

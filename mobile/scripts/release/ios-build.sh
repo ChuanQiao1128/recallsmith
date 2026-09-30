@@ -8,6 +8,17 @@ PROFILE="${1:-production}"
 VERSION=$(node -p "require('./app.json').expo.version")
 BUILD=$(node -p "require('./app.json').expo.ios.buildNumber")
 echo "app.json: version=$VERSION buildNumber=$BUILD profile=$PROFILE"
+# A store build uploads source maps to Sentry (eas.json production SENTRY_ORG/SENTRY_PROJECT); refuse placeholders.
+if [ "$PROFILE" = production ]; then
+  S_ORG=$(node -p "((require('./eas.json').build.production.ios || {}).env || {}).SENTRY_ORG || ''")
+  S_PROJECT=$(node -p "((require('./eas.json').build.production.ios || {}).env || {}).SENTRY_PROJECT || ''")
+  case "$S_ORG" in ''|REPLACE_ME_*) S_BAD=1 ;; *) S_BAD=0 ;; esac
+  case "$S_PROJECT" in ''|REPLACE_ME_*) S_BAD=1 ;; esac
+  if [ "$S_BAD" = 1 ]; then
+    echo "ios-build: fill SENTRY_ORG/SENTRY_PROJECT in eas.json (production) before a store build" >&2
+    exit 5
+  fi
+fi
 command -v eas >/dev/null || { echo "eas-cli missing" >&2; exit 2; }
 eas whoami >/dev/null 2>&1 || { echo "eas not logged in (eas login)" >&2; exit 2; }
 if [ "${DRY_RUN:-0}" = 1 ]; then
