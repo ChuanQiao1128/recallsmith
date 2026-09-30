@@ -18,11 +18,13 @@ const eas = readJson('eas.json') as { build: Record<string, Profile> };
 const iosEnv = (p: string) => eas.build[p]?.ios?.env ?? {};
 
 describe('eas.json Sentry env (1.9.0)', () => {
-  it('production uploads source maps, a failed upload only warns, org/project are placeholders', () => {
+  // Supervisor 2026-09-30 (M00 §9.2 #2): the Sentry org/project were created, so production carries the real,
+  // non-secret slugs; the placeholder guard itself stays covered by the ios-build.sh cases below.
+  it('production uploads source maps, a failed upload only warns, org/project are the real Sentry slugs', () => {
     expect(iosEnv('production')).toMatchObject({
       SENTRY_ALLOW_FAILURE: 'true',
-      SENTRY_ORG: 'REPLACE_ME_SENTRY_ORG',
-      SENTRY_PROJECT: 'REPLACE_ME_SENTRY_PROJECT',
+      SENTRY_ORG: 'timeawake-limited',
+      SENTRY_PROJECT: 'developercards-mobile',
     });
     expect(iosEnv('production').SENTRY_DISABLE_AUTO_UPLOAD).toBeUndefined();
   });

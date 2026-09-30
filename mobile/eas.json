@@ -79,8 +79,8 @@
           "CLANG_CXX_LIBRARY": "libc++",
           "EXPO_PUBLIC_ENV": "production",
           "SENTRY_ALLOW_FAILURE": "true",
-          "SENTRY_ORG": "REPLACE_ME_SENTRY_ORG",
-          "SENTRY_PROJECT": "REPLACE_ME_SENTRY_PROJECT"
+          "SENTRY_ORG": "timeawake-limited",
+          "SENTRY_PROJECT": "developercards-mobile"
         }
       }
     },
