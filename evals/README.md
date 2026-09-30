@@ -388,7 +388,10 @@ one repair turn), no second reviewer.
 
 The transport is the owner's local Claude Code CLI (`claude -p`, their subscription). **No paid
 provider is selectable:** `--provider` accepts only `claude-cli`; any other value exits 2 with
-"paid providers are not available here; use dc-evals run". It spends no API money, but it does use
+"paid providers are not available here; use dc-evals run". Every `claude -p` child is started
+without `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`,
+`CLAUDE_CODE_USE_BEDROCK` and `CLAUDE_CODE_USE_VERTEX` (removed even when your shell exports them
+for `dc-evals run`), so the CLI can only use your subscription login. It spends no API money, but it does use
 the owner's subscription, so it is run by the owner on their machine only: never in CI, a verify
 or a worker session (the tests replace the parser and the CLI with fakes).
 

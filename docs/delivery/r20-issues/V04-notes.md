@@ -109,16 +109,30 @@ Reasonable as a "likely overlap, review it" flag; too low to call a pair a true 
 
 - bge-small cosines of same-domain cards are compressed: the median card's nearest neighbour is
   already 0.85, and nothing reaches 0.98. No two cards in either deck are word-for-word copies.
-- Every pair at or above 0.90 is a concept card and an MCQ card about the same scenario and
-  answer. Examples: `aws-quick-service-card` / `aws-bi-dashboard-choice-mcq-36` 0.957,
-  `ccdvf-cache-min-prefix-by-model` / `ccdvf-cache-silently-not-written-mcq-03` 0.950. An author
-  should see these pairs before adding a third card on the same point, which is the job of the
-  authoring-time `likelyDuplicate` flag.
+- The 63 pairs at or above 0.90 are three kinds (corrected in F01, e-tests-2; the first version
+  of these notes said every pair was a concept card and an MCQ card, which the reports do not
+  support). Card kind read from the `mcq` field of `evals/data/cards-<slug>.jsonl`:
+
+  | Deck | concept + MCQ | MCQ + MCQ | concept + concept | Total |
+  |---|---|---|---|---|
+  | aws-saa-c03 | 16 | 8 | 1 | 25 |
+  | claude-ccdv-f | 24 | 1 | 13 | 38 |
+
+  Concept + MCQ pairs are the same scenario and answer asked two ways (for example
+  `aws-quick-service-card` / `aws-bi-dashboard-choice-mcq-36` 0.957,
+  `ccdvf-cache-min-prefix-by-model` / `ccdvf-cache-silently-not-written-mcq-03` 0.950); that is by
+  design, but an author should see them before adding a third card on the same point, which is the
+  job of the authoring-time `likelyDuplicate` flag. The 14 concept + concept pairs are different:
+  several look like true duplicates the deck already holds, and they are owner review items (see
+  "Owner review: likely duplicates" below).
 - The distribution has no gap at 0.90. The 10 closest pairs below it (0.89-0.90) look like the
   pairs just above it (for example, the RDS encryption concept card and its MCQ at 0.898). A
   threshold of 0.90 flags 13-16 % of cards. At 0.93 only 5-6 pairs per deck remain, and at
   0.95 only 1-2.
-- Recommendation: keep 0.90 for `SemanticDuplicateThreshold` (a warning, not a block). If the
+- Recommendation: keep 0.90 for `SemanticDuplicateThreshold` (a warning, not a block): it is
+  the level at which the claude-ccdv-f concept-card duplicates below appear at all (the lowest is
+  0.903), so a higher threshold would hide real duplicates, while most other pairs are intended
+  concept/MCQ twins that a block would wrongly stop. If the
   console's duplicates list feels noisy, raise its default `minCosine` to 0.92-0.93 rather than
   changing the shared constant. Judge it again after the owner pushes vectors and V10 shows the
   live list.
@@ -149,6 +163,32 @@ Reasonable as a "likely overlap, review it" flag; too low to call a pair a true 
 
 Gates run: `cd evals && uv lock --check && uv run --python 3.12 pytest -q` (all pass) and
 `V04.verify.sh`.
+
+### Owner review: likely duplicates
+
+The concept + concept pairs at or above 0.90 (from the 2026-09-30 reports). The first three look
+like the same card written twice; review each pair and merge or retire one card where they are:
+
+| Cosine | Card A | Card B |
+|---|---|---|
+| 0.942 | `ccdvf-instruction-placement-tool-result-vs-user-turn` | `ccdvf-own-instructions-not-in-tool-result` |
+| 0.940 | `ccdvf-model-lifecycle-states` | `ccdvf-model-deprecation-lifecycle` |
+| 0.909 | `ccdvf-sampling-params-removed` | `ccdvf-sampling-parameters-removed` |
+| 0.930 | `ccdvf-parallel-tool-results-single-message` | `ccdvf-parallel-tool-calls-execution` |
+| 0.921 | `ccdvf-batch-cache-seed-1h` | `ccdvf-batch-plus-cache-stacking` |
+| 0.913 | `ccdvf-model-id-pinning-dateless` | `ccdvf-dateless-id-not-alias` |
+| 0.913 | `ccdvf-context-window-accounting` | `ccdvf-context-window-what-counts` |
+| 0.912 | `ccdvf-usage-input-token-fields` | `ccdvf-usage-object-fields` |
+| 0.912 | `ccdvf-claude-md-context-not-enforcement` | `ccdvf-permission-rules-not-model` |
+| 0.912 | `ccdvf-claude-md-context-not-enforcement` | `ccdvf-cc-hook-vs-claude-md-enforcement` |
+| 0.909 | `aws-rds-multi-az-vs-read-replica` | `aws-rds-multi-az-cluster-vs-instance` |
+| 0.904 | `ccdvf-batch-async-lifecycle` | `ccdvf-batch-api-limits` |
+| 0.904 | `ccdvf-settings-file-scopes` | `ccdvf-cc-local-vs-shared-settings` |
+| 0.903 | `ccdvf-foundry-deployment-and-auth` | `ccdvf-foundry-hosting-option-choice` |
+
+The 9 MCQ + MCQ pairs (8 in aws-saa-c03, for example `aws-asg-scale-workers-on-queue-mcq-06` /
+`aws-queue-backlog-per-instance-mcq-08` 0.952, and `ccdvf-prefill-removed-mcq-01` /
+`ccdvf-prefill-400-mcq-09` 0.915) are worth the same look.
 
 ## Owner steps
 

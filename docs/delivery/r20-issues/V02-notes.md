@@ -64,7 +64,69 @@ dc-evals retrieval [--deck SLUG ...] [--k 1,5,10] [--methods bm25,embed,hybrid]
 
 ## The run on this machine (2026-10-01)
 
-RUN_RESULTS_PLACEHOLDER
+Run on the owner's Mac on 2026-10-01 (F01 fix round; the V02 worker left this section as a
+placeholder and never committed the report). Commands, from `evals/`:
+
+```
+uv run --python 3.12 dc-evals fetch-sources                 # then once more with --retry-failed
+uv sync --python 3.12 --extra embeddings                    # this worktree's venv only
+uv run --python 3.12 --extra embeddings dc-evals retrieval --date 2026-10-01
+```
+
+Report: `evals/reports/2026-10-01-retrieval.json` and `.md` (metrics, config, counts, failure
+reasons; no page text). fastembed `BAAI/bge-small-en-v1.5`, local CPU; no paid model call.
+
+Pages: 611 cited, 602 cached, 9 failed (still failing after `--retry-failed`), 0 not fetched. Chunks:
+8,682 (aws-saa-c03) and 4,538 (claude-ccdv-f). Pairs evaluated: 738 of 753 (aws-saa-c03; 15 cite
+a failed page) and 587 of 587 (claude-ccdv-f).
+
+Pairs (one per card and cited page), page-level, corpus = every cached page the deck cites:
+
+| Deck | Method | n | recall@1 | recall@5 | recall@10 | MRR |
+| --- | --- | --- | --- | --- | --- | --- |
+| overall | bm25 | 1325 | 0.4370 | 0.7713 | 0.8649 | 0.5798 |
+| overall | embed | 1325 | 0.4226 | 0.7404 | 0.8279 | 0.5588 |
+| overall | hybrid | 1325 | 0.4196 | 0.7691 | 0.8634 | 0.5758 |
+| aws-saa-c03 | bm25 | 738 | 0.2818 | 0.6680 | 0.8022 | 0.4472 |
+| aws-saa-c03 | embed | 738 | 0.2846 | 0.6328 | 0.7493 | 0.4347 |
+| aws-saa-c03 | hybrid | 738 | 0.2764 | 0.6626 | 0.7954 | 0.4484 |
+| claude-ccdv-f | bm25 | 587 | 0.6320 | 0.9012 | 0.9438 | 0.7465 |
+| claude-ccdv-f | embed | 587 | 0.5963 | 0.8756 | 0.9267 | 0.7148 |
+| claude-ccdv-f | hybrid | 587 | 0.5997 | 0.9029 | 0.9489 | 0.7360 |
+
+Cards (best rank over the card's cited pages):
+
+| Deck | Method | n | recall@1 | recall@5 | recall@10 | MRR |
+| --- | --- | --- | --- | --- | --- | --- |
+| overall | bm25 | 748 | 0.7741 | 0.9599 | 0.9799 | 0.8521 |
+| overall | embed | 748 | 0.7487 | 0.9599 | 0.9786 | 0.8392 |
+| overall | hybrid | 748 | 0.7433 | 0.9666 | 0.9799 | 0.8451 |
+| aws-saa-c03 | bm25 | 307 | 0.6775 | 0.9349 | 0.9707 | 0.7871 |
+| aws-saa-c03 | embed | 307 | 0.6840 | 0.9446 | 0.9642 | 0.7908 |
+| aws-saa-c03 | hybrid | 307 | 0.6645 | 0.9446 | 0.9642 | 0.7882 |
+| claude-ccdv-f | bm25 | 441 | 0.8413 | 0.9773 | 0.9864 | 0.8973 |
+| claude-ccdv-f | embed | 441 | 0.7937 | 0.9705 | 0.9887 | 0.8728 |
+| claude-ccdv-f | hybrid | 441 | 0.7982 | 0.9819 | 0.9909 | 0.8846 |
+
+Reading: BM25 is the strongest single method on these decks (the cards reuse the pages'
+service and API names); embed alone is a little weaker, and RRF hybrid does not beat BM25 on
+MRR, only on recall@5/@10 for claude-ccdv-f. aws-saa-c03 is harder at the pair level: its corpus
+is about four times larger (497 pages) and a card cites 2.4 pages on average, so only one of a
+card's pages can rank first.
+
+Failed pages (recorded in the cache manifest; the run went on):
+
+| Page | Reason |
+| --- | --- |
+| https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/ec2/USD/current/ec2-ondemand-without-sec-sel/ | HTTP error 404 fetching https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/ec2/USD/current/ec2-ondemand-without-sec-sel/ |
+| https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-limits.html | no extractable text |
+| https://docs.aws.amazon.com/cost-management/latest/userguide/sp-recommendations.html | no extractable text |
+| https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSDataTransfer/current/us-east-1/index.csv | unsupported content type application/octet-stream |
+| https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSELB/current/us-east-1/index.csv | unsupported content type application/octet-stream |
+| https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonEC2/current/us-east-1/index.csv | unsupported content type application/octet-stream |
+| https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonEFS/current/us-east-1/index.csv | unsupported content type application/octet-stream |
+| https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/current/us-east-1/index.csv | unsupported content type application/octet-stream |
+| https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3GlacierDeepArchive/current/us-east-1/index.csv | unsupported content type application/octet-stream |
 
 ## Why the lexical chooser is not a baseline
 
