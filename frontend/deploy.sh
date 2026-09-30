@@ -6,6 +6,8 @@
 # Pruning is manual; see `frontend/README.md` → Deployment.
 #
 #   AWS_PROFILE=dev ./deploy.sh        DRY_RUN=1 ./deploy.sh (build + print commands)
+#   Sentry: VITE_SENTRY_DSN from the environment, else the SSM String parameter named by CONSOLE_SENTRY_DSN_PARAM
+#   (default /developercards/prod/console-sentry-dsn); blank means the build reports nothing.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"; cd "$HERE"
 export AWS_PROFILE="${AWS_PROFILE:-dev}"
@@ -13,6 +15,8 @@ BUCKET="${CONSOLE_BUCKET:-recallsmith-console-622994489535}"
 DIST_ID="${CONSOLE_DISTRIBUTION_ID:-E85FKUMZZWQWX}"     # d12pfy1rhi3ekm.cloudfront.net
 REGION="${AWS_REGION:-ap-southeast-2}"
 CONSOLE_URL="${CONSOLE_URL:-https://console.developercards.app}"
+# Sets VITE_SENTRY_DSN (or leaves it blank) and VITE_BUILD_ID for the build; never fails and never prints the DSN.
+source scripts/resolve-sentry-dsn.sh
 
 npm run build
 [ -f dist/index.html ] || { echo "dist/index.html missing after build" >&2; exit 1; }
