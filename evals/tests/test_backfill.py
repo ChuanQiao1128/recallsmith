@@ -251,6 +251,7 @@ def test_select_quote_skips_chunk_edge_fragments_and_headings() -> None:
     assert quote.text == ("If one customer gateway device fails, the virtual private gateway directs traffic to the "
                           "working device.")
     assert select_quote("#### Customer gateway device failover", support) is None
+    assert select_quote("# What is a customer gateway device?", support) is None
     assert select_quote("Customer gateway devices advertise routes over BGP so the gateway can", support) is None
 
 

@@ -154,8 +154,8 @@ def select_quote(
     """The best quote window of ``text`` for the answer terms ``support``, or None.
 
     Seed: the sentence sharing the most answer terms (the first one on a tie) that fits the cap and
-    does not begin with a deck marker. A window starts on a character that is not lower-case and ends
-    with a stop, so a chunk that dc-ingest cut mid-sentence (overlap start, size-driven end) and a
+    does not begin with a deck marker. A window starts on a character that is neither lower-case nor a
+    Markdown heading ``#`` and ends with a stop, so a chunk that dc-ingest cut mid-sentence (overlap start, size-driven end) and a
     heading never make a quote. Growth: the neighbour on the same line that adds the most new
     answer terms (the following one on a tie), while it adds at least one, the window stays within
     ``max_chars`` and ``max_sentences``, and the window's first sentence is not a marker line."""
@@ -168,7 +168,7 @@ def select_quote(
 
     def fits(i: int, j: int) -> bool:
         window = text[spans[i][0]:spans[j][1]]
-        return (len(window) <= max_chars and not starts_with_marker(window) and not window[0].islower()
+        return (len(window) <= max_chars and not starts_with_marker(window) and not window[0].islower() and not window.startswith("#")
                 and _ENDS_SENTENCE.search(window) is not None)
 
     seeds = [i for i in range(len(spans)) if overlap[i] and fits(i, i)]
