@@ -11,7 +11,8 @@ The deck files are not edited in this issue.
 | --- | --- |
 | `evals/src/dc_evals/backfill.py` | New. Candidate pages, chunk ranking, quote windows, SOURCE insertion, unified patch, patched-deck validation, report files, `--apply`. |
 | `evals/src/dc_evals/cli.py` | New subcommand `backfill-sources`. |
-| `evals/tests/test_backfill.py` | New, 16 tests. |
+| `evals/tests/test_backfill.py` | New, 18 tests. |
+| `evals/tests/test_report.py` | The committed-runs check skips `evals/reports/backfill/` (proposal files, not eval run files). |
 | `evals/README.md` | New section "Citation backfill"; layout line. |
 | `evals/reports/backfill/<date>-<slug>-sources.{jsonl,md,patch}` | The real run output for both decks (see "The run"). |
 
@@ -37,7 +38,10 @@ dc-evals backfill-sources --deck SLUG [--limit N] [--min-score X] [--out DIR] [-
   Query = question + explanation + code + keyed options (`mutations._answer_text`).
 - Quote window, in each of the best 3 chunks: sentences split at `.`/`?`/`!` followed by space
   (not after e.g./i.e./etc., not before a lower-case word) and never across a line break. A
-  window starts on a character that is neither lower-case nor `#` and ends with `.`, `?` or `!`. Seed =
+  window starts on a character that is neither lower-case nor `#` and ends with `.`, `?` or `!`.
+  A window holding wording the project keeps out of tracked files is never proposed
+  (`EXCLUDED_WORDING`, stored as sha256 digests of the lower-case terms so the list itself is not in
+  the repo). One real doc passage was dropped this way (two ccdvf cards got another quote). Seed =
   the sentence sharing the most answer terms (explanation + keyed options; tokens as V02, plural
   `s` stripped); grow by the same-line neighbour adding the most new answer terms (following one
   on a tie) while it adds at least one, up to 3 sentences and 1000 characters. A window whose
@@ -74,6 +78,7 @@ blocked or a fake embedder):
   refusal for a card that already has a SOURCE or does not exist;
 - the patch applies cleanly with `git apply` (also for a deck without a final newline);
 - chunk-edge fragments (lower-case start, no final stop) and Markdown headings are never quoted;
+- excluded wording (a stand-in digest) is never quoted; the committed digests are sha256 hex;
 - the command end to end: cards with a source skipped, fragment dropped, ledger CSV fallback,
   review table weakest first, deck untouched without `--apply`, patch reproduces the proposals;
   `--min-score` and `--limit`; uncached pages skipped; `--apply`; a patched deck that does not
