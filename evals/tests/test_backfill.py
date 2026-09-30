@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from pytest import fixture
 
 from dc_evals import backfill, deck_review
 from dc_evals.backfill import (
@@ -157,7 +158,7 @@ def doc(url: str, *texts: str, title: str = "T") -> dict:
     }
 
 
-@pytest.fixture()
+@fixture()
 def setup(tmp_path: Path, monkeypatch) -> dict:
     """A demo deck, its sources file and ledger, and a cache holding the three pages."""
     decks = tmp_path / "decks"
