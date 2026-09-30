@@ -8,6 +8,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -95,6 +96,22 @@ def _methods(text: str) -> list[str]:
     if unknown or not chosen:
         raise argparse.ArgumentTypeError(f"methods are a comma list of {', '.join(METHODS)}")
     return list(dict.fromkeys(chosen))
+
+
+def _deck_slug(text: str) -> str:
+    if not re.fullmatch(r"[a-z0-9]+(?:[-_][a-z0-9]+)*", text):
+        raise argparse.ArgumentTypeError("expected a deck slug such as aws-saa-c03")
+    return text
+
+
+def _score_value(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("expected a number between 0 and 1") from None
+    if not 0.0 <= value <= 1.0:
+        raise argparse.ArgumentTypeError("expected a number between 0 and 1")
+    return value
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -284,6 +301,20 @@ def _parser() -> argparse.ArgumentParser:
                            help="comma list of bm25, embed, hybrid (default all three)")
     retrieval.add_argument("--out", type=Path, default=REPORTS_DIR)
     retrieval.add_argument("--date", type=_review_date, default=None, help="YYYY-MM-DD (default: UTC today)")
+
+    backfill = sub.add_parser(
+        "backfill-sources",
+        help="propose verbatim SOURCE quotes for a deck's cards without one (V03; review files, no deck edit)",
+    )
+    backfill.add_argument("--deck", required=True, type=_deck_slug, help="the deck slug (content/decks/<slug>.md)")
+    backfill.add_argument("--limit", type=_positive_int, default=None, help="only the first N cards without a source")
+    backfill.add_argument("--min-score", type=_score_value, default=None,
+                          help="skip proposals scoring below X (0..1; default 0.1)")
+    backfill.add_argument("--out", type=Path, default=None, help="output directory (default evals/reports/backfill)")
+    backfill.add_argument("--date", type=_review_date, default=None, help="YYYY-MM-DD in the file names (default: UTC today)")
+    backfill.add_argument("--offline", action="store_true", help="use cached pages only; never fetch")
+    backfill.add_argument("--apply", action="store_true",
+                          help="also write the SOURCE lines into the deck file (the owner's step, after review)")
 
     score = sub.add_parser("score", help="print the report JSON for a run file")
     score.add_argument("run_file", type=Path)
@@ -565,6 +596,16 @@ def _retrieval(args: argparse.Namespace) -> int:
                          date=args.date or today())
 
 
+def _backfill_sources(args: argparse.Namespace) -> int:
+    from . import backfill
+
+    if args.min_score is None:
+        args.min_score = backfill.DEFAULT_MIN_SCORE
+    if args.out is None:
+        args.out = backfill.DEFAULT_OUT
+    return backfill.run_backfill(args)
+
+
 def _compare(args: argparse.Namespace) -> int:
     from .compare import compare
 
@@ -603,6 +644,7 @@ def main(argv: list[str] | None = None) -> int:
         "review": _review,
         "fetch-sources": _fetch_sources,
         "retrieval": _retrieval,
+        "backfill-sources": _backfill_sources,
     }
     return handlers[args.command](args)
 
