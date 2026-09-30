@@ -9,10 +9,13 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from pytest import fixture
 from conftest import FakeLlm, finding, reply, review_json
 
 from dc_evals import deck_review
 from dc_evals.cli import main
+
+parametrize = pytest.mark.parametrize
 
 
 def card(uid: str, question: str = "What is it?", difficulty: int = 1) -> dict:
@@ -44,7 +47,7 @@ class Seams:
         return self.llm
 
 
-@pytest.fixture
+@fixture
 def seams(monkeypatch: pytest.MonkeyPatch) -> Seams:
     s = Seams()
     monkeypatch.setattr(deck_review, "parse_deck", fake_parse)
@@ -52,7 +55,7 @@ def seams(monkeypatch: pytest.MonkeyPatch) -> Seams:
     return s
 
 
-@pytest.fixture
+@fixture
 def deck(tmp_path: Path) -> Path:
     return write_deck(tmp_path / "demo.md", [card("a-1"), card("b-2"), card("c-3")])
 
@@ -99,7 +102,7 @@ def git(repo: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True)
 
 
-@pytest.fixture
+@fixture
 def repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     (root / "decks").mkdir(parents=True)
@@ -152,7 +155,7 @@ def test_card_content_is_sorted_key_json() -> None:
 
 # ---- provider and caps ---------------------------------------------------------------------
 
-@pytest.mark.parametrize("provider", ["anthropic", "bedrock", "bedrock-converse", "openai-mantle", "x"])
+@parametrize("provider", ["anthropic", "bedrock", "bedrock-converse", "openai-mantle", "x"])
 def test_any_provider_but_claude_cli_is_refused(seams, deck, tmp_path, capsys, provider) -> None:
     assert run(deck, tmp_path, "--all", "--provider", provider) == 2
     assert "paid providers are not available here; use dc-evals run" in capsys.readouterr().err
@@ -223,7 +226,7 @@ def test_exit_0_when_only_minor_findings(monkeypatch, seams, deck, tmp_path) -> 
     assert run(deck, tmp_path, "--all") == 0
 
 
-@pytest.mark.parametrize("category", ["incorrect_answer", "ambiguous_stem"])
+@parametrize("category", ["incorrect_answer", "ambiguous_stem"])
 def test_exit_1_on_a_blocker_or_major_finding(seams, deck, tmp_path, category) -> None:
     seams.llm.respond = responder({"b-2": [finding("minor", category, "bad", "fix it")]})
     assert run(deck, tmp_path, "--all") == 1
