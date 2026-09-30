@@ -24,7 +24,8 @@ in the Lambda) and the client from `ai_qa.providers.make_client`.
 
 ```
 evals/
-  pyproject.toml, uv.lock        Python 3.12, hatchling, uv path source to ../services/ai-qa
+  pyproject.toml, uv.lock        Python 3.12, hatchling, uv path sources to ../services/ai-qa and
+                                 ../tools/ingest (V02); optional extra `embeddings` (fastembed)
   scripts/export-cards.mts       decks -> data/cards-<slug>.jsonl through the console parser
   scripts/parse-deck.mts         one deck (file or stdin) -> QaCard JSON lines (V01, used by dc-evals review)
   scripts/deck-lib.mts           the shared console-parser loader and exportCard of both scripts
@@ -46,7 +47,8 @@ evals/
                                  B06 new-facts: dc-evals import-drafts from the author-runner's drafts)
   data/authored-v2.labels.jsonl  A15: its jury labels (dc-evals jury --dataset authored-v2), + .labels.summary.json
   src/dc_evals/                  cli, dataset, sources, seed, mutations, runner, score, report,
-                                 author, jury, compare, automation_gate, drafts_import, deck_review
+                                 author, jury, compare, automation_gate, drafts_import, deck_review,
+                                 source_cache and retrieval (V02)
   reports/                       run files and reports (the owner commits them)
   .cache/review/                 dc-evals review output (git-ignored, never committed)
   tests/                         pytest with a FakeLlm; no test calls a model
@@ -297,9 +299,13 @@ uv run --python 3.12 dc-evals compare reports/<run>.jsonl ... --name <name> [--d
 uv run --python 3.12 dc-evals review --deck <deck.md> (--changed-since REF | --cards UID[,UID...] | --all) \
     [--provider claude-cli] [--model claude-opus-5] [--concurrency 2] [--limit 60] [--out FILE] \
     [--review-date YYYY-MM-DD] [--dry-run]
+uv run --python 3.12 dc-evals fetch-sources [--deck <slug> ...] [--max-pages N] [--delay-s 1.0] [--retry-failed]
+uv run --python 3.12 [--extra embeddings] dc-evals retrieval [--deck <slug> ...] [--k 1,5,10] \
+    [--methods bm25,embed,hybrid] [--date YYYY-MM-DD] [--out reports/]
 ```
 
-`dc-evals review` is described in [Local pre-publish review](#local-pre-publish-review).
+`dc-evals review` is described in [Local pre-publish review](#local-pre-publish-review);
+`fetch-sources` and `retrieval` in [Retrieval eval](#retrieval-eval).
 
 The three Q03 commands (`author`, `jury`, `compare`) are described in
 [Agent-authored cards, model jury and configuration comparison](#agent-authored-cards-model-jury-and-configuration-comparison-q03).
@@ -931,6 +937,59 @@ humanValid, humanInvalid, unadjudicated}, perEvidence{<class>: {self-evidenced, 
 recall, recallCi95}}, excludedRows[]}, proxyFidelity (null unless claude-cli){outcomes[], note}, gate{thresholds, expected{datasetSha256, rows, shipping{provider,
 model, promptVersion, effort, structuredOutputsAtStart}}, passes, failures[]}`. `perClass` lists the classes the run's dataset seeds (six for v1, seven for v2 and v3).
 
+## Retrieval eval
+
+`dc-evals retrieval` measures whether the official page that supports a card can be found from
+the card's own text, the retrieval step a cited-authoring or source-check flow would rely on. It
+calls no model API: BM25 is pure Python and the embeddings run locally.
+
+**Ground truth.** The distinct (uid, page) pairs of `data/sources-<deck>.jsonl`: the fact-check
+ledgers say card `uid` was verified against that page. The URL's `#fragment` is dropped, so two
+anchors on one page are one page.
+
+**Fetching** (`dc-evals fetch-sources`). Every distinct https page the ledgers cite goes through
+dc-ingest (`dc_ingest.core.ingest`, its https-only redirects, `DC_INGEST_ALLOWED_HOSTS` and 10 MB
+cap unchanged), chunked at 1500 characters with 150 of overlap. One request at a time,
+`--delay-s` (default 1.0) seconds between network requests, User-Agent
+`developercards-evals-retrieval/1.0 (...) developercards-ingest/<version>`. Each page is cached
+as `<sha256(url)>.json` under `$DC_SOURCES_CACHE` (default `~/.cache/developercards/sources`,
+outside the repo; fetched documentation is copyrighted and is never committed). `manifest.json`
+in the same directory records each page's status, HTTP status and a one-line reason; a failed
+page never stops the run, and a re-run skips cached pages and recorded failures
+(`--retry-failed` fetches failures again). `--max-pages N` stops after N network fetches.
+
+**Ranking.** For each pair whose page is cached, the query is the card's question plus the text
+it asserts (explanation, code, keyed options; `mutations._answer_text`), the corpus is every
+chunk (page title + chunk text) of every cached page the same deck cites, and pages are ranked
+by their best chunk. A pair's rank counts every page tied with the gold page as ahead of it.
+
+| method | what |
+| --- | --- |
+| `bm25` | Okapi BM25, pure Python, k1 = 1.5, b = 0.75, idf ln(1 + (N - df + 0.5) / (df + 0.5)); tokens are lower-case `[a-z0-9]+` minus a short stop list; each distinct query term once |
+| `embed` | cosine similarity of `BAAI/bge-small-en-v1.5` vectors through fastembed (optional extra `embeddings`; the model, about 130 MB, downloads to fastembed's own cache on first use); no query prefix, because the queries are passage-length. Without fastembed it is reported as skipped |
+| `hybrid` | reciprocal rank fusion of the bm25 and embed page rankings, sum of 1 / (60 + rank); skipped when embed is |
+
+**Metrics**, per deck and overall: recall@k for each `--k` and MRR over the pairs, the same over
+cards (best rank across the card's cited pages), the pair and card counts, and the pages cited,
+cached, failed and not fetched. The report is `reports/<date>-retrieval.json` and `.md`: metrics,
+method configuration and counts, never page text.
+
+The existing lexical chooser (`mutations.supporting_source`) is **not** a comparable baseline and
+is not reported: it only chooses among the card's own ledger URLs (one to a few candidates, all
+correct by construction) and it scores the ledger's `fact_checked` summary notes rather than the
+page text, so its hit rate measures agreement between two notes about the same card, not
+retrieval.
+
+```
+cd evals
+uv run --python 3.12 dc-evals fetch-sources                 # ~611 pages, about 15 minutes
+uv run --python 3.12 --extra embeddings dc-evals retrieval   # bm25, embed and hybrid
+uv run --python 3.12 dc-evals retrieval --methods bm25       # without the extra: bm25 only
+```
+
+The tests use a fake fetcher, a fake embedder and a temporary cache; nothing in CI downloads a
+page or a model.
+
 ## Versioning
 
 The report name and body carry the model and `promptVersion`; a prompt change bumps
@@ -952,6 +1011,6 @@ uv lock --check
 uv run --python 3.12 pytest -q
 ```
 
-Every test uses `tests/conftest.py`'s `FakeLlm` (a copy of the ai-qa test fake's shape; packages
+`tests/test_retrieval.py` uses a fake fetcher and a fake embedder. Every model-reviewer test uses `tests/conftest.py`'s `FakeLlm` (a copy of the ai-qa test fake's shape; packages
 never import each other's tests). Nothing in the test suite constructs a real client or calls a
 model.
