@@ -120,3 +120,10 @@ Tests first: `ChangeImpactTests.cs` was written before the implementation and do
 - The `source.changed` webhook payload does not carry the affected cards (that would change the A00 §13 payload
   contract).
 - The console rendering is V10.
+
+## Final test run (2026-10-01)
+
+- `dotnet test Tests/RecallSmith.Lambda.IntegrationTests` (from `src_C`): 2807 passed, 0 failed, 0 skipped.
+- `V07.verify.sh` with `BASE=delivery/r20-s`: `V07 VERIFY OK` (targeted filter: 30 passed).
+- The docs path citations in this file and the runbook were checked against the `docsPaths.test.ts` rule: every
+  cited path exists. vitest itself could not run, because this worktree has no `frontend/node_modules`.
