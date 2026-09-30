@@ -28,7 +28,9 @@ public sealed class PostgresFixture : Xunit.IAsyncLifetime
 {
   // Pinned, not floating. A suite whose entire purpose is to observe what a
   // real planner does must not quietly change planners between runs.
-  private const string Image = "postgres:16-alpine";
+  // R20 V06: PostgreSQL 17 with pgvector (was postgres:16-alpine), so migration 038 installs
+  // the vector extension here; the "extension absent" path is tested in a scratch database.
+  private const string Image = "pgvector/pgvector:pg17";
   private const string Db = "recallsmith";
   private const string User = "recallsmith";
   private const string Password = "recallsmith";

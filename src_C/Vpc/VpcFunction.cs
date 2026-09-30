@@ -391,6 +391,19 @@ public sealed class VpcFunction
       {
         return await Vpc.Reports.CardReports.HandleUser(req, res, auth);
       }
+      // R20 V06 — card embeddings (pushed from the owner's Mac) and semantic duplicates
+      if (p.EndsWith("/api/v1/admin/card-embeddings/status", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Authoring.CardEmbeddings.HandleStatus(req, res, auth);
+      }
+      if (p.EndsWith("/api/v1/admin/card-embeddings", StringComparison.OrdinalIgnoreCase))
+      {
+        return await Vpc.Authoring.CardEmbeddings.HandleUpsert(req, res, auth);
+      }
+      if (RouteMatcher.Match("/api/v1/admin/decks/:deckId/semantic-duplicates", p) is { } semanticDuplicates)
+      {
+        return await Vpc.Authoring.CardEmbeddings.HandleSemanticDuplicates(req, res, auth, semanticDuplicates["deckId"]);
+      }
       // Runtime
       if (p.EndsWith("/api/v1/me", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))
       {
