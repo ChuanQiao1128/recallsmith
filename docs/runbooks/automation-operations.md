@@ -489,3 +489,36 @@ to 6 decimals.
 **Rollback.** The table only adds data. To stop using it, stop pushing vectors. To remove it, the master can run
 `DROP TABLE card_embeddings;`, and the routes return `503 VECTOR_NOT_READY` once the 5-minute cache expires. Do not
 drop the extension while the table exists.
+
+## Change impact of the source watch (R20 V07)
+
+The source watch now says which cards a change touches. Everything here is deterministic (SQL only), works with
+`AI_QA_ENABLED=0`, and never edits a card: the output is a list for a person to check.
+
+**Deploy order.** Code first, then `POST /api/v1/admin/db/migrate` (applies `039_source_watch_impact.sql`, one
+additive `possibly_affected_cards jsonb` column on `source_watch_feed_items`). Before the migration the page
+impact below already works (it lives in the event's `details` jsonb); the release-notes analysis is skipped with
+an `impact_not_migrated` log line, the watch route answers `recentFeedItems: []` and the digest counts zero.
+
+**Changed or gone page.** Each `changed`/`gone` event stores `details.affectedCards`: the live cards (card and
+deck not deleted) whose `source.url` is exactly the page URL, by card id, at most 200, each with
+`quoteMissing` when the watcher could not find its quote. `details.needsHumanReview` becomes `true` when such
+cards exist and the AI QA re-check is unavailable (AI QA off, or the re-check was given up). The
+`source_changed` email then lists up to 20 of them under NEEDS YOU with a console editor link
+(`<CONSOLE_BASE_URL>/decks/cards/edit?deckId=<id>&cardId=<id>`); when a re-check ran they are listed under
+DETAILS instead. A URL that differs in any character (query string, trailing slash) is a different page.
+
+**New release-notes item.** For each new item matching a feed's title pattern (not the first, baseline
+observation), core runs PostgreSQL full-text search over the live cards of the feed's deck (all decks when the
+feed has none): `to_tsvector('english', question || ' ' || explanation)` against the item's title (plus its
+`summary`, when the watcher sends one), the terms OR-ed, ranked with `ts_rank_cd`. The top 5 with rank ≥ 0.2
+are stored. Each occurrence of a query word in a card is worth 0.1, so 0.2 means at least two hits; a single
+shared word such as "Amazon" does not qualify. The Monday digest lists the week's items that have possibly
+affected cards (one line each, with ranks and editor links) and a NEEDS YOU line with their count.
+
+**Where to look.** `GET /api/v1/admin/automation/watch`: each `recentEvents[]` entry has `affectedCards` and
+`needsHumanReview`; `recentFeedItems` holds the latest 20 analysed items with `possiblyAffectedCards`.
+`GET /api/v1/admin/automation/status` → `watch.needsReview`: changed/gone events of the last 30 days flagged for
+a human review. The flag is informational; nothing clears it, so the 30-day window keeps the count current.
+
+**Rollback.** Revert the code; the column and the extra `details` keys are ignored by older code.
