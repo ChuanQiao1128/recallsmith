@@ -35,7 +35,7 @@ Status: fixed
 
 Status: fixed
 
-- `mobile/src/telemetry/observability.ts:138,155`: the OTA tags are built once (`otaTags`) and still passed as
+- `mobile/src/telemetry/observability.ts:139,155`: the OTA tags are built once (`otaTags`) and still passed as
   `initialScope: { tags: otaTags }` (contract literal kept).
 - `mobile/src/telemetry/observability.ts:194-200`: after a successful init with a parsed DSN, `Sentry.setTags(otaTags)`
   writes the same tags through the isolation scope, which @sentry/react-native syncs to native, so native crash
