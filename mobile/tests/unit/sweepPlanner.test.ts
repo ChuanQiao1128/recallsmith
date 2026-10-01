@@ -3,7 +3,7 @@ import fc from 'fast-check';
 
 import { countLearned, pickNextCard, planChallengeRoute } from '../../src/features/gacha/planner/sessionPlanner';
 import { buildFocusRoute, buildSweepRoute } from '../../src/features/gacha/planner/sessionBuilder';
-import { buildRatedSessionState, modeLabel } from '../../src/features/gacha/session/sessionReviewHelpers';
+import { buildRatedSessionState, buildSessionProgressVM, modeLabel } from '../../src/features/gacha/session/sessionReviewHelpers';
 import { scheduleNextReview } from '../../src/review/model';
 import type { ReviewRating } from '../../src/review/model';
 import { SESSION_MAIN_ROUTE_DEFAULT, SWEEP_SPREAD_DAYS } from '../../src/features/gacha/constants';
@@ -288,6 +288,12 @@ describe('sweep planner', () => {
     expect(modeLabel('review-due')).toBe('Review Due');
     expect(modeLabel('learn-new')).toBe('Learn');
     expect(modeLabel('mixed')).toBe('Mixed');
+  });
+
+  it('keeps the mode label out of the session subtitle (R22 §5)', () => {
+    const vm = buildSessionProgressVM({ sessionDone: 0, sessionLimit: 5, dueTodayCount: 0, mode: 'sweep' });
+    expect(vm.subtitle).toBe('Card 1 of 5');
+    expect(vm.subtitle).not.toContain(modeLabel('sweep'));
   });
 });
 

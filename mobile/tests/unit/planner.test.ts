@@ -56,6 +56,8 @@ describe('buildChallengeRoute / planChallengeRoute', () => {
 
     expect(challenge.limit).toBe(1);
     expect(challenge.nodes[0]?.role).toBe('warmup');
+    // R22 §5: the warm-up card carries no learner-visible title ('Warm-up node' is gone).
+    expect(challenge.nodes[0]?.title).toBe('');
     expect(challenge.summary).toMatch(/maintenance run/i);
   });
 
