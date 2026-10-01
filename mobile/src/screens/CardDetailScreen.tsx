@@ -506,9 +506,7 @@ export function CardDetailScreen({ navigation, route }: Props) {
                       {mcq.options
                         .filter((option) => option.correct)
                         .map((option) => (
-                          <Text key={option.key} style={styles.mcqCorrectText}>
-                            {option.text}
-                          </Text>
+                          <InlineCodeText key={option.key} style={styles.mcqCorrectText} text={option.text} />
                         ))}
                     </View>
                   ) : null}
