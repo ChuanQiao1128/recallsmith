@@ -4,8 +4,19 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
-import { setAudiencePreference, type AudiencePreference } from '../features/gacha/audience/audiencePrefs';
-import { getAudiencePreferenceLabel } from '../features/gacha/audience/audienceRules';
+import { setStudyGoal } from '../features/goal/studyGoal';
+import {
+  DATE_PRESETS,
+  DEFAULT_GOAL_DECK_SLUG,
+  GOAL_CHOICES,
+  NO_DATE_LABEL,
+  canStepExamDate,
+  examDateForPreset,
+  formatExamDate,
+  stepExamDate,
+  type DatePresetKey,
+} from '../features/gacha/audience/goalChoices';
+import { setActiveDeckSlug } from '../content/activeDeck';
 import { completeOnboarding } from '../features/gacha/onboarding/onboardingPrefs';
 import { colors } from '../theme/colors';
 import { CHROME_MAX_FONT_SCALE } from '../theme/dynamicType';
@@ -13,23 +24,25 @@ import { markPermissionPromptPending } from './PermissionPromptScreen';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AudienceSurvey'>;
 
-// The label is the one shared audience vocabulary (getAudiencePreferenceLabel);
-// the outcome-driven body sentence stays as the human-readable description.
-export const AUDIENCE_SURVEY_OPTIONS: Array<{ key: AudiencePreference; label: string; body: string }> = [
-  { key: 'junior', label: getAudiencePreferenceLabel('junior'), body: 'Easier cards first to build confidence.' },
-  { key: 'both', label: getAudiencePreferenceLabel('both'), body: 'A balance of easy and hard cards.' },
-  { key: 'all', label: getAudiencePreferenceLabel('all'), body: 'Lean toward harder cards when new content arrives.' },
-];
+// R22 §1.1 / §3: the onboarding step that used to ask for a content lane now asks what the learner
+// wants to learn, then an optional exam date. The route keeps its 'AudienceSurvey' name (and the
+// 'audience' onboarding stage) so existing installs mid-onboarding resume here. The lane preference
+// lives on in Settings as "Card difficulty" (default Balanced); onboarding no longer writes it.
+type Step = 'goal' | 'date';
+type DateChoice = { kind: 'none' } | { kind: 'preset'; preset: DatePresetKey; examDate: string };
 
 export function AudienceSurveyScreen({ navigation }: Props) {
-  const [selected, setSelected] = useState<AudiencePreference>('both');
+  const [step, setStep] = useState<Step>('goal');
+  const [deckSlug, setDeckSlug] = useState<string>(DEFAULT_GOAL_DECK_SLUG);
+  const [dateChoice, setDateChoice] = useState<DateChoice>({ kind: 'none' });
   const [saving, setSaving] = useState(false);
 
-  async function finish(preferenceOverride?: AudiencePreference) {
+  async function finish() {
     if (saving) return;
     setSaving(true);
     try {
-      await setAudiencePreference(preferenceOverride ?? selected);
+      await setStudyGoal({ deckSlug, examDate: dateChoice.kind === 'preset' ? dateChoice.examDate : null });
+      await setActiveDeckSlug(deckSlug);
       await completeOnboarding();
       await markPermissionPromptPending();
       navigation.replace('Home', { firstDrawCoach: true });
@@ -38,14 +51,141 @@ export function AudienceSurveyScreen({ navigation }: Props) {
     }
   }
 
-  // Skip = use the balanced default ('both') — matches the visible
-  // pre-selected option in the survey, so skipping is functionally
-  // identical to "I'm fine with the default, just continue". Was 'all'
-  // (stretch bias) which silently steered new users toward harder
-  // content — wrong default for someone who didn't express a preference.
-  async function skip() {
-    if (saving) return;
-    await finish('both');
+  function pickPreset(preset: DatePresetKey) {
+    setDateChoice({ kind: 'preset', preset, examDate: examDateForPreset(preset, Date.now()) });
+  }
+
+  function stepWeeks(weeks: number) {
+    if (dateChoice.kind !== 'preset') return;
+    if (!canStepExamDate(dateChoice.examDate, weeks, Date.now())) return;
+    setDateChoice({ ...dateChoice, examDate: stepExamDate(dateChoice.examDate, weeks) });
+  }
+
+  function renderGoalStep() {
+    return (
+      <>
+        <Text style={styles.eyebrow}>YOUR GOAL</Text>
+        <Text style={styles.title}>What do you want to learn?</Text>
+        <Text style={styles.body}>You can switch decks any time.</Text>
+
+        <View style={styles.optionList} accessibilityRole="radiogroup">
+          {GOAL_CHOICES.map((choice) => {
+            const active = deckSlug === choice.deckSlug;
+            return (
+              <Pressable
+                key={choice.deckSlug}
+                testID={`goal-choice-${choice.deckSlug}`}
+                style={({ pressed }) => [
+                  styles.optionCard,
+                  choice.highlighted && styles.optionCardHighlighted,
+                  active && styles.optionCardActive,
+                  pressed && styles.pressed,
+                ]}
+                accessibilityRole="radio"
+                accessibilityState={{ selected: active, checked: active }}
+                accessibilityLabel={choice.label}
+                onPress={() => setDeckSlug(choice.deckSlug)}
+              >
+                <Text style={[styles.optionTitle, active && styles.optionTitleActive]}>{choice.label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
+        <Pressable
+          style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
+          accessibilityRole="button"
+          onPress={() => setStep('date')}
+        >
+          <Text style={styles.primaryButtonText} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>Continue</Text>
+        </Pressable>
+      </>
+    );
+  }
+
+  function renderDateStep() {
+    const noDateActive = dateChoice.kind === 'none';
+    const nowMs = Date.now();
+    return (
+      <>
+        <Text style={styles.eyebrow}>OPTIONAL</Text>
+        <Text style={styles.title}>Do you have an exam date?</Text>
+        <Text style={styles.body}>With a date, reviews finish the day before your exam.</Text>
+
+        <View style={styles.optionList} accessibilityRole="radiogroup">
+          <Pressable
+            testID="exam-date-none"
+            style={({ pressed }) => [styles.optionCard, noDateActive && styles.optionCardActive, pressed && styles.pressed]}
+            accessibilityRole="radio"
+            accessibilityState={{ selected: noDateActive, checked: noDateActive }}
+            accessibilityLabel={NO_DATE_LABEL}
+            onPress={() => setDateChoice({ kind: 'none' })}
+          >
+            <Text style={[styles.optionTitle, noDateActive && styles.optionTitleActive]}>{NO_DATE_LABEL}</Text>
+          </Pressable>
+
+          <View style={styles.presetRow}>
+            {DATE_PRESETS.map((preset) => {
+              const active = dateChoice.kind === 'preset' && dateChoice.preset === preset.key;
+              return (
+                <Pressable
+                  key={preset.key}
+                  testID={`exam-date-${preset.key}`}
+                  style={({ pressed }) => [styles.presetChip, active && styles.presetChipActive, pressed && styles.pressed]}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: active, checked: active }}
+                  accessibilityLabel={preset.label}
+                  onPress={() => pickPreset(preset.key)}
+                >
+                  <Text style={[styles.presetChipText, active && styles.presetChipTextActive]}>{preset.label}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          {dateChoice.kind === 'preset' ? (
+            <View style={styles.stepperRow}>
+              <Pressable
+                style={({ pressed }) => [styles.stepperButton, pressed && styles.pressed]}
+                accessibilityRole="button"
+                accessibilityLabel="One week earlier"
+                disabled={!canStepExamDate(dateChoice.examDate, -1, nowMs)}
+                onPress={() => stepWeeks(-1)}
+              >
+                <Text style={styles.stepperButtonText}>−1 week</Text>
+              </Pressable>
+              <Text style={styles.stepperDate} accessibilityLiveRegion="polite">{formatExamDate(dateChoice.examDate)}</Text>
+              <Pressable
+                style={({ pressed }) => [styles.stepperButton, pressed && styles.pressed]}
+                accessibilityRole="button"
+                accessibilityLabel="One week later"
+                onPress={() => stepWeeks(1)}
+              >
+                <Text style={styles.stepperButtonText}>+1 week</Text>
+              </Pressable>
+            </View>
+          ) : null}
+        </View>
+
+        <Pressable
+          style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed, saving && styles.buttonDisabled]}
+          accessibilityRole="button"
+          disabled={saving}
+          onPress={() => void finish()}
+        >
+          <Text style={styles.primaryButtonText} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>{saving ? 'Saving…' : 'Finish setup'}</Text>
+        </Pressable>
+
+        <Pressable
+          style={({ pressed }) => [styles.backLink, pressed && styles.pressed]}
+          onPress={() => setStep('goal')}
+          disabled={saving}
+          accessibilityRole="button"
+        >
+          <Text style={styles.backLinkText} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>Back</Text>
+        </Pressable>
+      </>
+    );
   }
 
   return (
@@ -56,45 +196,7 @@ export function AudienceSurveyScreen({ navigation }: Props) {
           contentContainerStyle={[styles.container, { flexGrow: 1 }]}
           showsVerticalScrollIndicator={false}
         >
-          <Text style={styles.eyebrow}>CONTENT PREFERENCE</Text>
-          <Text style={styles.title}>Which lane should new content favor?</Text>
-          <Text style={styles.body}>This only shapes new supply and draw recommendations. Due review stays intact.</Text>
-
-          <View style={styles.optionList} accessibilityRole="radiogroup">
-            {AUDIENCE_SURVEY_OPTIONS.map((option) => {
-              const active = selected === option.key;
-              return (
-                <Pressable
-                  key={option.key}
-                  style={({ pressed }) => [styles.optionCard, active && styles.optionCardActive, pressed && styles.pressed]}
-                  accessibilityRole="radio"
-                  accessibilityState={{ selected: active, checked: active }}
-                  accessibilityLabel={`${option.label}. ${option.body}`}
-                  onPress={() => setSelected(option.key)}
-                >
-                  <Text style={[styles.optionTitle, active && styles.optionTitleActive]}>{option.label}</Text>
-                  <Text style={styles.optionBody}>{option.body}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
-
-          <Pressable style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed, saving && styles.buttonDisabled]} accessibilityRole="button" disabled={saving} onPress={() => void finish()}>
-            <Text style={styles.primaryButtonText} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>{saving ? 'Saving…' : 'Finish setup'}</Text>
-          </Pressable>
-
-          {/* Skip escape hatch — picks 'all' (most permissive) and
-              advances. Lets users reach Home in 1 tap if they don't
-              care about the survey. */}
-          <Pressable
-            style={({ pressed }) => [styles.skipLink, pressed && styles.pressed]}
-            onPress={() => void skip()}
-            disabled={saving}
-            accessibilityRole="button"
-            accessibilityLabel="Skip survey for now"
-          >
-            <Text style={styles.skipLinkText} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>Skip for now</Text>
-          </Pressable>
+          {step === 'goal' ? renderGoalStep() : renderDateStep()}
         </ScrollView>
       </LinearGradient>
     </SafeAreaView>
@@ -133,13 +235,41 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     elevation: 2,
   },
+  optionCardHighlighted: {
+    borderWidth: 2,
+  },
   optionCardActive: {
     borderColor: colors.gold,
     backgroundColor: '#FFFFFF',
   },
   optionTitle: { fontSize: 15, fontWeight: '900', color: colors.ink },
   optionTitleActive: { color: colors.gold },
-  optionBody: { marginTop: 6, fontSize: 12, lineHeight: 18, color: colors.inkMuted, fontWeight: '600' },
+  presetRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  presetChip: {
+    minHeight: 44,
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    justifyContent: 'center',
+    backgroundColor: colors.softCream,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+  },
+  presetChipActive: { borderColor: colors.gold, backgroundColor: '#FFFFFF' },
+  presetChipText: { fontSize: 13, fontWeight: '800', color: colors.ink },
+  presetChipTextActive: { color: colors.gold },
+  stepperRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  stepperButton: {
+    minHeight: 44,
+    minWidth: 80,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.hairline,
+  },
+  stepperButtonText: { fontSize: 13, fontWeight: '800', color: colors.ink },
+  stepperDate: { flexShrink: 1, textAlign: 'center', fontSize: 14, fontWeight: '900', color: colors.ink },
   // Primary CTA — pokeBlue 56pt to match the rest of the app
   primaryButton: {
     marginTop: 'auto',
@@ -156,11 +286,9 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   primaryButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: '900', letterSpacing: 0.4 },
-  // Skip pill — upgraded from a quiet text link to a ghost-style
-  // button, more clearly an alternative action. Same height as
-  // primary's secondary peer, transparent + hairline border so it
+  // Ghost-style secondary (Back) — transparent + hairline border so it
   // doesn't compete with the primary visually.
-  skipLink: {
+  backLink: {
     marginTop: 12,
     minHeight: 48,
     borderRadius: 999,
@@ -171,7 +299,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 16,
   },
-  skipLinkText: {
+  backLinkText: {
     color: colors.inkSoft,
     fontSize: 14,
     fontWeight: '800',

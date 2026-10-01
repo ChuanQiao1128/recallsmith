@@ -3,7 +3,7 @@ import renderer, { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // react-native is mocked per file (its Flow-typed entry point cannot be
-// parsed by the bundler). AudienceSurveyScreen + ProfileScreen reach for a
+// parsed by the bundler). ProfileScreen reaches for a
 // few more primitives than settings-copy.spec.ts, so ScrollView /
 // ActivityIndicator are added here.
 vi.mock('react-native', () => {
@@ -57,7 +57,7 @@ vi.mock('../../src/features/gacha/audience/audiencePrefs', () => ({
   setAudiencePreference: vi.fn(async (next: any) => next),
 }));
 
-import { AUDIENCE_SURVEY_OPTIONS } from '../../src/screens/AudienceSurveyScreen';
+import * as GoalStep from '../../src/screens/AudienceSurveyScreen';
 import { CONTENT_COPY } from '../../src/features/gacha/settings/content/ContentSection';
 import { AUDIENCE_LABELS, getAudiencePreferenceLabel } from '../../src/features/gacha/audience/audienceRules';
 import { ProfileScreen } from '../../src/screens/ProfileScreen';
@@ -73,12 +73,27 @@ describe('one audience vocabulary', () => {
   it('uses one label for each audience preference everywhere', () => {
     for (const key of KEYS) {
       const expected = AUDIENCE_LABELS[key];
-      const surveyOption = AUDIENCE_SURVEY_OPTIONS.find((o) => o.key === key);
       const chip = CONTENT_COPY.chips.find((c) => c.key === key);
-      expect(surveyOption?.label).toBe(expected);
       expect(chip?.label).toBe(expected);
       expect(getAudiencePreferenceLabel(key)).toBe(expected);
     }
+  });
+
+  it("keeps the lane in Settings as 'Card difficulty', not in onboarding", () => {
+    expect(CONTENT_COPY.title).toBe('Card difficulty');
+    expect(CONTENT_COPY.current('both')).toBe('Current: Balanced');
+    expect(JSON.stringify(CONTENT_COPY).toLowerCase()).not.toContain('lane');
+    // Onboarding's goal step no longer exports lane options.
+    expect('AUDIENCE_SURVEY_OPTIONS' in GoalStep).toBe(false);
+  });
+
+  it('defaults the card difficulty to Balanced when nothing is stored', async () => {
+    const actual = await vi.importActual<typeof import('../../src/features/gacha/audience/audiencePrefs')>(
+      '../../src/features/gacha/audience/audiencePrefs',
+    );
+    const pref = await actual.getAudiencePreference();
+    expect(pref).toBe('both');
+    expect(getAudiencePreferenceLabel(pref)).toBe('Balanced');
   });
 
   it('shows the audience label, not the raw key, on Profile', async () => {

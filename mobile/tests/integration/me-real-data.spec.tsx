@@ -157,10 +157,10 @@ describe('Me tab · real data', () => {
     expect(stats).toContain('0');
   });
 
-  it('shows the stored audience preference, not the mock default', async () => {
+  it('shows the stored card difficulty (audience preference), not the mock default', async () => {
     audienceFixture = 'all';
     const tree = await renderProfile();
-    // Profile shows the one shared audience label, not the raw storage key:
+    // Profile shows the one shared label (Settings "Card difficulty"), not the raw storage key:
     // 'all' → "Stretch". The mock default 'both' would render "Balanced".
     const texts = tree.root
       .findAll((node) => (node.type as any) === 'Text')

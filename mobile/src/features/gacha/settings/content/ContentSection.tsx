@@ -7,14 +7,14 @@ import { spacing } from '../../../../theme/spacing';
 import { typography } from '../../../../theme/typography';
 
 export const CONTENT_COPY = {
-  title: 'Content preferences',
-  body: "Choose who today's new cards are aimed at.",
+  title: 'Card difficulty',
+  body: 'Choose how hard new cards should be. Balanced suits most learners.',
   chips: [
     { key: 'junior', label: getAudiencePreferenceLabel('junior') },
     { key: 'both', label: getAudiencePreferenceLabel('both') },
     { key: 'all', label: getAudiencePreferenceLabel('all') },
   ] as Array<{ key: AudiencePreference; label: string }>,
-  current: (pref: AudiencePreference) => `Current lane: ${getAudiencePreferenceLabel(pref)}`,
+  current: (pref: AudiencePreference) => `Current: ${getAudiencePreferenceLabel(pref)}`,
 } as const;
 
 export function ContentSection(props: {
