@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import CodeBlock from '../../../components/CodeBlock';
-import { hasInlineCode, stripInlineCode } from '../../../content/inlineCode';
+import { hasInlineCode, splitInlineCode, stripInlineCode } from '../../../content/inlineCode';
 import { QUESTION_CODE_A11Y_SUFFIX, splitQuestionCode } from '../../../content/questionCode';
 import type { CardExport, McqExport, McqOption } from '../../../types/deckExport';
 import { formatRank } from '../library/cardRank';
@@ -91,10 +91,16 @@ export type StemSegment = { text: string; emphasis: 'qualifier' | 'caps' | null 
 // bolding every all-caps run of four or more letters ("LEAST", "MOST"). The fallback is a
 // fallback, not a demotion: a qualifier that the authoring pipeline dropped from the stem still
 // gets the caps treatment so the constraint stays visible.
+// F01: emphasis never cuts an inline `code` span — a cut span loses its backtick pair and
+// renders them literally — so a qualifier or caps match that overlaps a span is skipped.
 export function stemSegments(stem: string, qualifier: string | null): StemSegment[] {
+  const spans = codeSpanRanges(stem);
   const trimmed = qualifier === null ? null : qualifier.trim();
   if (trimmed !== null && trimmed.length > 0) {
-    const at = stem.toLowerCase().indexOf(trimmed.toLowerCase());
+    const lower = stem.toLowerCase();
+    const needle = trimmed.toLowerCase();
+    let at = lower.indexOf(needle);
+    while (at >= 0 && overlapsSpan(spans, at, at + trimmed.length)) at = lower.indexOf(needle, at + 1);
     if (at >= 0) {
       const segments: StemSegment[] = [];
       const before = stem.slice(0, at);
@@ -106,15 +112,35 @@ export function stemSegments(stem: string, qualifier: string | null): StemSegmen
       return segments;
     }
   }
-  return capsSegments(stem);
+  return capsSegments(stem, spans);
 }
 
-function capsSegments(stem: string): StemSegment[] {
+// [start, end) of each well-formed inline code span in `text`, backticks included.
+function codeSpanRanges(text: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  let pos = 0;
+  for (const segment of splitInlineCode(text)) {
+    const length = segment.kind === 'code' ? segment.value.length + 2 : segment.value.length;
+    if (segment.kind === 'code') ranges.push([pos, pos + length]);
+    pos += length;
+  }
+  return ranges;
+}
+
+function overlapsSpan(spans: ReadonlyArray<[number, number]>, start: number, end: number): boolean {
+  return spans.some(([from, to]) => start < to && end > from);
+}
+
+function capsSegments(stem: string, spans: ReadonlyArray<[number, number]>): StemSegment[] {
   const segments: StemSegment[] = [];
   const re = /\b[A-Z]{4,}\b/g;
   let last = 0;
   let match: RegExpExecArray | null = re.exec(stem);
   while (match !== null) {
+    if (overlapsSpan(spans, match.index, match.index + match[0].length)) {
+      match = re.exec(stem);
+      continue;
+    }
     if (match.index > last) segments.push({ text: stem.slice(last, match.index), emphasis: null });
     segments.push({ text: match[0], emphasis: 'caps' });
     last = match.index + match[0].length;
