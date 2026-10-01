@@ -44,6 +44,8 @@ import { SessionExpiredBanner } from '../auth/SessionExpiredBanner';
 import { setIsPremiumUser, usePremiumUser } from '../premium/premiumStore';
 import { useFeatureFlags } from '../config/featureFlags';
 import { useSessionStore } from '../features/gacha/session/sessionStore';
+import { isStarterLessonOpen, resolveStarterSlug } from '../features/gacha/starter/starterGate';
+import { STARTER_COPY } from '../features/gacha/starter/starterCopy';
 import { colors } from '../theme/colors';
 import { spacing } from '../theme/spacing';
 import { typography } from '../theme/typography';
@@ -130,6 +132,44 @@ export function HomeScreen({ navigation, route }: Props) {
   const isPremiumUser = serverPremiumLoaded ? serverPremium : cachedPremium;
   const paywallHidden = useFeatureFlags().paywall.hidden === true;
   const firstDrawCoach = route.params?.firstDrawCoach ?? false;
+  // ─── Starter lesson (R22 §4) ───────────────────────────────────────
+  // Non-null while onboarding is in the 'starter' stage: the deck whose first 5 cards the learner
+  // studies before the first pack. Home sends the learner into the lesson once per mount; after a
+  // pause it offers the lesson as the one primary action. Stage 'done' (every existing user) leaves
+  // this null and Home exactly as it was.
+  const [starterSlug, setStarterSlug] = useState<string | null>(null);
+  const [starterStarted, setStarterStarted] = useState(false);
+  const starterAutoStartedRef = useRef(false);
+  const openStarterLesson = useCallback(
+    (slug: string) => {
+      setStarterStarted(true);
+      navigation.navigate('SessionCard', { slug, mode: 'learn-new' });
+    },
+    [navigation],
+  );
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      (async () => {
+        const open = await isStarterLessonOpen();
+        if (cancelled || !isMountedRef.current) return;
+        if (!open) {
+          setStarterSlug(null);
+          return;
+        }
+        const slug = await resolveStarterSlug(await loadActiveDeckSlug());
+        if (cancelled || !isMountedRef.current) return;
+        setStarterSlug(slug);
+        if (slug && !starterAutoStartedRef.current) {
+          starterAutoStartedRef.current = true;
+          openStarterLesson(slug);
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [openStarterLesson]),
+  );
   // ─── One-shot notice toast ─────────────────────────────────────────
   // Set by PermissionPrompt when the user denied/skipped notifications.
   // Auto-clears after 3.5s so it doesn't stick around forever. We
@@ -410,6 +450,10 @@ export function HomeScreen({ navigation, route }: Props) {
   }, [homeState.vm]);
   const handlePrimaryCta = useCallback(async () => {
     const slug = homeState.vm.selectedDeckSlug ?? selectedDeckRow?.deck.slug ?? null;
+    if (starterSlug) {
+      openStarterLesson(starterSlug);
+      return;
+    }
     switch (homeState.vm.cta.nav) {
       case 'challenge': {
         if (!slug) return;
@@ -446,7 +490,7 @@ export function HomeScreen({ navigation, route }: Props) {
       default:
         return;
     }
-  }, [homeState.vm, navigation, refreshHome, selectedDeckRow]);
+  }, [homeState.vm, navigation, openStarterLesson, refreshHome, selectedDeckRow, starterSlug]);
   const handleDeckPress = useCallback(
     async (row: HomeDeckVM) => {
       setDeckBusySlug(row.deck.slug);
@@ -520,9 +564,16 @@ export function HomeScreen({ navigation, route }: Props) {
       );
     });
   }, [homeState.vm.calendar]);
-  const primaryCtaDisabled =
-    homeState.vm.cta.disabled ||
-    (homeState.vm.cta.nav === 'challenge' && !homeState.vm.selectedDeckSlug);
+  const primaryCtaDisabled = starterSlug
+    ? false
+    : homeState.vm.cta.disabled ||
+      (homeState.vm.cta.nav === 'challenge' && !homeState.vm.selectedDeckSlug);
+  const primaryCtaLabel = starterSlug
+    ? starterStarted
+      ? STARTER_COPY.ctaResumeLabel
+      : STARTER_COPY.ctaLabel
+    : homeState.vm.cta.label;
+  const primaryCtaTestID = starterSlug ? 'home-starter-cta' : homeState.vm.cta.testID;
   const totalDueAcrossDecks = homeState.vm.counts.totalDueAllDecks;
   // Only show the full-screen spinner on the FIRST load. Subsequent refreshes
   // (after navigating away + returning) keep the previous UI rendered so the
@@ -581,7 +632,9 @@ export function HomeScreen({ navigation, route }: Props) {
                   DeveloperCards
                 </Text>
                 <Text style={styles.headerStatusSubtitle} numberOfLines={1}>
-                  {totalDueAcrossDecks > 0
+                  {starterSlug
+                    ? STARTER_COPY.headline
+                    : totalDueAcrossDecks > 0
                     ? `${totalDueAcrossDecks} cards waiting today`
                     : homeState.vm.draw.state === 'available' || homeState.vm.draw.state === 'reserve'
                       ? 'A reward draw is ready'
@@ -676,7 +729,9 @@ export function HomeScreen({ navigation, route }: Props) {
               // reward draw ready → vm fallback.
               const isFeaturedMastered = featuredDeck.isFullyMastered;
               const heroTitle =
-                isFeaturedMastered
+                starterSlug
+                  ? STARTER_COPY.headline
+                  : isFeaturedMastered
                   ? 'Deck mastered 🎉'
                   : totalDueAcrossDecks > 0
                     ? `${totalDueAcrossDecks} cards waiting`
@@ -707,7 +762,9 @@ export function HomeScreen({ navigation, route }: Props) {
                 || (featuredHint === 'update' && !featuredUpdating)
                 || featuredHint === 'trial-start'
                 || (featuredHint === 'install' && drawState === 'locked');
-              const featuredPackAccessibilityLabel = !featuredDeck.realRow
+              const featuredPackAccessibilityLabel = starterSlug
+                ? primaryCtaLabel
+                : !featuredDeck.realRow
                 ? 'Connect to load packs'
                 : firstDrawCoach
                   ? 'Open reward draw'
@@ -715,6 +772,10 @@ export function HomeScreen({ navigation, route }: Props) {
                     ? `${featuredDeck.status} ${featuredDeck.title}`
                     : homeState.vm.cta.label;
               const handleFeaturedPackPress = () => {
+                if (starterSlug) {
+                  openStarterLesson(starterSlug);
+                  return;
+                }
                 if (!featuredDeck.realRow) {
                   void refreshHome();
                   return;
@@ -827,7 +888,7 @@ export function HomeScreen({ navigation, route }: Props) {
                     ) : null}
                     <View testID="screen-home-primary-cta">
                       <Pressable
-                        testID={homeState.vm.cta.testID}
+                        testID={primaryCtaTestID}
                         accessibilityRole="button"
                         style={({ pressed }) => [
                           styles.primaryCta,
@@ -840,7 +901,7 @@ export function HomeScreen({ navigation, route }: Props) {
                         }}
                       >
                         <Text style={styles.primaryCtaText} numberOfLines={1}>
-                          {homeState.vm.cta.label}
+                          {primaryCtaLabel}
                         </Text>
                       </Pressable>
                     </View>

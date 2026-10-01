@@ -11,6 +11,7 @@ import {
   migrateLegacyWalletIfNeeded,
   updateDeckWallet,
 } from './deckWallet';
+import { isStarterLessonOpen } from '../starter/starterGate';
 
 /**
  * Exactly one. The floor is a throttle, not a faucet: it exists so the
@@ -168,6 +169,11 @@ export async function applyEconomyFloorIfStarved(
  * Bootstrap runs BEFORE the floor so a never-drawn pack gets its 3 pulls, not a
  * single floor pull. Never throws: on any error it returns whatever
  * loadDeckWallets() gives.
+ *
+ * While the starter lesson is open (R22 §4) steps (2) and (4) are skipped:
+ * the lesson's cards are the learner's work, and a floor pull granted now
+ * would both let them draw before learning and spoil the pack's 3-pull
+ * bootstrap (it only pays an empty wallet). Finishing the lesson grants it.
  */
 export async function prepareHomeDeckWallets(params: {
   deckSummaries: DeckSummary[];
@@ -178,9 +184,11 @@ export async function prepareHomeDeckWallets(params: {
     // (1) One-time split of the legacy balance, plus a sweep of any that reappears.
     await migrateLegacyWalletIfNeeded();
 
+    const starterOpen = await isStarterLessonOpen();
+
     // (2) Bootstrap every studiable pack (each is a no-op unless the pack has
     //     never been drawn from and holds nothing).
-    for (const summary of deckSummaries) {
+    for (const summary of starterOpen ? [] : deckSummaries) {
       if (summary.canStudy === true) {
         await ensureDeckBootstrap(summary.slug);
       }
@@ -190,7 +198,7 @@ export async function prepareHomeDeckWallets(params: {
     const wallets = await loadDeckWallets();
 
     // (4) Floor each studiable pack whose collection is not complete.
-    for (const summary of deckSummaries) {
+    for (const summary of starterOpen ? [] : deckSummaries) {
       if (summary.canStudy !== true) continue;
       // Skip a complete collection: nothing left to draw, so no floor is owed.
       if (summary.totalCards > 0 && ownedCountOf(summary) >= summary.totalCards) continue;
