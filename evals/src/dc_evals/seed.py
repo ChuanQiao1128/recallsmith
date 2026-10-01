@@ -57,13 +57,15 @@ def _stratum(deck_slug: str, card: dict[str, Any]) -> tuple[str, str]:
 
 
 def _row(deck_slug: str, exported: dict[str, Any], defect: str | None, mutation: str | None, card: dict[str, Any]):
+    # v1 is the source-less benchmark (v2 adds a supporting source): SOURCE lines added to the decks
+    # later (R20 citation backfill) must not change it, or earlier v1 results stop being comparable.
     return {
         "id": "",
         "deckSlug": deck_slug,
         "sourceUid": exported["sourceUid"],
         "defect": defect,
         "mutation": mutation,
-        "card": card,
+        "card": {k: (None if k == "source" else v) for k, v in card.items()},
     }
 
 

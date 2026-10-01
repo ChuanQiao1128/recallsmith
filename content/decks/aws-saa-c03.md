@@ -237,6 +237,8 @@ A:
 Nothing: an SCP never grants, it caps what identity-based and resource-based policies can grant to every user and role in member accounts, root included, so someone must still attach an IAM policy. SCPs bind neither the management account nor service-linked roles, and they need all-features mode, as do tag policies and delegated administrators. Beyond guardrails, Organizations gives one management account with nested OUs that inherit policies, consolidated billing that shares volume tiers plus Reserved Instance and Savings Plans discounts, and delegated administrator accounts for services such as GuardDuty. Multi-account access stacks four layers: prevent with SCPs, grant with cross-account roles, give humans permission sets through Identity Center, and share subnets or transit gateways with RAM instead of copying them.
 USAGE:
 Test a new SCP on an OU holding a single sandbox account before attaching it near the root, since one typo can lock every member account out of a service at once.
+SOURCE: https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html
+SCPs do not grant permissions to the IAM users and IAM roles in your organization.
 
 ## aws-iam-identity-center | d2
 TOPIC: 1.1 Secure access
@@ -1216,6 +1218,8 @@ A:
 DAX. It is API-compatible with DynamoDB, so the change is the client library: eventually consistent GetItem, Query and Scan results come from memory in microseconds, hot items stop hammering one partition, and fewer read units need provisioning. It runs as a cluster inside your VPC and is write-through, so writes made through DAX land in the table and the cache. It does not cache strongly consistent or transactional reads, which pass straight to DynamoDB, and it suits write-heavy tables poorly. ElastiCache needs cache code, extra RCUs buy throughput not latency, and Global Tables solve geography, not speed.
 USAGE:
 Set the item and query cache TTLs deliberately, because writes that go around DAX stay invisible to cached readers until the TTL expires.
+SOURCE: https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DAX.html
+- As an in-memory cache, DAX reduces the response times of eventually consistent read workloads by an order of magnitude from single-digit milliseconds to microseconds.
 
 ## aws-dynamodb-gsi-vs-lsi | d2
 TOPIC: 3.3 High-performing databases
@@ -1249,6 +1253,8 @@ A:
 Add RDS Proxy. It keeps a pool of long-lived connections to the database and lets many client connections share them, so the memory and CPU cost of a fresh connection per invocation disappears and surplus requests are queued rather than failed. It also shortens Multi-AZ failover by sidestepping DNS caches, lets clients authenticate with IAM, and fetches database credentials from Secrets Manager. It must sit in the same VPC as the database and is never publicly accessible. Raising max_connections or the instance class only moves the ceiling, reserved concurrency on the functions caps throughput instead of fixing churn, and DynamoDB is a rewrite.
 USAGE:
 Point every client at the proxy endpoint rather than the instance endpoint, otherwise client-side DNS caching brings back the slow failover the proxy was meant to remove.
+SOURCE: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/rds-proxy.html
+RDS Proxy establishes a database connection pool and reuses connections in this pool.
 
 ## aws-aurora-reader-endpoint-and-autoscaling | d2
 TOPIC: 3.3 High-performing databases
@@ -2074,6 +2080,8 @@ A:
 A stateless tier keeps nothing between requests in local memory or disk, so any instance can serve any user, scale-in loses nothing and a failed node is simply replaced; that is what allows horizontal scaling and a later move to Lambda or Fargate. Session data goes to ElastiCache (Redis, Multi-AZ) for low latency or to DynamoDB with a TTL attribute that expires sessions without consuming write throughput; uploads to S3; shared files to EFS. Sticky sessions bind a user to one target with a cookie (1 second to 7 days): they concentrate load, and when that target turns unhealthy the ALB picks another and the session is gone. Databases and brokers get EBS or EFS plus failover, not horizontal scaling.
 USAGE:
 If a request would fail when served by a different instance than the last one, that instance holds state you should move out.
+SOURCE: https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_mitigate_interaction_failure_stateless.html
+- Offload session data to a database, cache, or external files. Amazon ElastiCache , Amazon DynamoDB, Amazon Elastic File System (Amazon EFS), and Amazon MemoryDB are examples of AWS services that you can use to offload session data.
 
 ## aws-dr-pilot-light | d2
 TOPIC: 2.2 HA and fault tolerance
@@ -2182,6 +2190,8 @@ A:
 AWS is responsible for security of the cloud: the hardware, software, networking and facilities that run every service, including the hypervisor and the patching of managed platforms. The customer owns security in the cloud, and what that covers depends on the service chosen. On EC2 you patch the guest OS, configure security groups and choose encryption. On RDS, AWS patches the engine and OS, while you still decide encryption, access, IAM and network rules. On Lambda and S3, abstracted services, AWS runs the OS and platform; you own only your data, code, permissions and encryption settings. The line moves with the service, but data classification, IAM and encryption choices never move to AWS.
 USAGE:
 When a question asks who is responsible for something, first decide whether the service is infrastructure, managed platform or abstracted; the answer follows from that level.
+SOURCE: https://aws.amazon.com/compliance/shared-responsibility-model/
+This shared model can help relieve the customer’s operational burden as AWS operates, manages and controls the components from the host operating system and virtualization layer down to the physical security of the facilities in which the service operates. The customer assumes responsibility and management of the guest operating system (including updates and security patches), other associated application software as well as the configuration of the AWS provided security group firewall. Customers should carefully consider the services they choose as their responsibilities vary depending on the services used, the integration of those services into their IT environment, and applicable laws and regulations.
 
 ## aws-ddos-mitigation-pattern | d2
 TOPIC: 1.2 Secure workloads
@@ -2290,6 +2300,8 @@ A:
 Backup and restore is the lowest-cost DR strategy: nothing runs in the recovery Region. Schedule backups with AWS Backup (EBS, EC2, RDS, DynamoDB, EFS, FSx) and add a copy rule that sends recovery points to the DR Region; use S3 Cross-Region Replication for object data and copy AMIs across Regions. Keep infrastructure as CloudFormation or CDK templates so the stack can be rebuilt without hand work. RPO equals the backup interval and RTO is deploy time plus restore time, so AWS rates it "RPO in hours, RTO in 24 hours or less". The trap: backups kept only in the primary Region vanish with it; the cross-Region copy is the whole point. Choose pilot light or warm standby when minutes matter.
 USAGE:
 Restore into the DR Region on a schedule, not only during a disaster: restore is a control-plane action, and a rehearsed one is the only one you can put a time on.
+SOURCE: https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/rel_planning_for_recovery_disaster_recovery.html
+- Backup and restore (RPO in hours, RTO in 24 hours or less): Back up your data and applications into the recovery Region. Using automated or continuous backups will permit point in time recovery (PITR), which can lower RPO to as low as 5 minutes in some cases. In the event of a disaster, you will deploy your infrastructure (using infrastructure as code to reduce RTO), deploy your code, and restore the backed-up data to recover from a disaster in the recovery Region.
 
 ## aws-batch-service-card | d1
 TOPIC: 3.2 Elastic compute
@@ -2727,6 +2739,8 @@ A:
 Amazon Elastic Transcoder: a job was submitted to a pipeline tied to an input and an output S3 bucket, a preset fixed codec and resolution, and SNS reported completion. AWS discontinued the service on November 13, 2025, so it survives only as a legacy name. The replacement is AWS Elemental MediaConvert, a file-based transcoder whose queues are not tied to buckets, whose presets can be overridden per job and whose job templates save whole job configurations, and whose status flows through CloudWatch Events and EventBridge. Neither service does live streaming (MediaLive), camera ingest (Kinesis Video Streams) or image processing.
 USAGE:
 When "transcode" appears in a design today, write MediaConvert; treat Elastic Transcoder as a migration source.
+SOURCE: https://aws.amazon.com/elastictranscoder/faqs/
+On November 13, 2025, AWS will discontinue support for Amazon Elastic Transcoder.
 
 ## aws-kinesis-video-streams-service-card | d1
 TOPIC: D3 services
@@ -2790,6 +2804,8 @@ A:
 Amazon Textract. Beyond OCR of typed and handwritten text, its AnalyzeDocument API returns forms as key-value pairs and tables as cells, answers natural-language Queries ("What is the policy number?"), AnalyzeExpense parses invoices and receipts, and AnalyzeID reads US passports and driver's licenses. Inputs are JPEG, PNG, PDF and TIFF; synchronous calls handle a single page up to 10 MB, asynchronous jobs take PDFs and TIFFs up to 500 MB and 3,000 pages. No ML expertise or training data is required. Textract does not describe photographs (Rekognition), transcribe audio (Transcribe) or judge sentiment (Comprehend); pair it with Comprehend when the extracted text needs NLP.
 USAGE:
 "Invoices, forms or tables to structured data" is Textract; "what is in this picture" is Rekognition.
+SOURCE: https://docs.aws.amazon.com/textract/latest/dg/what-is.html
+- Extract text, forms, and tables from documents with structured data, using the Amazon Textract Document Analysis API.
 
 ## aws-transcribe-service-card | d1
 TOPIC: D3 services
@@ -2817,6 +2833,8 @@ A:
 VMware Cloud on AWS was the managed service that ran a VMware software-defined data centre on dedicated AWS infrastructure, so teams kept their VMware tooling and simply relocated workloads, the "relocate" migration strategy. As of April 30, 2024, AWS and its partners no longer resell it: existing customers continue through Broadcom, but new subscriptions, add-ons and renewals cannot be bought from AWS. The AWS-native alternative is Amazon Elastic VMware Service (EVS), which deploys VMware Cloud Foundation on EC2 bare-metal instances inside your own VPC, so workloads move without changing IP addresses. Workloads that can simply rehost belong on EC2 via Application Migration Service (MGN); workloads that need AWS-native scaling should be refactored.
 USAGE:
 "Keep VMware tooling" is now EVS; "just move the servers" is MGN; neither answer is VMware Cloud on AWS for a new design.
+SOURCE: https://aws.amazon.com/vmware/vmwarecloudonaws/
+As of April 30, 2024, VMware Cloud on AWS is no longer resold by AWS or its channel partners. The service will continue to be available through Broadcom.
 
 ## aws-abac-tag-based-access-mcq-05 | d2
 TOPIC: 1.1 Secure access
@@ -2865,6 +2883,8 @@ A:
 Cross-account access needs both sides: a resource-based bucket policy in the bucket owner's account that names the account B role, and an identity-based policy on that role allowing the same action on the bucket. AWS evaluates the request in each account and grants it only when both evaluations allow it, which is why an identity policy alone works inside one account but fails across accounts. Leave Object Ownership at the default Bucket owner enforced so ACLs stay disabled and, if account B ever writes, account A still owns every object. Public bucket policies and shared IAM user keys solve the problem by removing the boundary rather than crossing it correctly.
 USAGE:
 When a cross-account S3 call returns AccessDenied, check the bucket policy and the caller's identity policy as a pair; the missing half is almost always on the side you did not write.
+SOURCE: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic-cross-account.html
+- AWS allows the request only if both account policy evaluations allow the request.
 
 ## aws-iam-groups-shared-permissions-mcq-04 | d1
 TOPIC: 1.1 Secure access
@@ -3368,6 +3388,8 @@ A:
 Amazon EKS: it is certified Kubernetes-conformant, so the Helm charts and manifests apply unchanged and the same artifacts still deploy to the on-premises cluster. The signal is the word Kubernetes (or Helm, kubectl, manifests, portability); without it, ECS is the simpler AWS-native orchestrator and the better default. EKS adds a per-cluster charge and a Kubernetes version upgrade cadence, so do not pick it when the requirement is only "run containers". Managed node groups or Fargate profiles are a capacity choice underneath EKS, not the deciding factor.
 USAGE:
 Ask whether the deployment artifacts are Kubernetes objects; if yes, only EKS keeps them, whatever compute runs underneath.
+SOURCE: https://docs.aws.amazon.com/eks/latest/userguide/what-is-eks.html
+Amazon EKS is certified Kubernetes-conformant, so you can deploy Kubernetes-compatible applications without refactoring and use Kubernetes community tooling and plugins.
 
 ## aws-order-queue-between-tiers-mcq-01 | d2
 TOPIC: 2.1 Loosely coupled architectures
@@ -4386,6 +4408,8 @@ A:
 The redundancy AWS builds into every connection, two tunnels to two AWS endpoints, protects against failure on the AWS side. To protect against the customer side you need a second customer gateway device and a second VPN connection to the same virtual private gateway; with BGP both devices advertise the same routes and the virtual private gateway shifts traffic to the surviving device. A VPC allows one virtual private gateway, a connection has two tunnels, and acceleration changes the path rather than the device count. Direct Connect with a VPN backup is the next step up when bandwidth or consistency also matter.
 USAGE:
 Two tunnels cover AWS failures; two customer gateways cover your failures; count which side broke before designing the fix.
+SOURCE: https://docs.aws.amazon.com/vpn/latest/s2svpn/vpn-redundant-connection.html
+If one customer gateway device fails, the virtual private gateway directs all traffic to the working customer gateway device.
 
 ## aws-waf-cannot-attach-nlb-mcq-29 | d2
 TOPIC: 1.2 Secure workloads
@@ -4434,6 +4458,8 @@ A:
 Replace the imported certificate with an ACM-issued, DNS-validated certificate. ACM's managed renewal covers only certificates it issued: for DNS validation it checks 45 days before expiry that the certificate is in use by an AWS service and that the validation CNAME records still resolve in public DNS, then renews with no human action. Imported certificates are explicitly excluded; their owner must obtain a new certificate and re-import it (which preserves the ARN and its association). If the DNS zone cannot be edited, email validation still works, but someone must answer the renewal email each cycle.
 USAGE:
 Before importing anything into ACM, ask whether you control the domain's DNS; if you do, an ACM-issued certificate is the one you never touch again.
+SOURCE: https://docs.aws.amazon.com/acm/latest/userguide/managed-renewal.html
+ACM provides managed renewal for your Amazon-issued SSL/TLS certificates.
 
 ## aws-backup-vault-lock-ransomware-mcq-45 | d2
 TOPIC: 1.3 Data security controls
@@ -4458,6 +4484,8 @@ A:
 Use AWS Backup with a compliance-mode Vault Lock plus a cross-Region copy. AWS Backup covers all four resource types under one tag-based plan, and once the compliance-mode lock passes its grace period (at least 3 days) neither any user, including root, nor AWS can delete recovery points or shorten the lock before their retention ends; the vault becomes write-once-read-many. Governance mode is the weaker variant: users with sufficient IAM permissions can still remove that lock. Object Lock, Data Lifecycle Manager and MFA delete each protect a single storage type, and scripted snapshots remain deletable.
 USAGE:
 Rehearse a restore from a governance-mode vault first and only then create the compliance-mode lock, because after its grace period there is no undo, not even by AWS.
+SOURCE: https://docs.aws.amazon.com/aws-backup/latest/devguide/vault-lock.html
+A vault lock in Compliance mode cannot be altered or deleted by any user or by AWS.
 
 ## aws-continuous-compliance-org-mcq-35 | d2
 TOPIC: 1.3 Data security controls
@@ -4652,6 +4680,8 @@ A:
 Cross-account sharing of an encrypted AMI has two conditions: the backing snapshots must be encrypted with a customer managed KMS key, never the default aws/ebs key, and that key's policy must let the other account use it (DescribeKey, GenerateDataKey, ReEncrypt, CreateGrant, Decrypt; scope CreateGrant with kms:GrantIsForAWSResource). Sharing the AMI does not require sharing its snapshots separately, but it does require sharing the key. Encrypted snapshots can never be public. The receiving account typically copies the AMI under its own key so it no longer depends on account A's key.
 USAGE:
 Any "share an encrypted snapshot or AMI" story fails first on the AWS managed key; the answer always starts with "copy under a customer managed key".
+SOURCE: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/sharingamis-explicit.html
+You can’t share AMIs that are backed by snapshots that are encrypted with the default AWS managed key. If you share an AMI that is backed by encrypted snapshots, you must allow the AWS accounts to use the KMS keys that were used to encrypt the snapshots.
 
 ## aws-stale-credentials-audit-mcq-03 | d2
 TOPIC: 1.3 Data security controls
@@ -5088,6 +5118,8 @@ A:
 Add a secondary CIDR block to the VPC and carve new subnets from it; the VPC keeps running and a local route for the new range is added automatically. Subnet and VPC ranges are fixed at creation, and every subnet reserves five addresses, which is why a /24 yields 251. Adding the new subnets to the EKS cluster, or using VPC CNI custom networking, lets pods take addresses from the new range, and 100.64.0.0/10 is a permitted secondary block when private space is crowded. Plan future allocations with VPC IPAM so the next VPC starts with room.
 USAGE:
 Size production VPCs at /16 from the start; a container platform burns an address per pod, and a secondary CIDR is the fix you reach for when someone did not.
+SOURCE: https://docs.aws.amazon.com/vpc/latest/userguide/vpc-cidr-blocks.html
+You can associate secondary IPv4 CIDR blocks with your VPC.
 
 ## aws-bi-dashboard-choice-mcq-36 | d1
 TOPIC: 3.5 Data ingestion and transformation
@@ -5111,6 +5143,8 @@ A:
 Use Amazon Quick Sight, the business intelligence feature of Amazon Quick and the successor of QuickSight. It connects to Redshift, Athena, S3 and RDS, and importing a dataset into SPICE, its in-memory calculation engine, makes analytical queries faster and avoids paying Athena for every dashboard refresh. It is fully managed, billed per user, and dashboards can be embedded in applications. OpenSearch Dashboards is for data indexed in OpenSearch, Managed Grafana is for observability data, and Athena has no dashboard layer at all.
 USAGE:
 A stem that says dashboards for business users points to Quick Sight; one that says logs points to OpenSearch, and one that says metrics points to Grafana.
+SOURCE: https://docs.aws.amazon.com/quicksight/latest/user/welcome.html
+- Amazon Quick Sight – Interactive data visualization and business intelligence. Connect to data sources, build dashboards, and embed analytics in applications.
 
 ## aws-data-lake-permissions-mcq-31 | d2
 TOPIC: 3.5 Data ingestion and transformation
@@ -5135,6 +5169,8 @@ A:
 Use Lake Formation data filters: granting SELECT on the Data Catalog table with specific columns included or excluded gives column-level security, and adding a row filter expression gives row- or cell-level security. Athena, Redshift Spectrum and EMR enforce the filter at query time, so one copy of the data serves every team. Bucket policies and IAM stop at the object and table boundary, which is why they cannot express every column but two. Filters apply only to reads, so only SELECT can carry one. Macie finds sensitive data; it never authorizes access.
 USAGE:
 Whenever the requirement is some columns or some rows of a shared table, the answer is Lake Formation, not a cleverer bucket policy.
+SOURCE: https://docs.aws.amazon.com/lake-formation/latest/dg/data-filtering.html
+You can implement column-level, row-level, and cell-level security by creating data filters.
 
 ## aws-partner-sftp-into-s3-mcq-22 | d1
 TOPIC: 3.5 Data ingestion and transformation
@@ -5434,6 +5470,8 @@ A:
 Stop what is not being used: outside 09:00 to 18:00 on weekdays, scale the Auto Scaling group to zero and stop the RDS instance with Instance Scheduler on AWS or an EventBridge rule and Lambda. A group at zero terminates its instances, so nothing is billed for them; a stopped RDS instance bills only storage and backups; cutting weekly runtime from 168 hours to about 45 saves roughly 70 percent. Keep it Single-AZ: short outages are acceptable. Reservations still pay for every hour; Multi-AZ buys availability this workload class does not need; Spot belongs on interruptible work, never on the production tier. Trap: RDS restarts a stopped instance automatically after 7 consecutive days, which a weekday schedule never reaches.
 USAGE:
 Classify each environment by the availability it truly needs before buying anything; the cheapest hour is the one you do not run.
+SOURCE: https://docs.aws.amazon.com/solutions/latest/instance-scheduler-on-aws/solution-overview.html
+For example, a company can use Instance Scheduler on AWS to automatically stop instances outside of business hours every day. If you leave all of your instances running at full utilization, this solution can result in up to 70% cost savings for those instances that are only necessary during regular business hours (weekly utilization reduced from 168 hours to 50 hours).
 
 ## aws-d4-graviton-or-burstable-choice-mcq-21 | d2
 TOPIC: 4.2 Cost-optimized compute
@@ -5846,6 +5884,8 @@ A:
 Download the reports from AWS Artifact. Artifact is the self-service portal for AWS's own security and compliance documents, including SOC reports, PCI DSS attestations and ISO certifications, available at no charge to any signed-in account, and for accepting agreements such as the HIPAA BAA. The shared responsibility model is the trap: Security Hub standards, Config conformance packs and Trusted Advisor checks evaluate the customer's resources, and only Artifact carries the evidence about AWS.
 USAGE:
 Artifact documents are audit artifacts about AWS; bundle them with your own control evidence, because AWS's report says nothing about how you configured your workloads.
+SOURCE: https://docs.aws.amazon.com/artifact/latest/ug/what-is-aws-artifact.html
+AWS Artifact provides on-demand downloads of AWS security and compliance documents.
 
 ## aws-s3-access-points-multi-app-mcq-49 | d3
 TOPIC: 1.3 Data security controls

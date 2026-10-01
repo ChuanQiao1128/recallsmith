@@ -259,7 +259,13 @@ describe('deckImport SOURCE:', () => {
       expect(headers.length).toBeGreaterThan(0);
       expect(parsed.cards.length).toBe(headers.length);
       expect(parsed.errors).toEqual([]);
-      expect(parsed.cards.some((c) => Object.prototype.hasOwnProperty.call(c, 'source'))).toBe(false);
+      // The decks carry reviewed SOURCE lines (R20 citation backfill); each one must be well formed.
+      for (const c of parsed.cards) {
+        if (!c.source) continue;
+        expect(c.source.url, c.stableUid).toMatch(/^https:\/\/\S+$/);
+        expect((c.source.quote ?? '').length, c.stableUid).toBeGreaterThan(0);
+        expect((c.source.quote ?? '').length, c.stableUid).toBeLessThanOrEqual(1000);
+      }
     }
   });
 });
