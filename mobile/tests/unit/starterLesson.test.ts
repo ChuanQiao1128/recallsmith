@@ -26,11 +26,13 @@ import {
   STARTER_LESSON_SIZE,
   ensureStarterLesson,
   isStarterLessonComplete,
+  isStarterLessonDeck,
   isStarterLessonOpen,
   loadStarterUids,
   pickStarterUids,
 } from '../../src/features/gacha/starter/starterGate';
-import { completeStarterLesson } from '../../src/features/gacha/starter/starterLesson';
+import { completeStarterLesson, skipStarterLesson } from '../../src/features/gacha/starter/starterLesson';
+import { ensureDeckBootstrap } from '../../src/features/gacha/rewards/deckWallet';
 import { isPermissionPromptPending } from '../../src/features/gacha/starter/permissionPromptGate';
 
 const STAGE_KEY = 'recallsmith:onboarding:stage:v1';
@@ -123,5 +125,40 @@ describe('starter lesson', () => {
     expect(store.has(STARTER_LESSON_KEY)).toBe(false);
     expect((await completeStarterLesson('aws')).completed).toBe(false);
     expect(await isPermissionPromptPending()).toBe(false);
+  });
+
+  it('skipping a lesson that cannot run closes the stage and lets every pack bootstrap as before', async () => {
+    await startStarterLesson();
+    store.set(GOAL_KEY, JSON.stringify({ deckSlug: 'csharp-basics', examDate: null }));
+    // While open, no pack bootstraps -- the lock the skip exists to release.
+    expect((await ensureDeckBootstrap('aws')).granted).toBe(0);
+
+    expect(await skipStarterLesson()).toBe(true);
+
+    expect(await getOnboardingStage()).toBe('done');
+    expect(store.has(STARTER_LESSON_KEY)).toBe(false);
+    // The prompt is armed so the first DrawResult "Done" still offers reminders.
+    expect(await isPermissionPromptPending()).toBe(true);
+    // The skip itself grants nothing; the ordinary first-visit bootstrap now pays on any pack.
+    expect(await loadDeckWallet('csharp-basics')).toEqual({ availablePulls: 0, reservePulls: 0 });
+    expect((await ensureDeckBootstrap('aws')).granted).toBe(3);
+    // A second skip (or an existing user) changes nothing.
+    expect(await skipStarterLesson()).toBe(false);
+  });
+
+  it('knows which deck the open lesson teaches', async () => {
+    expect(await isStarterLessonDeck('aws')).toBe(false); // closed (welcome)
+    await startStarterLesson();
+    // No goal, no record: whichever deck opens first becomes the lesson (ensureStarterLesson's rule).
+    expect(await isStarterLessonDeck('aws')).toBe(true);
+    store.set(GOAL_KEY, JSON.stringify({ deckSlug: 'csharp-basics', examDate: null }));
+    expect(await isStarterLessonDeck('aws')).toBe(false);
+    expect(await isStarterLessonDeck('csharp-basics')).toBe(true);
+    // A recorded lesson wins over the goal.
+    store.set(STARTER_LESSON_KEY, JSON.stringify({ slug: 'aws', uids: ['a1'] }));
+    expect(await isStarterLessonDeck('aws')).toBe(true);
+    expect(await isStarterLessonDeck('csharp-basics')).toBe(false);
+    store.set(STAGE_KEY, 'done');
+    expect(await isStarterLessonDeck('aws')).toBe(false);
   });
 });

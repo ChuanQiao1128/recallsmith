@@ -38,6 +38,7 @@ vi.mock('expo-linear-gradient', () => {
   return { LinearGradient: ({ children, ...props }: any) => React.createElement('LinearGradient', props, children) };
 });
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SplashScreen } from '../../src/screens/SplashScreen';
 import { WelcomeScreen } from '../../src/screens/WelcomeScreen';
 import { AudienceSurveyScreen } from '../../src/screens/AudienceSurveyScreen';
@@ -151,6 +152,39 @@ describe('phase A onboarding screens', () => {
     expect(replace).toHaveBeenCalledWith('Home');
     expect(replace).not.toHaveBeenCalledWith('Home', { firstDrawCoach: true });
     expect(store.get('notifications:permission-prompt:pending:v1')).toBeUndefined();
+  });
+
+  it('tells the learner when Finish setup could not save, and lets them retry', async () => {
+    const replace = vi.fn();
+    const tree = await renderWelcomeThenGoal(replace);
+    replace.mockClear();
+    await press(tree, 'Continue');
+
+    // The stage write fails once (storage trouble): no navigation, a short retry message, and the
+    // button is usable again. The rejection is handled (an unhandled one fails this run).
+    vi.mocked(AsyncStorage.setItem).mockImplementationOnce(async (key: string, value: string) => {
+      store.set(key, value);
+    });
+    vi.mocked(AsyncStorage.setItem).mockImplementationOnce(async (key: string, value: string) => {
+      store.set(key, value);
+    });
+    vi.mocked(AsyncStorage.setItem).mockImplementationOnce(async () => {
+      throw new Error('disk full');
+    });
+    await press(tree, 'Finish setup');
+
+    expect(replace).not.toHaveBeenCalled();
+    expect(store.get('recallsmith:onboarding:stage:v1')).toBe('audience');
+    const error = tree.root.findAll((node) => (node.type as any) === 'Text' && node.props.testID === 'goal-finish-error');
+    expect(error).toHaveLength(1);
+    expect(String(error[0].props.children)).toBe("Couldn't save your choice. Please try again.");
+    expect(findPressableByText(tree, 'Finish setup').props.disabled).toBe(false);
+
+    // Retry with storage working: saved, stage 'starter', Home opens and the message is gone.
+    await press(tree, 'Finish setup');
+    expect(store.get('recallsmith:onboarding:stage:v1')).toBe('starter');
+    expect(replace).toHaveBeenCalledWith('Home');
+    expect(tree.root.findAll((node) => (node.type as any) === 'Text' && node.props.testID === 'goal-finish-error')).toHaveLength(0);
   });
 
   it('routes splash to Home for a learner in the starter lesson, and an existing user too', async () => {

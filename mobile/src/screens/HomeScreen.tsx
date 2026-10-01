@@ -46,6 +46,7 @@ import { useFeatureFlags } from '../config/featureFlags';
 import { useSessionStore } from '../features/gacha/session/sessionStore';
 import { isStarterLessonOpen, resolveStarterSlug } from '../features/gacha/starter/starterGate';
 import { STARTER_COPY } from '../features/gacha/starter/starterCopy';
+import { skipStarterLesson } from '../features/gacha/starter/starterLesson';
 import { buildExamCountdownLabel } from '../features/gacha/home/examCountdown';
 import { getStudyGoal } from '../features/goal/studyGoal';
 import { colors } from '../theme/colors';
@@ -161,6 +162,15 @@ export function HomeScreen({ navigation, route }: Props) {
         }
         const slug = await resolveStarterSlug(await loadActiveDeckSlug());
         if (cancelled || !isMountedRef.current) return;
+        if (!slug) {
+          // No study goal and no active deck: there is no lesson to teach, so the stage must not
+          // keep every pack's bootstrap and floor on hold. Close it and re-prepare the wallets.
+          setStarterSlug(null);
+          if (await skipStarterLesson()) {
+            if (isMountedRef.current) void refreshHomeRef.current();
+          }
+          return;
+        }
         setStarterSlug(slug);
         if (slug && !starterAutoStartedRef.current) {
           starterAutoStartedRef.current = true;
@@ -596,18 +606,25 @@ export function HomeScreen({ navigation, route }: Props) {
   // The header line is context, never a second instruction: the hero below carries the one
   // instruction (R22 §1.6). It shows the exam countdown when a date is set; otherwise a status
   // that agrees with the hero. While the starter lesson is open the hero already says it all.
+  // "Caught up" only sits over a hero that says the learner is clear; every other hero line
+  // (new cards ready, today in progress, a deck to set up) gets no subtitle rather than a
+  // contradicting one.
+  const heroSaysClear =
+    homeState.vm.statusKind === 'nothing_to_learn' || homeState.vm.statusKind === 'today_full_clear';
   const headerStatus = starterSlug
     ? null
     : totalDueAcrossDecks > 0
       ? `${totalDueAcrossDecks} cards waiting today`
       : homeState.vm.draw.state === 'available' || homeState.vm.draw.state === 'reserve'
         ? 'A reward draw is ready'
-        : selectedDeckRow?.deck.canStudy &&
-            selectedDeckRow.deck.dueToday === 0 &&
-            selectedDeckRow.deck.newToday === 0 &&
-            homeState.vm.draw.state === 'locked'
-          ? 'Caught up'
-          : 'All caught up for now';
+        : !heroSaysClear
+          ? null
+          : selectedDeckRow?.deck.canStudy &&
+              selectedDeckRow.deck.dueToday === 0 &&
+              selectedDeckRow.deck.newToday === 0 &&
+              homeState.vm.draw.state === 'locked'
+            ? 'Caught up'
+            : 'All caught up for now';
   // Only show the full-screen spinner on the FIRST load. Subsequent refreshes
   // (after navigating away + returning) keep the previous UI rendered so the
   // user doesn't see a jarring blank → fade → blank flash. A small inline

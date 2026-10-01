@@ -35,3 +35,24 @@ export async function completeStarterLesson(slug: string): Promise<StarterLesson
   await markPermissionPromptPending();
   return { completed: true, granted, wallet };
 }
+
+/**
+ * The way out when the lesson cannot run (R22 §4): its deck needs Premium, is not published yet, is
+ * missing from the manifest, or there is no deck to teach at all. Without it the 'starter' stage
+ * would hold every pack's bootstrap and daily floor forever, since only a finished lesson closes it.
+ * The stage goes to 'done' and the record is dropped, so the ordinary first-visit bootstrap pays on
+ * the next Home load, Draw or Library open, exactly as for a new learner before R22. The reminder
+ * prompt is armed so the first DrawResult "Done" still offers it. Returns false (and changes
+ * nothing) when the lesson was already closed. Never throws.
+ */
+export async function skipStarterLesson(): Promise<boolean> {
+  if (!(await isStarterLessonOpen())) return false;
+  try {
+    await completeOnboarding();
+  } catch {
+    return false;
+  }
+  await clearStarterLesson();
+  await markPermissionPromptPending();
+  return true;
+}

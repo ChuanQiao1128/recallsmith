@@ -43,10 +43,10 @@ import { settleRatingReward } from '../features/gacha/rewards/sessionRewards';
 import {
   ensureStarterLesson,
   isStarterLessonComplete,
-  isStarterLessonOpen,
+  isStarterLessonDeck,
   type StarterLesson,
 } from '../features/gacha/starter/starterGate';
-import { completeStarterLesson } from '../features/gacha/starter/starterLesson';
+import { completeStarterLesson, skipStarterLesson } from '../features/gacha/starter/starterLesson';
 import { STARTER_COPY } from '../features/gacha/starter/starterCopy';
 import { recordMistakeOutcome } from '../features/gacha/mistakes/mistakeBook';
 import {
@@ -489,12 +489,23 @@ export function SessionCardScreen({ navigation, route }: Props) {
             return false;
           }
         };
+        // R22 §4: why the deck failed to load, for the starter lesson's error handling below.
+        // 'unavailable': the deck itself cannot be studied (not published yet, or absent from a
+        // manifest that did load); 'download': the manifest or the deck could not be fetched.
+        let failure: 'unavailable' | 'download' | null = null;
         try {
           const wantsTrial = previewLimit > 0;
-          const manifest = await listManifestDecks();
+          let manifest: Awaited<ReturnType<typeof listManifestDecks>>;
+          try {
+            manifest = await listManifestDecks();
+          } catch (err) {
+            failure = 'download';
+            throw err;
+          }
           const entry = manifest.find((item) => item.slug === slugValue) ?? null;
           const availability = String(entry?.availability ?? '').toLowerCase();
           if (availability === 'coming') {
+            failure = 'unavailable';
             throw new Error(entry?.eta ? `Coming soon. ETA: ${entry.eta}` : 'Coming soon.');
           }
           const premiumByManifest =
@@ -506,7 +517,13 @@ export function SessionCardScreen({ navigation, route }: Props) {
           }
           let resolved = await getCachedDeck(slugValue);
           if (!resolved) {
-            const updates = await checkManifestForUpdates();
+            let updates: Awaited<ReturnType<typeof checkManifestForUpdates>>;
+            try {
+              updates = await checkManifestForUpdates();
+            } catch (err) {
+              failure = 'download';
+              throw err;
+            }
             const info = (updates as any)[slugValue];
             if (info?.remoteUrl && info?.remoteVersion) {
               if (!cancelled) setInstalling(true);
@@ -518,12 +535,21 @@ export function SessionCardScreen({ navigation, route }: Props) {
                   info.remoteVersion,
                   info.remoteSha256 ?? null,
                 );
+              } catch (err) {
+                failure = 'download';
+                throw err;
               } finally {
                 if (!cancelled) setInstalling(false);
               }
               if (ok) {
                 resolved = await getCachedDeck(slugValue);
+              } else {
+                failure = 'download';
               }
+            } else {
+              // A manifest that loaded with no download for this deck means the deck is not there to
+              // fetch; no manifest at all (an offline first run) is a download failure.
+              failure = Object.keys(updates ?? {}).length > 0 ? 'unavailable' : 'download';
             }
           }
           if (!resolved) {
@@ -536,6 +562,12 @@ export function SessionCardScreen({ navigation, route }: Props) {
             await ensurePremiumOnce();
           }
           const isTrial = premiumDeck && !premiumActive && wantsTrial;
+          // A locked deck (paywall or trial preview) cannot run the starter lesson. When it is the
+          // lesson's deck, end the lesson so it stops holding every pack's bootstrap and floor.
+          if (premiumDeck && !premiumActive && (await isStarterLessonDeck(resolved.Slug))) {
+            await skipStarterLesson();
+          }
+          if (cancelled) return;
           if (premiumDeck && !premiumActive && !isTrial) {
             goPaywall('Premium required for this deck.');
             return;
@@ -663,9 +695,14 @@ export function SessionCardScreen({ navigation, route }: Props) {
           void syncDailyReminders({ remainingDueCount, now });
         } catch (e: any) {
           if (cancelled) return;
-          const starterOpen = await isStarterLessonOpen();
+          // The starter lesson's own deck only. A deck that cannot be studied ends the lesson (the
+          // learner keeps the plain error and every pack's bootstrap returns); a failed download
+          // keeps it open with the offline copy and Retry. Any other deck keeps its own error.
+          const lessonDeck = await isStarterLessonDeck(slugValue);
           if (cancelled) return;
-          setStarterLoadError(starterOpen);
+          if (lessonDeck && failure === 'unavailable') await skipStarterLesson();
+          if (cancelled) return;
+          setStarterLoadError(lessonDeck && failure === 'download');
           setDeck(null);
           setProgress([]);
           setDailyStats(null);

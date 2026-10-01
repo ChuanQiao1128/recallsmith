@@ -16,6 +16,16 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
   },
 }));
 
+// The pack's current card list, read by ensureDeckBootstrap's re-bootstrap check through deckCache.
+const liveDecks = vi.hoisted(() => new Map<string, string[]>());
+vi.mock('../../src/content/deckCache', () => ({
+  getCachedDeck: vi.fn(async (slug: string) => {
+    const uids = liveDecks.get(slug);
+    return uids ? { Slug: slug, Cards: uids.map((StableUid, i) => ({ StableUid, OrderInDeck: i })) } : null;
+  }),
+  invalidateDeckCache: vi.fn(),
+}));
+
 import { setActiveUserSubForStorage } from '../../src/review/storage';
 import { setActiveDeckSlug } from '../../src/content/activeDeck';
 import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStateCache';
@@ -56,6 +66,7 @@ function readRecord(): any {
 describe('deckWallet per-pack wallets', () => {
   beforeEach(async () => {
     store.clear();
+    liveDecks.clear();
     invalidateDrawStateCache();
     setActiveUserSubForStorage('user-a');
     await setActiveDeckSlug(null);
@@ -155,6 +166,77 @@ describe('deckWallet per-pack wallets', () => {
     await grantDeckPulls('funded-deck', 1);
     expect((await ensureDeckBootstrap('funded-deck')).granted).toBe(0);
     expect(await loadDeckWallet('funded-deck')).toEqual({ availablePulls: 1, reservePulls: 0 });
+  });
+
+  // F01 supervisor-1: a deck replaced wholesale (c-* uids out, net-* uids in) left learners owning
+  // zero cards of the live deck, with the first-visit bootstrap already spent.
+  describe('re-bootstrap after a content replacement', () => {
+    const NEW_DECK = ['net-types-01', 'net-types-02', 'asp-mvc-01', 'ef-core-01'];
+
+    beforeEach(() => {
+      liveDecks.set('csharp-basics', NEW_DECK);
+      store.set(walletsKey, JSON.stringify({ migratedAtMs: 1, decks: {}, bootstrappedAtMs: { 'csharp-basics': 5 } }));
+    });
+
+    it('grants 3 pulls once when every owned card left the deck and the wallet is empty', async () => {
+      await saveDrawState('csharp-basics', { owned: ['c-001', 'c-002'], pity: { draws: 3, threshold: 10 } });
+
+      const first = await ensureDeckBootstrap('csharp-basics');
+      expect(first).toEqual({ granted: 3, wallet: { availablePulls: 3, reservePulls: 0 } });
+      expect(readRecord().rebootstrappedAtMs['csharp-basics']).toEqual(expect.any(Number));
+      // The first-visit mark is left as it was.
+      expect(readRecord().bootstrappedAtMs['csharp-basics']).toBe(5);
+
+      // Spent, then asked again: never a second time.
+      await consumeDeckPulls('csharp-basics', 3);
+      expect((await ensureDeckBootstrap('csharp-basics')).granted).toBe(0);
+      expect(await loadDeckWallet('csharp-basics')).toEqual({ availablePulls: 0, reservePulls: 0 });
+    });
+
+    it('counts learned progress as held: retired learned cards alone qualify', async () => {
+      store.set(progressKey('csharp-basics'), JSON.stringify([
+        { stableUid: 'c-003', stage: 1, lastReviewedAt: 111, nextReviewAt: 222 },
+        { stableUid: 'net-types-01', stage: 0, nextReviewAt: 0 }, // untouched: not held
+      ]));
+      expect((await ensureDeckBootstrap('csharp-basics')).granted).toBe(3);
+    });
+
+    it('never re-bootstraps a pack where one held card is still in the deck', async () => {
+      await saveDrawState('csharp-basics', { owned: ['c-001', 'net-types-02'], pity: null });
+      expect((await ensureDeckBootstrap('csharp-basics')).granted).toBe(0);
+
+      // Held through learned progress counts too.
+      await saveDrawState('csharp-basics', { owned: ['c-001'], pity: null });
+      store.set(progressKey('csharp-basics'), JSON.stringify([{ stableUid: 'ef-core-01', stage: 1, lastReviewedAt: 111, nextReviewAt: 222 }]));
+      expect((await ensureDeckBootstrap('csharp-basics')).granted).toBe(0);
+      expect(readRecord().rebootstrappedAtMs).toBeUndefined();
+    });
+
+    it('needs an empty wallet, a readable deck and something held', async () => {
+      await saveDrawState('csharp-basics', { owned: ['c-001'], pity: null });
+      await grantDeckPulls('csharp-basics', 1);
+      expect((await ensureDeckBootstrap('csharp-basics')).granted).toBe(0);
+
+      // Deck not installed: no decision is made on missing content.
+      await saveDrawState('other-deck', { owned: ['o-001'], pity: null });
+      expect((await ensureDeckBootstrap('other-deck')).granted).toBe(0);
+
+      // Bootstrapped, nothing held (no owned card, no learned card): not a replacement.
+      liveDecks.set('fresh-deck', ['f-1']);
+      store.set(walletsKey, JSON.stringify({ migratedAtMs: 1, decks: {}, bootstrappedAtMs: { 'fresh-deck': 5 } }));
+      expect((await ensureDeckBootstrap('fresh-deck')).granted).toBe(0);
+    });
+
+    it('leaves the brand-new learner path unchanged', async () => {
+      liveDecks.set('aws', ['a-1', 'a-2']);
+      const first = await ensureDeckBootstrap('aws');
+      expect(first).toEqual({ granted: 3, wallet: { availablePulls: 3, reservePulls: 0 } });
+      expect(readRecord().bootstrappedAtMs.aws).toEqual(expect.any(Number));
+      expect(readRecord().rebootstrappedAtMs).toBeUndefined();
+      await consumeDeckPulls('aws', 3);
+      await saveDrawState('aws', { owned: ['a-1'], pity: null });
+      expect((await ensureDeckBootstrap('aws')).granted).toBe(0);
+    });
   });
 
   it('migrates the legacy balance in proportion to each pack R1 ledger, remainder to the most recently studied pack', async () => {
