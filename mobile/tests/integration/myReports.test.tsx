@@ -249,6 +249,18 @@ describe('MyReportsScreen', () => {
     }
   });
 
+  // F01 z-tests-2: inline code spans in a reported question show without backticks, in the row
+  // and in its label.
+  it('drops inline-code backticks from a reported question', async () => {
+    const inline = { ...REPORTS[0], question: 'Why does `List<int>` regrow on `Add(4)`?' };
+    vi.mocked(apiJson).mockResolvedValue({ success: true, data: { items: [inline] } });
+    const tree = await renderReports();
+
+    expect(byTestId(tree, 'my-reports-question').map(textOf)).toEqual(['Why does List<int> regrow on Add(4)?']);
+    const row = byTestId(tree, 'my-reports-item')[0];
+    expect(row.props.accessibilityLabel.startsWith('Open. Why does List<int> regrow on Add(4)?. ')).toBe(true);
+  });
+
   it('shows the empty state when there are no reports', async () => {
     vi.mocked(apiJson).mockResolvedValue({ data: { items: [] } });
     const tree = await renderReports();
