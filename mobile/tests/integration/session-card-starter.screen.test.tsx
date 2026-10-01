@@ -272,13 +272,23 @@ describe('SessionCardScreen starter lesson', () => {
     return { tree, navigation };
   }
 
-  async function rateGood(tree: renderer.ReactTestRenderer) {
+  // R22 §6 learning step: a never-reviewed Q/A card is studied first ("Got it", no rating) and
+  // comes back as a recall check at the end of the same run (Forgot / Remembered).
+  async function gotIt(tree: renderer.ReactTestRenderer) {
+    await act(async () => {
+      findPressableByLabel(tree, 'Got it').props.onPress();
+      await Promise.resolve();
+    });
+    await flush();
+  }
+
+  async function remembered(tree: renderer.ReactTestRenderer) {
     await act(async () => {
       findPressableByLabel(tree, 'Reveal answer').props.onPress();
       await Promise.resolve();
     });
     await act(async () => {
-      findPressableByLabel(tree, 'Good').props.onPress();
+      findPressableByLabel(tree, 'Remembered').props.onPress();
       await Promise.resolve();
     });
     await flush();
@@ -287,6 +297,18 @@ describe('SessionCardScreen starter lesson', () => {
   it('teaches the first 5 non-MCQ cards with nothing drawn, then opens Draw with the 3-pull bootstrap', async () => {
     const { tree, navigation } = await mount();
 
+    // Each lesson card is studied first, then recalled at the end of the run, in study order.
+    const studied: string[] = [];
+    for (const uid of ['c1', 'c2', 'c3', 'c4', 'c5']) {
+      expect(hasText(tree, `Question ${uid}`)).toBe(true);
+      expect(tree.root.findAll((n) => typeof n.type === 'string' && n.props.testID === 'learning-study-view')).toHaveLength(1);
+      studied.push(uid);
+      expect(await loadDeckWallet('csharp')).toEqual({ availablePulls: 0, reservePulls: 0 });
+      expect(navigation.replace).not.toHaveBeenCalled();
+      await gotIt(tree);
+    }
+    expect(studied).toEqual(['c1', 'c2', 'c3', 'c4', 'c5']);
+
     const seen: string[] = [];
     for (const uid of ['c1', 'c2', 'c3', 'c4', 'c5']) {
       expect(hasText(tree, `Question ${uid}`)).toBe(true);
@@ -294,7 +316,7 @@ describe('SessionCardScreen starter lesson', () => {
       // Bootstrap only after completion: no pull before the last card, and no R1 pull per card.
       expect(await loadDeckWallet('csharp')).toEqual({ availablePulls: 0, reservePulls: 0 });
       expect(navigation.replace).not.toHaveBeenCalled();
-      await rateGood(tree);
+      await remembered(tree);
     }
     expect(seen).toEqual(['c1', 'c2', 'c3', 'c4', 'c5']);
 
