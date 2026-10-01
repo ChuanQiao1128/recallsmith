@@ -290,3 +290,9 @@ None blocking. Defaults taken (owner may override):
 1. The bootstrap fix for old C# learners goes into the R22 fix round (JS-only, same OTA).
 2. Deck title ".NET & C# Interview".
 3. The .NET 10 / C# 14 delta round is scheduled after 2026-11-10 and needs its own go.
+
+## Decision log
+
+- 2026-10-02 (owner, after go-live): raise the MCQ share. 40 Q/A cards that an independent skeptic agreed make
+  good single-answer MCQs were converted in place; explain-why / trade-off cards stay Q/A. Deck mix becomes
+  90 Q/A + 127 MCQ (59 percent) instead of 60/40; the deck-level MCQ band for this deck is 55-62 percent.

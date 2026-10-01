@@ -1,31 +1,31 @@
 # csharp-basics — R23 build report (2026-10-02)
 
-217 cards: 130 Q/A, 87 MCQ (40%); junior 95 (44%), d3 5; code snippets 62 (compile 16, error:CS0304 1, error:CS0834 1, error:CS1061 1, error:CS1612 1, error:CS1996 1, error:CS8345 1, error:CS8418 1, error:CS8917 1, fragment 22, run 16).
+217 cards: 90 Q/A, 127 MCQ (59%); junior 95 (44%), d3 5; code snippets 62 (compile 16, error:CS0304 1, error:CS0834 1, error:CS1061 1, error:CS1612 1, error:CS1996 1, error:CS8345 1, error:CS8418 1, error:CS8917 1, fragment 22, run 16).
 Sources: learn.microsoft.com 217.
-MCQ whose correct option is the longest: 15/87. Outdated answers used: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].
+MCQ whose correct option is the longest: 15/127. Outdated answers used: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].
 
 | TOPIC | cards/budget | Q/A | MCQ | junior | code (question or answer) | dropped in review |
 |---|---|---|---|---|---|---|
-| 1.1 Types and Memory | 14/14 | 8 | 6 | 9 | 4 | 0 |
-| 1.2 OOP and Interfaces | 12/12 | 8 | 4 | 8 | 4 | 0 |
-| 1.3 Nullability | 8/8 | 4 | 4 | 5 | 2 | 0 |
-| 1.4 Generics, Delegates and Lambdas | 10/10 | 6 | 4 | 4 | 4 | 0 |
+| 1.1 Types and Memory | 14/14 | 4 | 10 | 9 | 4 | 0 |
+| 1.2 OOP and Interfaces | 12/12 | 5 | 7 | 8 | 4 | 0 |
+| 1.3 Nullability | 8/8 | 2 | 6 | 5 | 2 | 0 |
+| 1.4 Generics, Delegates and Lambdas | 10/10 | 3 | 7 | 4 | 4 | 0 |
 | 1.5 Collections | 10/10 | 5 | 5 | 6 | 3 | 0 |
-| 1.6 LINQ | 14/14 | 8 | 6 | 7 | 4 | 0 |
-| 1.7 Exceptions | 8/8 | 5 | 3 | 5 | 2 | 0 |
-| 1.8 Modern C# (10-12) | 12/12 | 6 | 6 | 5 | 3 | 0 |
-| 2.1 Async and Task | 16/16 | 10 | 6 | 6 | 4 | 0 |
-| 2.2 Concurrency and Thread Safety | 6/6 | 4 | 2 | 1 | 2 | 0 |
-| 3.1 GC and IDisposable | 10/10 | 6 | 4 | 5 | 3 | 0 |
-| 3.2 BCL: HttpClient, JSON, Time | 11/10 | 7 | 4 | 3 | 3 | 0 |
-| 4.1 Hosting, Configuration and Options | 10/10 | 6 | 4 | 4 | 4 | 0 |
-| 4.2 Dependency Injection | 12/12 | 7 | 5 | 5 | 3 | 0 |
-| 4.3 Middleware Pipeline | 8/8 | 5 | 3 | 3 | 2 | 0 |
-| 4.4 Minimal APIs, Controllers, Filters | 12/12 | 7 | 5 | 6 | 3 | 0 |
-| 4.5 Auth and CORS | 5/6 | 4 | 1 | 1 | 1 | 1 |
-| 5.1 EF Core Querying and Tracking | 14/14 | 8 | 6 | 4 | 4 | 0 |
+| 1.6 LINQ | 14/14 | 5 | 9 | 7 | 4 | 0 |
+| 1.7 Exceptions | 8/8 | 4 | 4 | 5 | 2 | 0 |
+| 1.8 Modern C# (10-12) | 12/12 | 2 | 10 | 5 | 3 | 0 |
+| 2.1 Async and Task | 16/16 | 6 | 10 | 6 | 4 | 0 |
+| 2.2 Concurrency and Thread Safety | 6/6 | 3 | 3 | 1 | 2 | 0 |
+| 3.1 GC and IDisposable | 10/10 | 5 | 5 | 5 | 3 | 0 |
+| 3.2 BCL: HttpClient, JSON, Time | 11/10 | 5 | 6 | 3 | 3 | 0 |
+| 4.1 Hosting, Configuration and Options | 10/10 | 4 | 6 | 4 | 4 | 0 |
+| 4.2 Dependency Injection | 12/12 | 6 | 6 | 5 | 3 | 0 |
+| 4.3 Middleware Pipeline | 8/8 | 4 | 4 | 3 | 2 | 0 |
+| 4.4 Minimal APIs, Controllers, Filters | 12/12 | 5 | 7 | 6 | 3 | 0 |
+| 4.5 Auth and CORS | 5/6 | 2 | 3 | 1 | 1 | 1 |
+| 5.1 EF Core Querying and Tracking | 14/14 | 6 | 8 | 4 | 4 | 0 |
 | 5.2 Transactions and Indexes | 6/6 | 4 | 2 | 2 | 3 | 0 |
-| 6.1 Unit and Integration Testing | 11/12 | 6 | 5 | 4 | 2 | 1 |
+| 6.1 Unit and Integration Testing | 11/12 | 4 | 7 | 4 | 2 | 1 |
 | 7.1 Design Principles | 8/8 | 6 | 2 | 2 | 2 | 0 |
 
 Checks: all passed
@@ -102,3 +102,15 @@ Each card read in full: claim correct for .NET 8 / C# 12, quote supports the key
 | net-design-07 | correct |  |
 
 Result: 42/42 correct; error rate 0% in every TOPIC (threshold 5%). No topic re-run.
+
+## MCQ conversion (owner decision, 2026-10-02)
+
+The owner asked to lean further toward multiple choice. Each of the 130 Q/A cards was assessed: a classifier
+proposed 110 conversions and an independent skeptic upheld 40. The other 70 would have become giveaway or
+strawman MCQs (explain-why, trade-off and multi-part answers stay Q/A: in an interview they must be said out loud).
+The 40 were converted in place (same uid, so learner progress is kept), passed the gate (lint, verbatim quote,
+.NET 8 snippets), and both reviewers (support, refute) with up to two repair rounds; none had to be reverted.
+Result: 90 Q/A + 127 MCQ (59 percent). The first five cards of the file are d1 Q/A so the R22 starter lesson
+still teaches before it tests.
+
+Supervisor spot check of the conversions (10 of 40, random.Random(59)): asp-api-07, asp-api-09, asp-host-02, ef-query-05, net-async-08, net-bcl-02, net-generics-02, net-null-02, net-oop-02, net-types-01: 10/10 correct.
