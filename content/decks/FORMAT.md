@@ -380,16 +380,31 @@ gets `D2 services` even when its service is also named by a task.
 | D7 | `D7 Security & safety` |
 | D8 | `D8 Tools & MCP` |
 
-### 5.3 .NET interview deck (`csharp-basics`): R23 topics, from `content/decks/csharp-basics.REPORT.md`
+### 5.3 .NET interview deck (`csharp-basics`): one label per R23 topic
 
-| area | `TOPIC:` labels |
+| area | `TOPIC:` label |
 |---|---|
-| C# language | `1.1 Types and Memory` · `1.2 OOP and Interfaces` · `1.3 Nullability` · `1.4 Generics, Delegates and Lambdas` · `1.5 Collections` · `1.6 LINQ` · `1.7 Exceptions` · `1.8 Modern C# (10-12)` |
-| async | `2.1 Async and Task` · `2.2 Concurrency and Thread Safety` |
-| runtime and BCL | `3.1 GC and IDisposable` · `3.2 BCL: HttpClient, JSON, Time` |
-| ASP.NET Core | `4.1 Hosting, Configuration and Options` · `4.2 Dependency Injection` · `4.3 Middleware Pipeline` · `4.4 Minimal APIs, Controllers, Filters` · `4.5 Auth and CORS` |
-| EF Core | `5.1 EF Core Querying and Tracking` · `5.2 Transactions and Indexes` |
-| testing and design | `6.1 Unit and Integration Testing` · `7.1 Design Principles` |
+| C# language | `1.1 Types and Memory` |
+| C# language | `1.2 OOP and Interfaces` |
+| C# language | `1.3 Nullability` |
+| C# language | `1.4 Generics, Delegates and Lambdas` |
+| C# language | `1.5 Collections` |
+| C# language | `1.6 LINQ` |
+| C# language | `1.7 Exceptions` |
+| C# language | `1.8 Modern C# (10-12)` |
+| async | `2.1 Async and Task` |
+| async | `2.2 Concurrency and Thread Safety` |
+| runtime and BCL | `3.1 GC and IDisposable` |
+| runtime and BCL | `3.2 BCL: HttpClient, JSON, Time` |
+| ASP.NET Core | `4.1 Hosting, Configuration and Options` |
+| ASP.NET Core | `4.2 Dependency Injection` |
+| ASP.NET Core | `4.3 Middleware Pipeline` |
+| ASP.NET Core | `4.4 Minimal APIs, Controllers, Filters` |
+| ASP.NET Core | `4.5 Auth and CORS` |
+| EF Core | `5.1 EF Core Querying and Tracking` |
+| EF Core | `5.2 Transactions and Indexes` |
+| testing | `6.1 Unit and Integration Testing` |
+| design | `7.1 Design Principles` |
 
 ---
 
