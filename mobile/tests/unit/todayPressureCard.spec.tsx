@@ -48,11 +48,11 @@ function tileValues(tree: renderer.ReactTestRenderer): Record<string, string> {
 }
 
 describe('TodayPressureCard', () => {
-  it('reads Due · New · Learned · Owned for the selected deck', async () => {
+  it('reads Due · New · Learned · Collected for the selected deck', async () => {
     // The owner's screen: 441-card deck, 11 fresh cards, 5 due in another deck.
     const tree = await render(counts({ selectedNew: 11, selectedOwned: 11, totalDueAllDecks: 5 }));
 
-    expect(tileValues(tree)).toEqual({ Due: '0', New: '11', Learned: '0', Owned: '11' });
+    expect(tileValues(tree)).toEqual({ Due: '0', New: '11', Learned: '0', Collected: '11' });
     expect(tree.root.findAllByProps({ testID: 'home-today-empty' })).toHaveLength(0);
   });
 
@@ -68,6 +68,6 @@ describe('TodayPressureCard', () => {
 
     // One owned card that is neither due nor new nor learned still counts.
     const oneOwned = await render(counts({ selectedOwned: 1 }));
-    expect(tileValues(oneOwned)).toEqual({ Due: '0', New: '0', Learned: '0', Owned: '1' });
+    expect(tileValues(oneOwned)).toEqual({ Due: '0', New: '0', Learned: '0', Collected: '1' });
   });
 });

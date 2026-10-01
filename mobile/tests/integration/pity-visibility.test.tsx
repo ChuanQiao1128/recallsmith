@@ -146,7 +146,7 @@ describe('pity guarantee visibility', () => {
     const tree = await renderDrawScreen();
 
     const label = tree.root.findByProps({ testID: 'draw-pity-progress' });
-    expect(label.props.children).toBe('3 cards until guaranteed reveal');
+    expect(label.props.children).toBe('A rare card is guaranteed within 3 cards');
   });
 
   it('promises the next card once the pity threshold is reached', async () => {
