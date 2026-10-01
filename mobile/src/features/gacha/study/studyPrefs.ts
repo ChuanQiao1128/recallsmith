@@ -13,7 +13,6 @@
 // error is fail-closed onto the current in-memory value.
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { loadAllProgress } from '../../../review/storage';
 import { isLearnedProgress } from '../selectors/progressSelectors';
 
 export const STUDY_PREFS_KEY = 'recallsmith:study-prefs:v1';
@@ -29,10 +28,27 @@ export function getStudyPrefsSync(): StudyPrefs {
   return { ...current };
 }
 
-/** True when any stored deck progress (current user scope) has a reviewed card. */
+// Every deck-progress key on the device, whoever owns it: the scoped keys
+// 'devcards:u:{sub}:deck-progress:{slug}', their legacy versioned form '…:{slug}:{version}' and the
+// unscoped global keys 'deck-progress:{slug}[:{version}]'. The key this decides is device-global
+// and decided once, so it cannot read only the current scope: a learner who upgrades while signed
+// out (scope 'anon') or whose progress is still in legacy keys would lose their four buttons.
+const PROGRESS_KEY_RE = /^(devcards:u:[^:]+:)?deck-progress:[^:]+(:[^:]+)?$/;
+
+/** True when any deck progress stored on this device (any user scope, legacy keys too) has a reviewed card. */
 export async function hasAnyLearnedCard(): Promise<boolean> {
-  const all = await loadAllProgress();
-  return Object.values(all).some((rows) => Array.isArray(rows) && rows.some((row) => !!row && isLearnedProgress(row)));
+  const keys = (await AsyncStorage.getAllKeys()).filter((key) => PROGRESS_KEY_RE.test(key));
+  if (keys.length === 0) return false;
+  const pairs = await AsyncStorage.multiGet(keys);
+  return pairs.some(([, raw]) => {
+    if (!raw) return false;
+    try {
+      const rows = JSON.parse(raw) as unknown;
+      return Array.isArray(rows) && rows.some((row) => !!row && typeof row === 'object' && isLearnedProgress(row));
+    } catch {
+      return false;
+    }
+  });
 }
 
 /**

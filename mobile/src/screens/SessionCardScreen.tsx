@@ -79,6 +79,7 @@ import { SessionReportButton } from '../features/cardReport/SessionReportButton'
 import { loadExpoHaptics } from '../components/ceremonyHaptics';
 import { getFeedbackPrefsSync } from '../features/gacha/settings/feedbackPrefs';
 import { getStudyPrefsSync, loadStudyPrefs } from '../features/gacha/study/studyPrefs';
+import { projectLearningChecks } from '../features/gacha/study/learningRunLength';
 import { getStudyGoal } from '../features/goal/studyGoal';
 import { studyHaptic } from '../features/gacha/session/studyHaptics';
 import type { McqExport, McqOption } from '../types/deckExport';
@@ -166,8 +167,9 @@ function isLearned(progress: CardProgress): boolean {
 // R22 §6 learning step. 'study' = the first exposure of a never-reviewed Q/A card (read it, "Got it");
 // 'check' = its recall check, re-queued at the end of the same session. null = an ordinary card.
 type LearningPhase = 'study' | 'check' | null;
-// The recall check has two answers whatever the rating-button setting: Remembered (the dock sends
-// 'good') schedules as 'hard' — stage 0, due in a day — and Forgot stays 'again' (due in 10 min).
+// The recall check has two answers whatever the rating-button setting: Remembered (the check dock
+// sends 'hard') schedules as 'hard' — stage 0, due in a day — and Forgot stays 'again' (due in
+// 10 min). Any other rating that reaches a check is folded onto those two.
 function mapLearningCheckRating(rating: ReviewRating): ReviewRating {
   return rating === 'again' ? 'again' : 'hard';
 }
@@ -239,9 +241,12 @@ export function SessionCardScreen({ navigation, route }: Props) {
   const [showAnswer, setShowAnswer] = useState(false);
   const [mcqState, setMcqState] = useState<McqCardState>(EMPTY_MCQ_CARD_STATE);
   const [learningPhase, setLearningPhase] = useState<LearningPhase>(null);
-  // One extra session slot per card studied this session: its recall check. The header's
-  // "X of Y" and the run's guards count against sessionLimit + learningCheckSlots.
+  // One extra session slot per card studied this session: its recall check. The run's guards and
+  // the summary count against sessionLimit + learningCheckSlots.
   const [learningCheckSlots, setLearningCheckSlots] = useState(0);
+  // The recall checks the planned run will add, projected when the run is planned, so the header's
+  // "Card X of Y" shows the run's length from the first card instead of growing at every Got it.
+  const [projectedCheckSlots, setProjectedCheckSlots] = useState(0);
   // Two rating buttons unless the learner has the four-button study setting on.
   // Seeded from the in-memory value, refreshed on focus (the first read decides
   // the default from whether the learner already has a learned card).
@@ -307,7 +312,6 @@ export function SessionCardScreen({ navigation, route }: Props) {
   const examDateRef = useRef<string | null>(null);
   const sessionId = useSessionStore((state) => state.sessionId);
   const sessionRoute = useSessionStore((state) => state.route);
-  const sessionRouteIndex = useSessionStore((state) => state.currentIndex);
   const startSession = useSessionStore((state) => state.startSession);
   const recordSessionRating = useSessionStore((state) => state.recordRating);
   const recordRewardStep = useSessionStore((state) => state.recordRewardStep);
@@ -465,6 +469,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
         checksDoneRef.current = 0;
         examDateRef.current = null;
         setLearningCheckSlots(0);
+        setProjectedCheckSlots(0);
         setLearningPhase(null);
         setLoadForecast(null);
         setPlannedMinimumGoal(null);
@@ -678,6 +683,22 @@ export function SessionCardScreen({ navigation, route }: Props) {
                 ownedSet: nextOwned,
                 kindHint: buildKindHint(mcqRunRef.current, getFeatureFlags()),
               });
+          // A focus run has no study view; elsewhere project the checks before the first deal moves
+          // the MCQ rotation on.
+          setProjectedCheckSlots(
+            focusIndex
+              ? 0
+              : projectLearningChecks({
+                  deck: deckForStudy,
+                  progress: nextProgress,
+                  now,
+                  mode,
+                  limit: plannedChallenge.limit,
+                  index: cardIndexRef.current,
+                  ownedSet: nextOwned,
+                  flags: getFeatureFlags(),
+                }),
+          );
           const nextSessionId = `${deckForStudy.Slug}-${now.getTime()}`;
           startSession({
             sessionId: nextSessionId,
@@ -733,16 +754,29 @@ export function SessionCardScreen({ navigation, route }: Props) {
   );
   const now = new Date();
   const dueTodayCount = countDueToday(progress, now, ownedSet);
+  // The planner's slots used so far: every step but the recall checks (a study uses its card's slot).
+  // checksDoneRef moves only together with sessionDone, so reading it here stays in step.
+  const plannerSlotsUsed = sessionDone - checksDoneRef.current;
+  // "Card X of Y": while the planner still deals, Y counts the projected checks (never fewer than
+  // the ones already queued); once its slots are used up the checks queued are all there will be.
+  const shownLimit =
+    sessionLimit > 0 && plannerSlotsUsed < sessionLimit
+      ? sessionLimit + Math.max(learningCheckSlots, projectedCheckSlots)
+      : totalLimit;
+  // The route's role badge (Elite recall, Boss check…) belongs to the planner slot of an ordinary
+  // card. The study view and the recall check are not that card, so they carry none; indexing by
+  // planner slot (not by ratings, which skip the studies) keeps it on the planned card.
+  const currentRoleLabel = learningPhase === null ? sessionRoute[plannerSlotsUsed]?.title ?? null : null;
   const sessionVm = useMemo(
     () =>
       buildSessionProgressVM({
         sessionDone,
-        sessionLimit: totalLimit,
+        sessionLimit: shownLimit,
         dueTodayCount,
         mode,
-        currentRoleLabel: sessionRoute[sessionRouteIndex]?.title ?? null,
+        currentRoleLabel,
       }),
-    [dueTodayCount, mode, sessionDone, totalLimit, sessionRoute, sessionRouteIndex],
+    [dueTodayCount, mode, sessionDone, shownLimit, currentRoleLabel],
   );
   // The next recall check waiting at the end of the run, with the card's latest progress.
   function takeLearningCheck(progressList: CardProgress[]): CurrentCardLike | null {
@@ -1358,7 +1392,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
                   requiredCount={mcqRequiredCount(mcqState.mcq)}
                   selectedCount={mcqState.picks.length}
                   disabled={reviewing}
-                  isLastNode={totalLimit > 0 && sessionDone + 1 >= totalLimit}
+                  isLastNode={shownLimit > 0 && sessionDone + 1 >= shownLimit}
                   onShowOptions={handleShowOptions}
                   onSubmit={handleSubmit}
                   onDontKnow={handleDontKnow}
@@ -1371,8 +1405,10 @@ export function SessionCardScreen({ navigation, route }: Props) {
                   testID="review-rating-bar"
                   disabled={reviewing || !showAnswer}
                   revealed={showAnswer}
-                  // The recall check is a yes/no question: Forgot / Remembered, whatever the setting.
-                  fourButtons={learningPhase === 'check' ? false : fourButtons}
+                  fourButtons={fourButtons}
+                  // The recall check is a yes/no question: Forgot / Remembered, whatever the setting,
+                  // with Remembered worded as what it schedules (due tomorrow).
+                  learningCheck={learningPhase === 'check'}
                   onRate={(rating) => void handleRating(rating)}
                 />
               )}

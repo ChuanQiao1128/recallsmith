@@ -25,7 +25,10 @@ Contract: R22-00 §5. JS-only (OTA-safe); no frozen file, package or native chan
 
 - Session header subtitle: `Card 1 of 5`, `Card 2 of 5`, … (never `Run 0/1 · Mixed`).
 - Session header role badge: shown only for `Elite recall` / `Boss check` / `Focus review`
-  (the header already hides an empty label). No learner-visible "node".
+  (the header already hides an empty label), and only on an ordinary card: since F02
+  (s-correctness-2) it is indexed by planner slot and hidden on a study card and a recall check.
+  No learner-visible "node" (F02 s-correctness-4 also renamed Home's hero helper line, which said
+  'Clear 1 node … capped at 5 nodes'; that line is in the view model but not rendered).
 - Reveal face: QUESTION recap, then EXPLANATION / CODING SAMPLE / REAL USAGE; no ANSWER caption.
 
 ## Tests

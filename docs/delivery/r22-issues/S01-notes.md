@@ -52,9 +52,13 @@ and every package, app, eas or native file.
   - Remembered: rating `hard`. Stage stays 0, due in 1 day, `hardStreak` 1. It pays R1 as `hard` does
     today (`settleRatingReward` unchanged).
   - Forgot: rating `again`. Due in 10 minutes, no Mistake Book entry.
-- Header: a run of N planned cards with k new Q/A cards reads `Run X/(N+k)`. The words are S04's
-  (`Card X of Y`), and the numbers already include the check slots. SessionSummary gets
-  `sessionDone`/`sessionLimit` with the check slots included.
+- Header: a run of N planned cards with k new Q/A cards reads `Card X of (N+k)` (S04's words). Y
+  counts the check slots from the first card (F02 s-correctness-3: projected when the run is planned,
+  exact once the planner's slots are used up). SessionSummary gets `sessionDone`/`sessionLimit` with
+  the check slots included.
+- Recall-check dock (F02 s-correctness-1): **Forgot** *Show soon* / **Remembered** *See it tomorrow*,
+  sending `again` / `hard` (`LEARNING_CHECK_ITEMS` in `RatingBar.tsx`). The route role badge
+  (Elite recall / Boss check) is not shown on a study card or a check (F02 s-correctness-2).
 - MCQ cards, learned Q/A cards and focus runs are unchanged. Under the MCQ kill switch an MCQ card renders
   as Q/A, so it gets the study step like any Q/A card.
 
@@ -64,10 +68,10 @@ and every package, app, eas or native file.
   the real rating helper and the real Mistake Book over in-memory storage. Cases:
   - a new Q/A card opens on the study view (question, answer, source, one Got it, no reveal, no rating
     buttons), and with the flag off there is no source;
-  - Got it sends no event, no mistake, no save, no reward, re-queues the card as a check, and the count goes
-    from 0/1 to 1/2;
+  - Got it sends no event, no mistake, no save, no reward, re-queues the card as a check, and the
+    subtitle goes from `Card 1 of 2` to `Card 2 of 2` (it read `Card 1 of 1` → `Card 2 of 2` before F02);
   - two new cards: the planner deals the second card (not the studied one, `excludeUids`), and the checks
-    come last in study order, ending at 4/4;
+    come last in study order, `Card 1 of 4` … `Card 4 of 4`, and the summary gets 4/4;
   - each check sends one event with `reviewStage: 'learning_check'`: Remembered → `hard` (stage 0,
     +1 day) and Forgot → `again` (+10 min); the reward and the saved progress follow the mapped rating;
   - a failed check calls the book with `learningCheck: true` and nothing is stored;
@@ -101,11 +105,9 @@ and every package, app, eas or native file.
 
 ## Deferred / notes
 
-- Header and summary words stay "Run X/Y". S04 renames them to "Card X of Y", and the counts already
-  include the check slots.
-- The check dock reuses S02's two-button RatingBar. Remembered there is labelled "Normal gap" (the
-  `good` subtitle), but the check maps it to `hard` (a 1-day gap). A check-specific subtitle would need
-  a RatingBar change, which is outside S01's scope.
+- Header words are S04's "Card X of Y"; the counts include the check slots (see Shipped surface).
+- ~~The check dock reuses S02's two-button RatingBar with Remembered labelled "Normal gap".~~ Fixed in
+  F02 (s-correctness-1): the check has its own wording, Remembered — *See it tomorrow*.
 - Pausing mid-run drops the pending checks. Studied cards stay new (nothing was saved for them), so they
   come back as study cards next session.
 - A route with no limit (`sessionLimit <= 0`) serves checks only once the planner has nothing left.

@@ -28,8 +28,9 @@ Round r22, wave s. Contract: `R22-00-contracts.md` §1.4, §5 (hint copy), §6.
   scales. Two-button mode stays one row.
 - Hint before reveal (both modes): "Try to recall the answer, then reveal it."
   After reveal: "Did you remember it?" with two buttons, "How well did you recall it?" with four.
-- Default when the key is absent: `hasAnyLearnedCard()` scans all stored deck progress in the current user
-  scope (`loadAllProgress`) for a row with `lastReviewedAt > 0` (`isLearnedProgress`). If it finds one,
+- Default when the key is absent: `hasAnyLearnedCard()` scans every deck-progress key on the device —
+  any user scope, legacy versioned keys and unscoped global keys (F02 x-deploy-1; it read only the
+  current scope through `loadAllProgress` before) — for a row with `lastReviewedAt > 0` (`isLearnedProgress`). If it finds one,
   `fourButtons` is `true` and existing users keep four buttons. Otherwise it is `false`. The result is
   then stored, so the decision is made once. A stored or malformed value is handled like this: a valid
   stored value always wins; a malformed one reads as absent. If storage or the probe errors, the
@@ -65,9 +66,10 @@ Round r22, wave s. Contract: `R22-00-contracts.md` §1.4, §5 (hint copy), §6.
 ## Deferred / notes
 
 - The learning-check rating (Remembered → `hard` on a first-exposure recall check) is S01's scope (§6).
-  The RatingBar is unchanged for that: S01 maps the button press at its own call site.
-- The prefs are device-global, like the feedback prefs. The learned-card probe reads only the active
-  user scope. A device whose first read happens while signed out, with history only in another account
-  scope, defaults to two buttons. The learner can switch to four in Settings.
+  Since F02 (s-correctness-1) RatingBar has a `learningCheck` dock: Forgot *Show soon* / Remembered
+  *See it tomorrow*, sending `again` / `hard`.
+- The prefs are device-global, like the feedback prefs, so since F02 (x-deploy-1) the learned-card probe
+  is device-wide too: a first read while signed out still finds the history kept under the account's
+  own scope or in legacy keys, and that learner keeps four buttons.
 - App-wide preloading of the prefs at launch (App.tsx) is out of scope. The session screen seeds from
   the in-memory default and corrects itself after the focus read, which is microseconds after mount.
