@@ -307,7 +307,12 @@ describe('SessionCardScreen starter lesson', () => {
     for (const uid of ['c1', 'c2', 'c3', 'c4', 'c5']) {
       expect(hasText(tree, `Question ${uid}`)).toBe(true);
       expect(tree.root.findAll((node) => node.props?.testID === 'learning-study-view').length).toBeGreaterThan(0);
-      studied.push(uid);
+      // F01 y-tests-4: record the card the screen actually presents, not the loop variable.
+      const shown = tree.root.findAll(
+        (node) => typeof node.type === 'string' && node.props?.testID === 'learning-study-question',
+      );
+      expect(shown).toHaveLength(1);
+      studied.push(String(shown[0].props.children).replace(/^Question /, ''));
       await studyGotIt(tree);
       expect(recordReviewEvent).not.toHaveBeenCalled();
       expect(navigation.replace).not.toHaveBeenCalled();

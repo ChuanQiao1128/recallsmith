@@ -14,6 +14,8 @@ Every surface used to print `card.Question` as plain text. Now:
 | ReviewBody question recap (after reveal) | prose, then the same `CodeBlock`, above the answer |
 | McqReviewBody stem | prose stem (lead-in split, qualifier / caps highlighting run on the prose only), then the `CodeBlock`, then the options; on the stem stage the code sits above the stem hint |
 | CardDetailScreen question card | prose, then the `CodeBlock` |
+| LearningStudyView (R22 study view, first view of a never-reviewed Q/A card) | prose, then the `CodeBlock`, then the answer sections — added in F01 (r22yx); Y01 itself left this surface printing raw backticks |
+| My Reports row + its spoken label | prose only (`questionText`) — added in F01 (r22yx) |
 | CardDetailScreen title, MistakeBook row + its spoken label, DrawResult featured question / grid / detail sheet, RevealCardFace, TapCard, DrawSummaryGrid, Library tiles | prose only (via `drawCommit` / `libraryMapper` / `questionText`) |
 
 The question `CodeBlock` is the same component, tokenizer hint (`normalizeCodeLanguage`) and language caption
@@ -50,6 +52,8 @@ extra node (ReviewBody uses a fragment), no `accessibilityLabel` override.
 - Code lines keep their indentation; blank lines at the edges of the fence body are dropped, inner blank lines kept.
 - `text`: prose before and after the fence joined by one blank line, trailing spaces per line removed, runs of
   blank lines collapsed, outer whitespace trimmed.
+- Fence-only question (no prose around the fence): `text` is `FENCE_ONLY_QUESTION_TEXT` ("What does this code do?"),
+  so no title, row or spoken label is empty (F01, r22yx). Y01 shipped an empty `text` here.
 
 ## Tests
 
@@ -76,11 +80,10 @@ inside `Question` (opening line with a language word, closing line on its own).
 
 ## Deferred
 
-- `LearningStudyView.tsx` (the R22 study view shown for a never-reviewed Q/A card) still prints `card.Question`
-  as plain text. It was outside this issue's file scope; it should call `splitQuestionCode` and render
-  `QuestionCodeBlock` the same way ReviewBody does.
-- `MyReportsScreen` shows the question echoed back by the card-report API; it is outside scope and would need
-  `questionText` too.
+- Resolved in F01 (r22yx), see `docs/delivery/r22yx-issues/F01-fixes.md`: `LearningStudyView.tsx` (the R22 study
+  view, the first face of every never-reviewed Q/A card) printed `card.Question` raw — it now splits the question
+  and renders `QuestionCodeBlock`; `MyReportsScreen` echoed the raw question — it now shows `questionText`.
+  Until F01 the "every surface" claim above did not hold for these two surfaces.
 - `tests/integration/session-card-starter.screen.test.tsx` > "teaches the first 5 non-MCQ cards…" failed on the
   base (`delivery/r22y-y`) before any Y01 change: the H02 starter test predates the merged R22 §6 learning step
   (r22-s), so it looked for "Reveal answer" / "Good" on a study view. To make the root mobile gate pass, the test

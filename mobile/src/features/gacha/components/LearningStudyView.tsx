@@ -3,9 +3,11 @@ import * as RN from 'react-native';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { CardExport } from '../../../types/deckExport';
+import { questionA11yLabel, splitQuestionCode } from '../../../content/questionCode';
 import { getFeatureFlags } from '../../../config/featureFlags';
 import { formatRank } from '../library/libraryMapper';
 import { CardAnswerSections } from './CardAnswerSections';
+import { QuestionCodeBlock } from '../session/QuestionCodeBlock';
 import { colors } from '../../../theme/colors';
 import { spacing } from '../../../theme/spacing';
 import { typography } from '../../../theme/typography';
@@ -58,6 +60,8 @@ export const LearningStudyView = React.memo(function LearningStudyView(props: Le
   const orderBadge = typeof rank === 'number' && rank > 0 ? `#${formatRank(rank)}` : `#${card.OrderInDeck}`;
   const [source, setSource] = useState<LoadedSource | null>(null);
   const uid = card.StableUid;
+  // Same split as ReviewBody: the prose, then the fenced code as a code block (never raw backticks).
+  const question = React.useMemo(() => splitQuestionCode(card.Question), [card.Question]);
 
   useEffect(() => {
     setSource(null);
@@ -82,9 +86,14 @@ export const LearningStudyView = React.memo(function LearningStudyView(props: Le
           {orderBadge}
         </Text>
       </View>
-      <Text style={styles.question} testID="learning-study-question">
-        {card.Question}
+      <Text
+        style={styles.question}
+        testID="learning-study-question"
+        accessibilityLabel={question.code ? questionA11yLabel(question) : undefined}
+      >
+        {question.text}
       </Text>
+      {question.code ? <QuestionCodeBlock code={question.code} /> : null}
       <View style={styles.answerWrap}>
         <CardAnswerSections card={card} testID="learning-study-answer" />
       </View>
