@@ -143,6 +143,6 @@ Status: fixed
 ## Gates
 
 - `cd mobile && npx tsc --noEmit`: pass
-- `npm run test:unit`: 194 files, 1421 tests, pass
+- `npm run test:unit`: 193 files, 1417 tests, pass
 - `npm run test:integration`: 74 files, 492 tests, pass. `home-auto-update.spec.tsx` failed once in a
   full run and passed on rerun and in isolation. It is unrelated to F02.
