@@ -186,7 +186,7 @@ vi.mock('../../src/features/gacha/planner/sessionPlanner', () => ({
   countDueToday: vi.fn(() => 0),
   pickNextCard: vi.fn(() => ({
     card: { StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1', Answer: 'A1' },
-    progress: { stableUid: '1', stage: 0, nextReviewAt: 0 },
+    progress: { stableUid: '1', stage: 0, nextReviewAt: 0, lastReviewedAt: LEARNED_AT },
   })),
   planChallengeRoute: vi.fn(() => ({
     slug: 'csharp',
@@ -233,6 +233,10 @@ import { settleRatingReward } from '../../src/features/gacha/rewards/sessionRewa
 import type { RatingRewardStep } from '../../src/features/gacha/rewards/sessionRewards';
 import { resetSessionStore, useSessionStore } from '../../src/features/gacha/session/sessionStore';
 import { loadAllProgress } from '../../src/review/storage';
+
+// The dealt card has been reviewed before, so it is rated directly; a never-reviewed Q/A card
+// opens on the R22 study view first (see the learning-step tests in session-card.screen.test).
+const LEARNED_AT = 1_600_000_000_000;
 
 async function flush() {
   await act(async () => {
@@ -293,7 +297,7 @@ describe('SessionCardScreen', () => {
     vi.mocked(resolveDeckBySlug).mockResolvedValue(buildDeck() as any);
     vi.mocked(pickNextCard).mockReturnValue({
       card: { StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1' },
-      progress: { stableUid: '1', stage: 0, nextReviewAt: 0 },
+      progress: { stableUid: '1', stage: 0, nextReviewAt: 0, lastReviewedAt: LEARNED_AT },
     });
     vi.mocked(planChallengeRoute).mockReturnValue(buildChallengeRoute() as any);
     errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -635,7 +639,7 @@ describe('SessionCardScreen', () => {
         Question: longQuestion,
         Explanation: 'Use a scheduled scaling action on the Auto Scaling group for the Saturday window.',
       },
-      progress: { stableUid: '1', stage: 0, nextReviewAt: 0 },
+      progress: { stableUid: '1', stage: 0, nextReviewAt: 0, lastReviewedAt: LEARNED_AT },
     } as any);
     const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
 
@@ -930,7 +934,7 @@ describe('SessionCardScreen', () => {
         nextDone: 1,
         nextCurrent: {
           card: { StableUid: '2', OrderInDeck: 2, Difficulty: 1, Question: 'Q2', Answer: 'A2' },
-          progress: { stableUid: '2', stage: 0, nextReviewAt: 0 },
+          progress: { stableUid: '2', stage: 0, nextReviewAt: 0, lastReviewedAt: LEARNED_AT },
         },
         prevLearnedCount: 0,
         remainingDueCount: 0,
@@ -1048,7 +1052,7 @@ describe('SessionCardScreen', () => {
       }) as any);
       vi.mocked(pickNextCard).mockReturnValue({
         card: { StableUid: 'b', OrderInDeck: 780, Difficulty: 1, Question: 'Q2' },
-        progress: { stableUid: 'b', stage: 0, nextReviewAt: 0 },
+        progress: { stableUid: 'b', stage: 0, nextReviewAt: 0, lastReviewedAt: LEARNED_AT },
       } as any);
       const { tree } = await mount({ limit: 1 });
       const badge = byTestID(tree, 'review-order-badge');

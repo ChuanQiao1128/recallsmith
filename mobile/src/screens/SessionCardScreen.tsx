@@ -750,7 +750,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
         nextIsCheck = nextCurrent !== null;
       }
       // Every step of the run counts: planner cards, studies and checks.
-      const nextDone = nextState.nextDone + checksDoneBefore;
+      const nextDone = sessionDone + 1;
       // Events are facts, progress is a projection; facts must land first. A
       // queued event can rebuild the progress on the next sync, but a saved
       // progress with no event means the server never learns this review

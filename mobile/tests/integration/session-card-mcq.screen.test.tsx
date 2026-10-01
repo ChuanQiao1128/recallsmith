@@ -601,10 +601,16 @@ describe('SessionCardScreen MCQ branch', () => {
     serve(CARD_1, NEW_PROGRESS(CARD_1.StableUid));
     const { tree, navigation } = await mount();
 
-    expect(findPressableByLabel(tree, 'Reveal answer')).toBeTruthy();
+    // Rendered as Q/A, a never-reviewed card is taught first (R22 §6): study view, then the
+    // recall check at the end of the run, which adds one slot.
+    expect(findPressableByLabel(tree, 'Got it')).toBeTruthy();
     expect(byTestIDPrefix(tree, 'mcq-')).toHaveLength(0);
     expect(pickNextCard).toHaveBeenCalledWith(expect.objectContaining({ kindHint: null }));
 
+    await act(async () => {
+      findPressableByLabel(tree, 'Got it').props.onPress();
+      await Promise.resolve();
+    });
     await act(async () => {
       findPressableByLabel(tree, 'Reveal answer').props.onPress();
       await Promise.resolve();
@@ -620,8 +626,8 @@ describe('SessionCardScreen MCQ branch', () => {
       sessionId: expect.any(String),
       slug: 'csharp',
       deckTitle: 'C# Interview',
-      sessionDone: 1,
-      sessionLimit: 1,
+      sessionDone: 2,
+      sessionLimit: 2,
       minimumGoal: 1,
       dueCount: 0,
       streakEarned: true,

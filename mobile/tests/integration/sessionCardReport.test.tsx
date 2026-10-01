@@ -171,7 +171,7 @@ vi.mock('../../src/features/gacha/planner/sessionPlanner', () => ({
   countDueToday: vi.fn(() => 0),
   pickNextCard: vi.fn(() => ({
     card: { StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1', Answer: 'A1' },
-    progress: { stableUid: '1', stage: 0, nextReviewAt: 0 },
+    progress: { stableUid: '1', stage: 0, nextReviewAt: 0, lastReviewedAt: LEARNED_AT },
   })),
   planChallengeRoute: vi.fn(() => ({
     slug: 'csharp',
@@ -219,6 +219,10 @@ import { resetSessionStore } from '../../src/features/gacha/session/sessionStore
 import { applyRemoteFeatures } from '../../src/config/featureFlags';
 import type { RemoteConfig } from '../../src/config/remoteConfig';
 import { CHROME_MAX_FONT_SCALE } from '../../src/theme/dynamicType';
+
+// The dealt card has been reviewed before, so it is rated directly; a never-reviewed Q/A card
+// opens on the R22 study view first (see the learning-step tests in session-card.screen.test).
+const LEARNED_AT = 1_600_000_000_000;
 
 async function flush() {
   await act(async () => {
@@ -280,7 +284,7 @@ describe('SessionCardScreen — report entry point', () => {
     } as any);
     vi.mocked(pickNextCard).mockReturnValue({
       card: { StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1' },
-      progress: { stableUid: '1', stage: 0, nextReviewAt: 0 },
+      progress: { stableUid: '1', stage: 0, nextReviewAt: 0, lastReviewedAt: LEARNED_AT },
     } as any);
     vi.mocked(planChallengeRoute).mockReturnValue({
       slug: 'csharp',
