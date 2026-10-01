@@ -3,10 +3,12 @@ import * as RN from 'react-native';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { CardExport } from '../../../types/deckExport';
+import { stripInlineCode } from '../../../content/inlineCode';
 import { questionA11yLabel, splitQuestionCode } from '../../../content/questionCode';
 import { getFeatureFlags } from '../../../config/featureFlags';
 import { formatRank } from '../library/libraryMapper';
 import { CardAnswerSections } from './CardAnswerSections';
+import { InlineCodeText } from './InlineCodeText';
 import { QuestionCodeBlock } from '../session/QuestionCodeBlock';
 import { colors } from '../../../theme/colors';
 import { spacing } from '../../../theme/spacing';
@@ -86,13 +88,12 @@ export const LearningStudyView = React.memo(function LearningStudyView(props: Le
           {orderBadge}
         </Text>
       </View>
-      <Text
+      <InlineCodeText
         style={styles.question}
         testID="learning-study-question"
-        accessibilityLabel={question.code ? questionA11yLabel(question) : undefined}
-      >
-        {question.text}
-      </Text>
+        accessibilityLabel={question.code ? stripInlineCode(questionA11yLabel(question)) : undefined}
+        text={question.text}
+      />
       {question.code ? <QuestionCodeBlock code={question.code} /> : null}
       <View style={styles.answerWrap}>
         <CardAnswerSections card={card} testID="learning-study-answer" />

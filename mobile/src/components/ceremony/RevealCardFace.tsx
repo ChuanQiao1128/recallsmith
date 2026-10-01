@@ -24,6 +24,7 @@ import {
   type PackPalette,
 } from '../../theme/packArt';
 import { MCQ_COPY } from '../../features/gacha/mcq/mcqConstants';
+import { stripInlineCode } from '../../content/inlineCode';
 import { drawResultStyles } from '../../features/gacha/components/drawResultStyles';
 import { revealFaceMetrics } from '../../features/gacha/draw/spotlightPlan';
 import { rarityLabel } from './TapCard';
@@ -242,7 +243,7 @@ export function RevealCardFace(props: RevealCardFaceProps): React.JSX.Element {
           numberOfLines={REVEAL_STEM_LINES}
           ellipsizeMode="tail"
         >
-          {card.question}
+          {stripInlineCode(card.question)}
         </Text>
       </View>
 

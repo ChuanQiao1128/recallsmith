@@ -44,6 +44,7 @@ import { SHARE_DRAW_TESTID, shareDrawImage, type ShareDrawResult } from '../feat
 import { RATING_PROMPT_DELAY_MS, maybeRequestRating, resolveRatingTrigger } from '../features/gacha/milestones/ratingPrompt';
 import { loadStreakSnapshot } from '../features/gacha/streaks/streakTracker';
 import { MCQ_COPY } from '../features/gacha/mcq/mcqConstants';
+import { stripInlineCode } from '../content/inlineCode';
 
 // ─── react-native facade ────────────────────────────────────────────────────
 // Vitest mocks use a strict Proxy that throws on missing exports — wrap access.
@@ -464,7 +465,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
                 packPaletteCover={packPalette.cover}
                 serialText={`No. ${formatRank(typeof featured.rank === 'number' && featured.rank > 0 ? featured.rank : ownedAfter)} / ${totalCards}`}
                 style={({ pressed }: { pressed: boolean }) => [styles.featured, { width: featuredWidth }, pressed && styles.pressed]}
-                accessibilityLabel={`Open featured card detail: ${featured.question}`}
+                accessibilityLabel={`Open featured card detail: ${stripInlineCode(featured.question)}`}
                 onPress={() => setDetailUid(featured.stableUid)}
               />
             </AnimatedView>
@@ -568,7 +569,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
                             </Text>
                           ) : null}
                           <Text style={styles.gridQuestion} numberOfLines={2}>
-                            {card.question}
+                            {stripInlineCode(card.question)}
                           </Text>
                         </View>
                         <View style={[styles.gridNewRibbon, { backgroundColor: accent }]}>
@@ -705,7 +706,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
                   </Text>
                 ) : null}
                 <Text testID="draw-result-detail-question" style={styles.modalTitle}>
-                  {detailCard?.question ?? ''}
+                  {stripInlineCode(detailCard?.question ?? '')}
                 </Text>
               </ScrollView>
               <Pressable

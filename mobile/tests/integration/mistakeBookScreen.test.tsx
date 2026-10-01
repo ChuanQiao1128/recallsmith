@@ -276,6 +276,33 @@ describe('MistakeBookScreen', () => {
     expect(row.props.accessibilityLabel).not.toContain('`');
   });
 
+  // Z01: inline `code` spans show as plain text in the row and its spoken label — no backticks.
+  it('shows a question with inline code spans without backticks, in the row and its label', async () => {
+    const dotnet = deck('dotnet', '.NET Interview', [
+      {
+        ...card('list-1', 1, 'collections'),
+        Question: 'What does `List<int>.Add(4)` return, and when is `ConfigureAwait(false)` needed?',
+      },
+      {
+        ...card('both-1', 2, 'async'),
+        Question: 'What does `xs.Length` print?\n```csharp\nvar xs = new[] { 1, 2 };\n```',
+      },
+    ]);
+    vi.mocked(getCachedDeck).mockImplementation((async (slug: string) => (slug === 'dotnet' ? dotnet : null)) as any);
+    seedBook([entry('dotnet', 'list-1', 'collections', NOW - 1000), entry('dotnet', 'both-1', 'async', NOW - 1000)]);
+    const { tree } = await mount();
+
+    const row = byTestID(tree, 'mistake-row-list-1')[0];
+    expect(texts(row)[0]).toBe('What does List<int>.Add(4) return, and when is ConfigureAwait(false) needed?');
+    expect(texts(row).join(' ')).not.toContain('`');
+    expect(row.props.accessibilityLabel).toBe(
+      'What does List<int>.Add(4) return, and when is ConfigureAwait(false) needed?. collections. Wrong once, last wrong today',
+    );
+    const both = byTestID(tree, 'mistake-row-both-1')[0];
+    expect(texts(both)[0]).toBe('What does xs.Length print?');
+    expect(both.props.accessibilityLabel).not.toContain('`');
+  });
+
   // F01 supervisor-1 / y-tests-3: a fence-only question shows the neutral fallback prose, never a
   // blank row or a label that starts with a period.
   it('shows the fallback prose for a fence-only question, in the row and its label', async () => {
