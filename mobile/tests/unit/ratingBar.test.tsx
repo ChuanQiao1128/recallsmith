@@ -17,9 +17,16 @@ vi.mock('react-native', () => {
   };
 });
 
-import { RATING_HINT, RATING_ITEMS, RatingBar, TWO_RATING_ITEMS } from '../../src/features/gacha/components/RatingBar';
+import {
+  LEARNING_CHECK_ITEMS,
+  RATING_HINT,
+  RATING_ITEMS,
+  RatingBar,
+  ratingA11yLabel,
+  TWO_RATING_ITEMS,
+} from '../../src/features/gacha/components/RatingBar';
 
-function render(props: { revealed?: boolean; disabled?: boolean; fourButtons?: boolean }) {
+function render(props: { revealed?: boolean; disabled?: boolean; fourButtons?: boolean; learningCheck?: boolean }) {
   let tree!: renderer.ReactTestRenderer;
   act(() => {
     tree = renderer.create(<RatingBar onRate={() => {}} {...props} />);
@@ -140,5 +147,39 @@ describe('RatingBar two-button default', () => {
       const hint = texts(render({ revealed: false, fourButtons })).find((node) => node.props.testID === 'review-rating-hint');
       expect(hint?.props.children).toBe('Try to recall the answer, then reveal it.');
     }
+  });
+});
+
+// F02 s-correctness-1: the recall check schedules Remembered as 'hard' (stage 0, due in a day), so
+// its dock must not borrow the two-button 'Normal gap' wording, on screen or in VoiceOver.
+describe('RatingBar learning-check dock', () => {
+  it('says what the check schedules: Forgot shows soon, Remembered comes back tomorrow', () => {
+    expect(LEARNING_CHECK_ITEMS.map((item) => [item.key, item.title, item.subtitle])).toEqual([
+      ['again', 'Forgot', 'Show soon'],
+      ['hard', 'Remembered', 'See it tomorrow'],
+    ]);
+    const tree = render({ revealed: true, learningCheck: true });
+    const buttons = tree.root.findAll((node) => (node.type as any) === 'Pressable');
+    expect(buttons.map((b) => b.props.accessibilityLabel)).toEqual(['Forgot, show soon', 'Remembered, see it tomorrow']);
+    const rendered = texts(tree).map((node) => node.props.children);
+    expect(rendered).toContain('See it tomorrow');
+    expect(rendered).not.toContain('Normal gap');
+    expect(ratingA11yLabel(LEARNING_CHECK_ITEMS[1])).not.toMatch(/normal/i);
+  });
+
+  it('wins over the four-button setting and sends again / hard', () => {
+    const onRate = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    act(() => {
+      tree = renderer.create(<RatingBar onRate={onRate} revealed fourButtons learningCheck />);
+    });
+    const buttons = tree.root.findAll((node) => (node.type as any) === 'Pressable');
+    expect(buttons).toHaveLength(2);
+    act(() => {
+      buttons.forEach((button) => button.props.onPress());
+    });
+    expect(onRate.mock.calls.map((call) => call[0])).toEqual(['again', 'hard']);
+    const hint = texts(tree).find((node) => node.props.testID === 'review-rating-hint');
+    expect(hint?.props.children).toBe(RATING_HINT.afterRevealTwo);
   });
 });

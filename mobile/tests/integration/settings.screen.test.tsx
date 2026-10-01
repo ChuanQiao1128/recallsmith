@@ -70,7 +70,10 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
     getItem: vi.fn(async () => null),
     setItem: vi.fn(async () => {}),
     removeItem: vi.fn(async () => {}),
-    getAllKeys: vi.fn(async () => []),
+    // The device holds one learned card (another account's scope is enough): the four-button
+    // default reads every deck-progress key on the device (F02 x-deploy-1).
+    getAllKeys: vi.fn(async () => ['devcards:u:other-sub:deck-progress:csharp']),
+    multiGet: vi.fn(async (keys: string[]) => keys.map((key) => [key, JSON.stringify([{ stableUid: 'a', lastReviewedAt: 1 }])])),
     multiRemove: vi.fn(async () => {}),
     clear: vi.fn(async () => {}),
   },

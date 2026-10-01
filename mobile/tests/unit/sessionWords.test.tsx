@@ -28,6 +28,25 @@ function vm(sessionDone: number, sessionLimit: number, mode = 'mixed') {
   return buildSessionProgressVM({ sessionDone, sessionLimit, dueTodayCount: 0, mode });
 }
 
+function sampleDeck(): DeckSummary {
+  return {
+    slug: 'csharp',
+    title: 'C# Interview',
+    locale: 'en-US',
+    version: '1',
+    deckType: 1,
+    totalCards: 50,
+    localCards: 50,
+    studyCards: 50,
+    canStudy: true,
+    dueToday: 4,
+    plannedToday: 4,
+    newToday: 2,
+    masteredApprox: 8,
+    percent: 0.16,
+  };
+}
+
 function visibleWords(nodes: RoutePreviewNode[]) {
   return nodes.flatMap((node) => [node.title, node.subtitle]);
 }
@@ -82,22 +101,7 @@ describe("route titles — no 'Warm-up node', no 'node'", () => {
   });
 
   it('keeps Home’s route preview free of "node" too', () => {
-    const deck: DeckSummary = {
-      slug: 'csharp',
-      title: 'C# Interview',
-      locale: 'en-US',
-      version: '1',
-      deckType: 1,
-      totalCards: 50,
-      localCards: 50,
-      studyCards: 50,
-      canStudy: true,
-      dueToday: 4,
-      plannedToday: 4,
-      newToday: 2,
-      masteredApprox: 8,
-      percent: 0.16,
-    };
+    const deck = sampleDeck();
     const home = buildHomeVM({ selectedSlug: 'csharp', hasSignedInUser: true, deckSummaries: [deck] });
     expect(home.routePreview.length).toBeGreaterThan(1);
     expect(home.routePreview[0]?.role).toBe('warmup');
@@ -105,6 +109,17 @@ describe("route titles — no 'Warm-up node', no 'node'", () => {
     for (const word of visibleWords(home.routePreview)) {
       expect(word).not.toMatch(/node/i);
       expect(word).not.toMatch(/Warm-up/i);
+    }
+  });
+
+  // F02 s-correctness-4: the hero's helper line said 'Clear 1 node to keep momentum. Full run stays
+  // capped at 5 nodes.' It is not rendered today (HomeHero was removed), but it is Home copy in the
+  // view model and must not carry the planner word either.
+  it('keeps Home’s hero copy free of "node", with card counts pluralised', () => {
+    const home = buildHomeVM({ selectedSlug: 'csharp', hasSignedInUser: true, deckSummaries: [sampleDeck()] });
+    expect(home.hero.helper).toBe('Clear 1 card to keep momentum. Full run stays capped at 5 cards.');
+    for (const word of [home.hero.title, home.hero.subtitle, home.hero.helper, home.hero.headline, home.hero.subline]) {
+      expect(word).not.toMatch(/node/i);
     }
   });
 });

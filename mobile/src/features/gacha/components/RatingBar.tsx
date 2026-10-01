@@ -34,6 +34,14 @@ export const TWO_RATING_ITEMS: ReadonlyArray<RatingItem> = [
   { key: 'good', title: 'Remembered', subtitle: 'Normal gap', styleKey: 'ratingGood' },
 ];
 
+// R22 §6: the recall check after a study view. Remembered schedules as `hard` (stage 0, due in a
+// day), so it sends `hard` and says so; borrowing 'Normal gap' from the dock above promised a
+// longer gap than the card gets. Two buttons get half the width each, so three words fit.
+export const LEARNING_CHECK_ITEMS: ReadonlyArray<RatingItem> = [
+  { key: 'again', title: 'Forgot', subtitle: 'Show soon', styleKey: 'ratingAgain' },
+  { key: 'hard', title: 'Remembered', subtitle: 'See it tomorrow', styleKey: 'ratingGood' },
+];
+
 // The hint changes with the face. Before reveal it asks for the recall
 // attempt; after reveal the old sentence ("…before seeing the answer") kept
 // describing a moment that had already passed, so it now asks the question
@@ -56,11 +64,14 @@ export function RatingBar(props: {
   revealed?: boolean;
   /** Show Again/Hard/Good/Easy instead of the two-button default (the study setting). */
   fourButtons?: boolean;
+  /** The recall check of a card studied this session: Forgot / Remembered whatever `fourButtons` says. */
+  learningCheck?: boolean;
   testID?: string;
   onRate: (rating: ReviewRating) => void;
 }) {
-  const { disabled = false, revealed = false, fourButtons = false, testID = 'review-rating-bar', onRate } = props;
-  const items = fourButtons ? RATING_ITEMS : TWO_RATING_ITEMS;
+  const { disabled = false, revealed = false, learningCheck = false, testID = 'review-rating-bar', onRate } = props;
+  const fourButtons = !learningCheck && props.fourButtons === true;
+  const items = learningCheck ? LEARNING_CHECK_ITEMS : fourButtons ? RATING_ITEMS : TWO_RATING_ITEMS;
   const afterReveal = fourButtons ? RATING_HINT.afterReveal : RATING_HINT.afterRevealTwo;
 
   // At accessibility text sizes a fixed 4-up row clips the labels; reflow to a

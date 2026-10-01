@@ -272,31 +272,44 @@ describe('SessionCardScreen starter lesson', () => {
     return { tree, navigation };
   }
 
-  async function rateGood(tree: renderer.ReactTestRenderer) {
+  async function pressLabel(tree: renderer.ReactTestRenderer, label: string) {
     await act(async () => {
-      findPressableByLabel(tree, 'Reveal answer').props.onPress();
-      await Promise.resolve();
-    });
-    await act(async () => {
-      findPressableByLabel(tree, 'Good').props.onPress();
+      findPressableByLabel(tree, label).props.onPress();
       await Promise.resolve();
     });
     await flush();
+  }
+
+  // R22 §6: a never-reviewed Q/A card is studied first (Got it) and rated at its recall check at
+  // the end of the run, so the lesson is five studies, then five checks.
+  async function study(tree: renderer.ReactTestRenderer) {
+    await pressLabel(tree, 'Got it');
+  }
+
+  async function passCheck(tree: renderer.ReactTestRenderer) {
+    await pressLabel(tree, 'Reveal answer');
+    await pressLabel(tree, 'Remembered');
   }
 
   it('teaches the first 5 non-MCQ cards with nothing drawn, then opens Draw with the 3-pull bootstrap', async () => {
     const { tree, navigation } = await mount();
 
     const seen: string[] = [];
-    for (const uid of ['c1', 'c2', 'c3', 'c4', 'c5']) {
-      expect(hasText(tree, `Question ${uid}`)).toBe(true);
-      seen.push(uid);
-      // Bootstrap only after completion: no pull before the last card, and no R1 pull per card.
-      expect(await loadDeckWallet('csharp')).toEqual({ availablePulls: 0, reservePulls: 0 });
-      expect(navigation.replace).not.toHaveBeenCalled();
-      await rateGood(tree);
+    for (const step of ['study', 'check'] as const) {
+      for (const uid of ['c1', 'c2', 'c3', 'c4', 'c5']) {
+        expect(hasText(tree, `Question ${uid}`)).toBe(true);
+        seen.push(`${step}:${uid}`);
+        // Bootstrap only after completion: no pull before the last card, and no R1 pull per card.
+        expect(await loadDeckWallet('csharp')).toEqual({ availablePulls: 0, reservePulls: 0 });
+        expect(navigation.replace).not.toHaveBeenCalled();
+        if (step === 'study') await study(tree);
+        else await passCheck(tree);
+      }
     }
-    expect(seen).toEqual(['c1', 'c2', 'c3', 'c4', 'c5']);
+    expect(seen).toEqual([
+      'study:c1', 'study:c2', 'study:c3', 'study:c4', 'study:c5',
+      'check:c1', 'check:c2', 'check:c3', 'check:c4', 'check:c5',
+    ]);
 
     expect(navigation.replace).toHaveBeenCalledTimes(1);
     expect(navigation.replace).toHaveBeenCalledWith('Draw', { slug: 'csharp', rewardPending: true });
