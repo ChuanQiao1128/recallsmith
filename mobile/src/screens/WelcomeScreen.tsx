@@ -8,6 +8,7 @@ import type { RootStackParamList } from '../navigation/types';
 import { completeWelcome } from '../features/gacha/onboarding/onboardingPrefs';
 import { colors } from '../theme/colors';
 import { packImageForSlug, packPaletteFromSlug } from '../theme/packArt';
+import { DEFAULT_GOAL_DECK_SLUG } from '../features/goal/goalChoices';
 
 // Vitest mocks RN without Image — guarded lookup so tests don't crash.
 function readRN<T = any>(key: string, fallback: T): T {
@@ -23,11 +24,11 @@ const RNImage: any = readRN('Image', null);
 type Props = NativeStackScreenProps<RootStackParamList, 'Welcome'>;
 
 // Welcome v3 — single page. Drops the 3-swipe carousel + internal jargon
-// ("v6", "phase A"). New users see one value proposition + the actual
-// first pack they're about to study, and reach the audience survey in
-// one tap. Cuts onboarding clicks from 4 to 1 before the survey gate.
+// ("v6", "phase A"). New users see one value proposition + the featured
+// pack (the first goal choice, AWS SAA-C03), and reach the goal step
+// ("What do you want to learn?") in one tap.
 export function WelcomeScreen({ navigation }: Props) {
-  const featuredSlug = 'csharp';
+  const featuredSlug = DEFAULT_GOAL_DECK_SLUG;
   const cover = packImageForSlug(featuredSlug);
   const palette = packPaletteFromSlug(featuredSlug);
 
@@ -67,7 +68,7 @@ export function WelcomeScreen({ navigation }: Props) {
                   style={styles.packFallback}
                 >
                   <Text style={styles.packFallbackTitle} numberOfLines={1}>
-                    C#
+                    AWS
                   </Text>
                 </LinearGradient>
               )}
