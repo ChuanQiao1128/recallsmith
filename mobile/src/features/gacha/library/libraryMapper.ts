@@ -1,5 +1,6 @@
 import type { DeckExport } from '../../../types/deckExport';
 import { questionText } from '../../../content/questionCode';
+import { stripInlineCode } from '../../../content/inlineCode';
 import type { CardProgress } from '../../../review/model';
 import type { LibraryVM, OwnedGate } from '../contracts';
 import { isLearnedProgress, isMasteredProgress, isNewProgress, isScheduledProgress, startOfToday } from '../selectors/progressSelectors';
@@ -163,7 +164,7 @@ export function buildLibraryCardRows(params: {
         stableUid: card.StableUid,
         orderInDeck: card.OrderInDeck,
         // Prose only: a library tile never prints a fenced code block's backticks (Y01).
-        question: questionText(card.Question),
+        question: stripInlineCode(questionText(card.Question)),
         difficulty: card.Difficulty,
         rarity: rarityFromDifficulty(card.Difficulty),
         icon: cardIconFor(card),
