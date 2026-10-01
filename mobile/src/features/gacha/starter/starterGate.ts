@@ -85,6 +85,22 @@ export async function resolveStarterSlug(fallback: string | null): Promise<strin
 }
 
 /**
+ * True when `slug` is the deck the open lesson teaches: the recorded lesson's deck, else the deck
+ * ensureStarterLesson would record for it (the study goal's deck; with no goal, any deck). False
+ * when the lesson is closed. Never throws.
+ */
+export async function isStarterLessonDeck(slug: string): Promise<boolean> {
+  if (!(await isStarterLessonOpen())) return false;
+  try {
+    const recorded = parseLesson(await AsyncStorage.getItem(STARTER_LESSON_KEY));
+    if (recorded) return recorded.slug === slug;
+    return (await resolveStarterSlug(slug)) === slug;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Records the lesson's cards from the deck in hand, once. Returns the lesson (existing or new), or null
  * when the lesson is closed or `deck` is not the lesson's deck. The first pick is kept even if the deck
  * updates later, so the lesson a learner started is the lesson they finish. Never throws.

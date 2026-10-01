@@ -46,6 +46,7 @@ import { useFeatureFlags } from '../config/featureFlags';
 import { useSessionStore } from '../features/gacha/session/sessionStore';
 import { isStarterLessonOpen, resolveStarterSlug } from '../features/gacha/starter/starterGate';
 import { STARTER_COPY } from '../features/gacha/starter/starterCopy';
+import { skipStarterLesson } from '../features/gacha/starter/starterLesson';
 import { buildExamCountdownLabel } from '../features/gacha/home/examCountdown';
 import { getStudyGoal } from '../features/goal/studyGoal';
 import { colors } from '../theme/colors';
@@ -161,6 +162,15 @@ export function HomeScreen({ navigation, route }: Props) {
         }
         const slug = await resolveStarterSlug(await loadActiveDeckSlug());
         if (cancelled || !isMountedRef.current) return;
+        if (!slug) {
+          // No study goal and no active deck: there is no lesson to teach, so the stage must not
+          // keep every pack's bootstrap and floor on hold. Close it and re-prepare the wallets.
+          setStarterSlug(null);
+          if (await skipStarterLesson()) {
+            if (isMountedRef.current) void refreshHomeRef.current();
+          }
+          return;
+        }
         setStarterSlug(slug);
         if (slug && !starterAutoStartedRef.current) {
           starterAutoStartedRef.current = true;
