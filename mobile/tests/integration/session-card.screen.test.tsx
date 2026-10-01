@@ -235,7 +235,7 @@ import { resetSessionStore, useSessionStore } from '../../src/features/gacha/ses
 import { loadAllProgress } from '../../src/review/storage';
 
 // The dealt card has been reviewed before, so it is rated directly; a never-reviewed Q/A card
-// opens on the R22 study view first (see the learning-step tests in session-card.screen.test).
+// opens on the R22 study view first (see the learning-step tests in session-card-learning.screen.test.tsx).
 const LEARNED_AT = 1_600_000_000_000;
 
 async function flush() {
