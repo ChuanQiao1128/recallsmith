@@ -251,8 +251,8 @@ describe('deckImport SOURCE:', () => {
     expect(normalizeSourceForCompare({ url: SRC_URL, quote: ' q ' })).toBe(JSON.stringify([SRC_URL, 'q']));
   });
 
-  it('parses both project deck files with every card and no issues', () => {
-    for (const name of ['aws-saa-c03.md', 'claude-ccdv-f.md']) {
+  it('parses every project deck file with every card and no issues', () => {
+    for (const name of ['aws-saa-c03.md', 'claude-ccdv-f.md', 'csharp-basics.md']) {
       const text = readFileSync(new URL(`../../content/decks/${name}`, import.meta.url), 'utf8');
       const headers = text.match(/^## /gm) ?? [];
       const parsed = parseDeckMarkdown(text);
@@ -265,6 +265,10 @@ describe('deckImport SOURCE:', () => {
         expect(c.source.url, c.stableUid).toMatch(/^https:\/\/\S+$/);
         expect((c.source.quote ?? '').length, c.stableUid).toBeGreaterThan(0);
         expect((c.source.quote ?? '').length, c.stableUid).toBeLessThanOrEqual(1000);
+      }
+      // R23 rebuilt the .NET deck with a verbatim Microsoft Learn quote on every card.
+      if (name === 'csharp-basics.md') {
+        expect(parsed.cards.filter((c) => !c.source).map((c) => c.stableUid)).toEqual([]);
       }
     }
   });
