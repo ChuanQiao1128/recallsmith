@@ -248,6 +248,37 @@ describe('McqReviewBody', () => {
     expect(segs.filter((s) => s.emphasis === 'caps').map((s) => s.text)).toEqual(['BEST', 'FEWEST']);
   });
 
+  it('never cuts an inline code span for caps or qualifier emphasis (F01)', () => {
+    const question = 'Which attribute maps a method to `HttpPost` for a `POST` request with the LEAST code?';
+    const { tree } = renderBody({ stage: 'stem', card: { ...card1, Question: question }, mcq: { ...mcq1, qualifier: null } });
+    const stem = textByTestId(tree, 'mcq-stem');
+    const spans = stem.findAll((n) => (n.type as any) === 'Text' && n.props.testID === 'inline-code');
+    expect(spans.map((n) => n.props.children)).toEqual(['HttpPost', 'POST']);
+    // POST sits inside a span: no caps emphasis there, only on the prose word.
+    expect(texts(tree).filter((n) => n.props.testID === 'mcq-stem-caps').map((n) => n.props.children)).toEqual(['LEAST']);
+    const visible = stem
+      .findAll((n) => (n.type as any) === 'Text')
+      .flatMap((n) => [n.props.children].flat())
+      .filter((c: unknown) => typeof c === 'string')
+      .join('');
+    expect(visible).not.toContain('`');
+    expect(stem.props.accessibilityLabel).toBe(question.replace(/`/g, ''));
+
+    // Segments keep each span whole; the joined text is the stem unchanged.
+    const caps = stemSegments('Send `JSON` with the FEWEST calls', null);
+    expect(caps.filter((seg) => seg.emphasis === 'caps').map((seg) => seg.text)).toEqual(['FEWEST']);
+    expect(caps.map((seg) => seg.text).join('')).toBe('Send `JSON` with the FEWEST calls');
+
+    // A qualifier hit inside a span is skipped for the next hit in the prose.
+    const qual = stemSegments('Pick the `Most` recent or the most stable build', 'most');
+    expect(qual.filter((seg) => seg.emphasis === 'qualifier').map((seg) => seg.text)).toEqual(['most']);
+    expect(qual[0].text).toBe('Pick the `Most` recent or the ');
+    // A qualifier found only inside a span falls back to caps, outside spans.
+    const onlyInSpan = stemSegments('Is `least` the MOST useful?', 'least');
+    expect(onlyInSpan.filter((seg) => seg.emphasis === 'qualifier')).toHaveLength(0);
+    expect(onlyInSpan.filter((seg) => seg.emphasis === 'caps').map((seg) => seg.text)).toEqual(['MOST']);
+  });
+
   it('keeps the ask and the qualifier visible on the options stage and clamps only the lead-in', () => {
     const { tree } = renderBody({ stage: 'options' });
 
