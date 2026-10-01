@@ -1,11 +1,76 @@
 # deck: csharp-basics
 
+## net-types-03 | d1
+TOPIC: 1.1 Types and Memory
+Q:
+Why should a product price be stored as a `decimal` rather than a `double`, and what goes wrong with `double`?
+A:
+Because `decimal` represents base-10 amounts such as 0.10 exactly, while `double` is binary floating point and cannot represent 0.1. With `double`, sums drift (`0.1 + 0.2 == 0.3` is false), so totals and comparisons can be off by a cent.
+USAGE:
+Remember the `m` suffix (`19.99m`); use `double` only when speed or range matters more than exact decimal digits.
+SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/floating-point-numeric-types
+Even numbers that are precise to only one decimal digit are handled more accurately by the decimal type: 0.1, for example, can be exactly represented by a decimal instance, while there's no double or float instance that exactly represents 0.1. Because of this difference in numeric types, unexpected rounding errors can occur in arithmetic calculations when you use double or float for decimal data.
+
+## net-oop-01 | d1
+TOPIC: 1.2 OOP and Interfaces
+Q:
+A `Customer` class already derives from `Entity`, and it must also be comparable and auditable. Why model "comparable" and "auditable" as interfaces rather than as abstract base classes?
+A:
+Because a C# class can have only one direct base class, and `Entity` already takes that slot, while it can implement any number of interfaces. Interfaces also describe capabilities without an "is a" relationship, so unrelated types such as `Order` can share them too.
+USAGE:
+In an interview, say "single inheritance of classes, multiple inheritance of contracts."
+SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/object-oriented/inheritance
+A class can implement multiple interfaces even though it can derive from only a single direct base class.
+
+## net-oop-03 | d1
+TOPIC: 1.2 OOP and Interfaces
+Q:
+Other teams may derive from your `PaymentProcessor`, but its overridden `Validate` method must not be overridden further down the hierarchy. How do you enforce that without sealing the whole class?
+A:
+Mark the override sealed: `public sealed override bool Validate(...)`. The class stays inheritable, but a subclass that tries to override `Validate` gets compiler error CS0239. `sealed` on a member is valid only together with `override`, because it ends a virtual chain that a base class started.
+SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/sealed
+You can also use the sealed modifier on a method or property that overrides a virtual method or property in a base class. By using this approach, you enable developers to derive classes from your class while preventing them from overriding specific virtual methods or properties.
+
+## net-oop-05 | d1
+TOPIC: 1.2 OOP and Interfaces
+Q:
+Every report generator needs the same `_createdAt` and `_author` fields, set by one shared constructor. Why is an abstract base class a better fit here than an interface?
+A:
+Because an interface can't hold instance state: it can't declare instance fields or instance constructors, so every implementer would redeclare and initialize those fields itself. An abstract class declares the fields and a protected constructor once, and each derived generator inherits both.
+SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/interface
+Interfaces can't contain instance state. While static fields are now permitted, instance fields aren't permitted in interfaces. Instance auto-properties aren't supported in interfaces, as they would implicitly declare a hidden field.
+
+## net-oop-06 | d1
+TOPIC: 1.2 OOP and Interfaces
+Q:
+`OrderService` and `EmailSender` both inherit from a `LoggingBase` class only to reuse its `Log` method. What is wrong with that design, and what would you do instead?
+A:
+It misuses inheritance: an `OrderService` is not a kind of logger, yet it spends its only base-class slot and couples itself to `LoggingBase`. Instead, use composition: inject an `ILogger<OrderService>` through the constructor, so the class reuses logging by having a collaborator rather than by being one.
+USAGE:
+Rule of thumb to say out loud: inherit for "is a", compose for "has a" or "uses a".
+SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/object-oriented/inheritance
+Conceptually, a derived class is a specialization of the base class. For example, if you have a base class Animal, you might have one derived class that is named Mammal and another derived class that is named Reptile. A Mammal is an Animal, and a Reptile is an Animal, but each derived class represents different specializations of the base class.
+
 ## net-types-01 | d1
 TOPIC: 1.1 Types and Memory
 Q:
 A method takes a `List<int>` parameter with no modifier and calls `Add(4)` on it. After the call, does the caller's list contain 4, and why?
+OPT: a
+No: an argument passed without `ref` is a copy of the whole list, so the caller's list is unchanged
+WHY:
+Passing by value copies the variable, and for a reference type that variable holds only a reference. The list object itself is not duplicated, so `Add` changes the one list the caller holds.
+OPT: b *
+Yes: the method gets a copy of the reference, and both copies point to the same list
+OPT: c
+No: a change to the object reaches the caller only when the parameter is declared `ref`
+WHY:
+No modifier is needed to mutate a shared object: `Add` runs on the list that the copied reference points to, and the caller holds a reference to that same list.
+OPT: d
+Yes: reference types are passed by reference exactly like `ref`, so the method uses the caller's variable
+WHY:
+Right verdict, wrong reason: without `ref`, the parameter is its own variable holding a copy of the reference. The two variables merely point to the same list object.
 A:
-Yes. The method receives a copy of the reference, and both copies point to the same list object on the heap, so `Add` mutates the single list the caller also holds.
+Yes, because the reference is passed by value: the parameter holds a copy of the reference, both copies point to the same list on the heap, and `Add` mutates that single shared object.
 USAGE:
 Say "the reference is passed by value": the object is shared, only the variable is copied.
 SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/method-parameters
@@ -21,6 +86,20 @@ string b = a;
 a += "s";
 Console.WriteLine($"{a} {b}");
 ```
+OPT: a
+It prints `cats cats`
+WHY:
+This assumes `a` and `b` share one mutable string. Strings are immutable: `+=` builds a new string and points only `a` at it, so `b` still refers to the original "cat".
+OPT: b
+It prints `cat cat`
+WHY:
+This treats `+=` as if its new string were thrown away. `+=` is an assignment: the new string "cats" is stored back in `a`, and only `b` still refers to the original "cat".
+OPT: c *
+It prints `cats cat`
+OPT: d
+Compile error: `string` is immutable
+WHY:
+Immutability applies to the string object, not the variable. `a += "s"` compiles to `a = a + "s"`, which assigns a new string to `a` and leaves the original "cat" untouched.
 A:
 It prints `cats cat`. Strings are immutable, so `+=` builds a new string and points `a` at it, while `b` still refers to the original "cat" object.
 USAGE:
@@ -28,27 +107,30 @@ The same rule explains why string methods such as `Replace` or `ToUpper` return 
 SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/strings/
 Because a string "modification" is actually a new string creation, you must use caution when you create references to strings. If you create a reference to a string, and then "modify" the original string, the reference continues to point to the original object.
 
-## net-types-03 | d1
-TOPIC: 1.1 Types and Memory
-Q:
-Why should a product price be stored as a `decimal` rather than a `double`, and what goes wrong with `double`?
-A:
-Because `decimal` represents base-10 amounts such as 0.10 exactly, while `double` is binary floating point and cannot represent 0.1. With `double`, sums drift (`0.1 + 0.2 == 0.3` is false), so totals and comparisons can be off by a cent.
-USAGE:
-Remember the `m` suffix (`19.99m`); use `double` only when speed or range matters more than exact decimal digits.
-SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/floating-point-numeric-types
-Even numbers that are precise to only one decimal digit are handled more accurately by the decimal type: 0.1, for example, can be exactly represented by a decimal instance, while there's no double or float instance that exactly represents 0.1. Because of this difference in numeric types, unexpected rounding errors can occur in arithmetic calculations when you use double or float for decimal data.
-
 ## net-types-04 | d1
 TOPIC: 1.1 Types and Memory
 Q:
-What does this program print, and why?
+What does this program print?
 ```csharp
 var items = new List<int> { 1, 2, 3 };
 Reset(ref items);
 Console.WriteLine(items.Count);
 static void Reset(ref List<int> list) => list = new List<int>();
 ```
+OPT: a
+It prints `3`: `List<int>` is a reference type, so `ref` adds nothing
+WHY:
+`ref` is not redundant for reference types: it makes `list` an alias of the caller's `items` variable, so assigning a new list replaces what `items` refers to, not a local copy.
+OPT: b
+It fails to compile: `ref` cannot be applied to a reference-type argument
+WHY:
+`ref` works with a variable of any type, including `List<int>`. It passes a reference to the variable itself, and `items` is an assigned local, so the call compiles.
+OPT: c
+It fails to compile: a static local function cannot modify the caller's `items`
+WHY:
+`static` only stops a local function from capturing outer locals. `Reset` captures nothing; it receives the variable through its `ref` parameter, which is allowed.
+OPT: d *
+It prints `0`: the method replaces the list that `items` refers to
 A:
 It prints `0`. With `ref`, the parameter is an alias for the caller's `items` variable, so assigning a new list replaces what `items` refers to; the original three-item list is simply abandoned.
 USAGE:
@@ -59,9 +141,25 @@ The preceding example shows how reassigning the value of a parameter that is pas
 ## net-types-05 | d1
 TOPIC: 1.1 Types and Memory
 Q:
-An optional database column maps to `int? discount`, which is null for some rows, and the code does `int d = (int)discount;`. What happens at run time, and how do you write it safely?
+An optional database column maps to `int? discount`, which is null for some rows, and the code does `int d = (int)discount;`. What happens when a row's `discount` is null?
+OPT: a
+It throws `NullReferenceException` because the cast dereferences a null reference
+WHY:
+`int?` is `Nullable<int>`, a struct, so there is no reference to dereference. The explicit cast reads `Value`, which reports the missing value with a different exception type.
+OPT: b *
+It throws `InvalidOperationException` because the nullable has no value
+OPT: c
+`d` is set to 0, the default value of `int`
+WHY:
+Falling back to 0 is what `GetValueOrDefault()` or `discount ?? 0` does. An explicit cast does not substitute a default; it demands a value and fails when there is none.
+OPT: d
+The line does not compile: `int?` cannot be cast to `int`
+WHY:
+An explicit conversion from `int?` to `int` exists, so the line compiles. Only the implicit direction is missing: `int d = discount;` without a cast is what the compiler rejects.
 A:
-It throws `InvalidOperationException` ("Nullable object must have a value") because the explicit cast reads the value when `HasValue` is false. Decide what null means: `discount ?? 0` or `GetValueOrDefault()` for a default, or `if (discount is int d)` to branch.
+It throws `InvalidOperationException` ("Nullable object must have a value") because the explicit cast reads the value while `HasValue` is false. Decide what null means: `discount ?? 0` or `GetValueOrDefault()` for a default, or `if (discount is int d)` to branch.
+USAGE:
+It usually surfaces in production on the first row with a null column, so include null rows in the test data for every `int?` mapping.
 SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/nullable-value-types
 At run time, if the value of a nullable value type is null, the explicit cast throws an InvalidOperationException.
 
@@ -261,21 +359,10 @@ Measure before adding `in`: for small structs, passing a reference can cost more
 SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/method-parameters
 The in modifier enables the compiler to create a temporary variable for the argument and pass a readonly reference to that argument. The compiler always creates a temporary variable when the argument must be converted, when there's an implicit conversion from the argument type, or when the argument is a value that isn't a variable.
 
-## net-oop-01 | d1
-TOPIC: 1.2 OOP and Interfaces
-Q:
-A `Customer` class already derives from `Entity`, and it must also be comparable and auditable. Why model "comparable" and "auditable" as interfaces rather than as abstract base classes?
-A:
-Because a C# class can have only one direct base class, and `Entity` already takes that slot, while it can implement any number of interfaces. Interfaces also describe capabilities without an "is a" relationship, so unrelated types such as `Order` can share them too.
-USAGE:
-In an interview, say "single inheritance of classes, multiple inheritance of contracts."
-SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/object-oriented/inheritance
-A class can implement multiple interfaces even though it can derive from only a single direct base class.
-
 ## net-oop-02 | d1
 TOPIC: 1.2 OOP and Interfaces
 Q:
-These two constructors repeat the same initialization. How do you make one reuse the other instead of copying the code?
+These two constructors repeat the same initialization. Which version of the one-argument constructor reuses the two-argument one instead of copying its code?
 ```csharp
 public class Employee
 {
@@ -285,19 +372,26 @@ public class Employee
     public Employee(string name, int salary) { Name = name.Trim(); Salary = salary; }
 }
 ```
+OPT: a
+`public Employee(string name) : base(name, 30000) { }`
+WHY:
+`base(...)` calls a constructor of the base class, not a sibling. `Employee` derives only from `object`, which has no two-argument constructor, so this does not compile.
+OPT: b
+`public Employee(string name) { this(name, 30000); }`
+WHY:
+Calling `this(...)` as a statement in the body is Java syntax. In C# another constructor can be invoked only from the initializer after the parameter list, so this line is a compile error.
+OPT: c *
+`public Employee(string name) : this(name, 30000) { }`
+OPT: d
+`public Employee(string name) { new Employee(name, 30000); }`
+WHY:
+This compiles, but `new Employee(...)` builds a second object that is thrown away. The instance being constructed is not initialized, so its `Name` stays null and its `Salary` stays 0.
 A:
-Chain them: `public Employee(string name) : this(name, 30000) { }`. The short constructor forwards to the full one, so the trimming and assignments live in one place. The chained constructor runs before the caller's body, so that body only adds what differs.
+Chain with `: this(name, 30000)` in the one-argument constructor's initializer. It forwards to the full constructor, which runs first, so the trimming and assignments live in one place and the get-only properties are still set inside a constructor.
+USAGE:
+In an interview, add that the `this(...)` target runs before the calling constructor's body, so that body only adds what differs.
 SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/classes-and-structs/using-constructors
 A constructor can invoke another constructor in the same object by using the this keyword. Like base, this can be used with or without parameters, and any parameters in the constructor are available as parameters to this, or as part of an expression.
-
-## net-oop-03 | d1
-TOPIC: 1.2 OOP and Interfaces
-Q:
-Other teams may derive from your `PaymentProcessor`, but its overridden `Validate` method must not be overridden further down the hierarchy. How do you enforce that without sealing the whole class?
-A:
-Mark the override sealed: `public sealed override bool Validate(...)`. The class stays inheritable, but a subclass that tries to override `Validate` gets compiler error CS0239. `sealed` on a member is valid only together with `override`, because it ends a virtual chain that a base class started.
-SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/sealed
-You can also use the sealed modifier on a method or property that overrides a virtual method or property in a base class. By using this approach, you enable developers to derive classes from your class while preventing them from overriding specific virtual methods or properties.
 
 ## net-oop-04 | d1
 TOPIC: 1.2 OOP and Interfaces
@@ -313,32 +407,26 @@ class Derived : Base {
     public override string Name() => "Derived";
     public new string Kind() => "Derived"; }
 ```
+OPT: a
+`Derived Derived`
+WHY:
+This assumes a `new` method also dispatches on the object's run-time type. `new` only hides `Kind`, so a call through a `Base` variable still binds to `Base.Kind`.
+OPT: b *
+`Derived Base`
+OPT: c
+`Base Base`
+WHY:
+This assumes the variable's declared type decides every call. `Name` is virtual and overridden, so it dispatches on the run-time object, which is a `Derived`.
+OPT: d
+`Base Derived`
+WHY:
+This swaps the two rules: an override follows the object's run-time type, while a `new` method follows the compile-time type of the variable `b`.
 A:
 It prints `Derived Base`. `Name` is virtual and overridden, so the call dispatches on the object's run-time type (`Derived`); `Kind` is only hidden with `new`, so the call binds to the variable's compile-time type (`Base`).
 USAGE:
 Bites when code holds a base-type reference: a `new` method in the subclass is silently skipped.
 SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/object-oriented/polymorphism
 When you use the new keyword, you're creating a method that hides the base class method rather than overriding it. This is different from virtual methods. With method hiding, the method that gets called depends on the compile-time type of the variable, not the run-time type of the object.
-
-## net-oop-05 | d1
-TOPIC: 1.2 OOP and Interfaces
-Q:
-Every report generator needs the same `_createdAt` and `_author` fields, set by one shared constructor. Why is an abstract base class a better fit here than an interface?
-A:
-Because an interface can't hold instance state: it can't declare instance fields or instance constructors, so every implementer would redeclare and initialize those fields itself. An abstract class declares the fields and a protected constructor once, and each derived generator inherits both.
-SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/interface
-Interfaces can't contain instance state. While static fields are now permitted, instance fields aren't permitted in interfaces. Instance auto-properties aren't supported in interfaces, as they would implicitly declare a hidden field.
-
-## net-oop-06 | d1
-TOPIC: 1.2 OOP and Interfaces
-Q:
-`OrderService` and `EmailSender` both inherit from a `LoggingBase` class only to reuse its `Log` method. What is wrong with that design, and what would you do instead?
-A:
-It misuses inheritance: an `OrderService` is not a kind of logger, yet it spends its only base-class slot and couples itself to `LoggingBase`. Instead, use composition: inject an `ILogger<OrderService>` through the constructor, so the class reuses logging by having a collaborator rather than by being one.
-USAGE:
-Rule of thumb to say out loud: inherit for "is a", compose for "has a" or "uses a".
-SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/object-oriented/inheritance
-Conceptually, a derived class is a specialization of the base class. For example, if you have a base class Animal, you might have one derived class that is named Mammal and another derived class that is named Reptile. A Mammal is an Animal, and a Reptile is an Animal, but each derived class represents different specializations of the base class.
 
 ## net-oop-07 | d1
 TOPIC: 1.2 OOP and Interfaces
@@ -421,8 +509,24 @@ static class LoggerExtensions
     public static void Write(this Logger l, string s) => Console.WriteLine("extension");
 }
 ```
+OPT: a
+`extension`
+WHY:
+`Write(string)` would be the better overload, but the two are not compared: the compiler searches the type's own members first, finds the applicable `Write(object)`, and stops before looking at extension methods.
+OPT: b
+A compile error: ambiguous call (CS0121)
+WHY:
+Instance and extension methods do not compete in one candidate set, so there is no ambiguity. Extensions are searched only when no applicable instance member exists, and `Write(object)` applies here.
+OPT: c *
+`instance`
+OPT: d
+A compile error: duplicate method name
+WHY:
+An extension method may share its name, even its signature, with an instance method. The declaration compiles; the extension is simply not chosen while an applicable instance method exists.
 A:
-It prints `instance`. The compiler first looks for an applicable instance method; `Write(object)` accepts the string through an implicit conversion, so extension methods are never considered, even though `Write(string)` matches better. Consequence: adding an applicable instance method to a type silently redirects calls away from existing extension methods.
+It prints `instance`. The compiler first looks for an applicable instance method, and `Write(object)` accepts the string through an implicit conversion, so extension methods are not considered even though `Write(string)` matches better. Adding an applicable instance method therefore silently redirects calls away from existing extensions.
+USAGE:
+Before naming an extension method, check the type's own overloads: one that takes `object` or a base type captures every call first.
 SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/classes-and-structs/extension-methods
 When the compiler encounters a member invocation, it first looks for a match in the type's members. If no match is found, it searches for any extension members that are defined for the type.
 
@@ -491,9 +595,23 @@ The null-coalescing operator ?? returns the value of its left-hand operand if it
 ## net-null-02 | d1
 TOPIC: 1.3 Nullability
 Q:
-In a brand-new .NET 8 console project, `string name = null;` produces a compiler warning, but the same line in a project created from a .NET 5 template compiles silently. Why the difference?
+In a brand-new .NET 8 console project, `string name = null;` produces a nullable warning. The same line in a project created from a .NET 5 template shows no nullable warning. What explains the difference?
+OPT: a *
+The .NET 8 template sets `<Nullable>enable</Nullable>` in the .csproj; the .NET 5 template omits it
+OPT: b
+The C# 12 compiler turns nullable checking on for every project, whatever the .csproj file contains
+WHY:
+The language version does not switch it on: the nullable context comes from the project's `<Nullable>` property or `#nullable` directives, and without them it is disabled, so a C# 12 project lacking the property shows no nullable warning either.
+OPT: c
+C# 9, the default language version on .NET 5, predates nullable reference types and cannot check them
+WHY:
+Nullable reference types arrived in C# 8, so C# 9 supports them fully. The .NET 5 project shows no nullable warning because nothing enables the nullable context, not because the language lacks the feature.
+OPT: d
+The .NET 8 template adds a `#nullable enable` directive at the top of the generated Program.cs
+WHY:
+The template puts the setting in the project file, not in source: the generated Program.cs has no `#nullable` line, and a directive would cover only that one file, not the whole project.
 A:
-New projects from .NET 6 and later templates set `<Nullable>enable</Nullable>` in the .csproj, so plain `string` means non-nullable and assigning null warns (CS8625). Projects from earlier templates lack that property, so the nullable context is disabled and the line is not checked.
+The .NET 8 template sets `<Nullable>enable</Nullable>` in the .csproj, so plain `string` is non-nullable and assigning null warns (CS8600). The .NET 5 template lacks that property, so the nullable context is disabled and the line gets no nullable check.
 USAGE:
 If a project shows no nullable warnings at all, check the .csproj first: the setting is per project, not per SDK.
 SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/nullable-migration-strategies
@@ -503,8 +621,22 @@ New projects created from .NET 6 or later templates already have <Nullable>enabl
 TOPIC: 1.3 Nullability
 Q:
 With nullable enabled, a public library method declares a non-nullable `string name` parameter. Can a caller still pass null at run time, and should the method still check for it?
+OPT: a *
+Yes; the annotations are compile-time only, so keep a guard like `ArgumentNullException.ThrowIfNull`
+OPT: b
+No; the runtime throws `ArgumentNullException` by itself whenever null reaches a non-nullable parameter
+WHY:
+The runtime knows nothing about the annotation: `string` and `string?` are the same `System.String`, so null flows into the method and fails later, typically as a `NullReferenceException`, unless the method checks.
+OPT: c
+No; any call that passes null to a non-nullable parameter is a compile error, so null cannot arrive
+WHY:
+Passing null to a non-nullable parameter is only a warning, and callers compiled with nullable disabled get no diagnostic at all, so the call compiles and null arrives at run time.
+OPT: d
+Yes, but no guard is needed because every caller already gets a compiler warning for passing null
+WHY:
+A warning stops nothing: callers can ignore it, suppress it with `!`, compile with nullable disabled, or call through reflection, so null still reaches a public method that does not check.
 A:
-Yes, and yes. Nullable reference types only drive compiler warnings; nothing is enforced at run time, so callers with nullable disabled, callers using `!`, or reflection can still pass null. Public entry points should keep a guard such as `ArgumentNullException.ThrowIfNull(name);`.
+Yes, and the method should still guard. Nullable reference types only drive compiler warnings and change nothing at run time, so callers with nullable disabled, callers using `!`, or reflection can pass null; public entry points keep `ArgumentNullException.ThrowIfNull(name);`.
 USAGE:
 In an interview, say "`string` and `string?` are the same runtime type; the `?` is only design intent for the compiler."
 SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/nullable-references
@@ -656,15 +788,6 @@ Say "generics move type checks from run time to compile time and avoid boxing fo
 SOURCE: https://learn.microsoft.com/en-us/dotnet/standard/generics/
 Type safety. Generics shift the burden of type safety from you to the compiler. There is no need to write code to test for the correct data type because it is enforced at compile time.
 
-## net-generics-02 | d1
-TOPIC: 1.4 Generics, Delegates and Lambdas
-Q:
-A method takes a callback that receives an `Order` and must decide whether to ship it. Which built-in delegate type fits, and why not `Action<Order>`?
-A:
-`Func<Order, bool>`, because the callback has to return a decision and `Action<Order>` returns `void`, so the method could never read the answer. `Predicate<Order>` has the same shape, but LINQ and most APIs use `Func<T, bool>`, and the two are distinct types that do not convert implicitly.
-SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/lambda-expressions
-If a lambda expression doesn't return a value, convert it to one of the Action delegate types. If it returns a value, convert it to one of the Func delegate types.
-
 ## net-generics-03 | d1
 TOPIC: 1.4 Generics, Delegates and Lambdas
 Q:
@@ -673,6 +796,31 @@ A:
 The `event` keyword lets outside code only subscribe and unsubscribe with `+=` and `-=`; only the declaring class can raise it. With a public delegate field, any caller could invoke it or assign `Completed = null`, silently wiping out every other subscriber.
 SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/distinguish-delegates-events
 Classes other than the one in which an event is contained can only add and remove event listeners; only the class containing the event can invoke the event.
+
+## net-generics-02 | d1
+TOPIC: 1.4 Generics, Delegates and Lambdas
+Q:
+A method takes a callback that receives an `Order` and must return whether to ship it. Which built-in delegate type should the callback parameter have?
+OPT: a
+`Func<bool, Order>`
+WHY:
+The last type argument of `Func` is the return type, so this delegate takes a `bool` and returns an `Order`, the reverse of a callback that receives an order and returns a decision.
+OPT: b
+`Action<Order, bool>`
+WHY:
+Every `Action` delegate returns `void`; here `bool` is just a second input parameter, so the callback has no way to hand its shipping decision back to the method.
+OPT: c *
+`Func<Order, bool>`
+OPT: d
+`EventHandler<Order>`
+WHY:
+`EventHandler<T>` follows the event pattern: it takes a sender plus event data and returns `void`, so the method cannot read a decision from it.
+A:
+`Func<Order, bool>` fits: it takes an `Order`, and its last type argument, `bool`, is the return value the method reads as the decision. `Predicate<Order>` has the same shape; LINQ and most newer APIs use `Func<T, bool>`, while older `List<T>` methods such as `FindAll` take `Predicate<T>`, and the two types do not convert implicitly.
+USAGE:
+In an interview, say "Action for side effects, Func when the caller needs a result back; the last Func type argument is the return type."
+SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/lambda-expressions
+You instantiate the delegate as a Func<int, bool> instance where int is an input parameter and bool is the return value. The return value is always specified in the last type parameter.
 
 ## net-generics-04 | d1
 TOPIC: 1.4 Generics, Delegates and Lambdas
@@ -703,30 +851,6 @@ Typical in generic factories and repositories; `new()` cannot pass constructor a
 SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/where-generic-type-constraint
 The new() Constraint lets the compiler know that any type argument supplied must have an accessible parameterless constructor.
 
-## net-generics-05 | d2
-TOPIC: 1.4 Generics, Delegates and Lambdas
-Q:
-What does this program print, and why?
-```csharp
-var actions = new List<Action>();
-for (int i = 0; i < 3; i++)
-    actions.Add(() => Console.Write(i));
-foreach (var a in actions) a();
-```
-A:
-It prints `333`. A lambda captures the variable, not its current value, and a `for` loop has a single `i` shared by all iterations, so every lambda reads `i` after the loop ended at 3. Copying it into a local inside the body (`int copy = i;`) gives each lambda its own variable; `foreach` already declares a fresh variable per iteration.
-SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/language-specification/expressions
-If a for-loop declares an iteration variable, that variable itself is considered to be declared outside of the loop.
-
-## net-generics-06 | d2
-TOPIC: 1.4 Generics, Delegates and Lambdas
-Q:
-An event has three subscribers and the second handler throws an exception it does not catch. Does the third handler run, and what does the code that raised the event see?
-A:
-The third handler does not run, and the exception propagates out of the raise call to the publisher. Raising an event invokes the multicast delegate's invocation list one by one on the same thread, so an uncaught exception stops the loop. If every handler must run, iterate `GetInvocationList()` and wrap each call in `try`/`catch`.
-SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/delegates/using-delegates
-When any of the methods throws an exception that isn't caught within the method, that exception is passed to the caller of the delegate. No subsequent methods in the invocation list are called.
-
 ## net-generics-07 | d2
 TOPIC: 1.4 Generics, Delegates and Lambdas
 Q:
@@ -739,6 +863,62 @@ A:
 `Queryable.Where` takes an `Expression<Func<T, bool>>`, and the compiler builds expression trees only from expression-bodied lambdas, so a block body fails with CS0834. A query provider such as EF Core needs that tree as data to translate into SQL, so keep predicates as single expressions and move complex logic into composable expressions.
 SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/advanced-topics/expression-trees/
 The C# compiler generates expression trees only from expression lambdas (or single-line lambdas). It can't parse statement lambdas (or multi-line lambdas).
+
+## net-generics-05 | d2
+TOPIC: 1.4 Generics, Delegates and Lambdas
+Q:
+What does this program print?
+```csharp
+var actions = new List<Action>();
+for (int i = 0; i < 3; i++)
+    actions.Add(() => Console.Write(i));
+foreach (var a in actions) a();
+```
+OPT: a
+`012`
+WHY:
+C# 5 gave each iteration its own variable only for `foreach`. A `for` loop still declares one `i` outside the body, and every lambda reads that shared variable after the loop.
+OPT: b
+`222`
+WHY:
+The body last ran with `i` equal to 2, but the lambdas run after the loop, when the final `i++` has already made the shared variable 3.
+OPT: c
+It does not compile: a lambda cannot capture a loop variable
+WHY:
+A lambda can capture a `for` iteration variable like an ordinary local; the compiler moves it into a closure object, so the program compiles and runs.
+OPT: d *
+`333`
+A:
+It prints `333`. A lambda captures the variable, not its value, and a `for` loop has one `i` shared by all iterations, so every lambda reads it after the loop ended at 3. Copying `i` into a local inside the body (`int copy = i;`) gives each lambda its own variable.
+USAGE:
+Bites when a `for` loop starts tasks or registers callbacks that use the index; every callback sees the final value unless the index is copied first.
+SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/language-specification/expressions
+If a for-loop declares an iteration variable, that variable itself is considered to be declared outside of the loop.
+
+## net-generics-06 | d2
+TOPIC: 1.4 Generics, Delegates and Lambdas
+Q:
+An event has three subscribers, and the second handler throws an exception it does not catch. What happens to the third handler and to the code that raised the event?
+OPT: a *
+The third handler is skipped, and the exception reaches the code that raised the event.
+OPT: b
+All three handlers run, and then the raise call throws an `AggregateException` holding the error.
+WHY:
+`AggregateException` comes from blocking `Task` waits such as `Wait()`. Raising an event calls the handlers one after another, so the first uncaught exception stops the invocation and escapes unwrapped.
+OPT: c
+The third handler still runs, and the event swallows the exception, so the publisher sees nothing.
+WHY:
+An event has no error handling of its own: an uncaught exception is passed to the caller of the delegate, so the publisher sees it and the remaining handlers are not called.
+OPT: d
+The third handler still runs, because event handlers are invoked in parallel on thread-pool threads.
+WHY:
+A multicast delegate invokes its handlers synchronously, in order, on the raising thread, so the second handler's exception stops the list before the third handler starts.
+A:
+The third handler is skipped and the exception reaches the raise call. Raising an event invokes the invocation list in order on the same thread, so an uncaught exception ends it. If every handler must run, iterate `GetInvocationList()` and wrap each call in `try`/`catch`.
+USAGE:
+Bites when one faulty subscriber silently stops later ones, such as audit logging or cache invalidation, and the error surfaces in the publisher's code path.
+SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/delegates/using-delegates
+When any of the methods throws an exception that isn't caught within the method, that exception is passed to the caller of the delegate. No subsequent methods in the invocation list are called.
 
 ## net-generics-08 | d2
 TOPIC: 1.4 Generics, Delegates and Lambdas
@@ -1046,9 +1226,23 @@ Select produces one result value for every source value. The overall result is t
 ## net-linq-03 | d1
 TOPIC: 1.6 LINQ
 Q:
-`customers.First(c => c.City == city)` works in testing, but in production some cities have no customers. What happens then, and when would you use `FirstOrDefault` instead?
+`customers.First(c => c.City == city)` works in testing, but in production some cities have no customers. What happens when `First` finds no matching customer?
+OPT: a
+It returns `null`, which the caller has to check before using it
+WHY:
+Returning `null` (the default for a reference type) is what `FirstOrDefault` does. `First` has no fallback value, so a missing match cannot come back as `null`.
+OPT: b *
+It throws `InvalidOperationException` because no element matches
+OPT: c
+It throws `NullReferenceException` when it reads the missing customer
+WHY:
+`First` does not hand back a `null` for something to dereference; it fails inside the call itself. A `NullReferenceException` appears only later, if `FirstOrDefault` returned `null` and the caller used it unchecked.
+OPT: d
+It throws `ArgumentNullException` because the predicate found no match
+WHY:
+`ArgumentNullException` is thrown only when `customers` or the predicate itself is `null`. Here both arguments are valid; an empty result is not a null argument.
 A:
-`First` throws `InvalidOperationException` when no element matches. Use `FirstOrDefault` when "not found" is a normal outcome you handle, then check the result for `null` (the default for a reference type); keep `First` when an empty result means a bug.
+`First` throws `InvalidOperationException` when no element satisfies the predicate, because it has no default to return. Use `FirstOrDefault` when "not found" is a normal outcome and check for `null`; keep `First` when an empty result means a bug.
 USAGE:
 With nullable reference types on, `FirstOrDefault` returns `Customer?`, so the compiler reminds you to handle the missing case.
 SOURCE: https://learn.microsoft.com/en-us/dotnet/api/system.linq.enumerable.first?view=net-8.0
@@ -1064,8 +1258,24 @@ var big = nums.Where(n => n > 1);
 nums.Add(4);
 Console.WriteLine(string.Join(",", big));
 ```
+OPT: a *
+It prints `2,3,4`
+OPT: b
+It prints `2,3`
+WHY:
+That assumes `Where` copies the matching items when `big` is defined. `Where` only stores the list and the filter; the list is read when `string.Join` enumerates `big`, after 4 was added.
+OPT: c
+It throws `InvalidOperationException` because the list was modified
+WHY:
+"Collection was modified" is thrown only when the list changes while an enumeration is in progress. `Add` runs before `string.Join` starts enumerating `big`, so no enumerator is active at that point.
+OPT: d
+It prints the query's type name instead of its elements
+WHY:
+That is what `Console.WriteLine(big)` would print. `string.Join` binds to its `IEnumerable<T>` overload, which enumerates `big` and joins the elements with commas.
 A:
-It prints `2,3,4`. `Where` only stores the filter; the list is read when `string.Join` enumerates `big`, which happens after 4 was added. Calling `.ToList()` on the query when it is defined would snapshot `2,3` instead.
+It prints `2,3,4`. `Where` stores the list and the filter, not the results, so the list is read when `string.Join` enumerates `big`, after 4 was added. Calling `.ToList()` where the query is defined would snapshot `2,3` instead.
+USAGE:
+Bites when a query is built in one method and enumerated later: it sees whatever the source holds by then.
 SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/linq/get-started/introduction-to-linq-queries
 The results of executing the query depend on the contents of the data source when the query is executed rather than when the query is defined.
 
@@ -1123,25 +1333,25 @@ Because IOrderedEnumerable<TElement> inherits from IEnumerable<T>, you can call 
 ## net-linq-07 | d1
 TOPIC: 1.6 LINQ
 Q:
-Starting from an `Order[] orders`, which call reads the array at the moment it is called, rather than later when results are enumerated?
+Starting from an `Order[] orders`, which call has already iterated the array by the time it returns?
 OPT: a
-`orders.Where(o => o.Total > 100)`
+`orders.TakeWhile(o => o.Total > 100)`
 WHY:
-`Where` returns an `IEnumerable<Order>` that only stores the predicate; it reads the array when that sequence is enumerated.
+`TakeWhile` returns an `IEnumerable<Order>`, not a computed value, so the call hands back a query object without testing a single order.
 OPT: b
 `orders.Select(o => o.Id)`
 WHY:
-`Select` is deferred too: it returns a query object and runs the projection element by element during enumeration.
+`Select` also returns a sequence; the call only wraps the array and the projection, so no `Id` has been read when it returns.
 OPT: c
 `orders.OrderBy(o => o.CreatedDate)`
 WHY:
-Sorting has to see every element, but `OrderBy` still defers: it reads and sorts the whole array only when the result is first enumerated.
+Sorting has to see every element, but `OrderBy` returns a sequence too, so the call only records the key selector and has sorted nothing when it returns.
 OPT: d *
 `orders.Count(o => o.Total > 100)`
 A:
-`Count` returns an `int`, not a sequence, so it must iterate the array immediately to produce its value. Operators that return a sequence, such as `Where`, `Select` and `OrderBy`, defer reading until enumeration.
+`Count` returns an `int`, not a sequence, so it has to iterate the array and test every order before it can return. Other scalar operators such as `Max`, `Average` and `First` also run at the call.
 USAGE:
-Say "scalar results run now, sequences run later"; call `ToList()` when you need a sequence evaluated immediately.
+Say "a scalar operator runs at the call": `int n = orders.Count(...)` holds a fixed number, not a query you can re-run.
 SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/linq/get-started/introduction-to-linq-queries
 All the standard query operators that return a scalar result execute immediately. Examples of such queries are Count, Max, Average, and First.
 
@@ -1161,22 +1371,6 @@ USAGE:
 Tests on a small database pass; production slows down and memory grows with the table.
 SOURCE: https://learn.microsoft.com/en-us/ef/core/querying/client-eval
 In such cases, you can explicitly opt into client evaluation by calling methods like AsEnumerable or ToList (AsAsyncEnumerable or ToListAsync for async). By using AsEnumerable you would be streaming the results, but using ToList would cause buffering by creating a list, which also takes additional memory.
-
-## net-linq-09 | d2
-TOPIC: 1.6 LINQ
-Q:
-What does this program print, and what does the last number tell you?
-```csharp
-int calls = 0;
-var squares = new[] { 1, 2, 3 }.Select(n => { calls++; return n * n; });
-Console.WriteLine(squares.Sum());
-Console.WriteLine(squares.Max());
-Console.WriteLine(calls);
-```
-A:
-It prints `14`, `9`, then `6`. `squares` is a deferred query, not a list, so `Sum` and `Max` each enumerate it from scratch and the selector runs three times per pass. With an expensive selector (or an EF/IO-backed source), every extra enumeration repeats that work. Materialize once with `ToArray()` or `ToList()` and the selector runs three times in total.
-SOURCE: https://learn.microsoft.com/en-us/dotnet/fundamentals/code-analysis/quality-rules/ca1851
-Enumeration starts when the collection is passed into a LINQ enumeration method, like ElementAt, or used in a for each statement. The enumeration result is not calculated once and cached, like Lazy.
 
 ## net-linq-10 | d2
 TOPIC: 1.6 LINQ
@@ -1201,6 +1395,38 @@ A:
 `ToLookup` runs immediately and builds a hashed one-to-many index, so each `lookup[id]` is a fast key lookup, and an unknown key returns an empty sequence. A `Where` per customer rescans every order on each iteration; `GroupBy` is deferred and regroups on every enumeration; `ToDictionary` needs unique keys, so the second order of a customer throws `ArgumentException`.
 SOURCE: https://learn.microsoft.com/en-us/dotnet/api/system.linq.enumerable.tolookup?view=net-8.0
 The ToLookup<TSource,TKey>(IEnumerable<TSource>, Func<TSource,TKey>) method returns a Lookup<TKey,TElement>, a one-to-many dictionary that maps keys to collections of values. A Lookup<TKey,TElement> differs from a Dictionary<TKey,TValue>, which performs a one-to-one mapping of keys to single values.
+
+## net-linq-09 | d2
+TOPIC: 1.6 LINQ
+Q:
+What does this program print?
+```csharp
+int calls = 0;
+var squares = new[] { 1, 2, 3 }.Select(n => { calls++; return n * n; });
+Console.WriteLine(squares.Sum());
+Console.WriteLine(squares.Max());
+Console.WriteLine(calls);
+```
+OPT: a
+It prints `14`, `9` and `3`
+WHY:
+That assumes `Sum` caches the projected values for `Max` to reuse. `squares` is a deferred query, not a collection, so `Max` enumerates the array again and runs the selector three more times.
+OPT: b *
+It prints `14`, `9` and `6`
+OPT: c
+It prints `14`, `9` and `0`
+WHY:
+That assumes the lambda increments its own copy of `calls`. A lambda captures the variable itself, so every `calls++` inside it updates the same local that the last line prints.
+OPT: d
+It fails to compile because the lambda changes `calls`
+WHY:
+That is the Java rule that captured locals must be effectively final. C# lambdas can read and write captured locals, so `calls++` compiles and updates the outer variable.
+A:
+It prints `14`, `9` and `6`. `squares` is a deferred query, not a list, so `Sum` and `Max` each enumerate it from scratch and the selector runs three times per pass. Materialize once with `ToArray()` or `ToList()` and the selector runs three times in total.
+USAGE:
+With an expensive selector or an EF/IO-backed source, every extra enumeration repeats that work; analyzer rule CA1851 flags it.
+SOURCE: https://learn.microsoft.com/en-us/dotnet/fundamentals/code-analysis/quality-rules/ca1851
+Enumeration starts when the collection is passed into a LINQ enumeration method, like ElementAt, or used in a for each statement. The enumeration result is not calculated once and cached, like Lazy.
 
 ## net-linq-12 | d2
 TOPIC: 1.6 LINQ
@@ -1387,7 +1613,7 @@ Exception filters (when): The filter expression is evaluated before the stack is
 ## net-exc-07 | d2
 TOPIC: 1.7 Exceptions
 Q:
-What does this program print, and what would change if the task were awaited instead of calling `Wait()`?
+What does this program print?
 ```csharp
 var t = Task.Run(Fail);
 try { t.Wait(); }
@@ -1395,8 +1621,22 @@ catch (InvalidOperationException) { Console.WriteLine("IOE"); }
 catch (AggregateException ae) { Console.WriteLine($"AE: {ae.InnerException!.GetType().Name}"); }
 static void Fail() => throw new InvalidOperationException("boom");
 ```
+OPT: a
+`IOE`, because the first catch clause matches the exception that `Fail` throws
+WHY:
+That is what `await t` would print, because await rethrows the original exception unwrapped. `Wait()` throws an `AggregateException` instead, so the `InvalidOperationException` clause does not match.
+OPT: b *
+`AE: InvalidOperationException`, printed by the second catch clause from the inner exception
+OPT: c
+`AE: AggregateException`, because `Task.Run` and `Wait()` each wrap the fault, nesting two wrappers
+WHY:
+The fault is wrapped only once: the task stores the original exception and `Wait()` throws a single `AggregateException` around it, so `ae.InnerException` is the `InvalidOperationException` itself.
+OPT: d
+Nothing; the process crashes, because an exception on a `Task.Run` thread cannot reach the caller
+WHY:
+A task captures the exception instead of letting it crash the thread-pool thread, and `Wait()` throws it on the calling thread wrapped in an `AggregateException`, so the surrounding try/catch handles it.
 A:
-It prints `AE: InvalidOperationException`. `Wait()` and `.Result` wrap the task's fault in an `AggregateException`, so the `InvalidOperationException` clause never matches and the real error sits in `InnerExceptions`. `await t` rethrows the original exception unwrapped, so the first clause would catch it and print `IOE`.
+It prints `AE: InvalidOperationException`. `Wait()` wraps the task's fault in an `AggregateException`, so the first clause does not match and the second reads the original error from `InnerException`. Awaiting the task would rethrow the original exception unwrapped and print `IOE`.
 USAGE:
 One more reason to avoid `.Result`/`.Wait()`: besides blocking a thread, they make catch clauses match `AggregateException` instead of the real error.
 SOURCE: https://learn.microsoft.com/en-us/dotnet/standard/parallel-programming/exception-handling-task-parallel-library
@@ -1428,26 +1668,6 @@ USAGE:
 SOURCE: https://learn.microsoft.com/en-us/dotnet/standard/exceptions/best-practices-for-exceptions
 It's better to catch OperationCanceledException instead of TaskCanceledException, which derives from OperationCanceledException, when you call an asynchronous method. Many asynchronous methods throw an OperationCanceledException exception if cancellation is requested.
 
-## net-modern-01 | d1
-TOPIC: 1.8 Modern C# (10-12)
-Q:
-You need a new int[] holding every element of arrays `first` and `second`, followed by a trailing 0. How do you write it in C# 12 without chaining Concat, Append and ToArray?
-A:
-Use a collection expression with spread elements: `int[] all = [.. first, .. second, 0];`. Each `..` inlines the elements of an enumerable into the new collection, and the target type `int[]` tells the compiler what to build, so no LINQ chain or extra ToArray call is needed.
-USAGE:
-The same syntax targets List<T>, Span<T> and ImmutableArray<T>; only the declared type changes.
-SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/collection-expressions
-Use a spread element .. to inline collection values in a collection expression.
-
-## net-modern-02 | d1
-TOPIC: 1.8 Modern C# (10-12)
-Q:
-A Settings class must be filled with `new Settings { BaseUrl = "..." }` and never changed afterward. Which accessor do you give BaseUrl, and how does it differ from `private set`?
-A:
-Declare it `public string BaseUrl { get; init; }`. An init accessor can be called only during object construction, including in an object initializer, and then the property is read-only; `private set` rejects initializers outside the class but lets the class's own methods change the value at any time.
-SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/init
-An init-only setter assigns a value to the property or the indexer element only during object construction. An init enforces immutability, so that once the object is initialized, it can't be changed.
-
 ## net-modern-03 | d1
 TOPIC: 1.8 Modern C# (10-12)
 Q:
@@ -1456,6 +1676,56 @@ A:
 Every type declared in that file belongs to the `Shop.Api` namespace. It means the same as wrapping the whole file in one namespace block, so it saves a level of braces and indentation; the cost is one namespace per file, with no nested or second namespace declaration.
 SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/namespace
 File scoped namespace declarations enable you to declare that all types in a file are in a single namespace.
+
+## net-modern-01 | d1
+TOPIC: 1.8 Modern C# (10-12)
+Q:
+You need a new int[] holding every element of arrays `first` and `second`, followed by a trailing 0. Which C# 12 line builds it without chaining Concat, Append and ToArray?
+OPT: a
+`int[] all = [...first, ...second, 0];`
+WHY:
+Three dots is the JavaScript and TypeScript spread; C# spreads with two dots, so `...first` is a syntax error and the line does not compile.
+OPT: b *
+`int[] all = [..first, ..second, 0];`
+OPT: c
+`int[] all = [first, second, 0];`
+WHY:
+Without `..`, each array is a single element of the new collection; an int[] cannot convert to int, so the compiler rejects the line instead of flattening the arrays.
+OPT: d
+`int[] all = new[] { ..first, ..second, 0 };`
+WHY:
+Spread elements exist only in collection expressions; an array initializer such as `new[] { }` takes ordinary expressions, so `..first` is not a spread there and the line does not compile.
+A:
+`int[] all = [..first, ..second, 0];` is the one: in a collection expression each `..` spread element inlines the elements of an enumerable, and the int[] target type tells the compiler what to build, so no LINQ chain or ToArray call is needed.
+USAGE:
+The same syntax targets List<T>, Span<T> and ImmutableArray<T>; only the declared type changes.
+SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/collection-expressions
+Use a spread element .. to inline collection values in a collection expression.
+
+## net-modern-02 | d1
+TOPIC: 1.8 Modern C# (10-12)
+Q:
+A Settings class must be filled with `new Settings { BaseUrl = "..." }` and stay unchanged afterward, even by the class's own methods. Which declaration of BaseUrl fits?
+OPT: a
+`public string BaseUrl { get; private set; }`
+WHY:
+A private setter rejects the object initializer outside the class, yet the class's own methods can still change the value at any time, so it fails both requirements.
+OPT: b
+`public string BaseUrl { get; }`
+WHY:
+A get-only property can be assigned only in a constructor or in its own initializer, so `new Settings { BaseUrl = "..." }` does not compile.
+OPT: c
+`public required string BaseUrl { get; set; }`
+WHY:
+required forces callers to set BaseUrl when they create the object, but the public set accessor still lets any code change it afterward.
+OPT: d *
+`public string BaseUrl { get; init; }`
+A:
+`public string BaseUrl { get; init; }` fits: an init accessor can be called only during object construction, including in an object initializer, and then the property is read-only. Unlike `private set`, it accepts initializers outside the class and stops the class's own methods from changing the value later.
+USAGE:
+Use init for options and DTO properties set once at creation; add required when callers must supply the value.
+SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/init
+An init-only setter assigns a value to the property or the indexer element only during object construction. An init enforces immutability, so that once the object is initialized, it can't be changed.
 
 ## net-modern-04 | d1
 TOPIC: 1.8 Modern C# (10-12)
@@ -1507,33 +1777,6 @@ Records suit DTOs and value objects that are compared by content, such as cache 
 SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/record
 For types with the record modifier (record class, record struct, and readonly record struct), two objects are equal if they are of the same type and store the same values.
 
-## net-modern-06 | d2
-TOPIC: 1.8 Modern C# (10-12)
-Q:
-A teammate writes `public class OrderService(IOrderRepository repo)` and expects callers to read `service.repo` and methods to use `this.repo`, as with a record. What actually happens, and what is `repo`?
-A:
-Neither compiles: on a class, `repo` is a constructor parameter in scope for the whole body, not a field or property. The compiler captures it in a hidden private field only if a member uses it, and it stays assignable like any parameter; to expose it, declare a member such as `public IOrderRepository Repo { get; } = repo;`. Only records turn primary-constructor parameters into public properties.
-USAGE:
-Primary constructors on services are fine for DI; just remember the parameter is mutable, not readonly.
-SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/whats-new/tutorials/primary-constructors
-Primary constructor parameters aren't members of the class. For example, a primary constructor parameter named param can't be accessed as this.param.
-
-## net-modern-07 | d2
-TOPIC: 1.8 Modern C# (10-12)
-Q:
-What does this program print, and why?
-```csharp
-var a = new Order("A", ["new"]);
-var b = a with { Id = "B" };
-b.Tags.Add("paid");
-Console.WriteLine(a.Tags.Count);
-record Order(string Id, List<string> Tags);
-```
-A:
-It prints 2. A `with` expression makes a shallow copy: it copies the reference held in Tags, not the list, so `a` and `b` share one List<string> and the item added through `b` is visible through `a`. To isolate the copy, write `a with { Id = "B", Tags = [.. a.Tags] }` or use an immutable collection.
-SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/record
-The result of a with expression is a shallow copy. For a reference property, the expression copies only the reference to an instance. Both the original record and the copy end up with a reference to the same instance.
-
 ## net-modern-08 | d2
 TOPIC: 1.8 Modern C# (10-12)
 Q:
@@ -1551,6 +1794,63 @@ A:
 It throws `SwitchExpressionException` at run time: 50 is not over 100 and "DE" is not "US", so no arm matches, and a switch expression must produce a value. Treat the non-exhaustive warning (CS8509) as a bug and add a final discard arm such as `_ => "standard"`, or throw a meaningful exception there.
 SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/switch-expression
 If none of a switch expression's patterns matches an input value, the runtime throws an exception. In .NET Core 3.0 and later versions, the exception is a System.Runtime.CompilerServices.SwitchExpressionException.
+
+## net-modern-06 | d2
+TOPIC: 1.8 Modern C# (10-12)
+Q:
+A teammate declares `public class OrderService(IOrderRepository repo)`. They expect callers to read `service.repo` and methods to use `this.repo`, as with a record. Which statement about `repo` is correct?
+OPT: a
+`repo` becomes a public property, as in a record, so both `service.repo` and `this.repo` compile
+WHY:
+Only records turn primary-constructor parameters into public properties; on a class the parameter is not a member at all, so `service.repo` has nothing to access.
+OPT: b
+`repo` becomes a private readonly field, so `this.repo` compiles in methods and only `service.repo` fails to compile
+WHY:
+No member named `repo` exists, so `this.repo` fails too; any hidden field the compiler creates to capture the parameter has a compiler-generated name you cannot write in C# and is not readonly, so methods can even reassign `repo`.
+OPT: c *
+`repo` is a parameter scoped to the class body, not a member, so neither access compiles
+OPT: d
+`repo` exists only during construction, so field initializers can read it but methods cannot use it
+WHY:
+The parameter stays in scope for every member, methods included; when a method uses `repo`, the compiler captures it in hidden state that lives as long as the object.
+A:
+`repo` is a parameter in scope for the whole class body, not a field or property, so neither `this.repo` nor `service.repo` compiles. The compiler captures it only if a member uses it, and it stays assignable; to expose it, declare a member such as `public IOrderRepository Repo { get; } = repo;`.
+USAGE:
+Primary constructors on services are fine for DI; just remember the parameter is mutable, not readonly.
+SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/whats-new/tutorials/primary-constructors
+Primary constructor parameters aren't members of the class. For example, a primary constructor parameter named param can't be accessed as this.param.
+
+## net-modern-07 | d2
+TOPIC: 1.8 Modern C# (10-12)
+Q:
+What does this program print?
+```csharp
+var a = new Order("A", ["new"]);
+var b = a with { Id = "B" };
+b.Tags.Add("paid");
+Console.WriteLine(a.Tags.Count);
+record Order(string Id, List<string> Tags);
+```
+OPT: a *
+2, because `with` copies the Tags reference, so the original and the copy share one list
+OPT: b
+1, because `with` deep-copies the record, so the copy gets its own Tags list
+WHY:
+A `with` expression is a shallow copy: it copies the reference stored in Tags, not the list, so both records point to the same List<string> and both see the added item.
+OPT: c
+It does not compile, because positional record properties are immutable, so calling Add on Tags is rejected
+WHY:
+Init-only positional properties block reassigning Tags, not calling Add on the list it references; a record's immutability is shallow, so this code compiles.
+OPT: d
+It throws NotSupportedException, because the Tags list in the copy is read-only
+WHY:
+Nothing wraps the list in a read-only view; the copy holds the same mutable List<string> reference, so Add succeeds without an exception.
+A:
+It prints 2. A `with` expression makes a shallow copy that copies the reference in Tags, not the list, so both records share one List<string> and the item added through the copy is visible through the original. To isolate the copy, write `a with { Id = "B", Tags = [.. a.Tags] }`.
+USAGE:
+Say "with makes a shallow copy"; a record holding a List<T> is not immutable, so use ImmutableArray<T> when copies must not share state.
+SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/record
+The result of a with expression is a shallow copy. For a reference property, the expression copies only the reference to an instance. Both the original record and the copy end up with a reference to the same instance.
 
 ## net-modern-09 | d2
 TOPIC: 1.8 Modern C# (10-12)
@@ -1673,25 +1973,6 @@ Say "await frees the thread, it does not block it"; that is why async I/O lets a
 SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/async-scenarios
 When you apply the await keyword, the code suspends the calling method and yields control back to its caller until the task completes.
 
-## net-async-02 | d1
-TOPIC: 2.1 Async and Task
-Q:
-About how long does this program take, and how do you bring it down to about one second?
-```csharp
-var sw = System.Diagnostics.Stopwatch.StartNew();
-await LoadAsync("users");
-await LoadAsync("orders");
-await LoadAsync("prices");
-Console.WriteLine(sw.Elapsed.TotalSeconds);
-static Task LoadAsync(string name) => Task.Delay(1000);
-```
-A:
-About three seconds, because each `await` waits for one load to finish before the next one starts. Start all three tasks first and then `await Task.WhenAll(t1, t2, t3)`, so the independent waits overlap and the total is about one second.
-USAGE:
-Independent I/O calls (several HTTP or database lookups) awaited one after another are a common, easy latency win in code review.
-SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/
-The thread doesn't block while the eggs or hash browns are cooking, but the code also doesn't start other tasks until the current work completes.
-
 ## net-async-03 | d1
 TOPIC: 2.1 Async and Task
 Q:
@@ -1701,10 +1982,43 @@ A:
 SOURCE: https://learn.microsoft.com/en-us/dotnet/standard/asynchronous-programming-patterns/task-based-asynchronous-pattern-tap
 The async keyword doesn't force a method to run asynchronously on another thread. It enables await, and the method runs synchronously until it reaches an incomplete awaitable.
 
+## net-async-02 | d1
+TOPIC: 2.1 Async and Task
+Q:
+About how long does this program take, and what, if anything, should change?
+```csharp
+var sw = System.Diagnostics.Stopwatch.StartNew();
+await LoadAsync("users");
+await LoadAsync("orders");
+await LoadAsync("prices");
+Console.WriteLine(sw.Elapsed.TotalSeconds);
+static Task LoadAsync(string name) => Task.Delay(1000);
+```
+OPT: a
+About 1 second already, because the three awaited calls run concurrently, so nothing needs to change
+WHY:
+Awaiting is not starting in parallel: each `await` suspends the program until that load finishes, and the next call only starts afterwards, so the three one-second delays run back to back.
+OPT: b *
+About 3 seconds; call all three without awaiting into `t1`..`t3`, then `await Task.WhenAll(t1, t2, t3)`
+OPT: c
+About 3 seconds; store each call in `t1`..`t3` and await it right away, then add `await Task.WhenAll(t1, t2, t3)`
+WHY:
+Adding WhenAll does not help when each task is awaited as soon as it starts: the loads still run one after another, and all three are already complete when WhenAll runs.
+OPT: d
+About 3 seconds; wrap each call in `await Task.Run(() => LoadAsync(name))` so the loads run in parallel
+WHY:
+Another thread does not make sequential awaits overlap: each `Task.Run` is awaited before the next one starts, so the loads still run one after another for about 3 seconds.
+A:
+About three seconds, because each `await` waits for one load to finish before the next one starts. Starting all three tasks first and then awaiting `Task.WhenAll(t1, t2, t3)` lets the independent waits overlap, so the total drops to about one second.
+USAGE:
+Independent I/O calls (several HTTP or database lookups) awaited one after another are a common, easy latency win in code review.
+SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/
+The thread doesn't block while the eggs or hash browns are cooking, but the code also doesn't start other tasks until the current work completes.
+
 ## net-async-04 | d1
 TOPIC: 2.1 Async and Task
 Q:
-Does the `catch` block in this program run, and what happens to the exception?
+What happens when this program runs?
 ```csharp
 try { SaveAsync(); }
 catch (Exception) { Console.WriteLine("caught"); }
@@ -1715,8 +2029,22 @@ async void SaveAsync()
     throw new InvalidOperationException();
 }
 ```
+OPT: a
+It prints `caught`, because the call to `SaveAsync()` sits inside the `try` block
+WHY:
+The `try` covers only the synchronous part of the call: `SaveAsync()` returns at its first `await`, so the `try` block has already finished when the exception is thrown 10 ms later.
+OPT: b
+It prints `caught` after the 500 ms delay, when the exception travels back to the caller
+WHY:
+A `catch` cannot run after its `try` block has ended, and an `async void` method gives the caller nothing to await, so the exception has no path back to this code.
+OPT: c
+`caught` is not printed; the exception is stored in the method's task and ignored, since nothing awaits it
+WHY:
+That describes an unawaited `async Task` method. An `async void` method returns no task to store the exception in; with no SynchronizationContext, it is rethrown on a thread-pool thread, where no user code can catch it.
+OPT: d *
+`caught` is not printed; with no task to hold it, the exception is unhandled and crashes the process
 A:
-No: `SaveAsync()` returns to the caller at its first `await`, so the `try` block has already finished when the exception is thrown. An `async void` method has no task to store the exception, so it is raised as unhandled and crashes the process. Return `Task` and `await` the call so the caller can catch it.
+The process crashes without printing `caught`. `SaveAsync()` returns at its first `await`, so the `try` has ended before the throw, and an `async void` method has no task to hold the exception, so it is unhandled. Return `Task` and `await` the call so the caller can catch it.
 USAGE:
 Keep `async void` for event handlers only; everywhere else return `Task` so failures reach the caller.
 SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/async-return-types
@@ -1785,15 +2113,6 @@ The symptom is high latency with low CPU; one blocking call in a hot path can st
 SOURCE: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/best-practices?view=aspnetcore-8.0
 A common performance problem in ASP.NET Core apps is blocking calls that could be asynchronous. Many synchronous blocking calls lead to Thread Pool starvation and degraded response times.
 
-## net-async-08 | d2
-TOPIC: 2.1 Async and Task
-Q:
-To "make it async", a teammate wraps a synchronous library call in `await Task.Run(() => legacy.Compute())` inside a controller action. Does that improve throughput, and why or why not?
-A:
-No. ASP.NET Core already runs the action on a thread-pool thread, so `Task.Run` just moves the work to another pool thread; one thread is still busy for the whole call, plus extra scheduling overhead. Call the synchronous method directly, or switch to a truly asynchronous API if the library offers one.
-SOURCE: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/best-practices?view=aspnetcore-8.0
-Do not call Task.Run and immediately await it. ASP.NET Core already runs app code on normal Thread Pool threads, so calling Task.Run only results in extra unnecessary Thread Pool scheduling. Even if the scheduled code would block a thread, Task.Run does not prevent that.
-
 ## net-async-09 | d2
 TOPIC: 2.1 Async and Task
 Q:
@@ -1802,25 +2121,6 @@ A:
 Add a `CancellationToken` parameter to the action and pass it to every async call, such as `ToListAsync(cancellationToken)`. MVC binds it to `HttpContext.RequestAborted`, which is signaled when the connection is aborted, so the database call is canceled and the request stops using resources. Expect an `OperationCanceledException` and do not log it as an error.
 SOURCE: https://learn.microsoft.com/en-us/aspnet/core/mvc/models/model-binding?view=aspnetcore-8.0
 Actions can optionally bind a CancellationToken as a parameter. This binds RequestAborted that signals when the connection underlying the HTTP request is aborted. Actions can use this parameter to cancel long running async operations that are executed as part of the controller actions.
-
-## net-async-10 | d2
-TOPIC: 2.1 Async and Task
-Q:
-A reviewer removed `async`/`await` here "to save a state machine". What can go wrong at run time, and what is the fix?
-```csharp
-Console.WriteLine(await ReadAllAsync("data.txt"));
-Task<string> ReadAllAsync(string path)
-{
-    using var reader = new StreamReader(path);
-    return reader.ReadToEndAsync();
-}
-```
-A:
-The reader is disposed as soon as the method returns its task, while the read may still be in progress, so it can fail with `ObjectDisposedException`. `using` disposes at method exit, and without `await` the method exits immediately. Mark it `async` and `return await reader.ReadToEndAsync();`, so disposal waits until the read completes.
-USAGE:
-Elide async/await only in pure pass-through methods with no `using` around the call.
-SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/using
-A return inside a using block still guarantees disposal. The compiler rewrites it into a try/finally, so the resource’s Dispose is always called before the method actually returns.
 
 ## net-async-11 | d2
 TOPIC: 2.1 Async and Task
@@ -1839,6 +2139,64 @@ A:
 Keep `Task<T>` by default and switch only where profiling shows a benefit. `ValueTask<T>` saves an allocation only when the method often completes synchronously, such as a cache hit; a database call that really awaits I/O allocates anyway. Consumers must also follow stricter rules (await once, do not block on it), so a blanket switch adds risk without a measurable gain.
 SOURCE: https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.valuetask-1?view=net-8.0
 As such, the default choice for any asynchronous method should be to return a Task or Task<TResult>. Only if performance analysis proves it worthwhile should a ValueTask<TResult> be used instead of a Task<TResult>.
+
+## net-async-08 | d2
+TOPIC: 2.1 Async and Task
+Q:
+A controller action calls a synchronous library method as `await Task.Run(() => legacy.Compute())` rather than directly. What is the effect on throughput?
+OPT: a
+It improves: the request thread is released while `Compute` runs, so the server can accept more requests
+WHY:
+There is no special request thread to free: the action already runs on a pool thread, and `Task.Run` keeps another pool thread busy for the whole call, so no extra requests are served.
+OPT: b
+It improves: `Compute` now runs in parallel with the rest of the request, so each request finishes about twice as fast
+WHY:
+The action awaits the `Task.Run` at once, so nothing else in the request runs meanwhile; the same work just moves to another thread and takes as long as before, plus scheduling overhead.
+OPT: c *
+No gain: the action is already on a pool thread, so `Task.Run` swaps threads and adds scheduling cost
+OPT: d
+It drops sharply: awaiting `Task.Run` deadlocks on ASP.NET Core's SynchronizationContext once several requests compete
+WHY:
+Awaiting does not deadlock; the classic deadlock comes from blocking with `.Result` or `.Wait()` while a continuation needs the captured SynchronizationContext, and ASP.NET Core has none. The real cost is a wasted thread hop.
+A:
+No throughput gain. ASP.NET Core already runs the action on a thread-pool thread, so `await Task.Run` only moves the blocking work to another pool thread and adds scheduling overhead. Call the synchronous method directly, or switch to a truly asynchronous API if the library offers one.
+USAGE:
+In code review, flag `await Task.Run` wrapped around a call in a controller: it costs a thread hop per request and frees no thread.
+SOURCE: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/best-practices?view=aspnetcore-8.0
+Do not call Task.Run and immediately await it. ASP.NET Core already runs app code on normal Thread Pool threads, so calling Task.Run only results in extra unnecessary Thread Pool scheduling. Even if the scheduled code would block a thread, Task.Run does not prevent that.
+
+## net-async-10 | d2
+TOPIC: 2.1 Async and Task
+Q:
+A reviewer removed `async`/`await` from this method to save a state machine. `data.txt` is a large existing file. What happens when this code runs?
+```csharp
+Console.WriteLine(await ReadAllAsync("data.txt"));
+Task<string> ReadAllAsync(string path)
+{
+    using var reader = new StreamReader(path);
+    return reader.ReadToEndAsync();
+}
+```
+OPT: a
+It works: `using` waits for the returned task to finish before it disposes the reader
+WHY:
+`using` knows nothing about the task: it disposes when the method exits, and without `await` the method exits as soon as `ReadToEndAsync` hands back its task.
+OPT: b
+It does not compile: a method that returns `Task<string>` must be marked `async`
+WHY:
+`async` is optional: any method may return a `Task<string>` it got from another call, so this compiles; the problem is when the reader is disposed, not the signature.
+OPT: c *
+The reader can be disposed while the read is still running, so it may throw `ObjectDisposedException`
+OPT: d
+It works, but the read runs synchronously and blocks the caller, because nothing inside the method awaits it
+WHY:
+`ReadToEndAsync` still runs asynchronously and the caller awaits the returned task, so the caller is not blocked; the problem here is when the reader is disposed.
+A:
+The reader can be disposed mid-read, so the call can throw `ObjectDisposedException`. `using` calls `Dispose` before the method returns, and without `await` the method returns as soon as the read starts. Mark it `async` and `return await reader.ReadToEndAsync();` so disposal waits until the read completes.
+USAGE:
+Elide async/await only in pure pass-through methods with no `using` around the call.
+SOURCE: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/using
+A return inside a using block still guarantees disposal. The compiler rewrites it into a try/finally, so the resource’s Dispose is always called before the method actually returns.
 
 ## net-async-13 | d2
 TOPIC: 2.1 Async and Task
@@ -1955,9 +2313,23 @@ The timeout after which the Task should be faulted with a TimeoutException if it
 ## net-conc-01 | d1
 TOPIC: 2.2 Concurrency and Thread Safety
 Q:
-Ten tasks each run `_count++` a thousand times on the same `int` field, and the final total often comes out below 10,000. Why, and what is the simplest fix?
+Ten tasks each run `_count++` 100,000 times on the same `int` field. Every task is awaited before the total is read, yet it often comes out below 1,000,000. Which explanation and fix is right?
+OPT: a
+Each core caches `_count` and misses the other updates; declare the field `volatile` so every increment is seen by all tasks
+WHY:
+This confuses visibility with atomicity. `volatile` affects how reads and writes are ordered and observed, but `_count++` on a volatile field is still a separate read, add and write, so two tasks can still lose an increment.
+OPT: b *
+`_count++` reads, adds and writes separately, so updates overwrite each other; use `Interlocked.Increment(ref _count)`
+OPT: c
+Postfix `_count++` works on a stale copy of the value; switch to prefix `++_count`, which increments the field in one step
+WHY:
+Prefix and postfix differ only in which value the expression returns. Both forms read the field, add one and write it back as separate steps, so concurrent increments are lost exactly as before.
+OPT: d
+Tasks interleave their updates; wrap the increment in `lock (new object()) { _count++; }` so only one task updates it at a time
+WHY:
+Each increment locks a brand-new object, so no task ever waits for another and nothing is serialized; updates are still lost. A lock only protects the field when every task locks the same shared object.
 A:
-`_count++` is not atomic: it is a read, an add and a write, so two threads can read the same value and one increment overwrites the other. Replace it with `Interlocked.Increment(ref _count)`, which performs the whole read-modify-write as one atomic operation.
+Use `Interlocked.Increment(ref _count)`: `_count++` is a separate read, add and write, so two tasks can read the same value and one write overwrites the other. `Interlocked.Increment` performs the whole read-modify-write as one atomic operation, so no update is lost.
 USAGE:
 Request counters and statistics fields in singletons are where lost updates show up in production; Interlocked fixes them without a lock.
 SOURCE: https://learn.microsoft.com/en-us/dotnet/standard/threading/managed-threading-best-practices
@@ -2180,7 +2552,7 @@ This queue is processed by the garbage collector. When the GC processes the queu
 ## net-gc-08 | d2
 TOPIC: 3.1 GC and IDisposable
 Q:
-A long-running service's memory grows until `OutOfMemoryException`, although the GC runs regularly. What in this class causes it?
+A long-running service's memory grows until `OutOfMemoryException`, although the GC runs regularly. Which diagnosis and fix are right for this class?
 ```csharp
 public class PriceService
 {
@@ -2193,8 +2565,22 @@ public class PriceService
     }
 }
 ```
+OPT: a
+Each `decimal[10_000]` is about 160 KB, lands on the large object heap and fragments it; rent the arrays from `ArrayPool<decimal>.Shared`.
+WHY:
+Fragmentation needs freed gaps between live objects, but nothing here is ever freed: the dictionary keeps every array referenced. Pooled arrays kept in the dictionary would not be returned either, so memory grows the same way.
+OPT: b *
+The static dictionary is a GC root with no eviction, so every array stays reachable; use a bounded `IMemoryCache` with a `SizeLimit`.
+OPT: c
+Returning the internal array lets callers hold references that block its collection; return a copy with `prices.ToArray()` so the cached array is freed.
+WHY:
+A caller's reference keeps an array alive only while the caller holds it, and the dictionary keeps every array alive regardless. Copying adds a large allocation per call and leaves the unbounded growth untouched.
+OPT: d
+`Dictionary` is not thread-safe, so concurrent writes corrupt it and orphan entries the GC cannot free; switch to `ConcurrentDictionary`.
+WHY:
+Thread safety is a real but separate bug: concurrent writes can corrupt a `Dictionary`. A `ConcurrentDictionary` still keeps every entry it ever stored, so memory still grows with each new SKU.
 A:
-The static dictionary is a GC root for the life of the process and never evicts, so every SKU's array stays reachable and the GC cannot reclaim it. A collector only frees unreachable objects, so this "cache" grows without bound. Use a bounded cache with eviction, such as `IMemoryCache` with a `SizeLimit` and expiration.
+The static dictionary is the leak: as a GC root it keeps every SKU's array reachable for the life of the process, and the GC frees only unreachable objects. Replace it with a bounded cache with eviction, such as `IMemoryCache` with a `SizeLimit` and expiration.
 USAGE:
 Say "the GC frees unreachable objects, not unused ones"; unbounded static caches are the most common managed leak in services.
 SOURCE: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/debug-memory-leak
@@ -2274,15 +2660,6 @@ Disposing an IDisposable looks correct here, which is why this bug survives code
 SOURCE: https://learn.microsoft.com/en-us/dotnet/fundamentals/networking/http/httpclient-guidelines
 If the rate of requests is high, the operating system limit of available ports might be exhausted. To avoid port exhaustion problems, reuse HttpClient instances for as many HTTP requests as possible.
 
-## net-bcl-02 | d1
-TOPIC: 3.2 BCL: HttpClient, JSON, Time
-Q:
-New .NET 8 code downloads a file with `new WebClient()`, and the build shows warning SYSLIB0014. What is the warning telling you, and what should the code use instead?
-A:
-`WebClient`, like `WebRequest` and `HttpWebRequest`, has been obsolete since .NET 6; new code should use `HttpClient`. The old types stay only for compatibility and get no new work, so suppressing the warning just postpones a migration you will have to do anyway.
-SOURCE: https://learn.microsoft.com/en-us/dotnet/fundamentals/syslib-diagnostics/syslib0014
-The following APIs are marked as obsolete, starting in .NET 6. Using them in code generates warning SYSLIB0014 at compile time.
-
 ## net-bcl-03 | d1
 TOPIC: 3.2 BCL: HttpClient, JSON, Time
 Q:
@@ -2293,6 +2670,31 @@ USAGE:
 Add that an offset is not a time zone: it fixes the instant but not future daylight-saving rules.
 SOURCE: https://learn.microsoft.com/en-us/dotnet/standard/datetime/choosing-between-datetime
 The DateTimeOffset structure represents a date and time value, together with an offset that indicates how much that value differs from UTC. Thus, the value always unambiguously identifies a single point in time.
+
+## net-bcl-02 | d1
+TOPIC: 3.2 BCL: HttpClient, JSON, Time
+Q:
+New .NET 8 code downloads a file with `new WebClient()`, and the build shows warning SYSLIB0014. Which reading of the warning, and which replacement, is correct?
+OPT: a
+`WebClient` is a thin wrapper; drop down to `HttpWebRequest`, the lower-level API it wraps
+WHY:
+Moving to `HttpWebRequest` swaps one legacy API for another: you obtain it through `WebRequest.Create`, which is obsolete under the same SYSLIB0014 warning, so the code is still not on `HttpClient`.
+OPT: b
+`WebClient` compiles on .NET 8 but throws `PlatformNotSupportedException` when called; replace it before release
+WHY:
+SYSLIB0014 is only a compile-time warning; `WebClient` still runs on .NET 8 and is kept for compatibility, so calling it does not throw.
+OPT: c *
+`WebClient` has been obsolete since .NET 6; it still works, but new code should use `HttpClient`
+OPT: d
+Only the synchronous `WebClient` methods are obsolete; switch to `DownloadFileTaskAsync` and keep the class
+WHY:
+The `WebClient()` constructor itself is on the obsolete list, so `new WebClient()` raises the warning whichever method you call; the async methods are still the legacy API.
+A:
+Use `HttpClient`: the warning means `WebClient`, like `WebRequest` and `HttpWebRequest`, has been obsolete since .NET 6. It still compiles and runs, but it is kept only for compatibility, so suppressing the warning only hides it and leaves new code on an API Microsoft no longer recommends.
+USAGE:
+In an interview add the follow-up: replace it with a long-lived `HttpClient` or `IHttpClientFactory`, not a new client per request.
+SOURCE: https://learn.microsoft.com/en-us/dotnet/fundamentals/syslib-diagnostics/syslib0014
+The following APIs are marked as obsolete, starting in .NET 6. Using them in code generates warning SYSLIB0014 at compile time.
 
 ## net-bcl-04 | d2
 TOPIC: 3.2 BCL: HttpClient, JSON, Time
@@ -2449,7 +2851,7 @@ Because System.Text.Json uses reflection by default, calling a basic serializati
 ## net-bcl-05 | d3
 TOPIC: 3.2 BCL: HttpClient, JSON, Time
 Q:
-With this registration, `PriceCache` keeps calling the catalog service's old IP after a blue-green deploy, even though `AddHttpClient` is used. Why, and what is one fix?
+After a blue-green deploy, `PriceCache` keeps calling the catalog service's old IP even though `AddHttpClient` is used. Which diagnosis and fix is correct?
 ```csharp
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddHttpClient<CatalogClient>();
@@ -2459,8 +2861,22 @@ public sealed class PriceCache(CatalogClient catalog)
     public Task<decimal> GetPriceAsync(int id) => catalog.GetPriceAsync(id);
 }
 ```
+OPT: a
+`AddHttpClient` registers `CatalogClient` as a singleton, so it outlives the deploy; register the typed client as scoped instead
+WHY:
+Typed clients are already registered as transient. The long-lived holder is the singleton `PriceCache`, so a scoped `CatalogClient` would still be captured, and scope validation in Development would throw on that captive dependency.
+OPT: b
+The default two-minute handler lifetime is too long for a cutover; lower it with `SetHandlerLifetime` so handlers recycle sooner
+WHY:
+The factory rotates handlers only for clients it creates later. The `HttpClient` inside the captured `CatalogClient` keeps the handler it got at creation, so a shorter lifetime changes nothing for `PriceCache`.
+OPT: c *
+The singleton keeps a typed client the factory can no longer recycle; inject `IHttpClientFactory` and create a client per call
+OPT: d
+`HttpClient` caches DNS results until the record's TTL expires; lower the catalog record's TTL before each deploy
+WHY:
+The stale IP lives in pooled connections that stay open, not in a DNS cache. DNS is resolved only when a new connection opens, so the TTL does not matter while the captured client keeps its old connections.
 A:
-The singleton captures one transient `CatalogClient` forever, so its `HttpClient` stays bound to the handler it got at creation and the factory's handler recycling never reaches it. Once a typed client is created, the factory has no control over it, so its pooled connections to the old IP are never replaced. Fix: inject `IHttpClientFactory` into `PriceCache` and create a named client per operation.
+The singleton `PriceCache` captures one typed `CatalogClient`, so its `HttpClient` keeps the handler and pooled connections it got at creation, and the factory's handler recycling never reaches it. Inject `IHttpClientFactory` into `PriceCache` and create a client per operation.
 USAGE:
 Captive dependency again: a short-lived service held by a long-lived one keeps its stale state.
 SOURCE: https://learn.microsoft.com/en-us/dotnet/core/extensions/httpclient-factory
@@ -2477,17 +2893,6 @@ When migrating an older app, say you can keep the existing Startup and call it f
 SOURCE: https://learn.microsoft.com/en-us/aspnet/core/migration/50-to-60?view=aspnetcore-8.0
 Using Startup and the Generic Host used by the ASP.NET Core 3.1 and 5.0 templates is fully supported.
 
-## asp-host-02 | d1
-TOPIC: 4.1 Hosting, Configuration and Options
-Q:
-A container sets `DOTNET_ENVIRONMENT=Staging` and `ASPNETCORE_ENVIRONMENT=Production` for an app built with `WebApplication.CreateBuilder`. Which environment does the app report, and why?
-A:
-It reports Staging. With `WebApplication`, `DOTNET_ENVIRONMENT` takes precedence over `ASPNETCORE_ENVIRONMENT`, so the app loads `appsettings.Staging.json`; the older `WebHost` gives `ASPNETCORE_ENVIRONMENT` priority instead.
-USAGE:
-When a container behaves like the wrong environment, list every *_ENVIRONMENT variable the image and orchestrator set, not just one.
-SOURCE: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/environments?view=aspnetcore-8.0
-When using WebApplication, the DOTNET_ENVIRONMENT value take precedence over ASPNETCORE_ENVIRONMENT. When using WebHost, ASPNETCORE_ENVIRONMENT takes precedence.
-
 ## asp-host-03 | d1
 TOPIC: 4.1 Hosting, Configuration and Options
 Q:
@@ -2498,6 +2903,31 @@ USAGE:
 Say "user secrets keep secrets out of source control, not safe at rest".
 SOURCE: https://learn.microsoft.com/en-us/aspnet/core/security/app-secrets?view=aspnetcore-8.0
 Secret Manager doesn't encrypt the stored secrets and shouldn't be treated as a trusted store. It's for development purposes only.
+
+## asp-host-02 | d1
+TOPIC: 4.1 Hosting, Configuration and Options
+Q:
+A container sets `DOTNET_ENVIRONMENT=Staging` and `ASPNETCORE_ENVIRONMENT=Production` for an app built with `WebApplication.CreateBuilder`. Which environment does the app report?
+OPT: a
+Production, because `ASPNETCORE_ENVIRONMENT` takes precedence over `DOTNET_ENVIRONMENT`
+WHY:
+That is the precedence rule of the older `WebHost`. `WebApplication` reverses it: `DOTNET_ENVIRONMENT` takes precedence over `ASPNETCORE_ENVIRONMENT`, so the Production value loses here.
+OPT: b *
+Staging, because `DOTNET_ENVIRONMENT` takes precedence over `ASPNETCORE_ENVIRONMENT`
+OPT: c
+The app throws at startup because the two environment variables conflict
+WHY:
+The host does not check the two variables against each other. Both are read as configuration and one simply takes precedence, so the app starts normally and reports a single environment.
+OPT: d
+Staging only when `appsettings.Staging.json` exists, otherwise Production
+WHY:
+This confuses the environment name with its settings file. The name comes from the variables alone; a missing `appsettings.Staging.json` only means no extra settings are loaded, and the app still reports Staging.
+A:
+Staging: with `WebApplication`, `DOTNET_ENVIRONMENT` takes precedence over `ASPNETCORE_ENVIRONMENT`, so the app runs as Staging and loads `appsettings.Staging.json` if present. The opposite rule, where `ASPNETCORE_ENVIRONMENT` wins, belongs to the older `WebHost`.
+USAGE:
+When a container behaves like the wrong environment, list every *_ENVIRONMENT variable the image and orchestrator set, not just one.
+SOURCE: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/environments?view=aspnetcore-8.0
+When using WebApplication, the DOTNET_ENVIRONMENT value take precedence over ASPNETCORE_ENVIRONMENT. When using WebHost, ASPNETCORE_ENVIRONMENT takes precedence.
 
 ## asp-host-04 | d1
 TOPIC: 4.1 Hosting, Configuration and Options
@@ -2523,23 +2953,6 @@ USAGE:
 Kubernetes manifests and Azure App Service settings on Linux use the same `__` form, such as `ConnectionStrings__Default`.
 SOURCE: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/configuration/?view=aspnetcore-8.0
 The colon (:) separator doesn't work with environment variable hierarchical keys on all platforms. For example, Bash doesn't support colon (:) as a separator. All platforms support the double underscore (__) syntax and automatically replace it with a colon (:).
-
-## asp-host-05 | d2
-TOPIC: 4.1 Hosting, Configuration and Options
-Q:
-What does this call write to the log, and why?
-```csharp
-var apples = 1;
-var pears = 2;
-var bananas = 3;
-logger.LogInformation("{Pears}, {Bananas}, {Apples}", apples, pears, bananas);
-```
-A:
-It writes `1, 2, 3`: `{Pears}` receives `apples`. Arguments fill placeholders by position, not by matching names, so the structured field `Pears` stores the apple count, and every query on that field is silently wrong.
-USAGE:
-In code review, check that argument order matches placeholder order; the compiler and the logger never flag a mismatch.
-SOURCE: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/logging/?view=aspnetcore-8.0
-The order of the parameters, not their placeholder names, determines which parameters are used to provide placeholder values in log messages.
 
 ## asp-host-06 | d2
 TOPIC: 4.1 Hosting, Configuration and Options
@@ -2568,6 +2981,37 @@ USAGE:
 Mention the trade-off: the snapshot rebinds the options for every request, a small cost you pay only where reload matters.
 SOURCE: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/configuration/options?view=aspnetcore-8.0
 For the preceding code, changes to the JSON configuration in the app settings file after the app has started are not read. To read changes after the app has started, use IOptionsSnapshot.
+
+## asp-host-05 | d2
+TOPIC: 4.1 Hosting, Configuration and Options
+Q:
+What message does this call write to the log?
+```csharp
+var apples = 1;
+var pears = 2;
+var bananas = 3;
+logger.LogInformation("{Pears}, {Bananas}, {Apples}", apples, pears, bananas);
+```
+OPT: a *
+`1, 2, 3`, because arguments fill the placeholders by position
+OPT: b
+`2, 3, 1`, because each placeholder takes the variable with the same name
+WHY:
+The logger receives only the argument values, in order; variable names do not reach it. `{Pears}` takes the first argument, `apples`, so name matching is not what happens here.
+OPT: c
+Nothing; it throws `FormatException` because placeholder names differ from argument names
+WHY:
+The formatter does not compare placeholder names with variable names at all. It pairs placeholders with arguments in order, and here three arguments fill three placeholders, so nothing throws.
+OPT: d
+The literal text `{Pears}, {Bananas}, {Apples}`, because no argument name matches
+WHY:
+Placeholder names do not have to match anything: each placeholder is filled from the argument in its position, and the name only labels the stored property. Every placeholder has an argument, so the message is rendered.
+A:
+It writes `1, 2, 3`: arguments fill placeholders by position, not by matching names, so `{Pears}` receives `apples`. The structured field `Pears` therefore stores the apple count, and every query on that field is silently wrong.
+USAGE:
+In code review, check that argument order matches placeholder order; the compiler and the logger never flag a mismatch.
+SOURCE: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/logging/?view=aspnetcore-8.0
+The order of the parameters, not their placeholder names, determines which parameters are used to provide placeholder values in log messages.
 
 ## asp-host-08 | d2
 TOPIC: 4.1 Hosting, Configuration and Options
@@ -2688,9 +3132,25 @@ Scoped services change only with a new scope, but are the same instance within a
 ## asp-di-03 | d1
 TOPIC: 4.2 Dependency Injection
 Q:
-A controller receives an injected service that implements `IDisposable`. Should the controller call `Dispose` on it, and who cleans it up?
+A controller receives an injected service that implements `IDisposable`. Who should dispose that service, and when?
+OPT: a
+The controller, with a `using` statement or a `Dispose` call once it has finished with the service
+WHY:
+This is the habit of disposing every `IDisposable` you receive. The container created this instance and may share it with other consumers in the scope or app, so disposing it early breaks them.
+OPT: b *
+The container, when the scope that resolved it ends, or at app shutdown for a singleton
+OPT: c
+No one explicitly; the garbage collector runs its finalizer after the controller is collected
+WHY:
+Finalizers are a nondeterministic safety net, and many disposable types have none. The container disposes the service deterministically, so connections and handles are released when the request ends, not whenever the GC runs.
+OPT: d
+The controller, but only for transients; the container disposes scoped and singleton services
+WHY:
+The container disposes every `IDisposable` it creates, transients included. A controller's transient dependency comes from the request scope, so it is disposed with that scope and the controller does not call `Dispose`.
 A:
-No. The container created it, so the container disposes it when the scope that resolved it ends, or at shutdown for a singleton. Disposing it yourself can break other consumers that share the same scoped or singleton instance.
+The container disposes it: scoped and transient services when the scope that resolved them ends, a singleton at app shutdown. The container created the instance, so it owns cleanup; disposing it yourself can break other consumers sharing the same scoped or singleton instance.
+USAGE:
+Say "whoever creates it disposes it": dispose only instances you create yourself with `new` or a factory, not ones the container injects.
 SOURCE: https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection-guidelines
 The container is responsible for cleanup of types it creates, and calls Dispose on IDisposable (or DisposeAsync on IAsyncDisposable) instances. Services resolved from the container should never be disposed by the developer.
 
@@ -2889,26 +3349,6 @@ Typical uses: two caches, two storage accounts, or per-tenant clients that share
 SOURCE: https://learn.microsoft.com/en-us/dotnet/core/whats-new/dotnet-8/runtime
 The FromKeyedServicesAttribute attribute, which can be used on service constructor parameters to specify which keyed service to use.
 
-## asp-mw-01 | d1
-TOPIC: 4.3 Middleware Pipeline
-Q:
-One request reaches this app. In what order are the four console lines printed?
-```csharp
-var app = WebApplication.CreateBuilder(args).Build();
-app.Use(async (context, next) =>
-{ Console.WriteLine("A before"); await next(context); Console.WriteLine("A after"); });
-app.Use(async (context, next) =>
-{ Console.WriteLine("B before"); await next(context); Console.WriteLine("B after"); });
-app.Run(context => context.Response.WriteAsync("Hello"));
-app.Run();
-```
-A:
-`A before`, `B before`, `B after`, `A after`. Middleware runs in registration order on the way in, and the code after each `await next(context)` runs as the calls unwind, so the response path is the reverse order.
-USAGE:
-This is why exception handling and logging middleware go first: they wrap everything registered after them.
-SOURCE: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/middleware/?view=aspnetcore-8.0
-The order that middleware appears in the app's Program file defines the order in which middleware are invoked on a request with the reverse order for the response.
-
 ## asp-mw-02 | d1
 TOPIC: 4.3 Middleware Pipeline
 Q:
@@ -2930,6 +3370,40 @@ USAGE:
 Wrap the registration in an extension method such as `app.UseRequestCulture()`, the way built-in middleware is exposed.
 SOURCE: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/middleware/write?view=aspnetcore-8.0
 The middleware class must include: A public constructor with a parameter of type RequestDelegate. A public method named Invoke or InvokeAsync.
+
+## asp-mw-01 | d1
+TOPIC: 4.3 Middleware Pipeline
+Q:
+One request reaches this app. In which order are the four console lines printed?
+```csharp
+var app = WebApplication.CreateBuilder(args).Build();
+app.Use(async (context, next) =>
+{ Console.WriteLine("A before"); await next(context); Console.WriteLine("A after"); });
+app.Use(async (context, next) =>
+{ Console.WriteLine("B before"); await next(context); Console.WriteLine("B after"); });
+app.Run(context => context.Response.WriteAsync("Hello"));
+app.Run();
+```
+OPT: a
+`A before`, `A after`, `B before`, `B after`
+WHY:
+This treats each middleware as running to completion before the next one starts. But A calls B from inside itself through `await next(context)`, so A's after-code waits until B and the terminal `Run` delegate have finished.
+OPT: b *
+`A before`, `B before`, `B after`, `A after`
+OPT: c
+`A before`, `B before`, `A after`, `B after`
+WHY:
+This unwinds first in, first out, as if the after-code were queued. Each `await next(context)` resumes only when the inner middleware has completed, so B's after-code finishes before A's await returns.
+OPT: d
+`B before`, `A before`, `A after`, `B after`
+WHY:
+This assumes the last registered middleware is the outermost. Registration order in Program.cs is the request order: A was added first, so it runs first on the way in and last on the way out.
+A:
+`A before`, `B before`, `B after`, `A after`: the middleware are nested, not sequential. They run in registration order on the way in, and the code after each `await next(context)` runs as the calls unwind, so the response path is the reverse order.
+USAGE:
+This is why exception handling and logging middleware go first: they wrap everything registered after them.
+SOURCE: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/middleware/?view=aspnetcore-8.0
+The order that middleware appears in the app's Program file defines the order in which middleware are invoked on a request with the reverse order for the response.
 
 ## asp-mw-04 | d2
 TOPIC: 4.3 Middleware Pipeline
@@ -3130,15 +3604,6 @@ A client sending a malformed id gets 404 and assumes the order does not exist; v
 SOURCE: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/routing?view=aspnetcore-8.0
 Don't use constraints for input validation. If constraints are used for input validation, invalid input results in a 404 Not Found response. Invalid input should produce a 400 Bad Request with an appropriate error message.
 
-## asp-api-07 | d2
-TOPIC: 4.4 Minimal APIs, Controllers, Filters
-Q:
-An `[ApiController]` action is declared `Post(Product product, Order order)` with no binding attributes. What happens, and how do you redesign it?
-A:
-The framework throws an exception instead of binding, because both complex parameters are inferred as `[FromBody]` and only one parameter can bind from the body. The request body is a single stream read once by one input formatter, so it cannot be split across two parameters. Redesign with one request DTO that contains both the product and the order, or move one value to the route or query.
-SOURCE: https://learn.microsoft.com/en-us/aspnet/core/web-api/?view=aspnetcore-8.0
-When an action has more than one parameter bound from the request body, an exception is thrown. For example, all of the following action method signatures cause an exception:
-
 ## asp-api-08 | d2
 TOPIC: 4.4 Minimal APIs, Controllers, Filters
 Q:
@@ -3154,12 +3619,53 @@ The lambda's return type cannot be inferred: `TypedResults.Ok` returns `Ok<strin
 SOURCE: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/minimal-apis/responses?view=aspnetcore-8.0
 The following method does not compile, because TypedResults.Ok and TypedResults.NotFound are declared as returning different types and the compiler won't attempt to infer the best matching type:
 
+## asp-api-07 | d2
+TOPIC: 4.4 Minimal APIs, Controllers, Filters
+Q:
+An `[ApiController]` action is declared `Post(Product product, Order order)` with no binding attributes, and both are complex model classes. What does ASP.NET Core do with these two parameters?
+OPT: a
+Binds `product` from the request body and falls back to the query string for `order`
+WHY:
+Inference does not fall back to the query string for a second complex type: `[ApiController]` infers `[FromBody]` for each complex type parameter not registered in DI, so both claim the body and the framework throws instead of binding.
+OPT: b
+Splits the JSON body by matching property names, filling both `product` and `order` from one document
+WHY:
+That is the form-binding habit from MVC views. In an API controller one input formatter reads the JSON body into one parameter, so a single body cannot be divided across two objects.
+OPT: c *
+Throws an exception: both are inferred as `[FromBody]`, and only one can bind from the body
+OPT: d
+Binds `product` from the request body and leaves `order` null, because the body stream was already consumed
+WHY:
+Nothing binds partially. Two body-bound parameters on one action is a configuration error the framework detects, so it throws an exception rather than quietly leaving `order` null.
+A:
+It throws an exception instead of binding. `[ApiController]` infers `[FromBody]` for both parameters because they are complex types not registered in DI, and the framework rejects two body-bound parameters since the request body can be read only once. Redesign with one request DTO that wraps both, or move one value to the route or query.
+USAGE:
+Say "one body per action" and reach for a single request DTO; use `[FromQuery]` or `[FromRoute]` only for values that belong in the URL.
+SOURCE: https://learn.microsoft.com/en-us/aspnet/core/web-api/?view=aspnetcore-8.0
+When an action has more than one parameter bound from the request body, an exception is thrown.
+
 ## asp-api-09 | d2
 TOPIC: 4.4 Minimal APIs, Controllers, Filters
 Q:
-A global, a controller-level and an action-level action filter each log in `OnActionExecuting` and `OnActionExecuted`. In what order do the six log lines appear, and why?
+An MVC app has three action filters: one registered globally, one as an attribute on the controller class, one on the action method. Each logs in `OnActionExecuting` and `OnActionExecuted`; none sets `Order`. In what order do the six log lines appear?
+OPT: a *
+Global, controller, action executing; then action, controller, global executed
+OPT: b
+Action, controller, global executing; then global, controller, action executed
+WHY:
+This makes the method attribute the outermost layer. Scope sets the nesting the other way: global filters surround class filters, which surround method filters, so the global filter is outermost and the action method's filter innermost.
+OPT: c
+Controller, global, action executing; then action, global, controller executed
+WHY:
+This puts the class attribute outside the global filter. Global filters surround class filters, so the controller's attribute sits between the global and method filters; a `Controller`'s own `OnActionExecuting` override is what runs ahead of global filters.
+OPT: d
+Nested by the order the filters were added in code, whatever each filter's scope
+WHY:
+Add order does not decide it across scopes: with no `Order` set, scope sets the nesting, so the global filter is outermost and the action method's filter innermost, whichever was written first.
 A:
-Global, controller, action executing; then action, controller, global executed. Filters of the same stage nest by scope, with global outermost, so each filter's after code runs as the inner layers unwind. Consequently a global filter sees the final result of everything inside it; use `Order` to change this default.
+Global, controller, action executing; then action, controller, global executed. With no `Order` set, scope sets the nesting: global filters are outermost, controller-class filters sit inside them, and action-method filters are innermost, next to the action. Setting `Order` is how you override that default.
+USAGE:
+A filter attribute on the controller still runs inside global filters; to put it outside them, give it `Order = int.MinValue`.
 SOURCE: https://learn.microsoft.com/en-us/aspnet/core/mvc/controllers/filters?view=aspnetcore-8.0
 When there are multiple filters for a particular stage of the pipeline, scope determines the default order of filter execution. Global filters surround class filters, which in turn surround method filters.
 
@@ -3271,36 +3777,6 @@ In interviews, map 401 to "who are you?" and 403 to "you can't do that"; clients
 SOURCE: https://learn.microsoft.com/en-us/aspnet/core/security/authentication/?view=aspnetcore-8.0
 An authentication scheme's forbid action is called by Authorization when an authenticated user attempts to access a resource they're not permitted to access.
 
-## asp-auth-02 | d2
-TOPIC: 4.5 Auth and CORS
-Q:
-A request with a valid JWT for `/orders` still gets 401. Why?
-```csharp
-var builder = WebApplication.CreateBuilder(args);
-builder.Services.AddAuthentication("Bearer").AddJwtBearer();
-builder.Services.AddAuthorization();
-var app = builder.Build();
-app.UseAuthorization();
-app.UseAuthentication();
-app.MapGet("/orders", () => "ok").RequireAuthorization();
-app.Run();
-```
-A:
-`UseAuthorization` runs before `UseAuthentication`, so the token hasn't been read yet when the policy is evaluated. Middleware runs in registration order: the authorization middleware sees an anonymous `HttpContext.User`, the default policy requires an authenticated user, so it challenges and returns 401 before authentication ever runs. Swapping the two calls fixes it.
-USAGE:
-A classic "works in Postman with the right token, still 401" bug; check pipeline order before blaming the token.
-SOURCE: https://learn.microsoft.com/en-us/aspnet/core/security/authentication/?view=aspnetcore-8.0
-Call UseAuthentication before any middleware that depends on users being authenticated.
-
-## asp-auth-03 | d2
-TOPIC: 4.5 Auth and CORS
-Q:
-Your API accepts an access token that your identity provider issued for a different API. Signature and issuer checks pass. Which validation is missing, and what should the API return when it fails?
-A:
-Audience validation is missing: the API must check that the token's `aud` claim matches its own identifier, and return 401 when it doesn't. A valid signature and issuer only prove the token came untampered from a trusted provider; `aud` says which API it was minted for. Without that check (for example `ValidateAudience = false`), any token for any sibling API can be replayed against yours.
-SOURCE: https://learn.microsoft.com/en-us/aspnet/core/security/authentication/configure-jwt-bearer-authentication?view=aspnetcore-8.0
-Incorrect claims: Critical claims within the token, such as the audience (aud) or issuer (iss), are missing or invalid.
-
 ## asp-auth-04 | d2
 TOPIC: 4.5 Auth and CORS
 Q:
@@ -3311,6 +3787,64 @@ USAGE:
 CORS relaxes the same-origin policy; it's never a substitute for `[Authorize]` or a fallback policy.
 SOURCE: https://learn.microsoft.com/en-us/aspnet/core/security/cors?view=aspnetcore-8.0
 It's up to the client (browser) to enforce CORS. The server executes the request and returns the response, it's the client that returns an error and blocks the response.
+
+## asp-auth-02 | d2
+TOPIC: 4.5 Auth and CORS
+Q:
+A teammate deleted the `UseAuthentication` and `UseAuthorization` calls, leaving this Program.cs. In .NET 8, what does a request to `/orders` that carries no token get?
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddAuthentication("Bearer").AddJwtBearer();
+builder.Services.AddAuthorization();
+var app = builder.Build();
+app.MapGet("/orders", () => "ok").RequireAuthorization();
+app.Run();
+```
+OPT: a
+A 200 "ok" response, because without a `UseAuthorization` call nothing in the pipeline evaluates the endpoint's authorization metadata
+WHY:
+Deleting the calls doesn't remove the middleware: with the services registered, `WebApplication` adds `UseAuthentication` and `UseAuthorization` itself, so the endpoint's authorization metadata is still enforced.
+OPT: b *
+A 401 challenge, because `WebApplication` adds authentication and authorization middleware itself when their services are registered
+OPT: c
+A 500 error, because the endpoint middleware throws when an endpoint with authorization metadata runs without the authorization middleware
+WHY:
+That exception is thrown only when no authorization middleware has run for the endpoint. Here `WebApplication` added `UseAuthorization` itself, so the anonymous request is challenged before the endpoint runs.
+OPT: d
+An exception at startup from `Build()`, because authentication services are registered but the app doesn't call `UseAuthentication`
+WHY:
+Nothing checks for the middleware calls at startup. Registering the services is what makes `WebApplication` add the two middleware itself, so the app starts and the endpoint is protected.
+A:
+A 401 challenge. Because `AddAuthentication` and `AddAuthorization` registered their services and Program.cs doesn't call the middleware, `WebApplication` adds `UseAuthentication` and `UseAuthorization` right after routing, so the default policy challenges the anonymous request. Calling either method yourself turns its automatic copy off, and that call runs where you place it.
+USAGE:
+Deleting the `Use` calls doesn't open endpoints once auth services are registered; mark a public endpoint with `AllowAnonymous()` instead.
+SOURCE: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/minimal-apis/webapplication?view=aspnetcore-8.0
+UseAuthentication is added immediately after UseRouting, if user code didn't already call UseAuthentication and if IAuthenticationSchemeProvider can be detected in the service provider. IAuthenticationSchemeProvider is added by default when you use AddAuthentication, and services are detected by using IServiceProviderIsService. UseAuthorization is added next, if user code didn't already call UseAuthorization and if IAuthorizationHandlerProvider can be detected in the service provider.
+
+## asp-auth-03 | d2
+TOPIC: 4.5 Auth and CORS
+Q:
+Your API accepts an access token that your identity provider issued for a different API. Signature and issuer checks pass. Which check should reject this token, and what should the API return when it fails?
+OPT: a
+Validating the `azp`/`client_id` claim against an allow-list of calling apps, returning 401
+WHY:
+`azp`/`client_id` names the app that requested the token, not the API it targets. An allowed client app can hold a token minted for a sibling API, and that token passes the allow-list.
+OPT: b
+A scope or role check on the endpoint, returning 403 when the token lacks this API's scope
+WHY:
+A scope check runs only after the token is accepted, and it cannot tie the token to this API: `scp` holds only the short scope name, so a sibling API can define the same name and its token passes.
+OPT: c
+An authorization policy checking which API the token was issued for, returning 403 since the signature proves it authentic
+WHY:
+A token minted for another API is not a valid credential here, so authentication fails. Failed authentication is a challenge (401); 403 is for an authenticated caller whom a policy denies.
+OPT: d *
+Audience validation of the `aud` claim in the bearer handler, returning 401 when it names a different API
+A:
+Audience validation: the API must check that the token's `aud` claim names this API and return 401 when it doesn't. Signature and issuer only prove a trusted provider issued the token untampered; `aud` says which API it is for, so without that check a sibling API's token can be replayed here.
+USAGE:
+Setting `ValidateAudience = false` to silence a mismatch opens this replay hole; fix the configured `Audience` instead.
+SOURCE: https://learn.microsoft.com/en-us/aspnet/core/security/authentication/configure-jwt-bearer-authentication?view=aspnetcore-8.0
+The following claims are required for OAuth 2.0 access tokens: iss, exp, aud, sub, client_id, iat, and jti. If any of these claims or values are incorrect, the API should return a 401 response.
 
 ## asp-auth-05 | d2
 TOPIC: 4.5 Auth and CORS
@@ -3395,27 +3929,6 @@ EnsureCreated is fine for demos and throwaway test databases; mention that a dat
 SOURCE: https://learn.microsoft.com/en-us/ef/core/managing-schemas/migrations/
 The migrations feature in EF Core provides a way to incrementally update the database schema to keep it in sync with the application's data model while preserving existing data in the database.
 
-## ef-query-05 | d2
-TOPIC: 5.1 EF Core Querying and Tracking
-Q:
-AppDbContext uses SQL Server and is registered with AddDbContext. What happens when GetCountsAsync runs, and how do you fix it?
-```csharp
-public class DashboardService(AppDbContext db)
-{
-    public async Task<(int, int)> GetCountsAsync()
-    {
-        var orders = db.Orders.CountAsync();
-        var customers = db.Customers.CountAsync();
-        await Task.WhenAll(orders, customers);
-        return (await orders, await customers);
-    }
-}
-```
-A:
-It is unsupported and usually throws InvalidOperationException ("A second operation was started on this context instance..."), because the second query starts while the first is still running. A DbContext is not thread-safe, and EF Core's detection is best effort. Fix it by awaiting each query before starting the next, or, if you really need parallelism, give each query its own context from IDbContextFactory<AppDbContext>.
-SOURCE: https://learn.microsoft.com/en-us/ef/core/dbcontext-configuration/
-Entity Framework Core does not support multiple parallel operations being run on the same DbContext instance. This includes both parallel execution of async queries and any explicit concurrent use from multiple threads. Therefore, always await async calls immediately, or use separate DbContext instances for operations that execute in parallel.
-
 ## ef-query-06 | d2
 TOPIC: 5.1 EF Core Querying and Tracking
 Q:
@@ -3458,10 +3971,47 @@ FromSql takes a FormattableString, so EF Core sends each interpolated value as a
 SOURCE: https://learn.microsoft.com/en-us/ef/core/querying/sql-queries
 While this syntax may look like regular C# string interpolation, the supplied value is wrapped in a DbParameter and the generated parameter name inserted where the {0} placeholder was specified. This makes FromSql safe from SQL injection attacks, and sends the value efficiently and correctly to the database.
 
+## ef-query-05 | d2
+TOPIC: 5.1 EF Core Querying and Tracking
+Q:
+AppDbContext uses SQL Server and is registered with AddDbContext. What happens when GetCountsAsync runs?
+```csharp
+public class DashboardService(AppDbContext db)
+{
+    public async Task<(int, int)> GetCountsAsync()
+    {
+        var orders = db.Orders.CountAsync();
+        var customers = db.Customers.CountAsync();
+        await Task.WhenAll(orders, customers);
+        return (await orders, await customers);
+    }
+}
+```
+OPT: a
+Both counts run in parallel over the shared connection, so the method returns faster than awaiting them in turn
+WHY:
+This assumes Task.WhenAll makes sharing the context safe. A DbContext supports one operation at a time, so starting the second CountAsync before the first completes is unsupported and gives no speed-up.
+OPT: b
+EF Core queues the second count until the first one finishes, so both results come back correctly
+WHY:
+This assumes the context serializes calls. A DbContext has no internal queue; when it detects the overlapping operation it throws instead of waiting for the first query.
+OPT: c *
+It throws InvalidOperationException because the second query starts before the first one completes
+OPT: d
+The method deadlocks because Task.WhenAll blocks the calling thread until both count queries have finished
+WHY:
+This confuses awaiting with sync-over-async such as .Result. Task.WhenAll returns a task that the method awaits, so no thread blocks while the queries run; the real failure is the shared context.
+A:
+It throws InvalidOperationException because the second CountAsync starts before the first completes, and a DbContext supports only one operation at a time. Detection is best effort, so the code is unsupported even when no exception appears. Fix it by awaiting each query in turn, or give each query its own context from IDbContextFactory<AppDbContext> (registered with AddDbContextFactory).
+USAGE:
+Bites in dashboard endpoints that fan out queries; for real parallelism, register AddDbContextFactory, inject IDbContextFactory<AppDbContext>, and create one short-lived context per task.
+SOURCE: https://learn.microsoft.com/en-us/ef/core/dbcontext-configuration/
+Entity Framework Core does not support multiple parallel operations being run on the same DbContext instance. This includes both parallel execution of async queries and any explicit concurrent use from multiple threads. Therefore, always await async calls immediately, or use separate DbContext instances for operations that execute in parallel.
+
 ## ef-query-09 | d2
 TOPIC: 5.1 EF Core Querying and Tracking
 Q:
-SomeBlog has Rating 5 before RunAsync executes. What rating is stored in the database afterwards, and why?
+Blog has no concurrency token, and SomeBlog has Rating 5 before RunAsync executes. What rating is stored in the database afterwards?
 ```csharp
 public class RatingJob(AppDbContext db)
 {
@@ -3474,8 +4024,24 @@ public class RatingJob(AppDbContext db)
     }
 }
 ```
+OPT: a
+8, because ExecuteUpdateAsync also refreshes the tracked blog to 6 before the +2 is applied
+WHY:
+This assumes bulk updates keep the change tracker in sync. ExecuteUpdate runs SQL directly and leaves tracked instances untouched, so the blog still holds 5 when the +2 is applied.
+OPT: b *
+7, because the tracked blog still holds 5, and SaveChangesAsync overwrites the bulk update
+OPT: c
+6, because SaveChangesAsync notices the row was already updated and discards the tracked change
+WHY:
+This assumes EF Core reconciles tracked entities with bulk updates. The tracker knows nothing about the ExecuteUpdate; it compares the current 7 with the original 5 and sends an UPDATE.
+OPT: d
+SaveChangesAsync throws DbUpdateConcurrencyException because the row changed after the blog was loaded
+WHY:
+Without a concurrency token the UPDATE filters only on the key, so EF Core cannot tell that the row changed and silently overwrites it instead of throwing.
 A:
-7. ExecuteUpdateAsync runs immediately in the database (5 becomes 6) but bypasses the change tracker, so the tracked blog still holds 5. Adding 2 makes it 7, and SaveChangesAsync sees a change from the original 5 and writes 7, overwriting the bulk update. Avoid mixing tracked edits and ExecuteUpdate/ExecuteDelete on the same rows, or reload the entity after the bulk operation.
+The stored rating is 7. ExecuteUpdateAsync sets the row to 6 but bypasses the change tracker, so the tracked blog still holds 5; adding 2 makes 7, and SaveChangesAsync overwrites the bulk update. Avoid mixing tracked edits and ExecuteUpdate on the same rows, or reload the entity after the bulk operation.
+USAGE:
+Bites in background jobs that mix bulk updates with tracked edits; say ExecuteUpdate takes effect immediately and the change tracker never learns about it.
 SOURCE: https://learn.microsoft.com/en-us/ef/core/saving/execute-insert-update-delete
 Crucially, when ExecuteUpdate is invoked and all Blogs are updated in the database, EF's change tracker is not updated, and the tracked .NET instance still has its original rating value, from the point at which it was queried.
 
@@ -3752,15 +4318,6 @@ Keep unit and integration tests in separate projects so infrastructure packages 
 SOURCE: https://learn.microsoft.com/en-us/dotnet/core/testing/
 Unit tests should only test code within the developer's control. They don't test infrastructure concerns. Infrastructure concerns include interacting with databases, file systems, and network resources.
 
-## net-test-02 | d1
-TOPIC: 6.1 Unit and Integration Testing
-Q:
-`IsPrime` must return false for -1, 0 and 1. Instead of copying a `[Fact]` test three times, what does xUnit give you, and what changes in the test method?
-A:
-Use one `[Theory]` method that takes an `int value` parameter and carries `[InlineData(-1)]`, `[InlineData(0)]` and `[InlineData(1)]`. xUnit runs each data row as its own test case and passes the value in, so the logic exists once and a failure names the exact input that broke.
-SOURCE: https://learn.microsoft.com/en-us/dotnet/core/testing/unit-testing-csharp-with-xunit
-[Theory] represents a suite of tests that execute the same code but have different input arguments.
-
 ## net-test-03 | d1
 TOPIC: 6.1 Unit and Integration Testing
 Q:
@@ -3771,6 +4328,32 @@ USAGE:
 If a test needs two Act steps, split it into two tests or a `[Theory]`.
 SOURCE: https://learn.microsoft.com/en-us/dotnet/core/testing/unit-testing-best-practices
 When you follow the pattern, you can clearly separate what is being tested from the Arrange and Assert tasks. The pattern also helps to reduce the opportunity for assertions to intermix with code in the Act task.
+
+## net-test-02 | d1
+TOPIC: 6.1 Unit and Integration Testing
+QUALIFIER: BEST
+Q:
+`IsPrime` must return false for -1, 0 and 1. Instead of copying a `[Fact]` test three times, which xUnit test is BEST?
+OPT: a
+One `[Fact]` method that loops over `new[] { -1, 0, 1 }` and asserts `IsPrime` is false for each
+WHY:
+A loop inside one `[Fact]` runs as a single test case, and the first failed assertion throws, so the remaining inputs are never checked or reported. The failing value shows only if you build it into the assertion message.
+OPT: b *
+One `[Theory]` method taking `int value`, with `[InlineData(-1)]`, `[InlineData(0)]`, `[InlineData(1)]`
+OPT: c
+Keep the `[Fact]` attribute, add an `int value` parameter, and add `[InlineData(-1)]`, `[InlineData(0)]`, `[InlineData(1)]`
+WHY:
+xUnit rejects a `[Fact]` that has parameters (analyzer error xUnit1001; the runner reports "Did you mean to use [Theory]?"). `[InlineData]` rows are passed only to a `[Theory]`, so the test never runs with -1, 0 or 1.
+OPT: d
+One method with an `int value` parameter and the attributes `[TestCase(-1)]`, `[TestCase(0)]`, `[TestCase(1)]`
+WHY:
+`[TestCase]` is NUnit's parameterized-test attribute, not xUnit's. xUnit does not recognize it, so without `[Theory]` the method is not discovered as a test, and it does not compile without the NUnit package.
+A:
+A `[Theory]` with an `int value` parameter and one `[InlineData]` per input is the xUnit way. xUnit runs each data row as its own test case and passes the value in, so the logic exists once and a failure names the exact input that broke.
+USAGE:
+Switch to `[MemberData]` when a row needs values an attribute cannot hold, such as a `DateTime` or a custom object.
+SOURCE: https://learn.microsoft.com/en-us/dotnet/core/testing/unit-testing-csharp-with-xunit
+[Theory] represents a suite of tests that execute the same code but have different input arguments.
 
 ## net-test-04 | d1
 TOPIC: 6.1 Unit and Integration Testing
@@ -3830,10 +4413,25 @@ Make the Program class public using a partial class declaration:
 
 ## net-test-08 | d2
 TOPIC: 6.1 Unit and Integration Testing
+QUALIFIER: BEST
 Q:
-A `TokenService` reads `DateTime.UtcNow`, and tokens expire after 15 minutes. How do you unit test the expiry on .NET 8 without `Thread.Sleep` or writing your own `IClock` interface?
+A `TokenService` reads `DateTime.UtcNow`, and tokens expire after 15 minutes. On .NET 8, which approach is BEST for unit testing the expiry without `Thread.Sleep` or writing your own `IClock` interface?
+OPT: a
+Keep `DateTime.UtcNow` in the service and use Moq's `Setup` to make it return a time 15 minutes in the future
+WHY:
+`DateTime.UtcNow` is a static property, and proxy-based libraries such as Moq intercept only virtual or interface members, so the setup cannot replace the clock the service reads.
+OPT: b *
+Inject `TimeProvider`; the test uses a `FakeTimeProvider` and calls `Advance(TimeSpan.FromMinutes(15))`
+OPT: c
+Inject ASP.NET Core's `ISystemClock` and pass a hand-written fake whose `UtcNow` property returns a later time
+WHY:
+ASP.NET Core 8 marks `ISystemClock` obsolete in favor of `TimeProvider`, so new code would depend on a deprecated, web-specific interface while the framework's own time abstraction already does the job.
+OPT: d
+Set the expiry to a few milliseconds in the test configuration and await a short delay before asserting expiry
+WHY:
+The test still waits on the real clock, so it is slower and can fail on a busy build agent, and a tiny expiry no longer exercises the 15-minute rule itself.
 A:
-Inject `TimeProvider` and read `GetUtcNow()` from it; production registers `TimeProvider.System`, and the test passes a `FakeTimeProvider` from Microsoft.Extensions.TimeProvider.Testing. `Advance(TimeSpan.FromMinutes(15))` moves the clock instantly, so the test is fast and deterministic, and the abstraction ships with .NET 8 instead of being hand-rolled.
+Inject `TimeProvider` (production passes `TimeProvider.System`) and give the test a `FakeTimeProvider`. `Advance(TimeSpan.FromMinutes(15))` moves its clock instantly, so the real 15-minute rule is tested fast and deterministically, with an abstraction that ships with .NET 8 instead of a hand-rolled or obsolete one.
 CODE: csharp
 // inside a [Fact] test method
 var time = new FakeTimeProvider();
@@ -3841,6 +4439,8 @@ var tokens = new TokenService(time);
 var token = tokens.Issue("alice");
 time.Advance(TimeSpan.FromMinutes(15));
 Assert.True(tokens.IsExpired(token));
+USAGE:
+Register `builder.Services.AddSingleton(TimeProvider.System)` in Program.cs, so every service shares the real clock and tests swap in the fake.
 SOURCE: https://learn.microsoft.com/en-us/dotnet/standard/datetime/timeprovider-overview
 The Microsoft.Extensions.TimeProvider.Testing NuGet package provides a controllable TimeProvider implementation designed for unit testing.
 
