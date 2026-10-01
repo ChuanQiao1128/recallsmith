@@ -6,6 +6,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
 import type { CardExport, DeckExport } from '../types/deckExport';
+import { questionA11yLabel, splitQuestionCode } from '../content/questionCode';
 import type { CardProgress } from '../review/model';
 import { colors } from '../theme/colors';
 import { CHROME_MAX_FONT_SCALE } from '../theme/dynamicType';
@@ -17,6 +18,7 @@ import { getFeatureFlags } from '../config/featureFlags';
 import { mcqRequiredCount, resolveMcq } from '../features/gacha/mcq/normalizeMcq';
 import { MCQ_COPY } from '../features/gacha/mcq/mcqConstants';
 import { CardAnswerSections } from '../features/gacha/components/CardAnswerSections';
+import { QuestionCodeBlock } from '../features/gacha/session/QuestionCodeBlock';
 import { cardDetailStatus } from '../features/gacha/library/cardDetailStatus';
 import { findCardAcrossDecks } from '../features/gacha/library/findCardAcrossDecks';
 import { ReportCardSheet } from '../features/cardReport/ReportCardSheet';
@@ -333,7 +335,11 @@ export function CardDetailScreen({ navigation, route }: Props) {
   // A locked card shows its slot and nothing else it could be recognised by.
   // The Library's silhouette tile makes the same trade: the registry admits
   // the card exists, the pull is still the moment you learn what it says.
-  const title = isLocked ? 'Not in your collection yet' : (card?.Question ?? '');
+  // Y01: a fenced code block in the question is lifted out — the title is the
+  // prose only and the question card renders the code as a CodeBlock below it.
+  const question = isLocked || !card ? null : splitQuestionCode(card.Question ?? '');
+  const title = isLocked ? 'Not in your collection yet' : (question?.text ?? '');
+  const questionCode = question?.code ?? null;
   // Rank in the deck, not OrderInDeck: the tile the user just tapped says
   // "#011" and this page has to say the same thing about the same card.
   const slot = card && deck ? (rankCardsByOrder(deck.Cards ?? []).get(card.StableUid) ?? 0) : 0;
@@ -439,7 +445,10 @@ export function CardDetailScreen({ navigation, route }: Props) {
               Moved out of the fixed overflow-hidden hero (MCORE-01): normal-flow
               text, no numberOfLines, no fixed height. The page already scrolls. */}
           <View testID="card-detail-question" style={styles.questionCard}>
-            <Text style={styles.questionText}>{title}</Text>
+            <Text style={styles.questionText} accessibilityLabel={questionCode && question ? questionA11yLabel(question) : undefined}>
+              {title}
+            </Text>
+            {questionCode ? <QuestionCodeBlock code={questionCode} /> : null}
           </View>
 
           {/* META STRIP — slot, last seen, next review, mastery */}

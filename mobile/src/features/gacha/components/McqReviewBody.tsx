@@ -2,9 +2,11 @@ import React, { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import CodeBlock from '../../../components/CodeBlock';
+import { QUESTION_CODE_A11Y_SUFFIX, splitQuestionCode } from '../../../content/questionCode';
 import type { CardExport, McqExport, McqOption } from '../../../types/deckExport';
 import { formatRank } from '../library/cardRank';
 import { normalizeCodeLanguage, renderSimpleMarkdown } from '../session/reviewContentHelpers';
+import { QuestionCodeBlock } from '../session/QuestionCodeBlock';
 import {
   MCQ_COPY,
   MCQ_OVER_LIMIT_HINT_MS,
@@ -222,9 +224,15 @@ export const McqReviewBody = React.memo(function McqReviewBody(props: McqReviewB
   // On the options stage the scenario lead-in is clamped to two lines, but the
   // actual ask (and its MOST/LEAST qualifier) always renders in full (MCORE-02).
   // A one-sentence stem has no lead-in to clamp, so it is never collapsed.
-  const split = splitStemForOptions(card.Question, mcq.qualifier);
+  // Y01: a fenced code block in the question is lifted out first — the lead-in
+  // split and the qualifier / caps highlighting run on the prose only, and the
+  // code renders as a CodeBlock between the stem and the options.
+  const question = React.useMemo(() => splitQuestionCode(card.Question), [card.Question]);
+  const split = splitStemForOptions(question.text, mcq.qualifier);
   const collapsed = stage === 'options' && !stemExpanded && split.leadIn.length > 0;
-  const segments = stemSegments(collapsed ? split.ask : card.Question, mcq.qualifier);
+  const stemText = collapsed ? split.ask : question.text;
+  const segments = stemSegments(stemText, mcq.qualifier);
+  const stemLabel = question.code ? `${stemText}${QUESTION_CODE_A11Y_SUFFIX}` : undefined;
   const showOptions = stage === 'options' || stage === 'verdict';
   // k for the partial banner (gap #10): distinct-by-list correct picks.
   const k = shownOrder.filter((option) => option.correct && picks.includes(option.key)).length;
@@ -316,7 +324,7 @@ export const McqReviewBody = React.memo(function McqReviewBody(props: McqReviewB
         </Text>
       ) : null}
 
-      <Text testID={MCQ_TEST_IDS.stem} style={styles.stem}>
+      <Text testID={MCQ_TEST_IDS.stem} style={styles.stem} accessibilityLabel={stemLabel}>
         {segments.map((seg, i) =>
           seg.emphasis === null ? (
             seg.text
@@ -344,6 +352,8 @@ export const McqReviewBody = React.memo(function McqReviewBody(props: McqReviewB
           </Text>
         </Pressable>
       ) : null}
+
+      {question.code ? <QuestionCodeBlock code={question.code} /> : null}
 
       {stage === 'stem' ? (
         <Text testID={MCQ_TEST_IDS.stemHint} style={styles.stemHint}>

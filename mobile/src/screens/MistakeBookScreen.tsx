@@ -7,6 +7,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
 import type { DeckExport } from '../types/deckExport';
+import { questionText } from '../content/questionCode';
 import { getCachedDeck } from '../content/deckCache';
 import { loadDeckProgress } from '../review/storage';
 import { resolveEffectiveOwned } from '../features/gacha/draw/effectiveOwned';
@@ -240,18 +241,20 @@ export function MistakeBookScreen({ navigation, route }: Props) {
                   <View style={styles.card}>
                     {group.rows.map(({ entry, card }) => {
                       const progress = clearProgress(entry, now);
+                      // Prose only (Y01): a row never prints a fenced code block's backticks.
+                      const rowQuestion = questionText(card.Question);
                       return (
                         <Pressable
                           key={entry.stableUid}
                           testID={`mistake-row-${entry.stableUid}`}
                           accessibilityRole="button"
-                          accessibilityLabel={mistakeRowLabel(card.Question, entry, now)}
+                          accessibilityLabel={mistakeRowLabel(rowQuestion, entry, now)}
                           accessibilityHint="Opens the card"
                           style={({ pressed }) => [styles.row, pressed && styles.pressed]}
                           onPress={() => navigation.navigate('CardDetail', { cardId: entry.stableUid })}
                         >
                           <Text style={styles.rowQuestion} numberOfLines={2}>
-                            {card.Question}
+                            {rowQuestion}
                           </Text>
                           <View style={styles.rowMeta}>
                             {entry.topic ? <Text style={styles.rowTopic}>{entry.topic}</Text> : null}
