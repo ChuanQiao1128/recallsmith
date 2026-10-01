@@ -596,18 +596,25 @@ export function HomeScreen({ navigation, route }: Props) {
   // The header line is context, never a second instruction: the hero below carries the one
   // instruction (R22 §1.6). It shows the exam countdown when a date is set; otherwise a status
   // that agrees with the hero. While the starter lesson is open the hero already says it all.
+  // "Caught up" only sits over a hero that says the learner is clear; every other hero line
+  // (new cards ready, today in progress, a deck to set up) gets no subtitle rather than a
+  // contradicting one.
+  const heroSaysClear =
+    homeState.vm.statusKind === 'nothing_to_learn' || homeState.vm.statusKind === 'today_full_clear';
   const headerStatus = starterSlug
     ? null
     : totalDueAcrossDecks > 0
       ? `${totalDueAcrossDecks} cards waiting today`
       : homeState.vm.draw.state === 'available' || homeState.vm.draw.state === 'reserve'
         ? 'A reward draw is ready'
-        : selectedDeckRow?.deck.canStudy &&
-            selectedDeckRow.deck.dueToday === 0 &&
-            selectedDeckRow.deck.newToday === 0 &&
-            homeState.vm.draw.state === 'locked'
-          ? 'Caught up'
-          : 'All caught up for now';
+        : !heroSaysClear
+          ? null
+          : selectedDeckRow?.deck.canStudy &&
+              selectedDeckRow.deck.dueToday === 0 &&
+              selectedDeckRow.deck.newToday === 0 &&
+              homeState.vm.draw.state === 'locked'
+            ? 'Caught up'
+            : 'All caught up for now';
   // Only show the full-screen spinner on the FIRST load. Subsequent refreshes
   // (after navigating away + returning) keep the previous UI rendered so the
   // user doesn't see a jarring blank → fade → blank flash. A small inline
