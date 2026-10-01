@@ -443,12 +443,15 @@ public class UsageAnalyticsTests
   }
 
   [Fact]
-  public void Analytics_ProdEnvFile_DefaultsExclusionToEmpty()
+  public void Analytics_ProdEnvFile_ExclusionIsEmptyOrSubList()
   {
+    // The owner lists their own learner subs here (runbook automation-operations.md, V08 owner step);
+    // the value must stay empty or a comma-separated list of Cognito subs (UUIDs), nothing else.
     var dir = new DirectoryInfo(AppContext.BaseDirectory);
     while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "env", "prod.env.json"))) dir = dir.Parent;
     Assert.NotNull(dir);
     using var doc = JsonDocument.Parse(File.ReadAllText(Path.Combine(dir!.FullName, "env", "prod.env.json")));
-    Assert.Equal(string.Empty, doc.RootElement.GetProperty(UsageAnalytics.ExcludedSubsEnv).GetString());
+    var value = doc.RootElement.GetProperty(UsageAnalytics.ExcludedSubsEnv).GetString();
+    Assert.Matches(@"^(|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(,[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})*)$", value);
   }
 }
