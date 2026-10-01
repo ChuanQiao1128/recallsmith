@@ -6,6 +6,7 @@ let walletFixture = { availablePulls: 0, reservePulls: 0 };
 let activeSlugFixture: string | null = 'csharp';
 let deckSummariesFixture: any[] = [];
 let updatesFixture: Record<string, any> = {};
+let studyGoalFixture: { deckSlug: string; examDate: string | null } | null = null;
 
 const navigateMock = vi.fn();
 const setActiveDeckSlugMock = vi.fn(async (_slug: string) => {});
@@ -117,6 +118,12 @@ vi.mock('../../src/sync/progressSync', () => ({
   forceProgressSync: vi.fn(async () => {}),
 }));
 
+// R22 §2 study goal: the real daysUntilExam, a fixture goal.
+vi.mock('../../src/features/goal/studyGoal', async (importActual) => ({
+  ...(await importActual<typeof import('../../src/features/goal/studyGoal')>()),
+  getStudyGoal: vi.fn(async () => studyGoalFixture),
+}));
+
 import { Alert } from 'react-native';
 import { HomeScreen } from '../../src/screens/HomeScreen';
 import { loadHomeDeckSummaries } from '../../src/features/gacha/home/deckActionResolver';
@@ -204,6 +211,7 @@ describe('HomeScreen v9', () => {
       },
     ];
     updatesFixture = {};
+    studyGoalFixture = null;
     navigateMock.mockReset();
     setActiveDeckSlugMock.mockClear();
     // Restore the shared cache-first/revalidate stub so per-test overrides of
@@ -232,7 +240,7 @@ describe('HomeScreen v9', () => {
     expect(tree.root.findByProps({ testID: 'home-pack-visual' })).toBeTruthy();
     expect(tree.root.findByProps({ testID: 'home-draw-status-badge' })).toBeTruthy();
     const goal = tree.root.findByProps({ testID: 'home-goal-line' });
-    expect(String(goal.props.children)).toContain('Full clear: 2 cards');
+    expect(String(goal.props.children)).toBe('Today: 2 cards');
   });
 
   it('shows due-card study link and routes it directly to SessionCard', async () => {
@@ -715,7 +723,7 @@ describe('HomeScreen v9', () => {
     await flush();
 
     expect(tree.root.findAllByProps({ testID: 'home-goal-line' })).toHaveLength(0);
-    expect(textBlob(tree)).not.toContain('Full clear: 0 cards');
+    expect(textBlob(tree)).not.toContain('Today: 0 cards');
   });
 
   it('caps the goal line at the route length the session will build', async () => {
@@ -734,7 +742,7 @@ describe('HomeScreen v9', () => {
     await flush();
 
     const goal = tree.root.findByProps({ testID: 'home-goal-line' });
-    expect(String(goal.props.children)).toBe('Keep streak: 1 card · Full clear: 5 cards');
+    expect(String(goal.props.children)).toBe('Today: 5 cards');
   });
 
   it('labels the tiles with the short deck title on two lines', async () => {
@@ -844,5 +852,102 @@ describe('HomeScreen v9', () => {
     expect(
       tree.root.findAll((node) => (node.type as any) === 'Text' && node.props?.testID === 'home-update-notice'),
     ).toHaveLength(0);
+  });
+
+  // ─── R22 H03: one primary action, no truncated headline, exam countdown ───
+  const renderHome = async (params?: Record<string, unknown>) => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <HomeScreen
+          navigation={{ navigate: navigateMock } as any}
+          route={{ key: 'home', name: 'Home', params } as any}
+        />,
+      );
+    });
+    await flush();
+    return tree;
+  };
+  const localDayKey = (offsetDays: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() + offsetDays);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  };
+
+  it('puts the primary CTA directly under the hero, above the Today card', async () => {
+    const tree = await renderHome();
+    const order = tree.root
+      .findAll((node) => typeof node.props?.testID === 'string' && typeof node.type === 'string')
+      .map((node) => node.props.testID as string);
+    const hero = order.indexOf('home-hero-title');
+    const cta = order.indexOf('screen-home-primary-cta');
+    const today = order.indexOf('home-today-count-grid');
+    const goal = order.indexOf('home-goal-line');
+    expect(hero).toBeGreaterThan(-1);
+    expect(cta).toBeGreaterThan(hero);
+    expect(today).toBeGreaterThan(cta);
+    expect(goal).toBeGreaterThan(cta);
+    // Nothing but the hero sits between the pack and the button.
+    const between = order.slice(hero + 1, cta);
+    expect(between).toEqual([]);
+  });
+
+  it('lets the hero headline wrap to two lines and shrink instead of truncating', async () => {
+    const tree = await renderHome();
+    const hero = tree.root.find(
+      (node) => (node.type as any) === 'Text' && node.props?.testID === 'home-hero-title',
+    );
+    expect(hero.props.numberOfLines).toBe(2);
+    expect(hero.props.adjustsFontSizeToFit).toBe(true);
+    expect(hero.props.minimumFontScale).toBeGreaterThan(0);
+    expect(hero.props.minimumFontScale).toBeLessThan(1);
+  });
+
+  it('never tells the learner to tap the pack in the header next to a different hero line', async () => {
+    const tree = await renderHome({ firstDrawCoach: true });
+    expect(textBlob(tree)).not.toContain('Tap your pack to begin');
+    const header = tree.root.findAll(
+      (node) => (node.type as any) === 'Text' && node.props?.testID === 'home-header-subtitle',
+    );
+    const hero = tree.root.find(
+      (node) => (node.type as any) === 'Text' && node.props?.testID === 'home-hero-title',
+    );
+    // Either no subtitle, or one that says the same thing as the hero
+    // ("3 cards waiting today" under "3 cards waiting").
+    const heroText = String(hero.props.children);
+    expect(header.length).toBeLessThanOrEqual(1);
+    for (const node of header) {
+      const text = String(node.props.children);
+      expect(text.startsWith(heroText) || heroText.startsWith(text)).toBe(true);
+    }
+  });
+
+  it('shows "Exam in N days" when the study goal has an exam date', async () => {
+    studyGoalFixture = { deckSlug: 'csharp', examDate: localDayKey(12) };
+    const tree = await renderHome();
+    const exam = tree.root.find(
+      (node) => (node.type as any) === 'Text' && node.props?.testID === 'home-exam-countdown',
+    );
+    expect(String(exam.props.children)).toBe('Exam in 12 days');
+  });
+
+  it('shows nothing about exams when no exam date is set', async () => {
+    studyGoalFixture = { deckSlug: 'csharp', examDate: null };
+    const withGoal = await renderHome();
+    expect(withGoal.root.findAllByProps({ testID: 'home-exam-countdown' })).toHaveLength(0);
+    expect(textBlob(withGoal)).not.toMatch(/exam/i);
+
+    studyGoalFixture = null;
+    const noGoal = await renderHome();
+    expect(noGoal.root.findAllByProps({ testID: 'home-exam-countdown' })).toHaveLength(0);
+    expect(textBlob(noGoal)).not.toMatch(/exam/i);
+  });
+
+  it('labels the fourth Today tile Collected, not Owned', async () => {
+    const tree = await renderHome();
+    expect(textBlob(tree)).toContain('Collected');
+    expect(textBlob(tree)).not.toContain('Owned');
+    expect(textBlob(tree)).not.toContain('Keep streak');
   });
 });
