@@ -225,6 +225,30 @@ describe('MyReportsScreen', () => {
     expect(rows[1].props.accessibilityLabel).toContain('Fixed');
   });
 
+  // F01 y-correctness-3: the API echoes the raw question; a fenced code block must show as prose
+  // only (no backticks, no code), like every other row surface.
+  it('shows the prose only for a reported question with a fenced code block', async () => {
+    const fenced = {
+      ...REPORTS[0],
+      question: 'What does this print?\n```csharp\nvar xs = new[]{1,2,3};\nConsole.WriteLine(xs.Length);\n```\n',
+    };
+    const fenceOnly = { ...REPORTS[1], question: '```csharp\nConsole.WriteLine(1 + 1);\n```\n' };
+    vi.mocked(apiJson).mockResolvedValue({ success: true, data: { items: [fenced, fenceOnly, REPORTS[2]] } });
+    const tree = await renderReports();
+
+    expect(byTestId(tree, 'my-reports-question').map(textOf)).toEqual([
+      'What does this print?',
+      'What does this code do?',
+      'S3 storage classes',
+    ]);
+    const rows = byTestId(tree, 'my-reports-item');
+    expect(rows[0].props.accessibilityLabel.startsWith('Open. What does this print?. ')).toBe(true);
+    for (const row of rows) {
+      expect(row.props.accessibilityLabel).not.toContain('`');
+      expect(row.props.accessibilityLabel).not.toContain('Console.WriteLine');
+    }
+  });
+
   it('shows the empty state when there are no reports', async () => {
     vi.mocked(apiJson).mockResolvedValue({ data: { items: [] } });
     const tree = await renderReports();

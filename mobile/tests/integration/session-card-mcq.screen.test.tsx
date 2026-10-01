@@ -623,6 +623,47 @@ describe('SessionCardScreen MCQ branch', () => {
     expect(order.filter((id) => id === 'option')).toHaveLength(4);
   });
 
+  // F01 y-tests-2: recallFirst is on by default, so the learner first meets the stem stage. The
+  // code must sit between the stem and the stem hint (no options yet) and stay when the options open.
+  it('keeps the code block between the stem and the stem hint on the recallFirst stem stage', async () => {
+    featureFlagsMock.mockReturnValue(flags({ recallFirst: true }));
+    const card = {
+      ...CARD_1,
+      StableUid: 'dotnet-code-in-stem-mcq-02',
+      Question: 'Which change has the LEAST allocation?\n```csharp\nvar parts = m.Split(\',\');\n```',
+      Mcq: { ...CARD_1.Mcq, qualifier: 'LEAST allocation' },
+    };
+    serve(card, NEW_PROGRESS(card.StableUid));
+    const { tree } = await mount();
+
+    const stemOrder = () =>
+      tree.root
+        .findAll(
+          (node) =>
+            typeof node.type === 'string' &&
+            typeof node.props?.testID === 'string' &&
+            ['mcq-stem', 'question-code', 'mcq-stem-hint'].includes(node.props.testID),
+        )
+        .map((node) => node.props.testID);
+    expect(stemOrder()).toEqual(['mcq-stem', 'question-code', 'mcq-stem-hint']);
+    expect(byTestIDPrefix(tree, 'mcq-option-')).toHaveLength(0);
+    expect(idText(tree, 'mcq-stem')).not.toContain('```');
+
+    await press(tree, 'mcq-show-options');
+
+    expect(byTestID(tree, 'mcq-stem-hint')).toHaveLength(0);
+    expect(byTestID(tree, 'question-code')).toHaveLength(1);
+    const order = tree.root
+      .findAll(
+        (node) =>
+          typeof node.type === 'string' &&
+          typeof node.props?.testID === 'string' &&
+          (node.props.testID === 'mcq-stem' || node.props.testID === 'question-code' || /^mcq-option-[a-f]$/.test(node.props.testID)),
+      )
+      .map((node) => (node.props.testID.startsWith('mcq-option-') ? 'option' : node.props.testID));
+    expect(order.slice(0, 3)).toEqual(['mcq-stem', 'question-code', 'option']);
+  });
+
   it('renders an AWS stem without a fence exactly as before (no code block, no label override)', async () => {
     featureFlagsMock.mockReturnValue(flags({ recallFirst: false }));
     serve(CARD_1, NEW_PROGRESS(CARD_1.StableUid));

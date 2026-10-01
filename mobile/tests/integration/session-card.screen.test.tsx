@@ -757,12 +757,12 @@ describe('SessionCardScreen', () => {
 
   // Y01: a fenced code block inside a Q/A question renders as a CodeBlock on the front face
   // (before reveal) and again in the question recap after reveal — never as raw backticks.
-  async function mountWithQuestion(question: string) {
-    const card = { StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: question };
+  async function mountWithQuestion(question: string, opts: { neverReviewed?: boolean } = {}) {
+    const card = { StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: question, Answer: 'A1' };
     vi.mocked(resolveDeckBySlug).mockResolvedValue(buildDeck({ Cards: [card] }) as any);
     vi.mocked(pickNextCard).mockReturnValue({
       card,
-      progress: { stableUid: '1', stage: 0, nextReviewAt: 0, lastReviewedAt: LEARNED_AT },
+      progress: { stableUid: '1', stage: 0, nextReviewAt: 0, lastReviewedAt: opts.neverReviewed ? 0 : LEARNED_AT },
     } as any);
     const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
     let tree!: renderer.ReactTestRenderer;
@@ -823,6 +823,68 @@ describe('SessionCardScreen', () => {
     expect(hostByTestID(tree, 'review-question')[0].props.children).toBe('What does this print?');
     expect(hostByTestID(tree, 'question-code')).toHaveLength(1);
     expect(anyBackticks(tree)).toHaveLength(0);
+  });
+
+  // F01 y-correctness-1 / y-tests-1: a never-reviewed Q/A card opens on the R22 study view,
+  // which must render the fenced code as a code block too (it is where a learner first meets a card).
+  it('shows the question code block on the study view of a never-reviewed card', async () => {
+    const tree = await mountWithQuestion(
+      'What does this print?\n```csharp\nvar xs = new[]{1,2,3};\nConsole.WriteLine(xs.Length);\n```\n',
+      { neverReviewed: true },
+    );
+
+    expect(hostByTestID(tree, 'learning-study-view')).toHaveLength(1);
+    expect(hostByTestID(tree, 'review-question')).toHaveLength(0);
+    const question = hostByTestID(tree, 'learning-study-question');
+    expect(question).toHaveLength(1);
+    expect(question[0].props.children).toBe('What does this print?');
+    expect(question[0].props.accessibilityLabel).toBe('What does this print?, code sample follows');
+    const code = codeBlocks(tree);
+    expect(code).toHaveLength(1);
+    expect(code[0].props.code).toBe('var xs = new[]{1,2,3};\nConsole.WriteLine(xs.Length);');
+    expect(code[0].props.label).toBe('C#');
+    expect(anyBackticks(tree)).toHaveLength(0);
+    // The code sits between the question and the answer sections.
+    const order = tree.root
+      .findAll(
+        (node) =>
+          typeof node.type === 'string' &&
+          ['learning-study-question', 'question-code', 'learning-study-answer'].includes(node.props?.testID),
+      )
+      .map((node) => node.props.testID);
+    expect(order.filter((id, i) => order.indexOf(id) === i)).toEqual([
+      'learning-study-question',
+      'question-code',
+      'learning-study-answer',
+    ]);
+  });
+
+  it('renders a study-view question without a fence exactly as before', async () => {
+    const tree = await mountWithQuestion('Explain async void.', { neverReviewed: true });
+
+    const question = hostByTestID(tree, 'learning-study-question');
+    expect(question).toHaveLength(1);
+    expect(question[0].props.children).toBe('Explain async void.');
+    expect(question[0].props.accessibilityLabel).toBeUndefined();
+    expect(hostByTestID(tree, 'question-code')).toHaveLength(0);
+  });
+
+  // F01 supervisor-1 / y-tests-3: a fence-only question gets neutral prose, never an empty
+  // question line or a label that starts with a comma.
+  it('gives a fence-only question the fallback prose on the review front and the study view', async () => {
+    const fenceOnly = '```csharp\nConsole.WriteLine(1 + 1);\n```\n';
+    const review = await mountWithQuestion(fenceOnly);
+    const front = hostByTestID(review, 'review-question');
+    expect(front[0].props.children).toBe('What does this code do?');
+    expect(front[0].props.accessibilityLabel).toBe('What does this code do?, code sample follows');
+    expect(hostByTestID(review, 'question-code')).toHaveLength(1);
+    review.unmount();
+
+    const study = await mountWithQuestion(fenceOnly, { neverReviewed: true });
+    const studyQuestion = hostByTestID(study, 'learning-study-question');
+    expect(studyQuestion[0].props.children).toBe('What does this code do?');
+    expect(studyQuestion[0].props.accessibilityLabel).toBe('What does this code do?, code sample follows');
+    expect(hostByTestID(study, 'question-code')).toHaveLength(1);
   });
 
   it('renders an existing AWS question without a fence exactly as before', async () => {
