@@ -272,7 +272,11 @@ const MCQ_CARD = {
 const fresh = (uid: string) => ({ stableUid: uid, stage: 0, nextReviewAt: 0 });
 const learnedDue = (uid: string) => ({ stableUid: uid, stage: 2, lastReviewedAt: FIXED_NOW_MS - 3 * DAY_MS, nextReviewAt: FIXED_NOW_MS - DAY_MS });
 
-function serve(cards: any[], progress: any[], limit: number) {
+const LEARNED_2 = { StableUid: 'old-e', OrderInDeck: 5, Difficulty: 1, Question: 'What is a shard?', Explanation: 'A slice of a stream.', Topic: 'kinesis' };
+
+type RouteNode = { id: string; role: string; title: string; subtitle: string };
+
+function serve(cards: any[], progress: any[], limit: number, nodes?: RouteNode[]) {
   vi.mocked(resolveDeckBySlug).mockResolvedValue({
     Slug: 'csharp',
     Title: 'C# Interview',
@@ -291,7 +295,7 @@ function serve(cards: any[], progress: any[], limit: number) {
     minimumGoal: 1,
     dueCount: 0,
     newCount: limit,
-    nodes: Array.from({ length: limit }, (_, i) => ({ id: `n-${i}`, role: 'core', title: `Node ${i}`, subtitle: '' })),
+    nodes: nodes ?? Array.from({ length: limit }, (_, i) => ({ id: `n-${i}`, role: 'core', title: `Node ${i}`, subtitle: '' })),
     summary: 'C# Interview',
   } as any);
 }
@@ -382,7 +386,8 @@ describe('SessionCardScreen learning step (R22 §6: teach before testing)', () =
   it('Got it sends no rating, no event, no mistake and no reward, and re-queues the card as a check', async () => {
     serve([NEW_A], [fresh('new-a')], 1);
     const { tree, navigation } = await mount();
-    expect(subtitle(tree)).toBe('Card 1 of 1');
+    // The run's length counts the check from the first card (F02 s-correctness-3).
+    expect(subtitle(tree)).toBe('Card 1 of 2');
 
     await press(tree, 'Got it');
 
@@ -404,7 +409,7 @@ describe('SessionCardScreen learning step (R22 §6: teach before testing)', () =
     const seen: string[] = [];
 
     expect(questionShown(tree)).toBe('What is a queue?');
-    expect(subtitle(tree)).toBe('Card 1 of 2');
+    expect(subtitle(tree)).toBe('Card 1 of 4');
     await press(tree, 'Got it');
     // The planner deals the next new card, never the one just studied.
     expect(byTestID(tree, 'learning-study-view')).toHaveLength(1);
@@ -412,7 +417,7 @@ describe('SessionCardScreen learning step (R22 §6: teach before testing)', () =
     expect(pickNextCard).toHaveBeenLastCalledWith(
       expect.objectContaining({ excludeUids: new Set(['new-a']) }),
     );
-    expect(subtitle(tree)).toBe('Card 2 of 3');
+    expect(subtitle(tree)).toBe('Card 2 of 4');
     await press(tree, 'Got it');
     expect(subtitle(tree)).toBe('Card 3 of 4');
 
@@ -575,5 +580,73 @@ describe('SessionCardScreen learning step (R22 §6: teach before testing)', () =
       ['new-a', 'learning_check'],
     ]);
     expect(navigation.replace).toHaveBeenCalledWith('SessionSummary', expect.objectContaining({ sessionDone: 3, sessionLimit: 3 }));
+  });
+
+  // F02 s-correctness-3: the total is the run's real length from the first card — the planned
+  // cards plus one recall check per new Q/A card the planner will deal — not a number that grows
+  // by one at every Got it.
+  it('shows the run length, checks included, from the first card and keeps it', async () => {
+    serve([NEW_A, NEW_B], [fresh('new-a'), fresh('new-b')], 2);
+    const { tree, navigation } = await mount('learn-new');
+    const seen: Array<string | undefined> = [subtitle(tree)];
+    await press(tree, 'Got it');
+    seen.push(subtitle(tree));
+    await press(tree, 'Got it');
+    seen.push(subtitle(tree));
+    await press(tree, 'Reveal answer');
+    await press(tree, 'Remembered');
+    seen.push(subtitle(tree));
+    await press(tree, 'Reveal answer');
+    await press(tree, 'Remembered');
+
+    expect(seen).toEqual(['Card 1 of 4', 'Card 2 of 4', 'Card 3 of 4', 'Card 4 of 4']);
+    expect(navigation.replace).toHaveBeenCalledWith('SessionSummary', expect.objectContaining({ sessionDone: 4, sessionLimit: 4 }));
+  });
+
+  it('counts only the new Q/A cards in a mixed run (a learned card gets no check)', async () => {
+    serve([NEW_A, LEARNED], [fresh('new-a'), learnedDue('old-c')], 2);
+    const { tree } = await mount('mixed');
+    expect(subtitle(tree)).toBe('Card 1 of 3');
+    await press(tree, 'Reveal answer');
+    await press(tree, 'Remembered');
+    expect(subtitle(tree)).toBe('Card 2 of 4');
+    await press(tree, 'Got it');
+    expect(subtitle(tree)).toBe('Card 3 of 3');
+  });
+
+  // F02 s-correctness-2 / s-tests-1: the role badge belongs to the planner slot of an ordinary
+  // card. A study view and its recall check are not the planned elite or boss card, so they carry
+  // no badge, and a study must not leave the badge one card behind.
+  it('keeps the route role badge on its planned card across a study and its check', async () => {
+    serve(
+      [NEW_A, LEARNED, LEARNED_2],
+      [fresh('new-a'), learnedDue('old-c'), learnedDue('old-e')],
+      3,
+      [
+        { id: 'warmup-0', role: 'warmup', title: '', subtitle: '' },
+        { id: 'elite-1', role: 'elite', title: 'Elite recall', subtitle: '' },
+        { id: 'boss-2', role: 'boss', title: 'Boss check', subtitle: '' },
+      ],
+    );
+    const { tree } = await mount('mixed');
+    const steps: string[] = [];
+    const badge = () => texts(tree).find((t) => t === 'Elite recall' || t === 'Boss check') ?? '-';
+    for (let step = 0; step < 4; step += 1) {
+      const study = byTestID(tree, 'learning-study-view').length > 0;
+      steps.push(`${study ? 'study' : 'rate'}:${questionShown(tree)}:${badge()}`);
+      if (study) {
+        await press(tree, 'Got it');
+      } else {
+        await press(tree, 'Reveal answer');
+        await press(tree, 'Remembered');
+      }
+    }
+
+    expect(steps).toEqual([
+      'rate:What is a stream?:-',
+      'rate:What is a shard?:Elite recall',
+      'study:What is a queue?:-',
+      'rate:What is a queue?:-',
+    ]);
   });
 });
