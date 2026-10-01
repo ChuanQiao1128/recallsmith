@@ -755,6 +755,89 @@ describe('SessionCardScreen', () => {
     expect(String(line[0].props.children)).toMatch(/^At this pace, about \d+ cards? comes? due tomorrow\.$/);
   });
 
+  // Y01: a fenced code block inside a Q/A question renders as a CodeBlock on the front face
+  // (before reveal) and again in the question recap after reveal — never as raw backticks.
+  async function mountWithQuestion(question: string) {
+    const card = { StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: question };
+    vi.mocked(resolveDeckBySlug).mockResolvedValue(buildDeck({ Cards: [card] }) as any);
+    vi.mocked(pickNextCard).mockReturnValue({
+      card,
+      progress: { stableUid: '1', stage: 0, nextReviewAt: 0, lastReviewedAt: LEARNED_AT },
+    } as any);
+    const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <SessionCardScreen
+          navigation={navigation}
+          route={{ key: 'session-card', name: 'SessionCard', params: { slug: 'csharp', mode: 'mixed', limit: 1 } } as any}
+        />,
+      );
+    });
+    await flush();
+    return tree;
+  }
+
+  const hostByTestID = (tree: renderer.ReactTestRenderer, id: string) =>
+    tree.root.findAll((node) => typeof node.type === 'string' && node.props?.testID === id);
+  const codeBlocks = (tree: renderer.ReactTestRenderer) =>
+    tree.root.findAll((node) => typeof node.type !== 'string' && typeof node.props?.code === 'string');
+  const anyBackticks = (tree: renderer.ReactTestRenderer) =>
+    tree.root.findAll(
+      (node) => (node.type as any) === 'Text' && typeof node.props.children === 'string' && node.props.children.includes('```'),
+    );
+
+  it('shows the question code block on the front face before reveal and in the recap after', async () => {
+    const tree = await mountWithQuestion(
+      'What does this print?\n```csharp\nvar xs = new[] { 1, 2, 3 };\nforeach (var x in xs)\n    Console.Write(x);\n```',
+    );
+
+    const question = hostByTestID(tree, 'review-question');
+    expect(question).toHaveLength(1);
+    expect(question[0].props.children).toBe('What does this print?');
+    expect(question[0].props.accessibilityLabel).toBe('What does this print?, code sample follows');
+    expect(hostByTestID(tree, 'question-code')).toHaveLength(1);
+    const code = codeBlocks(tree);
+    expect(code).toHaveLength(1);
+    expect(code[0].props.code).toBe('var xs = new[] { 1, 2, 3 };\nforeach (var x in xs)\n    Console.Write(x);');
+    expect(code[0].props.label).toBe('C#');
+    expect(anyBackticks(tree)).toHaveLength(0);
+    // Before reveal: the code sits between the question and the Reveal button.
+    const order = tree.root
+      .findAll(
+        (node) =>
+          typeof node.type === 'string' &&
+          (node.props?.testID === 'review-question' ||
+            node.props?.testID === 'question-code' ||
+            ((node.type as any) === 'Text' && node.props.children === 'Reveal answer')),
+      )
+      .map((node) => node.props.testID ?? 'reveal');
+    expect(order).toEqual(['review-question', 'question-code', 'reveal']);
+
+    await act(async () => {
+      findPressableByLabel(tree, 'Reveal answer').props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(hostByTestID(tree, 'review-question-recap')).toHaveLength(1);
+    expect(hostByTestID(tree, 'review-question')[0].props.children).toBe('What does this print?');
+    expect(hostByTestID(tree, 'question-code')).toHaveLength(1);
+    expect(anyBackticks(tree)).toHaveLength(0);
+  });
+
+  it('renders an existing AWS question without a fence exactly as before', async () => {
+    const aws =
+      'A company stores logs in Amazon S3 and must keep them for 7 years at the LEAST cost. Which storage class meets these requirements?';
+    const tree = await mountWithQuestion(aws);
+
+    const question = hostByTestID(tree, 'review-question');
+    expect(question).toHaveLength(1);
+    expect(question[0].props.children).toBe(aws);
+    expect(question[0].props.accessibilityLabel).toBeUndefined();
+    expect(hostByTestID(tree, 'question-code')).toHaveLength(0);
+    expect(codeBlocks(tree)).toHaveLength(0);
+  });
+
   it('offers Retry and Choose another deck when the deck cannot load', async () => {
     const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
     // First load can't resolve the deck → error state; the retry resolves it.

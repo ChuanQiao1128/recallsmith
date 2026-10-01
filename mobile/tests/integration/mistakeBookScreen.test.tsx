@@ -256,6 +256,26 @@ describe('MistakeBookScreen', () => {
     expect(ec2Row.props.accessibilityLabel).not.toContain('×');
   });
 
+  // Y01: a C# question with a fenced code block shows its prose only in the row and its spoken
+  // label — never raw backticks or the code itself.
+  it('shows the prose only for a question with a fenced code block, in the row and its label', async () => {
+    const dotnet = deck('dotnet', '.NET Interview', [
+      {
+        ...card('async-1', 1, 'async'),
+        Question: 'What does this print?\n```csharp\nawait Task.Delay(1);\n    Console.WriteLine("done");\n```',
+      },
+    ]);
+    vi.mocked(getCachedDeck).mockImplementation((async (slug: string) => (slug === 'dotnet' ? dotnet : null)) as any);
+    seedBook([entry('dotnet', 'async-1', 'async', NOW - 1000)]);
+    const { tree } = await mount();
+
+    const row = byTestID(tree, 'mistake-row-async-1')[0];
+    expect(texts(row)).toEqual(['What does this print?', 'async', 'Wrong ×1', 'Last wrong today']);
+    expect(texts(row).join(' ')).not.toContain('`');
+    expect(row.props.accessibilityLabel).toBe('What does this print?. async. Wrong once, last wrong today');
+    expect(row.props.accessibilityLabel).not.toContain('`');
+  });
+
   it('disables the review button and shows a busy indicator while the run is prepared', async () => {
     seedBook([entry('aws', 's3-1', 's3', NOW - 1000)]);
     let releaseProgress!: (value: never[]) => void;

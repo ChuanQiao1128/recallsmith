@@ -85,7 +85,26 @@ const AWS_DECK = {
   ],
 };
 
-const DECKS: Record<string, any> = { csharp: CSHARP_DECK, aws: AWS_DECK };
+// Y01: a question that carries its code in a fenced block.
+const DOTNET_DECK = {
+  Slug: 'dotnet',
+  Title: '.NET Interview',
+  Locale: 'en-US',
+  Version: '1',
+  DeckType: 1,
+  TotalCards: 1,
+  Cards: [
+    {
+      StableUid: 'dotnet-code',
+      OrderInDeck: 1,
+      Difficulty: 2,
+      Question: 'What does this print?\n```csharp\nvar s = "ab";\n    Console.WriteLine(s.Length);\n```',
+      Explanation: 'Length counts UTF-16 code units.',
+    },
+  ],
+};
+
+const DECKS: Record<string, any> = { csharp: CSHARP_DECK, aws: AWS_DECK, dotnet: DOTNET_DECK };
 
 let ownedFixture: Set<string> | null = null;
 
@@ -97,6 +116,7 @@ vi.mock('../../src/content/deckRepository', () => ({
   listManifestDecks: vi.fn(async () => [
     { slug: 'csharp', title: 'C# Interview', locale: 'en-US', version: '1', deckType: 1, availability: 'live' },
     { slug: 'aws', title: 'AWS', locale: 'en-US', version: '1', deckType: 2, availability: 'live' },
+    { slug: 'dotnet', title: '.NET Interview', locale: 'en-US', version: '1', deckType: 1, availability: 'live' },
   ]),
   resolveDeckBySlug: vi.fn(async (slug: string) => DECKS[slug] ?? null),
 }));
@@ -179,6 +199,30 @@ describe('CardDetailScreen — show answer', () => {
     expect(blob).toContain('REAL USAGE');
     expect(blob).toContain('It disposes the resource at the end of the block.');
     expect(blob).toContain('Hide answer');
+  });
+
+  it('renders a fenced question as prose plus a code block in the question card (Y01)', async () => {
+    const tree = await renderScreen('dotnet-code');
+
+    const card = byTestId(tree, 'card-detail-question')[0];
+    const question = card.findAll((n) => (n.type as any) === 'Text')[0];
+    expect(question.props.children).toBe('What does this print?');
+    expect(question.props.accessibilityLabel).toBe('What does this print?, code sample follows');
+    expect(card.findAll((n) => typeof n.type === 'string' && n.props.testID === 'question-code')).toHaveLength(1);
+    expect(card.findAll((n) => typeof n.type === 'string' && n.props.testID === 'code-block-language')[0].props.children).toBe('C#');
+    expect(textBlob(tree)).toContain('    ');
+    expect(textBlob(tree)).not.toContain('```');
+  });
+
+  it('renders a question without a fence exactly as before (no code block, no label override)', async () => {
+    ownedFixture = new Set(['cs-owned']);
+    const tree = await renderScreen('cs-owned');
+
+    const card = byTestId(tree, 'card-detail-question')[0];
+    const question = card.findAll((n) => (n.type as any) === 'Text')[0];
+    expect(question.props.children).toBe('What does a using statement do?');
+    expect(question.props.accessibilityLabel).toBeUndefined();
+    expect(card.findAll((n) => typeof n.type === 'string' && n.props.testID === 'question-code')).toHaveLength(0);
   });
 
   it('lists the correct options for a multiple-choice card', async () => {

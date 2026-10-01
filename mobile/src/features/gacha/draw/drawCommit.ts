@@ -1,4 +1,5 @@
 import type { CardExport, DeckExport } from '../../../types/deckExport';
+import { questionText } from '../../../content/questionCode';
 import { rarityOfCard } from './cardRarity';
 import {
   appendDrawHistory,
@@ -145,7 +146,8 @@ export async function commitDraw(
     const mcq = resolveMcq(card, flags);
     return {
       stableUid: card.StableUid,
-      question: card.Question,
+      // Prose only: the reveal / grid surfaces never print a fenced code block's backticks (Y01).
+      question: questionText(card.Question),
       difficulty: card.Difficulty,
       rarity: rarityOfCard(card),
       rank: ranks.get(card.StableUid) ?? 0,
