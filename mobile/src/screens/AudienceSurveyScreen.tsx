@@ -15,7 +15,7 @@ import {
   formatExamDate,
   stepExamDate,
   type DatePresetKey,
-} from '../features/goal/goalChoices';
+} from '../features/gacha/audience/goalChoices';
 import { setActiveDeckSlug } from '../content/activeDeck';
 import { completeOnboarding } from '../features/gacha/onboarding/onboardingPrefs';
 import { colors } from '../theme/colors';

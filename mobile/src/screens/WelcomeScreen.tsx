@@ -8,7 +8,7 @@ import type { RootStackParamList } from '../navigation/types';
 import { completeWelcome } from '../features/gacha/onboarding/onboardingPrefs';
 import { colors } from '../theme/colors';
 import { packImageForSlug, packPaletteFromSlug } from '../theme/packArt';
-import { DEFAULT_GOAL_DECK_SLUG } from '../features/goal/goalChoices';
+import { DEFAULT_GOAL_DECK_SLUG } from '../features/gacha/audience/goalChoices';
 
 // Vitest mocks RN without Image — guarded lookup so tests don't crash.
 function readRN<T = any>(key: string, fallback: T): T {

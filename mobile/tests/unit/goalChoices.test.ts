@@ -7,7 +7,7 @@ import {
   examDateForPreset,
   formatExamDate,
   stepExamDate,
-} from '../../src/features/goal/goalChoices';
+} from '../../src/features/gacha/audience/goalChoices';
 
 // 2026-10-02 at 15:00 local time.
 const NOW = new Date(2026, 9, 2, 15, 0, 0).getTime();

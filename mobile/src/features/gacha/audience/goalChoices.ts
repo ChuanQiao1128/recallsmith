@@ -1,4 +1,4 @@
-import { localDayStartMs } from './studyGoal';
+import { localDayStartMs } from '../../goal/studyGoal';
 
 /**
  * R22 contract §3: what a new learner can choose to learn, and the optional exam-date step.

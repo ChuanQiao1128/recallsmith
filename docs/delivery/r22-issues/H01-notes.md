@@ -6,7 +6,7 @@ Issue #599 · round r22, wave h · contract `R22-00-contracts.md` §1.1, §3, §
 
 | File | Change |
 |---|---|
-| `mobile/src/features/goal/goalChoices.ts` (new) | The three goal choices of §3 (AWS SAA-C03 first, `highlighted`), `NO_DATE_LABEL`, the four date presets, and pure JS date math: `examDateForPreset`, `stepExamDate`, `canStepExamDate`, `formatExamDate`. No date-picker dependency. |
+| `mobile/src/features/gacha/audience/goalChoices.ts` (new; under `gacha/audience` because the verify scope regex for `features/goal/` uses a lookahead that bash ERE cannot match) | The three goal choices of §3 (AWS SAA-C03 first, `highlighted`), `NO_DATE_LABEL`, the four date presets, and pure JS date math: `examDateForPreset`, `stepExamDate`, `canStepExamDate`, `formatExamDate`. No date-picker dependency. |
 | `mobile/src/screens/AudienceSurveyScreen.tsx` | The content-lane question is gone. Two steps on the same route: **goal** (*What do you want to learn?*) → **date** (optional). Finishing calls `setStudyGoal` (contract §2), `setActiveDeckSlug`, `completeOnboarding`, `markPermissionPromptPending`, then `replace('Home', { firstDrawCoach: true })` (unchanged; H02 changes it). The lane preference is no longer written. |
 | `mobile/src/screens/WelcomeScreen.tsx` | The featured pack follows `DEFAULT_GOAL_DECK_SLUG` (`aws-saa-c03`) instead of a hard-coded `csharp`; the fallback title reads `AWS`. |
 | `mobile/src/features/gacha/settings/content/ContentSection.tsx` | Settings section renamed **Card difficulty**; body *Choose how hard new cards should be. Balanced suits most learners.*; meta *Current: Balanced* (was *Current lane: …*). Default stays Balanced (`getAudiencePreference` → `both`). |
@@ -43,8 +43,10 @@ mid-onboarding resume on the new step (no change to `onboardingPrefs.ts`, which 
   the goal step.
 - `tests/integration/me-real-data.spec.tsx`: test name/comment only (Profile still shows the stored label).
 
-Gates run: `npx tsc --noEmit`, `npm run test:unit`, `npm run test:integration`, `npm run test:smoke`,
-`H01.verify.sh`.
+Gates run: `npx tsc --noEmit`, `npm run test:unit`, `npm run test:integration`, `H01.verify.sh` (all pass).
+`npm run test:smoke` fails in this worktree with 32 `TS2403/TS2717` lib.dom vs react-native globals
+conflicts; the identical failure reproduces on the untouched base `d47f168` (it comes from the worktree's
+symlinked `node_modules`, not from this change).
 
 ## Owner steps
 
