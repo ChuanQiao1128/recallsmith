@@ -36,7 +36,7 @@ extra node (ReviewBody uses a fragment), no `accessibilityLabel` override.
 - `mobile/src/features/gacha/components/ReviewBody.tsx` — front face + recap.
 - `mobile/src/features/gacha/components/McqReviewBody.tsx` — stem split, code between stem and options.
 - `mobile/src/screens/CardDetailScreen.tsx` — title = prose; question card renders the code block.
-- `mobile/src/screens/MistakeBookScreen.tsx` — row text and `mistakeRowLabel` get the prose.
+- `mobile/src/screens/MistakeBookScreen.tsx` — row text and `mistakeRowLabel` get the prose (`splitQuestionCode(card.Question).text`).
 - `mobile/src/features/gacha/draw/drawCommit.ts` — `DrawnCardVm.question` is the prose (DrawResult grid, featured card, RevealCardFace, TapCard, DrawSummaryGrid read it).
 - `mobile/src/features/gacha/library/libraryMapper.ts` — library row `question` is the prose.
 
@@ -84,3 +84,5 @@ inside `Question` (opening line with a language word, closing line on its own).
 - Pre-existing on the base (`delivery/r22y-y`, before any Y01 change):
   `tests/integration/session-card-starter.screen.test.tsx` > "teaches the first 5 non-MCQ cards…" fails
   (cannot find "Reveal answer"). Unrelated to Y01; left for the owner of that flow.
+- Pre-existing on the base too: `npm run test:smoke` stops on 32 TypeScript errors inside `node_modules`
+  (react-native `globals.d.ts` against `lib.dom.d.ts`) in this worktree setup; Y01 changes nothing there.
