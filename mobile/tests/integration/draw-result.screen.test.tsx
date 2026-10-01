@@ -332,7 +332,9 @@ describe('DrawResultScreen v9', () => {
     expect(navigate).toHaveBeenCalledWith('Home', undefined, { pop: true });
   });
 
-  it('routes the first Done into PermissionPrompt once when the onboarding flag is pending', async () => {
+  // R22 §4: the flag is armed when the starter lesson completes (not at onboarding); the first Done
+  // after the first pack still consumes it.
+  it('routes the first Done into PermissionPrompt once when the starter lesson armed the prompt', async () => {
     permissionPromptPendingFixture = true;
     const navigate = vi.fn();
 
