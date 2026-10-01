@@ -46,6 +46,8 @@ import { useFeatureFlags } from '../config/featureFlags';
 import { useSessionStore } from '../features/gacha/session/sessionStore';
 import { isStarterLessonOpen, resolveStarterSlug } from '../features/gacha/starter/starterGate';
 import { STARTER_COPY } from '../features/gacha/starter/starterCopy';
+import { buildExamCountdownLabel } from '../features/gacha/home/examCountdown';
+import { getStudyGoal } from '../features/goal/studyGoal';
 import { colors } from '../theme/colors';
 import { spacing } from '../theme/spacing';
 import { typography } from '../theme/typography';
@@ -169,6 +171,21 @@ export function HomeScreen({ navigation, route }: Props) {
         cancelled = true;
       };
     }, [openStarterLesson]),
+  );
+  // R22 §2/§5: the study goal's exam date, read on every focus so a date set in onboarding or
+  // Settings shows up on return. Null (the default for most learners) shows nothing about exams.
+  const [examDate, setExamDate] = useState<string | null>(null);
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      void getStudyGoal().then((goal) => {
+        if (cancelled || !isMountedRef.current) return;
+        setExamDate(goal?.examDate ?? null);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }, []),
   );
   // ─── One-shot notice toast ─────────────────────────────────────────
   // Set by PermissionPrompt when the user denied/skipped notifications.
@@ -575,6 +592,22 @@ export function HomeScreen({ navigation, route }: Props) {
     : homeState.vm.cta.label;
   const primaryCtaTestID = starterSlug ? 'home-starter-cta' : homeState.vm.cta.testID;
   const totalDueAcrossDecks = homeState.vm.counts.totalDueAllDecks;
+  const examCountdownLabel = buildExamCountdownLabel(examDate, Date.now());
+  // The header line is context, never a second instruction: the hero below carries the one
+  // instruction (R22 §1.6). It shows the exam countdown when a date is set; otherwise a status
+  // that agrees with the hero. While the starter lesson is open the hero already says it all.
+  const headerStatus = starterSlug
+    ? null
+    : totalDueAcrossDecks > 0
+      ? `${totalDueAcrossDecks} cards waiting today`
+      : homeState.vm.draw.state === 'available' || homeState.vm.draw.state === 'reserve'
+        ? 'A reward draw is ready'
+        : selectedDeckRow?.deck.canStudy &&
+            selectedDeckRow.deck.dueToday === 0 &&
+            selectedDeckRow.deck.newToday === 0 &&
+            homeState.vm.draw.state === 'locked'
+          ? 'Caught up'
+          : 'All caught up for now';
   // Only show the full-screen spinner on the FIRST load. Subsequent refreshes
   // (after navigating away + returning) keep the previous UI rendered so the
   // user doesn't see a jarring blank → fade → blank flash. A small inline
@@ -623,30 +656,23 @@ export function HomeScreen({ navigation, route }: Props) {
               </View>
             ) : null}
 
-            {/* Header — title + functional status subtitle (not marketing).
-                The subtitle reflects what's actually waiting today, so the
-                top of the page already answers "what should I do?". */}
+            {/* Header — title + one context line (not marketing, not an
+                instruction): the exam countdown when a date is set,
+                otherwise a status that agrees with the hero. */}
             <View style={styles.headerRow}>
               <View style={styles.headerTextWrap}>
                 <Text style={styles.title} numberOfLines={1}>
                   DeveloperCards
                 </Text>
-                <Text style={styles.headerStatusSubtitle} numberOfLines={1}>
-                  {starterSlug
-                    ? STARTER_COPY.headline
-                    : totalDueAcrossDecks > 0
-                    ? `${totalDueAcrossDecks} cards waiting today`
-                    : homeState.vm.draw.state === 'available' || homeState.vm.draw.state === 'reserve'
-                      ? 'A reward draw is ready'
-                      : firstDrawCoach
-                        ? 'Tap your pack to begin'
-                        : selectedDeckRow?.deck.canStudy &&
-                            selectedDeckRow.deck.dueToday === 0 &&
-                            selectedDeckRow.deck.newToday === 0 &&
-                            homeState.vm.draw.state === 'locked'
-                          ? 'Caught up'
-                          : 'All caught up for now'}
-                </Text>
+                {examCountdownLabel ? (
+                  <Text testID="home-exam-countdown" style={styles.headerStatusSubtitle} numberOfLines={1}>
+                    {examCountdownLabel}
+                  </Text>
+                ) : headerStatus ? (
+                  <Text testID="home-header-subtitle" style={styles.headerStatusSubtitle} numberOfLines={1}>
+                    {headerStatus}
+                  </Text>
+                ) : null}
               </View>
               <Pressable
                 accessibilityRole="button"
@@ -853,13 +879,49 @@ export function HomeScreen({ navigation, route }: Props) {
                     </Pressable>
 
                     {/* Action-driven title — never duplicates the pack
-                        name. "12 cards waiting" beats "C#" every time. */}
-                    <Text style={styles.heroTitle} numberOfLines={1}>
+                        name. "12 cards waiting" beats "C#" every time.
+                        R22 §5: two lines, shrinking rather than cutting off. */}
+                    <Text
+                      testID="home-hero-title"
+                      style={styles.heroTitle}
+                      numberOfLines={2}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.75}
+                    >
                       {heroTitle}
                     </Text>
                   </View>
 
-                  {/* ─── ACTION GROUP — pressure + CTA + draw status ──── */}
+                  {/* ─── PRIMARY CTA — directly under the hero so it is on
+                      the first screen of a 6.1-inch phone (R22 §1.6). ──── */}
+                  <View testID="screen-home-primary-cta">
+                    <Pressable
+                      testID={primaryCtaTestID}
+                      accessibilityRole="button"
+                      style={({ pressed }) => [
+                        styles.primaryCta,
+                        primaryCtaDisabled && styles.primaryCtaDisabled,
+                        pressed && styles.pressed,
+                      ]}
+                      disabled={primaryCtaDisabled}
+                      onPress={() => {
+                        void handlePrimaryCta();
+                      }}
+                    >
+                      <Text style={styles.primaryCtaText} numberOfLines={1}>
+                        {primaryCtaLabel}
+                      </Text>
+                    </Pressable>
+                  </View>
+                  <Text
+                    testID="home-draw-status-badge"
+                    style={styles.rewardStatusText}
+                    numberOfLines={1}
+                  >
+                    {homeState.vm.draw.label}
+                  </Text>
+
+                  {/* ─── TODAY GROUP — pressure card + update notice + goal ──── */}
                   <View style={styles.actionGroup}>
                     <TodayPressureCard
                       counts={homeState.vm.counts}
@@ -883,35 +945,9 @@ export function HomeScreen({ navigation, route }: Props) {
                     ) : null}
                     {homeState.vm.goal ? (
                       <Text testID="home-goal-line" style={styles.goalLine} numberOfLines={1}>
-                        {`${homeState.vm.goal.minimum} · ${homeState.vm.goal.fullClear}`}
+                        {homeState.vm.goal.text}
                       </Text>
                     ) : null}
-                    <View testID="screen-home-primary-cta">
-                      <Pressable
-                        testID={primaryCtaTestID}
-                        accessibilityRole="button"
-                        style={({ pressed }) => [
-                          styles.primaryCta,
-                          primaryCtaDisabled && styles.primaryCtaDisabled,
-                          pressed && styles.pressed,
-                        ]}
-                        disabled={primaryCtaDisabled}
-                        onPress={() => {
-                          void handlePrimaryCta();
-                        }}
-                      >
-                        <Text style={styles.primaryCtaText} numberOfLines={1}>
-                          {primaryCtaLabel}
-                        </Text>
-                      </Pressable>
-                    </View>
-                    <Text
-                      testID="home-draw-status-badge"
-                      style={styles.rewardStatusText}
-                      numberOfLines={1}
-                    >
-                      {homeState.vm.draw.label}
-                    </Text>
                     {homeState.error ? (
                       <View style={styles.errorBlock}>
                         <Text style={styles.errorText} numberOfLines={3}>
@@ -1246,8 +1282,9 @@ const styles = StyleSheet.create({
   },
   // ─── ACTION GROUP — pressure + CTA + draw status ────────────────────
   // Wider top margin from heroBand → makes hero clearly the visual lead.
+  // Today card group, now under the CTA and draw status line.
   actionGroup: {
-    marginTop: spacing.sm,
+    marginTop: spacing.md,
   },
   goalLine: {
     marginBottom: spacing.xs,
