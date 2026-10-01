@@ -317,7 +317,7 @@ function questionShown(tree: renderer.ReactTestRenderer): string | null {
 }
 
 function subtitle(tree: renderer.ReactTestRenderer): string | undefined {
-  return texts(tree).find((t) => /^Run \d+\/\d+/.test(t));
+  return texts(tree).find((t) => /^Card \d+ of \d+$/.test(t));
 }
 
 async function storedMistakes(): Promise<Record<string, unknown>> {
@@ -382,7 +382,7 @@ describe('SessionCardScreen learning step (R22 §6: teach before testing)', () =
   it('Got it sends no rating, no event, no mistake and no reward, and re-queues the card as a check', async () => {
     serve([NEW_A], [fresh('new-a')], 1);
     const { tree, navigation } = await mount();
-    expect(subtitle(tree)).toBe('Run 0/1 · Mixed');
+    expect(subtitle(tree)).toBe('Card 1 of 1');
 
     await press(tree, 'Got it');
 
@@ -395,7 +395,7 @@ describe('SessionCardScreen learning step (R22 §6: teach before testing)', () =
     expect(byTestID(tree, 'learning-study-view')).toHaveLength(0);
     expect(questionShown(tree)).toBe('What is a queue?');
     expect(pressables(tree, 'Reveal answer')).toHaveLength(1);
-    expect(subtitle(tree)).toBe('Run 1/2 · Mixed');
+    expect(subtitle(tree)).toBe('Card 2 of 2');
   });
 
   it('deals the checks at the end of the run, in study order, and counts them in the run', async () => {
@@ -404,7 +404,7 @@ describe('SessionCardScreen learning step (R22 §6: teach before testing)', () =
     const seen: string[] = [];
 
     expect(questionShown(tree)).toBe('What is a queue?');
-    expect(subtitle(tree)).toBe('Run 0/2 · Learn');
+    expect(subtitle(tree)).toBe('Card 1 of 2');
     await press(tree, 'Got it');
     // The planner deals the next new card, never the one just studied.
     expect(byTestID(tree, 'learning-study-view')).toHaveLength(1);
@@ -412,9 +412,9 @@ describe('SessionCardScreen learning step (R22 §6: teach before testing)', () =
     expect(pickNextCard).toHaveBeenLastCalledWith(
       expect.objectContaining({ excludeUids: new Set(['new-a']) }),
     );
-    expect(subtitle(tree)).toBe('Run 1/3 · Learn');
+    expect(subtitle(tree)).toBe('Card 2 of 3');
     await press(tree, 'Got it');
-    expect(subtitle(tree)).toBe('Run 2/4 · Learn');
+    expect(subtitle(tree)).toBe('Card 3 of 4');
 
     for (const answer of ['Remembered', 'Forgot']) {
       seen.push(questionShown(tree) ?? '');

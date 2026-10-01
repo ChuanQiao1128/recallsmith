@@ -177,7 +177,7 @@ vi.mock('../../src/features/gacha/planner/sessionPlanner', () => ({
     minimumGoal: 1,
     dueCount: 0,
     newCount: 1,
-    nodes: [{ id: 'warmup-0', role: 'warmup', title: 'Warm-up node', subtitle: 'Start.' }],
+    nodes: [{ id: 'warmup-0', role: 'warmup', title: '', subtitle: 'Start.' }],
     summary: 'C# Interview',
   })),
 }));
@@ -395,7 +395,7 @@ describe('Mistake Book loop across SessionCard and the real store', () => {
       minimumGoal: 1,
       dueCount: 1,
       newCount: 0,
-      nodes: [{ id: 'warmup-0', role: 'warmup', title: 'Warm-up node', subtitle: 'Start.' }],
+      nodes: [{ id: 'warmup-0', role: 'warmup', title: '', subtitle: 'Start.' }],
       summary: 'C# Interview',
     } as any);
     vi.mocked(pickNextCard).mockReturnValue({ card: CARDS[0], progress: LEARNED('c1') } as any);

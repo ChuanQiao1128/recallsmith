@@ -151,7 +151,7 @@ vi.mock('../../src/features/gacha/session/sessionReviewHelpers', () => ({
     prevLearnedCount: 0,
     remainingDueCount: 0,
   })),
-  buildSessionProgressVM: vi.fn(() => ({ title: 'Session progress', subtitle: 'Run 0/1 · Mixed', progressText: '0 / 1', hint: '0 due', percent: 0, currentRoleLabel: 'Warm-up node' })),
+  buildSessionProgressVM: vi.fn(() => ({ title: 'Session progress', subtitle: 'Card 1 of 1', progressText: '0 / 1', hint: '0 due', percent: 0, currentRoleLabel: null })),
   modeLabel: vi.fn(() => 'Mixed'),
 }));
 
@@ -181,7 +181,7 @@ vi.mock('../../src/features/gacha/planner/sessionPlanner', () => ({
     minimumGoal: 1,
     dueCount: 0,
     newCount: 1,
-    nodes: [{ id: 'warmup-0', role: 'warmup', title: 'Warm-up node', subtitle: 'Start.' }],
+    nodes: [{ id: 'warmup-0', role: 'warmup', title: '', subtitle: 'Start.' }],
     summary: 'C# Interview',
   })),
 }));
@@ -294,7 +294,7 @@ describe('SessionCardScreen — report entry point', () => {
       minimumGoal: 1,
       dueCount: 0,
       newCount: 1,
-      nodes: [{ id: 'warmup-0', role: 'warmup', title: 'Warm-up node', subtitle: 'Start.' }],
+      nodes: [{ id: 'warmup-0', role: 'warmup', title: '', subtitle: 'Start.' }],
       summary: 'C# Interview',
     } as any);
     errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});

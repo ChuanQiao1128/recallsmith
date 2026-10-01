@@ -2,10 +2,12 @@ import { SESSION_MAIN_ROUTE_DEFAULT, SESSION_MIN_GOAL, SWEEP_SPREAD_DAYS } from 
 import type { ChallengeRoute, RoutePreviewNode } from '../contracts';
 import { resolveRouteRole } from './sessionRoles';
 
+// R22 §5: titles are learner-visible (the session header badge), so the plain
+// first and normal cards carry no title and no route word says "node".
 function describeNode(role: RoutePreviewNode['role']) {
   if (role === 'warmup') {
     return {
-      title: 'Warm-up node',
+      title: '',
       subtitle: 'Open with one low-friction recall win and settle into the run.',
     };
   }
@@ -20,12 +22,12 @@ function describeNode(role: RoutePreviewNode['role']) {
   if (role === 'boss') {
     return {
       title: 'Boss check',
-      subtitle: 'Use the final node as a clean closing test, not a punishment wall.',
+      subtitle: 'Use the final card as a clean closing test, not a punishment wall.',
     };
   }
 
   return {
-    title: 'Normal node',
+    title: '',
     subtitle: 'A standard learning / recall step that keeps the route moving.',
   };
 }
@@ -76,7 +78,7 @@ export function buildChallengeRoute(params: {
   const summary = !hasPlayableCards
     ? `${deckTitle} has no cards yet — open a pack to get your first cards.`
     : hasTodayWork
-      ? `${deckTitle} · ${dueCount} due · ${newCount} fresh · clear ${SESSION_MIN_GOAL} node to keep momentum`
+      ? `${deckTitle} · ${dueCount} due · ${newCount} fresh · clear ${SESSION_MIN_GOAL} card${SESSION_MIN_GOAL === 1 ? '' : 's'} to keep momentum`
       : `${deckTitle} is light today — treat this as a short maintenance run, not a backlog day.`;
 
   return {

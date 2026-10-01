@@ -320,12 +320,13 @@ describe('ownership gate — every entry point', () => {
       // planChallengeRoute call, and it has to agree: ungated this deck plans a
       // three-card route and then the screen has no card to put in it. Gated,
       // the planner sees 0 owned and answers an empty route, and the screen
-      // shows the draw instead of "Route complete" over "Run 0/1" (which is
+      // shows the draw instead of "Route complete" over "Run 0/1", now "Card 1 of 1" (which is
       // what this test used to pin -- the phantom run itself).
       expect(blob).toContain('No cards yet');
       expect(blob).toContain('Open a pack to get your first cards');
       expect(blob).not.toContain('Route complete');
       expect(blob).not.toContain('Run 0/1');
+      expect(blob).not.toContain('Card 1 of 1');
       expect(blob).not.toContain('Stranger question');
     });
 
