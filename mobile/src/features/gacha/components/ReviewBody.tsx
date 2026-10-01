@@ -1,10 +1,12 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { stripInlineCode } from '../../../content/inlineCode';
 import { questionA11yLabel, splitQuestionCode } from '../../../content/questionCode';
 import type { CardExport } from '../../../types/deckExport';
 import { formatRank } from '../library/libraryMapper';
 import { CardAnswerSections, friendlyCodeLanguage } from './CardAnswerSections';
+import { InlineCodeText } from './InlineCodeText';
 import { QuestionCodeBlock } from '../session/QuestionCodeBlock';
 import { colors } from '../../../theme/colors';
 import { spacing } from '../../../theme/spacing';
@@ -62,7 +64,9 @@ export const ReviewBody = React.memo(function ReviewBody(props: ReviewBodyProps)
   // the prose, on both faces — never as raw backticks. No fence → code is null
   // and the question renders exactly as before.
   const question = React.useMemo(() => splitQuestionCode(card.Question), [card.Question]);
-  const questionLabel = question.code ? questionA11yLabel(question) : undefined;
+  // Z01: inline `code` spans in the prose render in monospace; the spoken label
+  // never carries backticks.
+  const questionLabel = question.code ? stripInlineCode(questionA11yLabel(question)) : undefined;
 
   return (
     <View style={styles.card}>
@@ -86,9 +90,12 @@ export const ReviewBody = React.memo(function ReviewBody(props: ReviewBodyProps)
           the answer after reveal. The outer ScrollView handles overflow. */}
       {!faceUp ? (
         <>
-          <Text style={styles.question} testID="review-question" accessibilityLabel={questionLabel}>
-            {question.text}
-          </Text>
+          <InlineCodeText
+            style={styles.question}
+            testID="review-question"
+            accessibilityLabel={questionLabel}
+            text={question.text}
+          />
           {question.code ? <QuestionCodeBlock code={question.code} /> : null}
         </>
       ) : (
@@ -96,9 +103,12 @@ export const ReviewBody = React.memo(function ReviewBody(props: ReviewBodyProps)
           <Text style={styles.questionCaption} numberOfLines={1}>
             QUESTION
           </Text>
-          <Text style={styles.questionRecapText} testID="review-question" accessibilityLabel={questionLabel}>
-            {question.text}
-          </Text>
+          <InlineCodeText
+            style={styles.questionRecapText}
+            testID="review-question"
+            accessibilityLabel={questionLabel}
+            text={question.text}
+          />
           {question.code ? <QuestionCodeBlock code={question.code} /> : null}
         </View>
       )}

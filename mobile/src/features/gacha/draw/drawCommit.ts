@@ -1,5 +1,6 @@
 import type { CardExport, DeckExport } from '../../../types/deckExport';
 import { questionText } from '../../../content/questionCode';
+import { stripInlineCode } from '../../../content/inlineCode';
 import { rarityOfCard } from './cardRarity';
 import {
   appendDrawHistory,
@@ -146,8 +147,9 @@ export async function commitDraw(
     const mcq = resolveMcq(card, flags);
     return {
       stableUid: card.StableUid,
-      // Prose only: the reveal / grid surfaces never print a fenced code block's backticks (Y01).
-      question: questionText(card.Question),
+      // Prose only: the reveal / grid surfaces never print a fenced code block's backticks (Y01)
+      // or an inline code span's (Z01).
+      question: stripInlineCode(questionText(card.Question)),
       difficulty: card.Difficulty,
       rarity: rarityOfCard(card),
       rank: ranks.get(card.StableUid) ?? 0,
