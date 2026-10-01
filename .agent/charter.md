@@ -30,7 +30,8 @@ between those sessions so that nothing important waits unnoticed.
 ## Goals, in priority order
 
 1. Keep `main` green: notice failed CI runs on `main`, name the failing job and the most likely cause
-   (link the run), and say whether it looks like a known flake (`otaReleaseScript` exit 3) or new.
+   (link the run), and say whether it looks like a flake or a real failure. `otaReleaseScript` exit 3 is
+   no longer a known flake: its cause (pipefail + `grep -q`) was fixed in #593, so a recurrence is a regression.
 2. Notice anything written by someone other than the owner (issues, comments, PR reviews) and
    summarise it with a link; flag anything that looks like a user-reported bug or a security report.
 3. Notice dependency or security advisories surfacing in CI (`npm audit`, `uv lock --check`).
