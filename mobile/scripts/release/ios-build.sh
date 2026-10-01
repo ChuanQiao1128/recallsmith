@@ -30,8 +30,10 @@ eas whoami >/dev/null 2>&1 || { echo "eas not logged in (eas login)" >&2; exit 2
 if [ "$PROFILE" = production ]; then
   NAMES=$(eas env:list --environment production --format short --non-interactive 2>/dev/null | tr -d '\033' | sed -E 's/\[[0-9;]*m//g' | sed -nE 's/^[[:space:]]*([A-Z][A-Z0-9_]*)=.*/\1/p' | sort -u || true)
   MISSING=()
+# No `printf | grep -q` here: under pipefail, grep -q exits on its first match while bash 5 is still
+# writing later lines (one write per line), printf dies of SIGPIPE and the name is wrongly reported missing.
   for name in EXPO_PUBLIC_SENTRY_DSN SENTRY_AUTH_TOKEN; do
-    printf '%s\n' "$NAMES" | grep -qx "$name" || MISSING+=("$name")
+    grep -qx -- "$name" <<<"$NAMES" || MISSING+=("$name")
   done
   if [ "${#MISSING[@]}" -gt 0 ]; then
     echo "ios-build: missing name(s) in the EAS production environment: ${MISSING[*]} (eas env:create --environment production)" >&2

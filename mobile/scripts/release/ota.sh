@@ -34,8 +34,10 @@ eas whoami >/dev/null 2>&1 || { echo "eas not logged in (eas login)" >&2; exit 2
 # Names only — never echo eas env:list output or the lines $NAMES came from.
 NAMES=$(eas env:list --environment production --format short --non-interactive 2>/dev/null | grep -oE 'EXPO_PUBLIC_[A-Z0-9_]+' | sort -u || true)
 MISSING=()
+# No `printf | grep -q` here: under pipefail, grep -q exits on its first match while bash 5 is still
+# writing later lines (one write per line), printf dies of SIGPIPE and the name is wrongly reported missing.
 for name in "${REQUIRED_NAMES[@]}"; do
-  printf '%s\n' "$NAMES" | grep -qx "$name" || MISSING+=("$name")
+  grep -qx -- "$name" <<<"$NAMES" || MISSING+=("$name")
 done
 if [ "${#MISSING[@]}" -gt 0 ]; then
   echo "ota: missing EXPO_PUBLIC name(s) in the EAS production environment: ${MISSING[*]}" >&2
