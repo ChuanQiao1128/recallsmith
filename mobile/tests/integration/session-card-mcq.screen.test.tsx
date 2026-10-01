@@ -747,6 +747,46 @@ describe('SessionCardScreen MCQ branch', () => {
     expect(recordReviewEvent).toHaveBeenCalledWith(expect.objectContaining({ rating: 'easy' }));
   });
 
+  it('reads the study goal and previews and saves with the exam-capped day (R22 §7)', async () => {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const today = new Date(FIXED_NOW_MS);
+    const exam = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 5);
+    const examDate = `${exam.getFullYear()}-${pad(exam.getMonth() + 1)}-${pad(exam.getDate())}`;
+    const capMs = new Date(exam.getFullYear(), exam.getMonth(), exam.getDate() - 1).getTime();
+    store.set('recallsmith:study-goal:v1', JSON.stringify({ deckSlug: 'csharp', examDate }));
+    serve(CARD_1, REPEAT_PROGRESS(CARD_1.StableUid));
+    const { tree } = await mount();
+
+    await press(tree, 'mcq-show-options');
+    await press(tree, 'mcq-option-a');
+    await press(tree, 'mcq-option-b');
+    vi.setSystemTime(FIXED_NOW_MS + 3_000);
+    await press(tree, 'mcq-submit-sure');
+
+    // Uncapped, a Good from stage 2 is 8 days; the exam pulls it to the start of the day before.
+    const days = Math.round((capMs - (FIXED_NOW_MS + 3_000)) / 86_400_000);
+    expect(days).toBeLessThan(8);
+    expect(idText(tree, 'mcq-schedule-line')).toBe(`Scheduled as Good · back in ${days} day${days === 1 ? '' : 's'}`);
+
+    await press(tree, 'mcq-next');
+    expect(buildRatedSessionState).toHaveBeenCalledWith(expect.objectContaining({ rating: 'good', examDate }));
+  });
+
+  it('saves with no exam cap when there is no study goal', async () => {
+    serve(CARD_1, REPEAT_PROGRESS(CARD_1.StableUid));
+    const { tree } = await mount();
+
+    await press(tree, 'mcq-show-options');
+    await press(tree, 'mcq-option-a');
+    await press(tree, 'mcq-option-b');
+    vi.setSystemTime(FIXED_NOW_MS + 3_000);
+    await press(tree, 'mcq-submit-sure');
+    expect(idText(tree, 'mcq-schedule-line')).toBe('Scheduled as Good · back in 8 days');
+
+    await press(tree, 'mcq-next');
+    expect(buildRatedSessionState).toHaveBeenCalledWith(expect.objectContaining({ rating: 'good', examDate: null }));
+  });
+
   it('re-deals an again card with a new order and the redeal banner', async () => {
     vi.mocked(planChallengeRoute).mockReturnValue(
       buildChallengeRoute({

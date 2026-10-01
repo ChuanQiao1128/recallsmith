@@ -71,6 +71,7 @@ import { SessionReportButton } from '../features/cardReport/SessionReportButton'
 import { loadExpoHaptics } from '../components/ceremonyHaptics';
 import { getFeedbackPrefsSync } from '../features/gacha/settings/feedbackPrefs';
 import { getStudyPrefsSync, loadStudyPrefs } from '../features/gacha/study/studyPrefs';
+import { getStudyGoal } from '../features/goal/studyGoal';
 import { studyHaptic } from '../features/gacha/session/studyHaptics';
 import type { McqExport, McqOption } from '../types/deckExport';
 import { mcqRequiredCount, resolveMcq } from '../features/gacha/mcq/normalizeMcq';
@@ -288,6 +289,8 @@ export function SessionCardScreen({ navigation, route }: Props) {
   const studiedUidsRef = useRef<Set<string>>(new Set());
   const pendingChecksRef = useRef<CurrentCardLike[]>([]);
   const checksDoneRef = useRef(0);
+  // R22 §7: the study goal's exam date, read once per session; every rating and preview is capped by it.
+  const examDateRef = useRef<string | null>(null);
   const sessionId = useSessionStore((state) => state.sessionId);
   const sessionRoute = useSessionStore((state) => state.route);
   const sessionRouteIndex = useSessionStore((state) => state.currentIndex);
@@ -443,6 +446,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
         studiedUidsRef.current = new Set();
         pendingChecksRef.current = [];
         checksDoneRef.current = 0;
+        examDateRef.current = null;
         setLearningCheckSlots(0);
         setLearningPhase(null);
         setLoadForecast(null);
@@ -568,6 +572,9 @@ export function SessionCardScreen({ navigation, route }: Props) {
           }
           const stats = await loadOrInitDailyStats(deckForStudy, nextProgress);
           if (cancelled) return;
+          const goal = await getStudyGoal();
+          if (cancelled) return;
+          examDateRef.current = goal?.examDate ?? null;
           const plannedChallenge = planChallengeRoute({
             deck: deckForStudy,
             progress: nextProgress,
@@ -734,6 +741,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
         // A focus run deals cards that are not due; those get no scheduler credit (mobile-12).
         focusRun: focusIndex !== null,
         excludeUids: studiedUidsRef.current,
+        examDate: examDateRef.current,
       });
       // Focus run: serve the next focus card in order instead of the planner's pick.
       if (focusIndex) focusRatedUidsRef.current.add(current.card.StableUid);
@@ -937,6 +945,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
       mappedRating,
       new Date(),
       focusIndexRef.current ? scheduleFocusReview : undefined,
+      examDateRef.current,
     ).line;
     setMcqState((prev) => ({ ...prev, stage: 'verdict', picks, confidence, changedPick, verdict, mappedRating, scheduleLine }));
     setShowAnswer(true);
