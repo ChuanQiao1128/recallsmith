@@ -435,3 +435,71 @@ describe('sessionRewards', () => {
     );
   });
 });
+
+// R22 §4: the starter lesson's cards are learned before anything is drawn, and they pay no R1 pull --
+// the lesson's reward is the pack's 3-pull bootstrap, granted when the lesson completes.
+describe('sessionRewards — starter lesson', () => {
+  const STAGE_KEY = 'recallsmith:onboarding:stage:v1';
+  const LESSON_KEY = 'recallsmith:starter-lesson:v1';
+
+  beforeEach(() => {
+    store.clear();
+    setItemCalls.length = 0;
+    throwOnGet = null;
+    failSetItemFor = null;
+    setActiveUserSubForStorage(null);
+  });
+
+  function openLesson(uids: string[], slug = 'csharp') {
+    store.set(STAGE_KEY, 'starter');
+    store.set(LESSON_KEY, JSON.stringify({ slug, uids }));
+  }
+
+  function rate(stableUid: string, rating: ReviewRating = 'good') {
+    return settleRatingReward({
+      slug: 'csharp',
+      stableUid,
+      rating,
+      progressBefore: [],
+      newCardEligible: true,
+      dueBefore: 0,
+      remainingDueCount: 0,
+      now: new Date(2026, 9, 2, 10),
+    });
+  }
+
+  it('pays no R1 pull for a starter card, but stamps it so it counts as learned today', async () => {
+    openLesson(['s1', 's2']);
+    const step = await rate('s1');
+    expect(step.newCardPaid).toBe(false);
+    expect(step.pulls).toBe(0);
+    expect(step.newCardsLearnedToday).toBe(1);
+    expect(totalPulls(await loadDeckWallet('csharp'))).toBe(0);
+    expect(Object.keys((await readNewCardLedger('csharp')).ledger)).toEqual(['s1']);
+  });
+
+  it('a starter card rated again, then passed after the lesson closed, never pays R1', async () => {
+    openLesson(['s1']);
+    await rate('s1', 'again');
+    store.set(STAGE_KEY, 'done');
+    store.delete(LESSON_KEY);
+    const later = await rate('s1', 'good');
+    expect(later.newCardPaid).toBe(false);
+    expect(totalPulls(await loadDeckWallet('csharp'))).toBe(0);
+  });
+
+  it('still pays R1 for a card outside the lesson, and on another deck', async () => {
+    openLesson(['s1']);
+    expect((await rate('c9')).newCardPaid).toBe(true);
+    openLesson(['s1'], 'aws');
+    expect((await rate('s1')).newCardPaid).toBe(true);
+  });
+
+  it('existing users (stage done) are paid exactly as before, even for a recorded lesson card', async () => {
+    store.set(STAGE_KEY, 'done');
+    store.set(LESSON_KEY, JSON.stringify({ slug: 'csharp', uids: ['s1'] }));
+    const step = await rate('s1');
+    expect(step.newCardPaid).toBe(true);
+    expect(step.pulls).toBe(1);
+  });
+});

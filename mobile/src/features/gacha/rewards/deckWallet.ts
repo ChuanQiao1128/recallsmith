@@ -12,6 +12,8 @@ import {
   type RewardWalletState,
 } from './rewardWallet';
 import { countPaidEntriesBySlug } from './newCardLedger';
+import { isStarterLessonOpen } from '../starter/starterGate';
+import { isLearnedProgress } from '../selectors/progressSelectors';
 
 // Release 1.7, owner option A: pulls belong to the pack that earned them, and a
 // pull earned in a pack can only open that pack. This module is that per-pack
@@ -33,6 +35,9 @@ export type DeckWalletsRecord = {
   migratedAtMs: number | null;
   decks: Record<string, RewardWalletState>;
   bootstrappedAtMs: Record<string, number>;
+  /** Packs re-bootstrapped once after a content replacement left every owned card outside the
+   *  deck (ensureDeckBootstrap). Absent on records that never needed it. */
+  rebootstrappedAtMs?: Record<string, number>;
 };
 
 function emptyRecord(): DeckWalletsRecord {
@@ -86,16 +91,27 @@ function parseRecord(raw: string | null): DeckWalletsRecord {
     }
   }
 
-  const bootstrappedAtMs: Record<string, number> = {};
-  if (rec.bootstrappedAtMs != null && typeof rec.bootstrappedAtMs === 'object' && !Array.isArray(rec.bootstrappedAtMs)) {
-    for (const [slug, ms] of Object.entries(rec.bootstrappedAtMs as Record<string, unknown>)) {
+  const bootstrappedAtMs = parseMarks(rec.bootstrappedAtMs);
+  const rebootstrappedAtMs = parseMarks(rec.rebootstrappedAtMs);
+
+  return {
+    migratedAtMs,
+    decks,
+    bootstrappedAtMs,
+    ...(Object.keys(rebootstrappedAtMs).length > 0 ? { rebootstrappedAtMs } : {}),
+  };
+}
+
+function parseMarks(raw: unknown): Record<string, number> {
+  const marks: Record<string, number> = {};
+  if (raw != null && typeof raw === 'object' && !Array.isArray(raw)) {
+    for (const [slug, ms] of Object.entries(raw as Record<string, unknown>)) {
       if (!slug) continue;
       const n = Number(ms);
-      if (Number.isFinite(n) && n >= 0) bootstrappedAtMs[slug] = Math.floor(n);
+      if (Number.isFinite(n) && n >= 0) marks[slug] = Math.floor(n);
     }
   }
-
-  return { migratedAtMs, decks, bootstrappedAtMs };
+  return marks;
 }
 
 function walletsKey(): Promise<string> {
@@ -244,26 +260,92 @@ export async function refundDeckPulls(slug: string, count: number): Promise<Rewa
 }
 
 /**
+ * The pack's current card uids, read through the non-frozen deck cache (a guarded dynamic import,
+ * like deckCache's own scope read, so suites that never touch decks do not load the deck stack).
+ * Null when the deck is not installed or cannot be read.
+ */
+async function liveDeckUids(slug: string): Promise<Set<string> | null> {
+  try {
+    const { getCachedDeck } = await import('../../../content/deckCache');
+    const deck = await getCachedDeck(slug);
+    const uids = (deck?.Cards ?? [])
+      .map((card) => card?.StableUid)
+      .filter((uid): uid is string => typeof uid === 'string' && uid.length > 0);
+    return uids.length > 0 ? new Set(uids) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when the learner holds cards of this pack but not one of them is still in the deck: the
+ * deck's content was replaced wholesale (new uids), so the old draw state and progress point at
+ * cards the deck no longer has. "Holds" is drawState.owned plus learned progress -- the same two
+ * sources the owned gate reads. False when nothing is held (the first-visit path covers that), when
+ * any held uid is still in the deck, or when the deck cannot be read.
+ */
+async function ownsOnlyRetiredCards(slug: string, owned: readonly string[]): Promise<boolean> {
+  const live = await liveDeckUids(slug);
+  if (!live) return false;
+  // The draw state first: for almost every learner an owned card is still in the deck, and that
+  // answers without reading progress.
+  let held = 0;
+  for (const uid of owned) {
+    if (typeof uid !== 'string' || !uid) continue;
+    if (live.has(uid)) return false;
+    held += 1;
+  }
+  try {
+    const progress = (await loadAllProgress())[slug] ?? [];
+    for (const entry of progress) {
+      if (!entry?.stableUid || !isLearnedProgress(entry)) continue;
+      if (live.has(entry.stableUid)) return false;
+      held += 1;
+    }
+  } catch {
+    // Progress unreadable: decide on the draw state alone.
+  }
+  return held > 0;
+}
+
+/**
  * Grants DECK_BOOTSTRAP_GRANT exactly once per pack per partition, and only when
  * all three hold: the pack has never been bootstrapped, its available + reserve
  * is 0, and its draw state is untouched (owned.length === 0 && pity == null). The
  * pulls and the bootstrap mark go in one record write. When the pack is not
  * eligible it writes nothing and does not mark it either. Never throws.
+ *
+ * R22 §4: while the starter lesson is open nothing is bootstrapped, on any pack
+ * -- a new learner learns first and the first pack is the reward for finishing.
+ * completeStarterLesson closes the lesson, then calls this. Every caller (Home,
+ * Draw, Library) goes through here, so the rule holds wherever the learner taps.
+ *
+ * Re-bootstrap after a content replacement: when the pack's wallet is empty and
+ * every card the learner holds in it (drawState.owned plus learned progress) has
+ * left the deck, the pack is granted DECK_BOOTSTRAP_GRANT once more, marked in
+ * rebootstrappedAtMs so it never repeats. A pack where even one held card is still
+ * in the deck never qualifies.
  */
 export async function ensureDeckBootstrap(slug: string): Promise<{ granted: number; wallet: RewardWalletState }> {
   try {
-    return await withLock(async () => {
+    if (await isStarterLessonOpen()) {
+      return { granted: 0, wallet: await loadDeckWallet(slug) };
+    }
+    type FirstVisit = { granted: number; wallet: RewardWalletState; rebootstrapCandidate: boolean; owned: string[] };
+    const first = await withLock(async (): Promise<FirstVisit> => {
       const key = await walletsKey();
       const record = await readRecord(key);
       const current = record.decks[slug] ?? zeroWallet();
       const alreadyMarked = Object.prototype.hasOwnProperty.call(record.bootstrappedAtMs, slug);
       const hasPulls = current.availablePulls + current.reservePulls > 0;
-      if (alreadyMarked || hasPulls) {
-        return { granted: 0, wallet: current };
+      if (hasPulls) {
+        return { granted: 0, wallet: current, rebootstrapCandidate: false, owned: [] };
       }
+      const rebootstrapped = Object.prototype.hasOwnProperty.call(record.rebootstrappedAtMs ?? {}, slug);
       const drawState = await loadDrawState(slug);
-      if (drawState.owned.length !== 0 || drawState.pity != null) {
-        return { granted: 0, wallet: current };
+      if (alreadyMarked || drawState.owned.length !== 0 || drawState.pity != null) {
+        // Not a first visit. An empty pack that was never re-bootstrapped may still qualify below.
+        return { granted: 0, wallet: current, rebootstrapCandidate: !rebootstrapped, owned: [...drawState.owned] };
       }
       const applied = applyRewardToWallet(current, DECK_BOOTSTRAP_GRANT);
       const wallet: RewardWalletState = { availablePulls: applied.availablePulls, reservePulls: applied.reservePulls };
@@ -271,6 +353,28 @@ export async function ensureDeckBootstrap(slug: string): Promise<{ granted: numb
         ...record,
         decks: { ...record.decks, [slug]: wallet },
         bootstrappedAtMs: { ...record.bootstrappedAtMs, [slug]: Date.now() },
+      };
+      await AsyncStorage.setItem(key, JSON.stringify(next));
+      return { granted: DECK_BOOTSTRAP_GRANT, wallet, rebootstrapCandidate: false, owned: [] };
+    });
+    if (first.granted > 0 || !first.rebootstrapCandidate) return { granted: first.granted, wallet: first.wallet };
+
+    // The deck read happens outside the lock; the grant re-checks the wallet and the mark under it.
+    if (!(await ownsOnlyRetiredCards(slug, first.owned))) return { granted: 0, wallet: first.wallet };
+    return await withLock(async () => {
+      const key = await walletsKey();
+      const record = await readRecord(key);
+      const current = record.decks[slug] ?? zeroWallet();
+      const marks = record.rebootstrappedAtMs ?? {};
+      if (Object.prototype.hasOwnProperty.call(marks, slug) || current.availablePulls + current.reservePulls > 0) {
+        return { granted: 0, wallet: current };
+      }
+      const applied = applyRewardToWallet(current, DECK_BOOTSTRAP_GRANT);
+      const wallet: RewardWalletState = { availablePulls: applied.availablePulls, reservePulls: applied.reservePulls };
+      const next: DeckWalletsRecord = {
+        ...record,
+        decks: { ...record.decks, [slug]: wallet },
+        rebootstrappedAtMs: { ...marks, [slug]: Date.now() },
       };
       await AsyncStorage.setItem(key, JSON.stringify(next));
       return { granted: DECK_BOOTSTRAP_GRANT, wallet };
@@ -505,7 +609,13 @@ export async function adoptAnonDeckWallets(): Promise<{
 
       // Union bootstrap marks, account value wins when both have one.
       const bootstrappedAtMs = { ...anonRecord.bootstrappedAtMs, ...account.bootstrappedAtMs };
-      const nextAccount: DeckWalletsRecord = { ...account, decks, bootstrappedAtMs };
+      const rebootstrappedAtMs = { ...anonRecord.rebootstrappedAtMs, ...account.rebootstrappedAtMs };
+      const nextAccount: DeckWalletsRecord = {
+        ...account,
+        decks,
+        bootstrappedAtMs,
+        ...(Object.keys(rebootstrappedAtMs).length > 0 ? { rebootstrappedAtMs } : {}),
+      };
       await AsyncStorage.setItem(userKey, JSON.stringify(nextAccount));
 
       // Anon record: drain the pack pulls but keep the bootstrap marks and the
@@ -515,6 +625,7 @@ export async function adoptAnonDeckWallets(): Promise<{
         migratedAtMs: anonRecord.migratedAtMs,
         decks: {},
         bootstrappedAtMs: anonRecord.bootstrappedAtMs,
+        ...(anonRecord.rebootstrappedAtMs ? { rebootstrappedAtMs: anonRecord.rebootstrappedAtMs } : {}),
       };
       await AsyncStorage.setItem(anonKey, JSON.stringify(nextAnon));
     });

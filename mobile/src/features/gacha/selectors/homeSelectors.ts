@@ -78,10 +78,16 @@ export type HomeCalendarCompact = {
   maxCount: number;
 };
 
+/** One plain line under the Today card (R22 §5: "Today: N cards", no streak or "full clear" words). */
 export type HomeGoalVM = {
-  minimum: string;
-  fullClear: string;
+  text: string;
 };
+
+/**
+ * R22 §5: the hero headline must fit in two lines at the hero size on a 360pt-wide phone and is
+ * never cut off. Headlines therefore never embed a deck title (the Today card names the deck).
+ */
+export const HERO_HEADLINE_MAX_CHARS = 40;
 
 export type HomeCtaVM = {
   kind: HomeCtaKind;
@@ -188,14 +194,8 @@ function buildRoutePreview(selectedDeck: DeckSummary | null): RoutePreviewNode[]
           ? 'elite'
           : 'normal';
 
-    const title =
-      role === 'warmup'
-        ? 'Warm-up node'
-        : role === 'boss'
-          ? 'Boss check'
-          : role === 'elite'
-            ? 'Elite review'
-            : 'Normal node';
+    // R22 §5: no learner-visible "node" — the plain first and normal cards carry no title.
+    const title = role === 'boss' ? 'Boss check' : role === 'elite' ? 'Elite review' : '';
 
     const subtitle =
       role === 'warmup'
@@ -490,17 +490,16 @@ function mapStatusToCta(params: { kind: HomeCtaKind; draw: HomeDrawVM }): HomeCt
   }
 }
 
-// "Full clear" is the run the session will actually build, so the number has
-// to be the planner's route length and not due + new: the summary already
-// says "5 / 5 · full clear" for a deck Home was calling "Full clear: 6 cards".
-// An installed deck with no cards in it gets its own line ("Keep streak: 1
-// card" would promise a run that cannot start); with cards but nothing due
-// and nothing new there is no run to describe, and a line reading
-// "Full clear: 0 cards" under that deck is noise, so it goes away.
+// "Today: N cards" is the run the session will actually build, so the number
+// has to be the planner's route length and not due + new: the summary already
+// says "5 / 5 · full clear" for a deck Home used to call "6 cards". An
+// installed deck with no cards in it gets its own line (a card count would
+// promise a run that cannot start); with cards but nothing due and nothing new
+// there is no run to describe, and "Today: 0 cards" is noise, so it goes away.
 function buildGoalVM(selectedDeck: DeckSummary | null): HomeGoalVM | null {
   if (!selectedDeck || !selectedDeck.canStudy) return null;
   if (isEmptyDeck(selectedDeck)) {
-    return { minimum: 'No cards yet', fullClear: 'Open a pack to start' };
+    return { text: 'No cards yet · Open a pack to start' };
   }
   const dueCount = Math.max(0, selectedDeck.dueToday ?? 0);
   const newCount = Math.max(0, selectedDeck.newToday ?? 0);
@@ -512,10 +511,11 @@ function buildGoalVM(selectedDeck: DeckSummary | null): HomeGoalVM | null {
     newCount,
     ownedCount: ownedCountOf(selectedDeck),
   });
-  return {
-    minimum: `Keep streak: ${SESSION_MIN_GOAL} card`,
-    fullClear: `Full clear: ${limit} card${limit === 1 ? '' : 's'}`,
-  };
+  return { text: `Today: ${limit} card${limit === 1 ? '' : 's'}` };
+}
+
+function dueTodayHeadline(dueCount: number): string {
+  return `${dueCount} card${dueCount === 1 ? '' : 's'} due today`;
 }
 
 /** @deprecated `helper` is never rendered on Home (HomeHero.tsx removed in A04); keep for HomeHeroVM shape only. */
@@ -559,14 +559,14 @@ function buildHeroCopy(params: {
     case 'empty_deck':
       return {
         eyebrow: 'Today',
-        title: `No cards in ${selectedDeck.title} yet`,
+        title: 'No cards in this deck yet',
         subtitle: 'Open a pack to get your first cards — today’s route appears once you hold some.',
         helper: 'Every card you pull joins today’s run; learning it earns the next pull.',
       };
     case 'today_partial':
       return {
         eyebrow: 'Today',
-        title: `${selectedDeck.title} is in progress`,
+        title: 'Today’s cards are in progress',
         subtitle: 'You started today. Finish the remaining cards.',
         helper: `${counts.selectedDue} due · ${counts.selectedNew} fresh still waiting.`,
       };
@@ -595,14 +595,14 @@ function buildHeroCopy(params: {
     case 'due_only':
       return {
         eyebrow: 'Today',
-        title: `${selectedDeck.dueToday} due in ${selectedDeck.title}`,
+        title: dueTodayHeadline(selectedDeck.dueToday),
         subtitle: 'Review-only day. Clear due cards to keep the streak stable.',
         helper: 'No fresh cards are required today.',
       };
     case 'nothing_to_learn':
       return {
         eyebrow: 'Today',
-        title: `You are clear for now in ${selectedDeck.title}`,
+        title: 'You are clear for now',
         subtitle: 'No due cards and no new cards queued right now.',
         helper: hasSignedInUser
           ? 'Browse another deck or come back later today.'
@@ -622,18 +622,19 @@ function buildHeroCopy(params: {
       const hasTodayWork = selectedDeck.dueToday > 0 || selectedDeck.newToday > 0;
       const title =
         selectedDeck.dueToday > 0
-          ? `${selectedDeck.dueToday} due today in ${selectedDeck.title}`
+          ? dueTodayHeadline(selectedDeck.dueToday)
           : selectedDeck.newToday > 0
-            ? `A few new cards are ready in ${selectedDeck.title}`
-            : `You are clear for now in ${selectedDeck.title}`;
+            ? 'A few new cards are ready'
+            : 'You are clear for now';
       return {
         eyebrow: 'Today',
         title,
         subtitle: hasTodayWork
           ? `Each new card you learn earns a pull · up to ${SESSION_MAIN_ROUTE_DEFAULT} cards a run.`
           : 'Nothing due today; review later or browse your decks.',
+        // R22 §5: no planner word "node" in learner copy (F02 s-correctness-4).
         helper: hasTodayWork
-          ? `Clear ${SESSION_MIN_GOAL} node to keep momentum. Full run stays capped at ${SESSION_MAIN_ROUTE_DEFAULT} nodes.`
+          ? `Clear ${SESSION_MIN_GOAL} card${SESSION_MIN_GOAL === 1 ? '' : 's'} to keep momentum. Full run stays capped at ${SESSION_MAIN_ROUTE_DEFAULT} cards.`
           : hasSignedInUser
             ? 'You can review again later or open another deck while today is light.'
             : 'Sign in later for backup and extended planning, but today you are clear.',

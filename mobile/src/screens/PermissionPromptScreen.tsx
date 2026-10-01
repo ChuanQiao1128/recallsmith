@@ -3,7 +3,6 @@ import { Pressable, ScrollView, StyleSheet, Text } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { RootStackParamList } from '../navigation/types';
 import { mapPermissionResponse } from '../notifications/permissionState';
 import { colors } from '../theme/colors';
@@ -25,22 +24,14 @@ function safeRequestNotificationPermission(): Promise<'granted' | 'denied' | 'un
   }
 }
 
-// One-shot gate: AudienceSurvey marks it when onboarding completes; the
-// first DrawResult the user leaves via "Done" consumes it and pushes this
-// screen. Existing users (flag never set) are never prompted again.
-export const PERMISSION_PROMPT_PENDING_KEY = 'notifications:permission-prompt:pending:v1';
-
-export async function markPermissionPromptPending(): Promise<void> {
-  try { await AsyncStorage.setItem(PERMISSION_PROMPT_PENDING_KEY, '1'); } catch {}
-}
-
-export async function isPermissionPromptPending(): Promise<boolean> {
-  try { return (await AsyncStorage.getItem(PERMISSION_PROMPT_PENDING_KEY)) === '1'; } catch { return false; }
-}
-
-export async function clearPermissionPromptPending(): Promise<void> {
-  try { await AsyncStorage.removeItem(PERMISSION_PROMPT_PENDING_KEY); } catch {}
-}
+// The one-shot pending flag (armed when the starter lesson completes, consumed by the first
+// DrawResult "Done") lives in the starter module; re-exported for existing callers.
+export {
+  PERMISSION_PROMPT_PENDING_KEY,
+  clearPermissionPromptPending,
+  isPermissionPromptPending,
+  markPermissionPromptPending,
+} from '../features/gacha/starter/permissionPromptGate';
 
 // PermissionPrompt v3 — actually requests the iOS notification permission
 // when the user taps "Allow reminders" (was just navigating, which was
@@ -79,7 +70,7 @@ export function PermissionPromptScreen({ navigation }: Props) {
       <LinearGradient colors={[colors.parchmentBg, colors.parchmentBgDeep]} style={styles.gradient}>
         <ScrollView contentContainerStyle={styles.container}>
           <Text style={styles.eyebrow}>NOTIFICATIONS</Text>
-          <Text style={styles.title}>Stay on streak with daily reminders</Text>
+          <Text style={styles.title}>A short daily reminder to keep your reviews on time</Text>
           <Text style={styles.body}>
             One reminder each morning, plus an optional evening check-in only when
             cards are still due. You can change both anytime in Settings &gt; Reminders.

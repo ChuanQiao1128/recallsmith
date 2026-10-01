@@ -157,7 +157,7 @@ vi.mock('../../src/features/gacha/session/sessionReviewHelpers', () => ({
     prevLearnedCount: 0,
     remainingDueCount: 0,
   })),
-  buildSessionProgressVM: vi.fn(() => ({ title: 'Session progress', subtitle: 'Run 0/1 · Mixed', progressText: '0 / 1', hint: '0 due', percent: 0, currentRoleLabel: 'Warm-up node' })),
+  buildSessionProgressVM: vi.fn(() => ({ title: 'Session progress', subtitle: 'Card 1 of 1', progressText: '0 / 1', hint: '0 due', percent: 0, currentRoleLabel: null })),
   modeLabel: vi.fn(() => 'Mixed'),
 }));
 
@@ -184,7 +184,7 @@ vi.mock('../../src/features/gacha/planner/sessionPlanner', () => ({
     minimumGoal: 1,
     dueCount: 0,
     newCount: 1,
-    nodes: [{ id: 'warmup-0', role: 'warmup', title: 'Warm-up node', subtitle: 'Start.' }],
+    nodes: [{ id: 'warmup-0', role: 'warmup', title: '', subtitle: 'Start.' }],
     summary: 'C# Interview',
   })),
 }));
@@ -277,7 +277,7 @@ function buildChallengeRoute() {
     minimumGoal: 1,
     dueCount: 0,
     newCount: 1,
-    nodes: [{ id: 'warmup-0', role: 'warmup', title: 'Warm-up node', subtitle: 'Start.' }],
+    nodes: [{ id: 'warmup-0', role: 'warmup', title: '', subtitle: 'Start.' }],
     summary: 'C# Interview',
   };
 }
@@ -305,6 +305,9 @@ const MCQ_CARD = {
 };
 
 const NEW_PROGRESS = (uid: string) => ({ stableUid: uid, stage: 0, nextReviewAt: 0 });
+// A Q/A card the learner has reviewed before: rated directly. A never-reviewed Q/A card opens on
+// the study view (R22 §6), and its recall check never writes the book (session-card.screen.test).
+const LEARNED_PROGRESS = (uid: string) => ({ stableUid: uid, stage: 1, nextReviewAt: 0, lastReviewedAt: FIXED_NOW_MS - 86_400_000 });
 
 const SUMMARY = expect.objectContaining({ slug: 'csharp', sessionDone: 1 });
 
@@ -340,7 +343,7 @@ describe('SessionCardScreen Mistake Book hook', () => {
   });
 
   function serve(card: any) {
-    const progress = NEW_PROGRESS(card.StableUid);
+    const progress = card.Mcq ? NEW_PROGRESS(card.StableUid) : LEARNED_PROGRESS(card.StableUid);
     vi.mocked(resolveDeckBySlug).mockResolvedValue(buildDeck({ Cards: [card] }) as any);
     vi.mocked(pickNextCard).mockReturnValue({ card, progress } as any);
     vi.mocked(loadDeckProgress).mockResolvedValue([progress] as any);
@@ -378,7 +381,7 @@ describe('SessionCardScreen Mistake Book hook', () => {
       await Promise.resolve();
     });
     await act(async () => {
-      findPressableByLabel(tree, 'Again').props.onPress();
+      findPressableByLabel(tree, 'Forgot').props.onPress();
       await Promise.resolve();
       await Promise.resolve();
     });

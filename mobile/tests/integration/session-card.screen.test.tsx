@@ -114,7 +114,24 @@ vi.mock('../../src/content/activeDeck', () => ({
   setActiveDeckSlug: vi.fn(async () => {}),
 }));
 
+// Backs the study prefs (recallsmith:study-prefs:v1) the screen reads on focus.
+const asyncStore = new Map<string, string>();
+vi.mock('@react-native-async-storage/async-storage', () => ({
+  default: {
+    getItem: vi.fn(async (key: string) => (asyncStore.has(key) ? asyncStore.get(key)! : null)),
+    setItem: vi.fn(async (key: string, value: string) => {
+      asyncStore.set(key, value);
+    }),
+    removeItem: vi.fn(async (key: string) => {
+      asyncStore.delete(key);
+    }),
+    getAllKeys: vi.fn(async () => [...asyncStore.keys()]),
+    multiGet: vi.fn(async (keys: string[]) => keys.map((key) => [key, asyncStore.get(key) ?? null])),
+  },
+}));
+
 vi.mock('../../src/review/storage', () => ({
+  loadAllProgress: vi.fn(async () => ({})),
   loadDeckProgress: vi.fn(async () => [{ stableUid: '1', stage: 0, nextReviewAt: 0 }]),
   saveDeckProgress: vi.fn(async () => {}),
   loadOrInitDailyStats: vi.fn(async () => ({ dateKey: '2026-04-23', plannedCount: 0, doneCount: 0 })),
@@ -149,7 +166,7 @@ vi.mock('../../src/features/gacha/session/sessionReviewHelpers', () => ({
     prevLearnedCount: 0,
     remainingDueCount: 0,
   })),
-  buildSessionProgressVM: vi.fn(() => ({ title: 'Session progress', subtitle: 'Run 0/1 · Mixed', progressText: '0 / 1', hint: '0 due', percent: 0, currentRoleLabel: 'Warm-up node' })),
+  buildSessionProgressVM: vi.fn(() => ({ title: 'Session progress', subtitle: 'Card 1 of 1', progressText: '0 / 1', hint: '0 due', percent: 0, currentRoleLabel: null })),
   modeLabel: vi.fn(() => 'Mixed'),
 }));
 
@@ -169,7 +186,7 @@ vi.mock('../../src/features/gacha/planner/sessionPlanner', () => ({
   countDueToday: vi.fn(() => 0),
   pickNextCard: vi.fn(() => ({
     card: { StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1', Answer: 'A1' },
-    progress: { stableUid: '1', stage: 0, nextReviewAt: 0 },
+    progress: { stableUid: '1', stage: 0, nextReviewAt: 0, lastReviewedAt: LEARNED_AT },
   })),
   planChallengeRoute: vi.fn(() => ({
     slug: 'csharp',
@@ -179,7 +196,7 @@ vi.mock('../../src/features/gacha/planner/sessionPlanner', () => ({
     minimumGoal: 1,
     dueCount: 0,
     newCount: 1,
-    nodes: [{ id: 'warmup-0', role: 'warmup', title: 'Warm-up node', subtitle: 'Start.' }],
+    nodes: [{ id: 'warmup-0', role: 'warmup', title: '', subtitle: 'Start.' }],
     summary: 'C# Interview',
   })),
 }));
@@ -215,6 +232,10 @@ import { buildRatedSessionState } from '../../src/features/gacha/session/session
 import { settleRatingReward } from '../../src/features/gacha/rewards/sessionRewards';
 import type { RatingRewardStep } from '../../src/features/gacha/rewards/sessionRewards';
 import { resetSessionStore, useSessionStore } from '../../src/features/gacha/session/sessionStore';
+
+// The dealt card has been reviewed before, so it is rated directly; a never-reviewed Q/A card
+// opens on the R22 study view first (see the learning-step tests in session-card-learning.screen.test.tsx).
+const LEARNED_AT = 1_600_000_000_000;
 
 async function flush() {
   await act(async () => {
@@ -257,7 +278,7 @@ function buildChallengeRoute(overrides: Record<string, unknown> = {}) {
     minimumGoal: 1,
     dueCount: 0,
     newCount: 1,
-    nodes: [{ id: 'warmup-0', role: 'warmup', title: 'Warm-up node', subtitle: 'Start.' }],
+    nodes: [{ id: 'warmup-0', role: 'warmup', title: '', subtitle: 'Start.' }],
     summary: 'C# Interview',
     ...overrides,
   };
@@ -269,12 +290,13 @@ describe('SessionCardScreen', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    asyncStore.clear();
     resetSessionStore();
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
     vi.mocked(resolveDeckBySlug).mockResolvedValue(buildDeck() as any);
     vi.mocked(pickNextCard).mockReturnValue({
       card: { StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1' },
-      progress: { stableUid: '1', stage: 0, nextReviewAt: 0 },
+      progress: { stableUid: '1', stage: 0, nextReviewAt: 0, lastReviewedAt: LEARNED_AT },
     });
     vi.mocked(planChallengeRoute).mockReturnValue(buildChallengeRoute() as any);
     errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -313,7 +335,7 @@ describe('SessionCardScreen', () => {
     });
 
     await act(async () => {
-      findPressableByLabel(tree, 'Good').props.onPress();
+      findPressableByLabel(tree, 'Remembered').props.onPress();
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -369,7 +391,7 @@ describe('SessionCardScreen', () => {
       await Promise.resolve();
     });
     await act(async () => {
-      findPressableByLabel(tree, 'Good').props.onPress();
+      findPressableByLabel(tree, 'Remembered').props.onPress();
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -405,7 +427,7 @@ describe('SessionCardScreen', () => {
     });
 
     await act(async () => {
-      findPressableByLabel(tree, 'Good').props.onPress();
+      findPressableByLabel(tree, 'Remembered').props.onPress();
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -440,7 +462,7 @@ describe('SessionCardScreen', () => {
     });
 
     await act(async () => {
-      findPressableByLabel(tree, 'Good').props.onPress();
+      findPressableByLabel(tree, 'Remembered').props.onPress();
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -616,7 +638,7 @@ describe('SessionCardScreen', () => {
         Question: longQuestion,
         Explanation: 'Use a scheduled scaling action on the Auto Scaling group for the Saturday window.',
       },
-      progress: { stableUid: '1', stage: 0, nextReviewAt: 0 },
+      progress: { stableUid: '1', stage: 0, nextReviewAt: 0, lastReviewedAt: LEARNED_AT },
     } as any);
     const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
 
@@ -713,7 +735,7 @@ describe('SessionCardScreen', () => {
       });
 
       await act(async () => {
-        findPressableByLabel(tree, 'Good').props.onPress();
+        findPressableByLabel(tree, 'Remembered').props.onPress();
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -731,6 +753,151 @@ describe('SessionCardScreen', () => {
     const line = findForecast(after);
     expect(line).toHaveLength(1);
     expect(String(line[0].props.children)).toMatch(/^At this pace, about \d+ cards? comes? due tomorrow\.$/);
+  });
+
+  // Y01: a fenced code block inside a Q/A question renders as a CodeBlock on the front face
+  // (before reveal) and again in the question recap after reveal — never as raw backticks.
+  async function mountWithQuestion(question: string, opts: { neverReviewed?: boolean } = {}) {
+    const card = { StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: question, Answer: 'A1' };
+    vi.mocked(resolveDeckBySlug).mockResolvedValue(buildDeck({ Cards: [card] }) as any);
+    vi.mocked(pickNextCard).mockReturnValue({
+      card,
+      progress: { stableUid: '1', stage: 0, nextReviewAt: 0, lastReviewedAt: opts.neverReviewed ? 0 : LEARNED_AT },
+    } as any);
+    const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <SessionCardScreen
+          navigation={navigation}
+          route={{ key: 'session-card', name: 'SessionCard', params: { slug: 'csharp', mode: 'mixed', limit: 1 } } as any}
+        />,
+      );
+    });
+    await flush();
+    return tree;
+  }
+
+  const hostByTestID = (tree: renderer.ReactTestRenderer, id: string) =>
+    tree.root.findAll((node) => typeof node.type === 'string' && node.props?.testID === id);
+  const codeBlocks = (tree: renderer.ReactTestRenderer) =>
+    tree.root.findAll((node) => typeof node.type !== 'string' && typeof node.props?.code === 'string');
+  const anyBackticks = (tree: renderer.ReactTestRenderer) =>
+    tree.root.findAll(
+      (node) => (node.type as any) === 'Text' && typeof node.props.children === 'string' && node.props.children.includes('```'),
+    );
+
+  it('shows the question code block on the front face before reveal and in the recap after', async () => {
+    const tree = await mountWithQuestion(
+      'What does this print?\n```csharp\nvar xs = new[] { 1, 2, 3 };\nforeach (var x in xs)\n    Console.Write(x);\n```',
+    );
+
+    const question = hostByTestID(tree, 'review-question');
+    expect(question).toHaveLength(1);
+    expect(question[0].props.children).toBe('What does this print?');
+    expect(question[0].props.accessibilityLabel).toBe('What does this print?, code sample follows');
+    expect(hostByTestID(tree, 'question-code')).toHaveLength(1);
+    const code = codeBlocks(tree);
+    expect(code).toHaveLength(1);
+    expect(code[0].props.code).toBe('var xs = new[] { 1, 2, 3 };\nforeach (var x in xs)\n    Console.Write(x);');
+    expect(code[0].props.label).toBe('C#');
+    expect(anyBackticks(tree)).toHaveLength(0);
+    // Before reveal: the code sits between the question and the Reveal button.
+    const order = tree.root
+      .findAll(
+        (node) =>
+          typeof node.type === 'string' &&
+          (node.props?.testID === 'review-question' ||
+            node.props?.testID === 'question-code' ||
+            ((node.type as any) === 'Text' && node.props.children === 'Reveal answer')),
+      )
+      .map((node) => node.props.testID ?? 'reveal');
+    expect(order).toEqual(['review-question', 'question-code', 'reveal']);
+
+    await act(async () => {
+      findPressableByLabel(tree, 'Reveal answer').props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(hostByTestID(tree, 'review-question-recap')).toHaveLength(1);
+    expect(hostByTestID(tree, 'review-question')[0].props.children).toBe('What does this print?');
+    expect(hostByTestID(tree, 'question-code')).toHaveLength(1);
+    expect(anyBackticks(tree)).toHaveLength(0);
+  });
+
+  // F01 y-correctness-1 / y-tests-1: a never-reviewed Q/A card opens on the R22 study view,
+  // which must render the fenced code as a code block too (it is where a learner first meets a card).
+  it('shows the question code block on the study view of a never-reviewed card', async () => {
+    const tree = await mountWithQuestion(
+      'What does this print?\n```csharp\nvar xs = new[]{1,2,3};\nConsole.WriteLine(xs.Length);\n```\n',
+      { neverReviewed: true },
+    );
+
+    expect(hostByTestID(tree, 'learning-study-view')).toHaveLength(1);
+    expect(hostByTestID(tree, 'review-question')).toHaveLength(0);
+    const question = hostByTestID(tree, 'learning-study-question');
+    expect(question).toHaveLength(1);
+    expect(question[0].props.children).toBe('What does this print?');
+    expect(question[0].props.accessibilityLabel).toBe('What does this print?, code sample follows');
+    const code = codeBlocks(tree);
+    expect(code).toHaveLength(1);
+    expect(code[0].props.code).toBe('var xs = new[]{1,2,3};\nConsole.WriteLine(xs.Length);');
+    expect(code[0].props.label).toBe('C#');
+    expect(anyBackticks(tree)).toHaveLength(0);
+    // The code sits between the question and the answer sections.
+    const order = tree.root
+      .findAll(
+        (node) =>
+          typeof node.type === 'string' &&
+          ['learning-study-question', 'question-code', 'learning-study-answer'].includes(node.props?.testID),
+      )
+      .map((node) => node.props.testID);
+    expect(order.filter((id, i) => order.indexOf(id) === i)).toEqual([
+      'learning-study-question',
+      'question-code',
+      'learning-study-answer',
+    ]);
+  });
+
+  it('renders a study-view question without a fence exactly as before', async () => {
+    const tree = await mountWithQuestion('Explain async void.', { neverReviewed: true });
+
+    const question = hostByTestID(tree, 'learning-study-question');
+    expect(question).toHaveLength(1);
+    expect(question[0].props.children).toBe('Explain async void.');
+    expect(question[0].props.accessibilityLabel).toBeUndefined();
+    expect(hostByTestID(tree, 'question-code')).toHaveLength(0);
+  });
+
+  // F01 supervisor-1 / y-tests-3: a fence-only question gets neutral prose, never an empty
+  // question line or a label that starts with a comma.
+  it('gives a fence-only question the fallback prose on the review front and the study view', async () => {
+    const fenceOnly = '```csharp\nConsole.WriteLine(1 + 1);\n```\n';
+    const review = await mountWithQuestion(fenceOnly);
+    const front = hostByTestID(review, 'review-question');
+    expect(front[0].props.children).toBe('What does this code do?');
+    expect(front[0].props.accessibilityLabel).toBe('What does this code do?, code sample follows');
+    expect(hostByTestID(review, 'question-code')).toHaveLength(1);
+    review.unmount();
+
+    const study = await mountWithQuestion(fenceOnly, { neverReviewed: true });
+    const studyQuestion = hostByTestID(study, 'learning-study-question');
+    expect(studyQuestion[0].props.children).toBe('What does this code do?');
+    expect(studyQuestion[0].props.accessibilityLabel).toBe('What does this code do?, code sample follows');
+    expect(hostByTestID(study, 'question-code')).toHaveLength(1);
+  });
+
+  it('renders an existing AWS question without a fence exactly as before', async () => {
+    const aws =
+      'A company stores logs in Amazon S3 and must keep them for 7 years at the LEAST cost. Which storage class meets these requirements?';
+    const tree = await mountWithQuestion(aws);
+
+    const question = hostByTestID(tree, 'review-question');
+    expect(question).toHaveLength(1);
+    expect(question[0].props.children).toBe(aws);
+    expect(question[0].props.accessibilityLabel).toBeUndefined();
+    expect(hostByTestID(tree, 'question-code')).toHaveLength(0);
+    expect(codeBlocks(tree)).toHaveLength(0);
   });
 
   it('offers Retry and Choose another deck when the deck cannot load', async () => {
@@ -795,7 +962,7 @@ describe('SessionCardScreen', () => {
         await Promise.resolve();
       });
       await act(async () => {
-        findPressableByLabel(tree, 'Good').props.onPress();
+        findPressableByLabel(tree, 'Remembered').props.onPress();
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -871,7 +1038,7 @@ describe('SessionCardScreen', () => {
         await Promise.resolve();
       });
       await act(async () => {
-        findPressableByLabel(tree, 'Good').props.onPress();
+        findPressableByLabel(tree, 'Remembered').props.onPress();
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -911,7 +1078,7 @@ describe('SessionCardScreen', () => {
         nextDone: 1,
         nextCurrent: {
           card: { StableUid: '2', OrderInDeck: 2, Difficulty: 1, Question: 'Q2', Answer: 'A2' },
-          progress: { stableUid: '2', stage: 0, nextReviewAt: 0 },
+          progress: { stableUid: '2', stage: 0, nextReviewAt: 0, lastReviewedAt: LEARNED_AT },
         },
         prevLearnedCount: 0,
         remainingDueCount: 0,
@@ -1004,17 +1171,17 @@ describe('SessionCardScreen', () => {
       const { tree } = await mount({ limit: 1 });
       const hint = () => byTestID(tree, 'review-rating-hint')[0].props.children;
 
-      expect(hint()).toBe('Think about how well you recalled this before seeing the answer.');
+      expect(hint()).toBe('Try to recall the answer, then reveal it.');
       await act(async () => {
         findPressableByLabel(tree, 'Reveal answer').props.onPress();
         await Promise.resolve();
       });
-      expect(hint()).toBe('How well did you recall it?');
+      expect(hint()).toBe('Did you remember it?');
       await act(async () => {
         findPressableByLabel(tree, 'Hide').props.onPress();
         await Promise.resolve();
       });
-      expect(hint()).toBe('Think about how well you recalled this before seeing the answer.');
+      expect(hint()).toBe('Try to recall the answer, then reveal it.');
     });
 
     it('prints the deck rank in the header badge, not the raw OrderInDeck', async () => {
@@ -1029,7 +1196,7 @@ describe('SessionCardScreen', () => {
       }) as any);
       vi.mocked(pickNextCard).mockReturnValue({
         card: { StableUid: 'b', OrderInDeck: 780, Difficulty: 1, Question: 'Q2' },
-        progress: { stableUid: 'b', stage: 0, nextReviewAt: 0 },
+        progress: { stableUid: 'b', stage: 0, nextReviewAt: 0, lastReviewedAt: LEARNED_AT },
       } as any);
       const { tree } = await mount({ limit: 1 });
       const badge = byTestID(tree, 'review-order-badge');
@@ -1048,6 +1215,69 @@ describe('SessionCardScreen', () => {
       expect(style.borderTopColor).toBeTruthy();
       expect(style.shadowOffset).toEqual({ width: 0, height: -4 });
       expect(style.shadowOpacity).toBeGreaterThan(0);
+    });
+  });
+
+  // R22 §1.4, §6: two rating buttons by default; existing learners keep four.
+  describe('rating buttons (two by default, four as a study setting)', () => {
+    const STUDY_PREFS_KEY = 'recallsmith:study-prefs:v1';
+
+    async function mount() {
+      const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
+      let tree!: renderer.ReactTestRenderer;
+      await act(async () => {
+        tree = renderer.create(
+          <SessionCardScreen
+            navigation={navigation}
+            route={{ key: 'session-card', name: 'SessionCard', params: { slug: 'csharp', mode: 'mixed', limit: 1 } } as any}
+          />,
+        );
+      });
+      await flush();
+      await act(async () => {
+        findPressableByLabel(tree, 'Reveal answer').props.onPress();
+        await Promise.resolve();
+      });
+      return { tree, navigation };
+    }
+
+    const ratingIds = (tree: renderer.ReactTestRenderer) =>
+      tree.root
+        .findAll((node) => (node.type as any) === 'Pressable' && String(node.props.testID ?? '').startsWith('review-rating-'))
+        .map((node) => node.props.testID);
+
+    it('shows Forgot / Remembered to a new learner and stores that default', async () => {
+      const { tree } = await mount();
+      expect(ratingIds(tree)).toEqual(['review-rating-again', 'review-rating-good']);
+      expect(findTextByLabel(tree, 'Hard')).toHaveLength(0);
+      expect(JSON.parse(asyncStore.get(STUDY_PREFS_KEY) as string)).toEqual({ fourButtons: false });
+
+      // Remembered still sends 'good' through the unchanged rating path.
+      await act(async () => {
+        findPressableByLabel(tree, 'Remembered').props.onPress();
+        await Promise.resolve();
+      });
+      await flush();
+      expect(vi.mocked(settleRatingReward).mock.calls[0][0]).toMatchObject({ rating: 'good' });
+    });
+
+    it('keeps all four buttons for an existing learner who already has a learned card', async () => {
+      // The probe reads every deck-progress key on the device, whoever is signed in (F02 x-deploy-1).
+      asyncStore.set(
+        'devcards:u:some-sub:deck-progress:csharp',
+        JSON.stringify([{ stableUid: '9', stage: 2, nextReviewAt: 5, lastReviewedAt: 1_700_000_000_000 }]),
+      );
+      const { tree } = await mount();
+      expect(ratingIds(tree)).toEqual(['review-rating-again', 'review-rating-hard', 'review-rating-good', 'review-rating-easy']);
+      expect(JSON.parse(asyncStore.get(STUDY_PREFS_KEY) as string)).toEqual({ fourButtons: true });
+    });
+
+    it('honours a stored choice over the learned-card default', async () => {
+      asyncStore.set(STUDY_PREFS_KEY, JSON.stringify({ fourButtons: true }));
+      const { tree } = await mount();
+      // No learned card on the device, so four buttons can only come from the stored choice, which stays.
+      expect(ratingIds(tree)).toHaveLength(4);
+      expect(JSON.parse(asyncStore.get(STUDY_PREFS_KEY) as string)).toEqual({ fourButtons: true });
     });
   });
 });

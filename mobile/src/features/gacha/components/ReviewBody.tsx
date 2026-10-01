@@ -1,9 +1,11 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { questionA11yLabel, splitQuestionCode } from '../../../content/questionCode';
 import type { CardExport } from '../../../types/deckExport';
 import { formatRank } from '../library/libraryMapper';
 import { CardAnswerSections, friendlyCodeLanguage } from './CardAnswerSections';
+import { QuestionCodeBlock } from '../session/QuestionCodeBlock';
 import { colors } from '../../../theme/colors';
 import { spacing } from '../../../theme/spacing';
 import { typography } from '../../../theme/typography';
@@ -56,6 +58,12 @@ export const ReviewBody = React.memo(function ReviewBody(props: ReviewBodyProps)
     ? friendlyCodeLanguage(card.CodeLanguage)
     : null;
 
+  // Y01: a fenced code block inside the question renders as a CodeBlock after
+  // the prose, on both faces — never as raw backticks. No fence → code is null
+  // and the question renders exactly as before.
+  const question = React.useMemo(() => splitQuestionCode(card.Question), [card.Question]);
+  const questionLabel = question.code ? questionA11yLabel(question) : undefined;
+
   return (
     <View style={styles.card}>
       <View style={styles.headerRow}>
@@ -77,17 +85,21 @@ export const ReviewBody = React.memo(function ReviewBody(props: ReviewBodyProps)
           the learner has to see all of it to answer, and again to judge
           the answer after reveal. The outer ScrollView handles overflow. */}
       {!faceUp ? (
-        <Text style={styles.question} testID="review-question">
-          {card.Question}
-        </Text>
+        <>
+          <Text style={styles.question} testID="review-question" accessibilityLabel={questionLabel}>
+            {question.text}
+          </Text>
+          {question.code ? <QuestionCodeBlock code={question.code} /> : null}
+        </>
       ) : (
         <View style={styles.questionRecap} testID="review-question-recap">
           <Text style={styles.questionCaption} numberOfLines={1}>
             QUESTION
           </Text>
-          <Text style={styles.questionRecapText} testID="review-question">
-            {card.Question}
+          <Text style={styles.questionRecapText} testID="review-question" accessibilityLabel={questionLabel}>
+            {question.text}
           </Text>
+          {question.code ? <QuestionCodeBlock code={question.code} /> : null}
         </View>
       )}
 
@@ -103,10 +115,10 @@ export const ReviewBody = React.memo(function ReviewBody(props: ReviewBodyProps)
         </Pressable>
       ) : (
         <View style={styles.answerWrap}>
+          {/* R22 §5: no ANSWER caption. Cards carry no short-answer field, so it
+              sat empty above the EXPLANATION caption; the sections below carry
+              their own headings and Hide keeps its place on the right. */}
           <View style={styles.answerTopRow}>
-            <Text style={styles.answerTitle} numberOfLines={1}>
-              ANSWER
-            </Text>
             <Pressable
               accessibilityRole="button"
               style={({ pressed }) => [styles.flipBackButton, pressed && styles.pressed]}
@@ -243,15 +255,8 @@ const styles = StyleSheet.create({
   answerTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
     marginBottom: spacing.sm,
-  },
-  answerTitle: {
-    fontSize: typography.caption,
-    color: colors.gold,
-    fontWeight: '900',
-    letterSpacing: 1.4,
-    textTransform: 'uppercase',
   },
   flipBackButton: {
     minHeight: 36,

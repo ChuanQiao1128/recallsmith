@@ -6,6 +6,7 @@ let walletFixture = { availablePulls: 0, reservePulls: 0 };
 let activeSlugFixture: string | null = 'csharp';
 let deckSummariesFixture: any[] = [];
 let updatesFixture: Record<string, any> = {};
+let studyGoalFixture: { deckSlug: string; examDate: string | null } | null = null;
 
 const navigateMock = vi.fn();
 const setActiveDeckSlugMock = vi.fn(async (_slug: string) => {});
@@ -117,9 +118,16 @@ vi.mock('../../src/sync/progressSync', () => ({
   forceProgressSync: vi.fn(async () => {}),
 }));
 
+// R22 §2 study goal: the real daysUntilExam, a fixture goal.
+vi.mock('../../src/features/goal/studyGoal', async (importActual) => ({
+  ...(await importActual<typeof import('../../src/features/goal/studyGoal')>()),
+  getStudyGoal: vi.fn(async () => studyGoalFixture),
+}));
+
 import { Alert } from 'react-native';
 import { HomeScreen } from '../../src/screens/HomeScreen';
 import { loadHomeDeckSummaries } from '../../src/features/gacha/home/deckActionResolver';
+import { resetSessionStore, useSessionStore } from '../../src/features/gacha/session/sessionStore';
 
 // Mirrors the mocked module's default snapshot so per-test overrides of
 // loadHomeDeckSummaries can be restored to the shared behaviour in beforeEach.
@@ -204,6 +212,7 @@ describe('HomeScreen v9', () => {
       },
     ];
     updatesFixture = {};
+    studyGoalFixture = null;
     navigateMock.mockReset();
     setActiveDeckSlugMock.mockClear();
     // Restore the shared cache-first/revalidate stub so per-test overrides of
@@ -232,7 +241,7 @@ describe('HomeScreen v9', () => {
     expect(tree.root.findByProps({ testID: 'home-pack-visual' })).toBeTruthy();
     expect(tree.root.findByProps({ testID: 'home-draw-status-badge' })).toBeTruthy();
     const goal = tree.root.findByProps({ testID: 'home-goal-line' });
-    expect(String(goal.props.children)).toContain('Full clear: 2 cards');
+    expect(String(goal.props.children)).toBe('Today: 2 cards');
   });
 
   it('shows due-card study link and routes it directly to SessionCard', async () => {
@@ -715,7 +724,7 @@ describe('HomeScreen v9', () => {
     await flush();
 
     expect(tree.root.findAllByProps({ testID: 'home-goal-line' })).toHaveLength(0);
-    expect(textBlob(tree)).not.toContain('Full clear: 0 cards');
+    expect(textBlob(tree)).not.toContain('Today: 0 cards');
   });
 
   it('caps the goal line at the route length the session will build', async () => {
@@ -734,7 +743,7 @@ describe('HomeScreen v9', () => {
     await flush();
 
     const goal = tree.root.findByProps({ testID: 'home-goal-line' });
-    expect(String(goal.props.children)).toBe('Keep streak: 1 card · Full clear: 5 cards');
+    expect(String(goal.props.children)).toBe('Today: 5 cards');
   });
 
   it('labels the tiles with the short deck title on two lines', async () => {
@@ -844,5 +853,167 @@ describe('HomeScreen v9', () => {
     expect(
       tree.root.findAll((node) => (node.type as any) === 'Text' && node.props?.testID === 'home-update-notice'),
     ).toHaveLength(0);
+  });
+
+  // ─── R22 H03: one primary action, no truncated headline, exam countdown ───
+  const renderHome = async (params?: Record<string, unknown>) => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <HomeScreen
+          navigation={{ navigate: navigateMock } as any}
+          route={{ key: 'home', name: 'Home', params } as any}
+        />,
+      );
+    });
+    await flush();
+    return tree;
+  };
+  const localDayKey = (offsetDays: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() + offsetDays);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  };
+
+  it('puts the primary CTA directly under the hero, above the Today card', async () => {
+    const tree = await renderHome();
+    const order = tree.root
+      .findAll((node) => typeof node.props?.testID === 'string' && typeof node.type === 'string')
+      .map((node) => node.props.testID as string);
+    const hero = order.indexOf('home-hero-title');
+    const cta = order.indexOf('screen-home-primary-cta');
+    const today = order.indexOf('home-today-count-grid');
+    const goal = order.indexOf('home-goal-line');
+    expect(hero).toBeGreaterThan(-1);
+    expect(cta).toBeGreaterThan(hero);
+    expect(today).toBeGreaterThan(cta);
+    expect(goal).toBeGreaterThan(cta);
+    // Nothing but the hero sits between the pack and the button.
+    const between = order.slice(hero + 1, cta);
+    expect(between).toEqual([]);
+  });
+
+  it('lets the hero headline wrap to two lines and shrink instead of truncating', async () => {
+    const tree = await renderHome();
+    const hero = tree.root.find(
+      (node) => (node.type as any) === 'Text' && node.props?.testID === 'home-hero-title',
+    );
+    expect(hero.props.numberOfLines).toBe(2);
+    expect(hero.props.adjustsFontSizeToFit).toBe(true);
+    expect(hero.props.minimumFontScale).toBeGreaterThan(0);
+    expect(hero.props.minimumFontScale).toBeLessThan(1);
+  });
+
+  // The header line is context and must never contradict the hero (R22 §1.6): either no subtitle,
+  // or one that says the same thing ("3 cards waiting today" under "3 cards waiting", "Caught up"
+  // over "You are clear for now").
+  const headerAndHero = (tree: renderer.ReactTestRenderer) => {
+    const header = tree.root.findAll(
+      (node) => (node.type as any) === 'Text' && node.props?.testID === 'home-header-subtitle',
+    );
+    expect(header.length).toBeLessThanOrEqual(1);
+    const hero = tree.root.find(
+      (node) => (node.type as any) === 'Text' && node.props?.testID === 'home-hero-title',
+    );
+    return { header: header.length ? String(header[0].props.children) : null, hero: String(hero.props.children) };
+  };
+  const expectHeaderAgreesWithHero = (tree: renderer.ReactTestRenderer) => {
+    const { header, hero } = headerAndHero(tree);
+    if (header === null) return;
+    if (/caught up/i.test(header)) {
+      expect(hero).toMatch(/clear|mastered/i);
+      return;
+    }
+    expect(header.startsWith(hero) || hero.startsWith(header)).toBe(true);
+  };
+  const clearDueEverywhere = (newOnCsharp: number) => {
+    deckSummariesFixture = deckSummariesFixture.map((deck) => ({
+      ...deck,
+      dueToday: 0,
+      plannedToday: deck.slug === 'csharp' ? newOnCsharp : 0,
+      newToday: deck.slug === 'csharp' ? newOnCsharp : 0,
+    }));
+    walletFixture = { availablePulls: 0, reservePulls: 0 };
+  };
+
+  it('never tells the learner to tap the pack in the header next to a different hero line', async () => {
+    // The state the old "Tap your pack to begin" branch rendered in: nothing due anywhere, the
+    // pulls spent (locked), new cards waiting on the selected deck.
+    clearDueEverywhere(2);
+    const tree = await renderHome({ firstDrawCoach: true });
+    expect(textBlob(tree)).not.toContain('Tap your pack to begin');
+    expect(headerAndHero(tree).hero).toBe('A few new cards are ready');
+    expectHeaderAgreesWithHero(tree);
+  });
+
+  it('keeps the header in agreement with the hero when only new cards are left and pulls are spent', async () => {
+    clearDueEverywhere(2);
+    const tree = await renderHome();
+    expect(headerAndHero(tree).hero).toBe('A few new cards are ready');
+    expect(textBlob(tree)).not.toContain('All caught up for now');
+    expectHeaderAgreesWithHero(tree);
+  });
+
+  it('keeps the header in agreement with the hero while today is in progress', async () => {
+    clearDueEverywhere(2);
+    useSessionStore.getState().startSession({
+      sessionId: 'csharp-run',
+      slug: 'csharp',
+      route: [{} as any, {} as any, {} as any],
+      startedAt: Date.now(),
+    });
+    useSessionStore.getState().advanceSession();
+    try {
+      const tree = await renderHome();
+      expect(headerAndHero(tree).hero).toBe('Today’s cards are in progress');
+      expect(textBlob(tree)).not.toContain('All caught up for now');
+      expectHeaderAgreesWithHero(tree);
+    } finally {
+      resetSessionStore();
+    }
+  });
+
+  it('says caught up in the header only when the hero says the learner is clear', async () => {
+    clearDueEverywhere(0);
+    const tree = await renderHome();
+    expect(headerAndHero(tree)).toEqual({ header: 'Caught up', hero: 'You are clear for now' });
+    expectHeaderAgreesWithHero(tree);
+  });
+
+  it('shows "Exam in N days" when the study goal has an exam date', async () => {
+    // A fixed local noon: the date key and Home's render read the same day, whatever the real clock.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 9, 2, 12, 0, 0));
+    try {
+      studyGoalFixture = { deckSlug: 'csharp', examDate: localDayKey(12) };
+      expect(studyGoalFixture.examDate).toBe('2026-10-14');
+      const tree = await renderHome();
+      const exam = tree.root.find(
+        (node) => (node.type as any) === 'Text' && node.props?.testID === 'home-exam-countdown',
+      );
+      expect(String(exam.props.children)).toBe('Exam in 12 days');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows nothing about exams when no exam date is set', async () => {
+    studyGoalFixture = { deckSlug: 'csharp', examDate: null };
+    const withGoal = await renderHome();
+    expect(withGoal.root.findAllByProps({ testID: 'home-exam-countdown' })).toHaveLength(0);
+    expect(textBlob(withGoal)).not.toMatch(/exam/i);
+
+    studyGoalFixture = null;
+    const noGoal = await renderHome();
+    expect(noGoal.root.findAllByProps({ testID: 'home-exam-countdown' })).toHaveLength(0);
+    expect(textBlob(noGoal)).not.toMatch(/exam/i);
+  });
+
+  it('labels the fourth Today tile Collected, not Owned', async () => {
+    const tree = await renderHome();
+    expect(textBlob(tree)).toContain('Collected');
+    expect(textBlob(tree)).not.toContain('Owned');
+    expect(textBlob(tree)).not.toContain('Keep streak');
   });
 });

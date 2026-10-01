@@ -11,6 +11,7 @@ import {
 } from './newCardLedger';
 import { readProgressSettled } from './progressSettled';
 import { readStorageFreshLearned } from './storageFreshLearned';
+import { isStarterLessonCard } from '../starter/starterGate';
 
 export type RatingRewardInput = {
   slug: string;
@@ -123,11 +124,17 @@ export async function settleRatingReward(input: RatingRewardInput): Promise<Rati
 
   // (2) R1: the first hard/good/easy on a not-yet-paid card pays one pull. R9 falls
   // out of this -- `again` only defers; it never decides whether a card ever pays.
+  // A starter-lesson card (R22 §4) pays no R1 pull, whatever the rating: the lesson's reward is the
+  // pack's bootstrap, granted when the lesson completes. It is still stamped in the ledger, so it
+  // counts as learned today (R7) and can never pay R1 later, after the lesson has closed.
   let newCardPaid = false;
-  if (settledState.settled && newCardEligible && rating !== 'again') {
-    const payResult = await payNewCardIfUnpaid(slug, stableUid, now.getTime());
-    newCardPaid = payResult.paid;
-    ledger = payResult.ledger;
+  if (settledState.settled && newCardEligible) {
+    const starterCard = await isStarterLessonCard(slug, stableUid);
+    if (starterCard || rating !== 'again') {
+      const payResult = await payNewCardIfUnpaid(slug, stableUid, now.getTime());
+      newCardPaid = payResult.paid && !starterCard;
+      ledger = payResult.ledger;
+    }
   }
 
   const newCardsLearnedToday = countPaidOnDay(ledger, now);

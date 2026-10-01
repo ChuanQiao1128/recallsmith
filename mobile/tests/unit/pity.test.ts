@@ -64,10 +64,10 @@ describe('pity helpers', () => {
   });
 
   it('returns countdown label when pity has not reached threshold', () => {
-    expect(buildPityProgressLabelV9({ draws: 7, threshold: 10 }, 1)).toBe('3 cards until guaranteed reveal');
+    expect(buildPityProgressLabelV9({ draws: 7, threshold: 10 }, 1)).toBe('A rare card is guaranteed within 3 cards');
   });
 
   it('says "card" in the singular when one card is left before the guarantee', () => {
-    expect(buildPityProgressLabelV9({ draws: 9, threshold: 10 }, 1)).toBe('1 card until guaranteed reveal');
+    expect(buildPityProgressLabelV9({ draws: 9, threshold: 10 }, 1)).toBe('A rare card is guaranteed within 1 card');
   });
 });

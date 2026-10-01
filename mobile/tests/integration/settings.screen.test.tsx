@@ -70,7 +70,10 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
     getItem: vi.fn(async () => null),
     setItem: vi.fn(async () => {}),
     removeItem: vi.fn(async () => {}),
-    getAllKeys: vi.fn(async () => []),
+    // The device holds one learned card (another account's scope is enough): the four-button
+    // default reads every deck-progress key on the device (F02 x-deploy-1).
+    getAllKeys: vi.fn(async () => ['devcards:u:other-sub:deck-progress:csharp']),
+    multiGet: vi.fn(async (keys: string[]) => keys.map((key) => [key, JSON.stringify([{ stableUid: 'a', lastReviewedAt: 1 }])])),
     multiRemove: vi.fn(async () => {}),
     clear: vi.fn(async () => {}),
   },
@@ -142,6 +145,7 @@ vi.mock('../../src/features/gacha/streaks/streakTracker', () => ({
 }));
 
 import { SettingsScreen } from '../../src/screens/SettingsScreen';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 async function flush() {
   await act(async () => {
@@ -271,6 +275,23 @@ describe('SettingsScreen', () => {
     });
 
     expect(setAudiencePreferenceMock).toHaveBeenCalledWith('junior');
+  });
+
+  it('shows the four-button study setting on for an existing learner and saves the toggle', async () => {
+    // The storage mock reports a learned card and no stored study prefs, so the
+    // first read defaults to four buttons (existing users keep what they know).
+    const { tree } = await renderSettings();
+    const toggle = () => findPressableByTestID(tree, 'settings-four-buttons-toggle');
+    expect(toggle().props.accessibilityLabel).toBe('Show all four rating buttons');
+    expect(toggle().props.accessibilityState).toEqual({ checked: true });
+    expect(vi.mocked(AsyncStorage.setItem)).toHaveBeenCalledWith('recallsmith:study-prefs:v1', JSON.stringify({ fourButtons: true }));
+
+    await act(async () => {
+      toggle().props.onPress();
+      await Promise.resolve();
+    });
+    expect(toggle().props.accessibilityState).toEqual({ checked: false });
+    expect(vi.mocked(AsyncStorage.setItem)).toHaveBeenLastCalledWith('recallsmith:study-prefs:v1', JSON.stringify({ fourButtons: false }));
   });
 
   it('confirms and runs Fresh Start reset flow', async () => {

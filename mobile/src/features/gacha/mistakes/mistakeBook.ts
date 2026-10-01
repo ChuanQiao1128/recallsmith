@@ -24,6 +24,9 @@ export type MistakeOutcome = {
   topic: string | null;
   rating: ReviewRating;
   mcqVerdict?: McqVerdict | null;
+  /** R22 §6: the end-of-session recall check of a card studied this session. Mistakes start once a
+   *  card is learned, so a check outcome — Forgot included — never writes the book. */
+  learningCheck?: boolean;
   at: number;
 };
 
@@ -106,6 +109,7 @@ function capEntries(entries: Record<string, MistakeEntry>): Record<string, Mista
  * and never mutates its input.
  */
 export function applyOutcome(s: MistakeBookState, o: MistakeOutcome): MistakeBookState {
+  if (o.learningCheck === true) return s;
   const key = entryKey(o.deckSlug, o.stableUid);
   const prev = getEntry(s, key);
 

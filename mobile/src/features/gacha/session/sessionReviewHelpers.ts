@@ -3,6 +3,7 @@ import type { CardProgress, ReviewRating } from '../../../review/model';
 import { scheduleNextReview } from '../../../review/model';
 import { countDueToday, pickNextCard } from '../planner/sessionPlanner';
 import { scheduleFocusReview } from '../mistakes/focusSession';
+import { capNextReviewToExam } from '../../goal/studyGoal';
 import type { OwnedGate } from '../contracts';
 import type { McqKindHint } from '../mcq/mcqRotation';
 
@@ -31,15 +32,18 @@ export function buildSessionProgressVM(params: {
   sessionDone: number;
   sessionLimit: number;
   dueTodayCount: number;
+  /** Kept for callers; the subtitle no longer names the mode (R22 §5). */
   mode: string;
   currentRoleLabel?: string | null;
 }): SessionProgressVM {
-  const { sessionDone, sessionLimit, dueTodayCount, mode, currentRoleLabel = null } = params;
+  const { sessionDone, sessionLimit, dueTodayCount, currentRoleLabel = null } = params;
   const percent = sessionLimit > 0 ? Math.min(sessionDone / sessionLimit, 1) : 0;
+  // R22 §5: the card on screen, 1-based, never past the last one; no mode label.
+  const cardNumber = sessionLimit > 0 ? Math.min(sessionDone + 1, sessionLimit) : sessionDone + 1;
 
   return {
     title: 'Session progress',
-    subtitle: `Run ${sessionDone}/${sessionLimit || '∞'} · ${modeLabel(mode)}`,
+    subtitle: sessionLimit > 0 ? `Card ${cardNumber} of ${sessionLimit}` : `Card ${cardNumber}`,
     progressText: `${sessionDone} / ${sessionLimit || '∞'}`,
     hint: `${dueTodayCount} card${dueTodayCount === 1 ? '' : 's'} still count as due in this deck today.`,
     percent,
@@ -60,6 +64,10 @@ export function buildRatedSessionState(params: {
   kindHint?: McqKindHint | null;
   /** A Mistake Book focus run: a card that is not due gets no scheduler credit (scheduleFocusReview). */
   focusRun?: boolean;
+  /** Cards studied this session (R22 §6): their recall check is dealt by the screen, never by the planner. */
+  excludeUids?: ReadonlySet<string> | null;
+  /** The study goal's exam date (R22 §7): no review is scheduled after the start of the day before it. */
+  examDate?: string | null;
 }): {
   updatedProgress: CardProgress[];
   updatedOne: CardProgress;
@@ -68,11 +76,11 @@ export function buildRatedSessionState(params: {
   prevLearnedCount: number;
   remainingDueCount: number;
 } {
-  const { current, progress, rating, mode, sessionDone, sessionLimit, now, cardIndex, ownedSet = null, kindHint = null, focusRun = false } = params;
+  const { current, progress, rating, mode, sessionDone, sessionLimit, now, cardIndex, ownedSet = null, kindHint = null, focusRun = false, excludeUids = null, examDate = null } = params;
 
   const schedule = focusRun ? scheduleFocusReview : scheduleNextReview;
   const updatedOne: CardProgress = {
-    ...schedule(current.progress, rating, now),
+    ...capNextReviewToExam(schedule(current.progress, rating, now), examDate, now.getTime()),
     lastSeenRevision: typeof current.card.Revision === 'number' && current.card.Revision > 0 ? current.card.Revision : 1,
   };
 
@@ -93,6 +101,7 @@ export function buildRatedSessionState(params: {
           index: cardIndex,
           ownedSet,
           kindHint,
+          excludeUids,
         })
       : null;
   const remainingDueCount = countDueToday(updatedProgress, new Date(now.getTime()), ownedSet);

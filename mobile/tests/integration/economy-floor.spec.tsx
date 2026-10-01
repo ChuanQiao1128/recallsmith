@@ -516,8 +516,9 @@ describe('economy floor', () => {
       // One owned new card plans a one-node route: R6 removed the padded
       // warm-up slot, so due 0 / new 1 is a single node the user can full-clear.
       // Asserted so a regression that re-opens the route to the whole deck file
-      // (3 cards) fails here too.
-      expect(blob).toContain('Run 0/1');
+      // (3 cards) fails here too. The card is a new Q/A card, so the run counts its
+      // recall check from the first card (R22 §6, F02 s-correctness-3): one card, two steps.
+      expect(blob).toContain('Card 1 of 2');
 
       // 5. The floor does not fire again: the user now has work to do, which
       //    is a different reason from "already granted today" and the one that

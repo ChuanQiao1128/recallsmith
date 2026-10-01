@@ -36,10 +36,10 @@ function flatten(style: any): Record<string, any> {
   return style && typeof style === 'object' ? style : {};
 }
 
-function renderBar() {
+function renderBar(fourButtons = true) {
   let tree!: renderer.ReactTestRenderer;
   act(() => {
-    tree = renderer.create(<RatingBar onRate={() => {}} revealed />);
+    tree = renderer.create(<RatingBar onRate={() => {}} revealed fourButtons={fourButtons} />);
   });
   return tree;
 }
@@ -86,5 +86,16 @@ describe('dynamicType policy', () => {
       (node) => (node.type as any) === 'View' && node.props.testID === 'review-rating-grid',
     );
     expect(flatten(normalGrid.props.style).flexWrap).toBeUndefined();
+  });
+
+  it('RatingBar keeps the two-button default on one row at large font scales', () => {
+    dims.fontScale = 1.5;
+    const two = renderBar(false);
+    const grid = two.root.find((node) => (node.type as any) === 'View' && node.props.testID === 'review-rating-grid');
+    expect(flatten(grid.props.style).flexWrap).toBeUndefined();
+    for (const text of two.root.findAll((node) => (node.type as any) === 'Text')) {
+      expect(text.props.maxFontSizeMultiplier).toBe(CHROME_MAX_FONT_SCALE);
+    }
+    dims.fontScale = 1.0;
   });
 });
