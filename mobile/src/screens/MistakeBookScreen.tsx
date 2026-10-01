@@ -8,6 +8,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import type { DeckExport } from '../types/deckExport';
 import { splitQuestionCode } from '../content/questionCode';
+import { stripInlineCode } from '../content/inlineCode';
 import { getCachedDeck } from '../content/deckCache';
 import { loadDeckProgress } from '../review/storage';
 import { resolveEffectiveOwned } from '../features/gacha/draw/effectiveOwned';
@@ -242,7 +243,7 @@ export function MistakeBookScreen({ navigation, route }: Props) {
                     {group.rows.map(({ entry, card }) => {
                       const progress = clearProgress(entry, now);
                       // Prose only (Y01): a row never prints a fenced code block's backticks.
-                      const rowQuestion = splitQuestionCode(card.Question).text;
+                      const rowQuestion = stripInlineCode(splitQuestionCode(card.Question).text);
                       return (
                         <Pressable
                           key={entry.stableUid}

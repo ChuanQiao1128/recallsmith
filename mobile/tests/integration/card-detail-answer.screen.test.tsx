@@ -92,7 +92,7 @@ const DOTNET_DECK = {
   Locale: 'en-US',
   Version: '1',
   DeckType: 1,
-  TotalCards: 1,
+  TotalCards: 2,
   Cards: [
     {
       StableUid: 'dotnet-code',
@@ -100,6 +100,25 @@ const DOTNET_DECK = {
       Difficulty: 2,
       Question: 'What does this print?\n```csharp\nvar s = "ab";\n    Console.WriteLine(s.Length);\n```',
       Explanation: 'Length counts UTF-16 code units.',
+    },
+    // F01: inline `code` spans in the question and in the correct option text.
+    {
+      StableUid: 'dotnet-inline',
+      OrderInDeck: 2,
+      Difficulty: 2,
+      Question: 'Why would a `Task` library avoid capturing the context?',
+      Explanation: 'Library code has no UI context to resume on.',
+      Mcq: {
+        v: 1,
+        qualifier: null,
+        shuffle: true,
+        options: [
+          { key: 'a', text: 'Call `ConfigureAwait(false)` on the awaited task', why: null, correct: true },
+          { key: 'b', text: 'Wrap the call in `Task.Run`', why: 'That only moves the work to the pool.', correct: false },
+          { key: 'c', text: 'Block on `.Result`', why: 'Blocking can deadlock on a UI context.', correct: false },
+          { key: 'd', text: 'Mark the method async void', why: 'Callers can no longer await it.', correct: false },
+        ],
+      },
     },
   ],
 };
@@ -243,6 +262,27 @@ describe('CardDetailScreen — show answer', () => {
     expect(correctBlob.indexOf('cross-region')).toBeLessThan(correctBlob.indexOf('object lock'));
     expect(correctBlob).not.toContain('transfer acceleration');
     expect(correctBlob).not.toContain('deny bucket policy');
+  });
+
+  it('renders inline code spans in the question card and the CORRECT ANSWER option (F01)', async () => {
+    ownedFixture = new Set(['dotnet-inline']);
+    const tree = await renderScreen('dotnet-inline');
+
+    const card = byTestId(tree, 'card-detail-question')[0];
+    const question = card.findAll((n) => (n.type as any) === 'Text')[0];
+    expect(question.props.accessibilityLabel).toBe('Why would a Task library avoid capturing the context?');
+    const questionSpans = card.findAll((n) => typeof n.type === 'string' && n.props.testID === 'inline-code');
+    expect(questionSpans.map((n) => n.props.children)).toEqual(['Task']);
+
+    await press(tree, 'card-detail-show-answer');
+
+    const correct = byTestId(tree, 'card-detail-mcq-correct')[0];
+    const spans = correct.findAll((n) => typeof n.type === 'string' && n.props.testID === 'inline-code');
+    expect(spans.map((n) => n.props.children)).toEqual(['ConfigureAwait(false)']);
+    expect(Object.assign({}, ...[spans[0].props.style].flat(Infinity).filter(Boolean)).fontFamily).toBe('Menlo');
+    const option = correct.findAll((n) => (n.type as any) === 'Text' && n.props.accessibilityLabel !== undefined);
+    expect(option.map((n) => n.props.accessibilityLabel)).toEqual(['Call ConfigureAwait(false) on the awaited task']);
+    expect(textBlob(tree)).not.toContain('`');
   });
 
   it('offers no Show answer toggle on a locked card', async () => {

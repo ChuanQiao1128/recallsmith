@@ -674,6 +674,69 @@ describe('SessionCardScreen MCQ branch', () => {
     expect(idText(tree, 'mcq-qualifier')).toBe('LEAST operational overhead');
   });
 
+  // Z01: inline `code` spans in the stem, an option and its WHY render as monospace segments,
+  // never with backticks; the qualifier highlight keeps working and labels carry no backticks.
+  it('renders inline code in the stem, an option and its WHY without backticks', async () => {
+    featureFlagsMock.mockReturnValue(flags({ recallFirst: false }));
+    const card = {
+      ...CARD_1,
+      StableUid: 'dotnet-inline-code-mcq-01',
+      Question: 'You append to a `List<int>` in a hot loop. Which `Add` pattern has the LEAST allocation?',
+      Explanation: 'Pre-size it so `Capacity` covers every item and `EnsureCapacity` never regrows the array.',
+      Mcq: {
+        ...CARD_1.Mcq,
+        qualifier: 'LEAST allocation',
+        options: [
+          { key: 'a', why: 'A `LinkedList<int>` allocates a node per `Add(4)`.', text: 'Switch to `LinkedList<int>`.', correct: false },
+          { key: 'b', why: null, text: 'Construct it with `new List<int>(n)`.', correct: true },
+          { key: 'c', why: 'Plain prose with no code.', text: 'Call `TrimExcess()` after the loop.', correct: false },
+          { key: 'd', why: 'Sorting does not change allocation.', text: 'Sort the list after each insert.', correct: false },
+        ],
+      },
+    };
+    serve(card, NEW_PROGRESS(card.StableUid));
+    const { tree } = await mount();
+
+    const codeSegments = (root: renderer.ReactTestInstance) =>
+      root.findAll((node) => typeof node.type === 'string' && node.props?.testID === 'inline-code');
+    const noBackticks = () =>
+      expect(
+        tree.root.findAll((node) => typeof node.type === 'string' && getTextContent(node.props.children).includes('`')),
+      ).toHaveLength(0);
+
+    // Options stage: the lead-in is clamped above the ask; both carry their code spans.
+    const lead = byTestID(tree, 'mcq-stem-lead')[0];
+    expect(getTextContent(lead.props.children)).toBe('You append to a List<int> in a hot loop.');
+    expect(codeSegments(lead).map((node) => node.props.children)).toEqual(['List<int>']);
+    const stem = byTestID(tree, 'mcq-stem')[0];
+    expect(getTextContent(stem.props.children)).toBe('Which Add pattern has the LEAST allocation?');
+    expect(codeSegments(stem).map((node) => node.props.children)).toEqual(['Add']);
+    expect(flatStyle(codeSegments(stem)[0].props.style).fontFamily).toBe('Menlo');
+    expect(idText(tree, 'mcq-qualifier')).toBe('LEAST allocation');
+    expect(stem.props.accessibilityLabel).toBe('Which Add pattern has the LEAST allocation?');
+
+    const optionA = byTestID(tree, 'mcq-option-text-a')[0];
+    expect(getTextContent(optionA.props.children)).toBe('Switch to LinkedList<int>.');
+    expect(codeSegments(optionA).map((node) => node.props.children)).toEqual(['LinkedList<int>']);
+    expect(flatStyle(codeSegments(optionA)[0].props.style).fontFamily).toBe('Menlo');
+    expect(byTestID(tree, 'mcq-option-a')[0].props.accessibilityLabel).toMatch(/^Option [A-D] of 4: Switch to LinkedList<int>\.$/);
+    expect(byTestID(tree, 'mcq-option-text-d')[0].props.children).toBe('Sort the list after each insert.');
+    noBackticks();
+
+    await press(tree, 'mcq-option-a');
+    await press(tree, 'mcq-submit-sure');
+
+    const why = byTestID(tree, 'mcq-why-a')[0];
+    expect(getTextContent(why.props.children)).toBe('A LinkedList<int> allocates a node per Add(4).');
+    expect(codeSegments(why).map((node) => node.props.children)).toEqual(['LinkedList<int>', 'Add(4)']);
+    expect(flatStyle(codeSegments(why)[0].props.style).fontFamily).toBe('Menlo');
+    // F01 z-tests-1: the section must exist, and its identifiers appear nowhere else on the card.
+    const explanations = byTestID(tree, 'mcq-section-explanation');
+    expect(explanations).toHaveLength(1);
+    expect(codeSegments(explanations[0]).map((node) => node.props.children)).toEqual(['Capacity', 'EnsureCapacity']);
+    noBackticks();
+  });
+
   it('skips the stem stage when recallFirst is off', async () => {
     featureFlagsMock.mockReturnValue(flags({ recallFirst: false }));
     serve(CARD_1, NEW_PROGRESS(CARD_1.StableUid));

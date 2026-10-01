@@ -7,6 +7,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import type { CardExport, DeckExport } from '../types/deckExport';
 import { questionA11yLabel, splitQuestionCode } from '../content/questionCode';
+import { stripInlineCode } from '../content/inlineCode';
 import type { CardProgress } from '../review/model';
 import { colors } from '../theme/colors';
 import { CHROME_MAX_FONT_SCALE } from '../theme/dynamicType';
@@ -18,6 +19,7 @@ import { getFeatureFlags } from '../config/featureFlags';
 import { mcqRequiredCount, resolveMcq } from '../features/gacha/mcq/normalizeMcq';
 import { MCQ_COPY } from '../features/gacha/mcq/mcqConstants';
 import { CardAnswerSections } from '../features/gacha/components/CardAnswerSections';
+import { InlineCodeText } from '../features/gacha/components/InlineCodeText';
 import { QuestionCodeBlock } from '../features/gacha/session/QuestionCodeBlock';
 import { cardDetailStatus } from '../features/gacha/library/cardDetailStatus';
 import { findCardAcrossDecks } from '../features/gacha/library/findCardAcrossDecks';
@@ -445,9 +447,11 @@ export function CardDetailScreen({ navigation, route }: Props) {
               Moved out of the fixed overflow-hidden hero (MCORE-01): normal-flow
               text, no numberOfLines, no fixed height. The page already scrolls. */}
           <View testID="card-detail-question" style={styles.questionCard}>
-            <Text style={styles.questionText} accessibilityLabel={questionCode && question ? questionA11yLabel(question) : undefined}>
-              {title}
-            </Text>
+            <InlineCodeText
+              style={styles.questionText}
+              accessibilityLabel={questionCode && question ? stripInlineCode(questionA11yLabel(question)) : undefined}
+              text={title}
+            />
             {questionCode ? <QuestionCodeBlock code={questionCode} /> : null}
           </View>
 
@@ -502,9 +506,7 @@ export function CardDetailScreen({ navigation, route }: Props) {
                       {mcq.options
                         .filter((option) => option.correct)
                         .map((option) => (
-                          <Text key={option.key} style={styles.mcqCorrectText}>
-                            {option.text}
-                          </Text>
+                          <InlineCodeText key={option.key} style={styles.mcqCorrectText} text={option.text} />
                         ))}
                     </View>
                   ) : null}

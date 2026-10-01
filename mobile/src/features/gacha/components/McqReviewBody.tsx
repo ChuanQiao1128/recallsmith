@@ -2,11 +2,13 @@ import React, { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import CodeBlock from '../../../components/CodeBlock';
+import { hasInlineCode, splitInlineCode, stripInlineCode } from '../../../content/inlineCode';
 import { QUESTION_CODE_A11Y_SUFFIX, splitQuestionCode } from '../../../content/questionCode';
 import type { CardExport, McqExport, McqOption } from '../../../types/deckExport';
 import { formatRank } from '../library/cardRank';
 import { normalizeCodeLanguage, renderSimpleMarkdown } from '../session/reviewContentHelpers';
 import { QuestionCodeBlock } from '../session/QuestionCodeBlock';
+import { InlineCodeText, inlineCodeNodes, useInlineCodeStyle } from './InlineCodeText';
 import {
   MCQ_COPY,
   MCQ_OVER_LIMIT_HINT_MS,
@@ -89,10 +91,16 @@ export type StemSegment = { text: string; emphasis: 'qualifier' | 'caps' | null 
 // bolding every all-caps run of four or more letters ("LEAST", "MOST"). The fallback is a
 // fallback, not a demotion: a qualifier that the authoring pipeline dropped from the stem still
 // gets the caps treatment so the constraint stays visible.
+// F01: emphasis never cuts an inline `code` span — a cut span loses its backtick pair and
+// renders them literally — so a qualifier or caps match that overlaps a span is skipped.
 export function stemSegments(stem: string, qualifier: string | null): StemSegment[] {
+  const spans = codeSpanRanges(stem);
   const trimmed = qualifier === null ? null : qualifier.trim();
   if (trimmed !== null && trimmed.length > 0) {
-    const at = stem.toLowerCase().indexOf(trimmed.toLowerCase());
+    const lower = stem.toLowerCase();
+    const needle = trimmed.toLowerCase();
+    let at = lower.indexOf(needle);
+    while (at >= 0 && overlapsSpan(spans, at, at + trimmed.length)) at = lower.indexOf(needle, at + 1);
     if (at >= 0) {
       const segments: StemSegment[] = [];
       const before = stem.slice(0, at);
@@ -104,15 +112,35 @@ export function stemSegments(stem: string, qualifier: string | null): StemSegmen
       return segments;
     }
   }
-  return capsSegments(stem);
+  return capsSegments(stem, spans);
 }
 
-function capsSegments(stem: string): StemSegment[] {
+// [start, end) of each well-formed inline code span in `text`, backticks included.
+function codeSpanRanges(text: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  let pos = 0;
+  for (const segment of splitInlineCode(text)) {
+    const length = segment.kind === 'code' ? segment.value.length + 2 : segment.value.length;
+    if (segment.kind === 'code') ranges.push([pos, pos + length]);
+    pos += length;
+  }
+  return ranges;
+}
+
+function overlapsSpan(spans: ReadonlyArray<[number, number]>, start: number, end: number): boolean {
+  return spans.some(([from, to]) => start < to && end > from);
+}
+
+function capsSegments(stem: string, spans: ReadonlyArray<[number, number]>): StemSegment[] {
   const segments: StemSegment[] = [];
   const re = /\b[A-Z]{4,}\b/g;
   let last = 0;
   let match: RegExpExecArray | null = re.exec(stem);
   while (match !== null) {
+    if (overlapsSpan(spans, match.index, match.index + match[0].length)) {
+      match = re.exec(stem);
+      continue;
+    }
     if (match.index > last) segments.push({ text: stem.slice(last, match.index), emphasis: null });
     segments.push({ text: match[0], emphasis: 'caps' });
     last = match.index + match[0].length;
@@ -232,7 +260,15 @@ export const McqReviewBody = React.memo(function McqReviewBody(props: McqReviewB
   const collapsed = stage === 'options' && !stemExpanded && split.leadIn.length > 0;
   const stemText = collapsed ? split.ask : question.text;
   const segments = stemSegments(stemText, mcq.qualifier);
-  const stemLabel = question.code ? `${stemText}${QUESTION_CODE_A11Y_SUFFIX}` : undefined;
+  // Z01: inline `code` spans render in monospace inside each stem segment, so
+  // the qualifier / caps emphasis keeps working; the spoken label never carries
+  // backticks.
+  const stemCodeStyle = useInlineCodeStyle(styles.stem);
+  const stemLabel = question.code
+    ? `${stripInlineCode(stemText)}${QUESTION_CODE_A11Y_SUFFIX}`
+    : hasInlineCode(stemText)
+      ? stripInlineCode(stemText)
+      : undefined;
   const showOptions = stage === 'options' || stage === 'verdict';
   // k for the partial banner (gap #10): distinct-by-list correct picks.
   const k = shownOrder.filter((option) => option.correct && picks.includes(option.key)).length;
@@ -261,7 +297,7 @@ export const McqReviewBody = React.memo(function McqReviewBody(props: McqReviewB
         key: 'explanation',
         testID: MCQ_TEST_IDS.sectionExplanation,
         label: MCQ_COPY.sectionExplanation,
-        node: <Text style={styles.sectionBody}>{card.Explanation}</Text>,
+        node: <InlineCodeText style={styles.sectionBody} text={card.Explanation} />,
       });
     }
     if (mcq.qualifier !== null) {
@@ -319,22 +355,25 @@ export const McqReviewBody = React.memo(function McqReviewBody(props: McqReviewB
       </View>
 
       {collapsed ? (
-        <Text testID={MCQ_TEST_IDS.stemLead} style={[styles.stem, styles.stemLead]} numberOfLines={2}>
-          {split.leadIn}
-        </Text>
+        <InlineCodeText
+          testID={MCQ_TEST_IDS.stemLead}
+          style={[styles.stem, styles.stemLead]}
+          numberOfLines={2}
+          text={split.leadIn}
+        />
       ) : null}
 
       <Text testID={MCQ_TEST_IDS.stem} style={styles.stem} accessibilityLabel={stemLabel}>
         {segments.map((seg, i) =>
           seg.emphasis === null ? (
-            seg.text
+            <React.Fragment key={i}>{inlineCodeNodes(seg.text, stemCodeStyle)}</React.Fragment>
           ) : (
             <Text
               key={i}
               testID={seg.emphasis === 'qualifier' ? MCQ_TEST_IDS.qualifier : MCQ_BODY_TEST_IDS.stemCaps}
               style={styles.stemEmphasis}
             >
-              {seg.text}
+              {inlineCodeNodes(seg.text, stemCodeStyle)}
             </Text>
           ),
         )}
@@ -367,7 +406,7 @@ export const McqReviewBody = React.memo(function McqReviewBody(props: McqReviewB
             const picked = picks.includes(option.key);
             const state = rowStateFor(option, picked, stage);
             const letter = mcqLetter(index);
-            const label = mcqOptionA11yLabel(index, shownOrder.length, option.text);
+            const label = mcqOptionA11yLabel(index, shownOrder.length, stripInlineCode(option.text));
             const glyph = glyphFor(state);
             const rowLabel = labelFor(state);
             const expanded = expandedWhy.includes(option.key);
@@ -402,19 +441,16 @@ export const McqReviewBody = React.memo(function McqReviewBody(props: McqReviewB
                         ) : null}
                       </View>
                     ) : null}
-                    <Text
+                    <InlineCodeText
                       testID={MCQ_BODY_TEST_IDS.optionText(option.key)}
                       style={[styles.optionText, state === 'wrong-unpicked' && styles.optionTextMuted]}
-                    >
-                      {option.text}
-                    </Text>
+                      text={option.text}
+                    />
                   </View>
                 </Pressable>
 
                 {stage === 'verdict' && state === 'wrong-picked' ? (
-                  <Text testID={MCQ_TEST_IDS.why(option.key)} style={styles.why}>
-                    {option.why}
-                  </Text>
+                  <InlineCodeText testID={MCQ_TEST_IDS.why(option.key)} style={styles.why} text={option.why} />
                 ) : null}
                 {stage === 'verdict' && state === 'wrong-unpicked' ? (
                   <Pressable
@@ -431,9 +467,7 @@ export const McqReviewBody = React.memo(function McqReviewBody(props: McqReviewB
                   </Pressable>
                 ) : null}
                 {stage === 'verdict' && state === 'wrong-unpicked' && expanded ? (
-                  <Text testID={MCQ_TEST_IDS.why(option.key)} style={styles.why}>
-                    {option.why}
-                  </Text>
+                  <InlineCodeText testID={MCQ_TEST_IDS.why(option.key)} style={styles.why} text={option.why} />
                 ) : null}
               </View>
             );

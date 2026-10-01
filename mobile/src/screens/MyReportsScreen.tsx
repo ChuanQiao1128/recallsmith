@@ -18,6 +18,7 @@ import {
   type MyCardReport,
 } from '../features/cardReport/cardReportApi';
 import { questionText } from '../content/questionCode';
+import { stripInlineCode } from '../content/inlineCode';
 import { colors } from '../theme/colors';
 import { a11y } from '../theme/a11y';
 import { CHROME_MAX_FONT_SCALE } from '../theme/dynamicType';
@@ -151,7 +152,7 @@ export function MyReportsScreen({ navigation }: Props) {
               {state.items.map((item) => {
                 const badge = reportBadgeLabel(item);
                 // The API echoes the raw question: show the prose only, never a fenced code block.
-                const question = (item.question && questionText(item.question)) || 'Card no longer available';
+                const question = (item.question && stripInlineCode(questionText(item.question))) || 'Card no longer available';
                 const reason = reasonLabel(item.reason);
                 return (
                   <View

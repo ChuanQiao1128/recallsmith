@@ -4,6 +4,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import CodeBlock from '../../../components/CodeBlock';
 import type { CardExport } from '../../../types/deckExport';
 import { normalizeCodeLanguage, renderSimpleMarkdown } from '../session/reviewContentHelpers';
+import { InlineCodeText } from './InlineCodeText';
 import { colors } from '../../../theme/colors';
 import { spacing } from '../../../theme/spacing';
 import { typography } from '../../../theme/typography';
@@ -73,7 +74,7 @@ export function CardAnswerSections(props: { card: CardExport; testID?: string })
     sections.push({
       key: 'explanation',
       label: 'EXPLANATION',
-      node: <Text style={styles.sectionBody}>{card.Explanation}</Text>,
+      node: <InlineCodeText style={styles.sectionBody} text={card.Explanation} />,
     });
   }
   if (card.CodeSnippet) {

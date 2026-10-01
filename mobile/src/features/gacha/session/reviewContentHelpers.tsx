@@ -1,6 +1,7 @@
 import React from 'react';
 import { Alert, Text, View } from 'react-native';
 import type { CardExport, DeckExport } from '../../../types/deckExport';
+import { InlineCodeText } from '../components/InlineCodeText';
 
 export function showTrialUpsellDialog(
   navigation: any,
@@ -73,16 +74,14 @@ export function renderSimpleMarkdown(text: string, stylesObj: any) {
       nodes.push(
         <View key={`b-${idx}`} style={stylesObj.mdBulletRow}>
           <Text style={stylesObj.mdBullet}>•</Text>
-          <Text style={stylesObj.mdText}>{bullet}</Text>
+          <InlineCodeText style={stylesObj.mdText} text={bullet} />
         </View>,
       );
       return;
     }
 
     nodes.push(
-      <Text key={`p-${idx}`} style={stylesObj.mdText}>
-        {raw}
-      </Text>,
+      <InlineCodeText key={`p-${idx}`} style={stylesObj.mdText} text={raw} />,
     );
   });
 
