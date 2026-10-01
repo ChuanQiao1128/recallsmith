@@ -92,4 +92,4 @@ Test: the unit tests under y-correctness-2 and the surface tests under y-tests-3
 
 - `npx tsc --noEmit` — pass
 - `npx vitest run` — 269 files, all tests pass
-- `F01.verify.sh`
+- `F01.verify.sh` — F01 VERIFY OK
