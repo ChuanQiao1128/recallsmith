@@ -163,7 +163,8 @@ export function buildLibraryCardRows(params: {
       return {
         stableUid: card.StableUid,
         orderInDeck: card.OrderInDeck,
-        // Prose only: a library tile never prints a fenced code block's backticks (Y01).
+        // Prose only: a library tile never prints a fenced code block's backticks (Y01) or an
+        // inline code span's (Z01).
         question: stripInlineCode(questionText(card.Question)),
         difficulty: card.Difficulty,
         rarity: rarityFromDifficulty(card.Difficulty),
