@@ -9,13 +9,17 @@ const read = (f: string) => fs.readFileSync(path.join(RELEASE_DIR, f), 'utf8').t
 const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
 
 describe('1.9.0 store texts', () => {
-  it("What's New stays within 4000 characters and describes the reports and the Mistake Book fixes", () => {
+  it("What's New stays within 4000 characters and describes reporting, crash reports and the Mistake Book fixes", () => {
     const text = read('whats-new-1.9.0.txt');
     expect(text.length).toBeGreaterThan(0);
     expect(text.length).toBeLessThanOrEqual(4000);
     expect(text).toContain('crash and performance reports');
-    expect(text).toMatch(/no account data/i);
-    expect(text).toMatch(/email address/i);
+    // Accurate wording only: the App Privacy label declares crash and diagnostic data as linked (the interim
+    // client-errors sink carries a hash of the account id), so the text must not call them anonymous.
+    expect(text).not.toMatch(/anonymous|no account data/i);
+    expect(text).toMatch(/name or email address/i);
+    expect(text).toMatch(/not used for tracking/i);
+    expect(text).toMatch(/Report a card/);
     expect(text).toMatch(/Mistake Book/);
     expect(text).toContain('No mistakes due today');
     expect(text.toLowerCase()).not.toContain('twice in a row');
