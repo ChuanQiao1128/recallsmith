@@ -232,7 +232,6 @@ import { buildRatedSessionState } from '../../src/features/gacha/session/session
 import { settleRatingReward } from '../../src/features/gacha/rewards/sessionRewards';
 import type { RatingRewardStep } from '../../src/features/gacha/rewards/sessionRewards';
 import { resetSessionStore, useSessionStore } from '../../src/features/gacha/session/sessionStore';
-import { loadAllProgress } from '../../src/review/storage';
 
 // The dealt card has been reviewed before, so it is rated directly; a never-reviewed Q/A card
 // opens on the R22 study view first (see the learning-step tests in session-card-learning.screen.test.tsx).
@@ -1118,9 +1117,11 @@ describe('SessionCardScreen', () => {
     });
 
     it('keeps all four buttons for an existing learner who already has a learned card', async () => {
-      vi.mocked(loadAllProgress).mockResolvedValueOnce({
-        csharp: [{ stableUid: '9', stage: 2, nextReviewAt: 5, lastReviewedAt: 1_700_000_000_000 }] as any,
-      });
+      // The probe reads every deck-progress key on the device, whoever is signed in (F02 x-deploy-1).
+      asyncStore.set(
+        'devcards:u:some-sub:deck-progress:csharp',
+        JSON.stringify([{ stableUid: '9', stage: 2, nextReviewAt: 5, lastReviewedAt: 1_700_000_000_000 }]),
+      );
       const { tree } = await mount();
       expect(ratingIds(tree)).toEqual(['review-rating-again', 'review-rating-hard', 'review-rating-good', 'review-rating-easy']);
       expect(JSON.parse(asyncStore.get(STUDY_PREFS_KEY) as string)).toEqual({ fourButtons: true });
@@ -1129,8 +1130,9 @@ describe('SessionCardScreen', () => {
     it('honours a stored choice over the learned-card default', async () => {
       asyncStore.set(STUDY_PREFS_KEY, JSON.stringify({ fourButtons: true }));
       const { tree } = await mount();
+      // No learned card on the device, so four buttons can only come from the stored choice, which stays.
       expect(ratingIds(tree)).toHaveLength(4);
-      expect(vi.mocked(loadAllProgress)).not.toHaveBeenCalled();
+      expect(JSON.parse(asyncStore.get(STUDY_PREFS_KEY) as string)).toEqual({ fourButtons: true });
     });
   });
 });

@@ -634,7 +634,7 @@ function buildHeroCopy(params: {
           : 'Nothing due today; review later or browse your decks.',
         // R22 §5: no planner word "node" in learner copy (F02 s-correctness-4).
         helper: hasTodayWork
-          ? `Clear ${SESSION_MIN_GOAL} card${SESSION_MIN_GOAL === 1 ? '' : 's'} to keep momentum. Full run stays capped at ${SESSION_MAIN_ROUTE_DEFAULT} card${SESSION_MAIN_ROUTE_DEFAULT === 1 ? '' : 's'}.`
+          ? `Clear ${SESSION_MIN_GOAL} card${SESSION_MIN_GOAL === 1 ? '' : 's'} to keep momentum. Full run stays capped at ${SESSION_MAIN_ROUTE_DEFAULT} cards.`
           : hasSignedInUser
             ? 'You can review again later or open another deck while today is light.'
             : 'Sign in later for backup and extended planning, but today you are clear.',
