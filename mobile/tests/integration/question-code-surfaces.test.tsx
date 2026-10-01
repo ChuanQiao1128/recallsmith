@@ -199,6 +199,54 @@ describe('question code on draw and library surfaces (Y01)', () => {
     expect(labels.some((label) => label.includes('`'))).toBe(false);
   });
 
+  // F01 z-tests-2: DrawResult and the reveal face strip inline-code backticks themselves, on top
+  // of the drawCommit strip. Feeding them a question that still carries spans proves each of
+  // the featured face, its label, the grid tiles and the detail sheet does its own strip. (The
+  // summary-grid caption and the spotlight sheet print the drawCommit text as given.)
+  it('strips inline-code backticks on the featured face, its label, the grid and the detail sheet', async () => {
+    const committed = await commitDraw(SLUG, 10);
+    const INLINE = 'Why does `List<int>` regrow on `Add(4)`?';
+    const clean = 'Why does List<int> regrow on Add(4)?';
+    const result = { ...committed!, cards: committed!.cards.map((card) => ({ ...card, question: INLINE })) };
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawResultScreen
+          navigation={{ navigate: vi.fn() } as any}
+          route={{
+            key: 'result',
+            name: 'DrawResult',
+            params: { slug: SLUG, deckTitle: '.NET Interview', drawResult: result, ownedAfter: 2, totalCards: 2 },
+          } as any}
+        />,
+      );
+    });
+    await flush();
+
+    const hostByTestID = (id: string) => tree.root.findAll((n) => typeof n.type === 'string' && n.props.testID === id);
+    const textOf = (n: renderer.ReactTestInstance) => {
+      const c = n.props.children;
+      return Array.isArray(c) ? c.join('') : String(c ?? '');
+    };
+
+    // RevealCardFace slab.
+    expect(hostByTestID('draw-result-featured-question').map(textOf)).toEqual([clean]);
+    // Featured label.
+    const featured = hostByTestID('screen-draw-result-featured-card');
+    expect(featured.map((n) => n.props.accessibilityLabel)).toContain(`Open featured card detail: ${clean}`);
+    // Featured slab plus one tile per drawn card in the all-cards sheet.
+    act(() => {
+      hostByTestID('draw-result-open-all-cards')[0].props.onPress();
+    });
+    expect(allText(tree).filter((line) => line === clean)).toHaveLength(1 + result.cards.length);
+
+    act(() => {
+      hostByTestID('draw-result-summary-cell-0')[0].props.onPress();
+    });
+    // Detail sheet title.
+    expect(hostByTestID('draw-result-detail-question').map(textOf)).toEqual([clean]);
+  });
+
   it('gives library tiles the prose only', () => {
     const rows = buildLibraryCardRows({ deck: deck as any, progress: [] });
     const byUid = Object.fromEntries(rows.map((row) => [row.stableUid, row]));
