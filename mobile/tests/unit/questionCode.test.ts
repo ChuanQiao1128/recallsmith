@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { questionA11yLabel, questionText, splitQuestionCode } from '../../src/content/questionCode';
+import {
+  FENCE_ONLY_QUESTION_TEXT,
+  questionA11yLabel,
+  questionText,
+  splitQuestionCode,
+} from '../../src/content/questionCode';
 
 const FENCE = '```';
 
@@ -66,11 +71,16 @@ describe('splitQuestionCode', () => {
     expect(splitQuestionCode(q)).toEqual({ text: 'Q?', code: { language: 'csharp', source: 'int a = 1;' } });
   });
 
-  it('returns empty text when the question is only a fence', () => {
+  // F01 supervisor-1 / y-correctness-2: a fence-only question never yields empty prose.
+  it('falls back to neutral prose when the question is only a fence', () => {
+    expect(FENCE_ONLY_QUESTION_TEXT).toBe('What does this code do?');
     expect(splitQuestionCode(`${FENCE}csharp\nint a = 1;\n${FENCE}`)).toEqual({
-      text: '',
+      text: 'What does this code do?',
       code: { language: 'csharp', source: 'int a = 1;' },
     });
+    expect(splitQuestionCode(`  \n${FENCE}csharp\nConsole.WriteLine(1 + 1);\n${FENCE}\n   \n`).text).toBe(
+      'What does this code do?',
+    );
   });
 });
 
@@ -80,5 +90,11 @@ describe('questionText / questionA11yLabel', () => {
     expect(questionText(q)).toBe('What prints?');
     expect(questionA11yLabel(splitQuestionCode(q))).toBe('What prints?, code sample follows');
     expect(questionA11yLabel(splitQuestionCode('Plain?'))).toBe('Plain?');
+  });
+
+  it('gives a fence-only question the fallback prose on row surfaces and in the spoken label', () => {
+    const q = `${FENCE}csharp\nConsole.WriteLine(1 + 1);\n${FENCE}\n`;
+    expect(questionText(q)).toBe('What does this code do?');
+    expect(questionA11yLabel(splitQuestionCode(q))).toBe('What does this code do?, code sample follows');
   });
 });

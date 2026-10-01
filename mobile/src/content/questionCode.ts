@@ -26,6 +26,9 @@
 //   • text = the question with the fenced block removed: the prose before and
 //     after it joined by one blank line, outer whitespace trimmed and runs of
 //     blank lines collapsed.
+//   • A fence-only question (no prose around the fence) gets the neutral prose
+//     FENCE_ONLY_QUESTION_TEXT, so no title, row or spoken label is ever empty
+//     (F01, r22yx).
 
 export type QuestionCode = { language: string; source: string };
 
@@ -35,6 +38,8 @@ const OPEN_FENCE = /^\s*```([A-Za-z0-9_+#.-]+)\s*$/;
 const CLOSE_FENCE = /^\s*```\s*$/;
 
 export const QUESTION_CODE_A11Y_SUFFIX = ', code sample follows';
+
+export const FENCE_ONLY_QUESTION_TEXT = 'What does this code do?';
 
 function tidy(text: string): string {
   return text
@@ -76,7 +81,7 @@ export function splitQuestionCode(question: string): SplitQuestion {
   const source = body.slice(start, end).join('\n');
   const before = tidy(lines.slice(0, open).join('\n'));
   const after = tidy(lines.slice(close + 1).join('\n'));
-  const text = [before, after].filter((part) => part.length > 0).join('\n\n');
+  const text = [before, after].filter((part) => part.length > 0).join('\n\n') || FENCE_ONLY_QUESTION_TEXT;
 
   return { text, code: { language, source } };
 }
