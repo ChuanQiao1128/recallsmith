@@ -69,6 +69,7 @@ import { getFeatureFlags } from '../config/featureFlags';
 import { SessionReportButton } from '../features/cardReport/SessionReportButton';
 import { loadExpoHaptics } from '../components/ceremonyHaptics';
 import { getFeedbackPrefsSync } from '../features/gacha/settings/feedbackPrefs';
+import { getStudyPrefsSync, loadStudyPrefs } from '../features/gacha/study/studyPrefs';
 import { studyHaptic } from '../features/gacha/session/studyHaptics';
 import type { McqExport, McqOption } from '../types/deckExport';
 import { mcqRequiredCount, resolveMcq } from '../features/gacha/mcq/normalizeMcq';
@@ -213,6 +214,10 @@ export function SessionCardScreen({ navigation, route }: Props) {
   const [sessionDone, setSessionDone] = useState(0);
   const [showAnswer, setShowAnswer] = useState(false);
   const [mcqState, setMcqState] = useState<McqCardState>(EMPTY_MCQ_CARD_STATE);
+  // Two rating buttons unless the learner has the four-button study setting on.
+  // Seeded from the in-memory value, refreshed on focus (the first read decides
+  // the default from whether the learner already has a learned card).
+  const [fourButtons, setFourButtons] = useState<boolean>(() => getStudyPrefsSync().fourButtons);
   const renderAsMcq = mcqState.mcq !== null;
   const [coachSeen, setCoachSeen] = useState<boolean | null>(null);
   // The dock's measured height (onLayout). The scroll surface reserves exactly this much at the
@@ -285,6 +290,17 @@ export function SessionCardScreen({ navigation, route }: Props) {
   useScrollToTopOnChange(
     scrollRef,
     current ? `${current.card.StableUid}:${mcqState.attemptIndex}:${sessionDone}` : null,
+  );
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      void loadStudyPrefs().then((prefs) => {
+        if (!cancelled) setFourButtons(prefs.fourButtons);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }, []),
   );
   useFocusEffect(
     useCallback(() => {
@@ -1149,6 +1165,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
                   testID="review-rating-bar"
                   disabled={reviewing || !showAnswer}
                   revealed={showAnswer}
+                  fourButtons={fourButtons}
                   onRate={(rating) => void handleRating(rating)}
                 />
               )}

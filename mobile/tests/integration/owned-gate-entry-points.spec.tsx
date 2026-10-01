@@ -352,7 +352,7 @@ describe('ownership gate — every entry point', () => {
         pressText(tree, 'Reveal answer');
       });
       await act(async () => {
-        pressText(tree, 'Good');
+        pressText(tree, 'Remembered');
         await Promise.resolve();
       });
       await flush();

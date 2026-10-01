@@ -17,9 +17,9 @@ vi.mock('react-native', () => {
   };
 });
 
-import { RATING_HINT, RATING_ITEMS, RatingBar } from '../../src/features/gacha/components/RatingBar';
+import { RATING_HINT, RATING_ITEMS, RatingBar, TWO_RATING_ITEMS } from '../../src/features/gacha/components/RatingBar';
 
-function render(props: { revealed?: boolean; disabled?: boolean }) {
+function render(props: { revealed?: boolean; disabled?: boolean; fourButtons?: boolean }) {
   let tree!: renderer.ReactTestRenderer;
   act(() => {
     tree = renderer.create(<RatingBar onRate={() => {}} {...props} />);
@@ -38,14 +38,20 @@ describe('RatingBar hint copy', () => {
   it('asks for the recall attempt before reveal', () => {
     const hint = texts(render({ revealed: false, disabled: true })).find((node) => node.props.testID === 'review-rating-hint');
     expect(hint?.props.children).toBe(RATING_HINT.beforeReveal);
-    expect(hint?.props.children).toBe('Think about how well you recalled this before seeing the answer.');
+    expect(hint?.props.children).toBe('Try to recall the answer, then reveal it.');
   });
 
-  it('asks how well it went after reveal, never the pre-reveal sentence', () => {
+  it('asks whether you remembered it after reveal (two buttons), never the pre-reveal sentence', () => {
     const hint = texts(render({ revealed: true, disabled: false })).find((node) => node.props.testID === 'review-rating-hint');
+    expect(hint?.props.children).toBe(RATING_HINT.afterRevealTwo);
+    expect(hint?.props.children).toBe('Did you remember it?');
+    expect(String(hint?.props.children)).not.toMatch(/then reveal it/i);
+  });
+
+  it('asks how well it went after reveal with all four buttons', () => {
+    const hint = texts(render({ revealed: true, fourButtons: true })).find((node) => node.props.testID === 'review-rating-hint');
     expect(hint?.props.children).toBe(RATING_HINT.afterReveal);
     expect(hint?.props.children).toBe('How well did you recall it?');
-    expect(String(hint?.props.children)).not.toMatch(/before seeing the answer/i);
   });
 
   it('defaults to the pre-reveal hint when the caller does not say', () => {
@@ -66,7 +72,7 @@ describe('RatingBar subtitles fit a 4-up grid', () => {
   });
 
   it('renders the four titles and subtitles, one line each', () => {
-    const tree = render({ revealed: true });
+    const tree = render({ revealed: true, fourButtons: true });
     const rendered = texts(tree).map((node) => node.props.children);
     for (const item of RATING_ITEMS) {
       expect(rendered).toContain(item.title);
@@ -81,7 +87,7 @@ describe('RatingBar subtitles fit a 4-up grid', () => {
     const onRate = vi.fn();
     let tree!: renderer.ReactTestRenderer;
     act(() => {
-      tree = renderer.create(<RatingBar onRate={onRate} revealed />);
+      tree = renderer.create(<RatingBar onRate={onRate} revealed fourButtons />);
     });
     const buttons = tree.root.findAll((node) => (node.type as any) === 'Pressable');
     expect(buttons).toHaveLength(4);
@@ -89,5 +95,50 @@ describe('RatingBar subtitles fit a 4-up grid', () => {
       buttons.forEach((button) => button.props.onPress());
     });
     expect(onRate.mock.calls.map((call) => call[0])).toEqual(['again', 'hard', 'good', 'easy']);
+  });
+});
+
+// R22 §1.4, §6: new learners rate with two buttons; four is an opt-in setting.
+describe('RatingBar two-button default', () => {
+  it('renders Forgot and Remembered by default, and nothing from the four-button scale', () => {
+    const tree = render({ revealed: true });
+    const buttons = tree.root.findAll((node) => (node.type as any) === 'Pressable');
+    expect(buttons).toHaveLength(2);
+    expect(buttons.map((b) => b.props.testID)).toEqual(['review-rating-again', 'review-rating-good']);
+    const rendered = texts(tree).map((node) => node.props.children);
+    expect(rendered).toContain('Forgot');
+    expect(rendered).toContain('Remembered');
+    for (const title of ['Again', 'Hard', 'Good', 'Easy']) expect(rendered).not.toContain(title);
+    expect(TWO_RATING_ITEMS.map((item) => item.title)).toEqual(['Forgot', 'Remembered']);
+  });
+
+  it('maps Forgot to again and Remembered to good through the same onRate contract', () => {
+    const onRate = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    act(() => {
+      tree = renderer.create(<RatingBar onRate={onRate} revealed />);
+    });
+    const buttons = tree.root.findAll((node) => (node.type as any) === 'Pressable');
+    act(() => {
+      buttons.forEach((button) => button.props.onPress());
+    });
+    expect(onRate.mock.calls.map((call) => call[0])).toEqual(['again', 'good']);
+  });
+
+  it('restores Again/Hard/Good/Easy when fourButtons is on', () => {
+    const buttons = render({ revealed: true, fourButtons: true }).root.findAll((node) => (node.type as any) === 'Pressable');
+    expect(buttons.map((b) => b.props.testID)).toEqual([
+      'review-rating-again',
+      'review-rating-hard',
+      'review-rating-good',
+      'review-rating-easy',
+    ]);
+  });
+
+  it('uses the same pre-reveal hint in both modes', () => {
+    for (const fourButtons of [false, true]) {
+      const hint = texts(render({ revealed: false, fourButtons })).find((node) => node.props.testID === 'review-rating-hint');
+      expect(hint?.props.children).toBe('Try to recall the answer, then reveal it.');
+    }
   });
 });

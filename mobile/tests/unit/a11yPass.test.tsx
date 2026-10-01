@@ -35,7 +35,7 @@ vi.mock('react-native-safe-area-context', () => {
   };
 });
 
-import { RATING_ITEMS, RatingBar, ratingA11yLabel } from '../../src/features/gacha/components/RatingBar';
+import { RATING_ITEMS, RatingBar, TWO_RATING_ITEMS, ratingA11yLabel } from '../../src/features/gacha/components/RatingBar';
 import BottomTabBar from '../../src/components/BottomTabBar';
 import { MAIN_TABS } from '../../src/navigation/mainTabs';
 import { LibraryCardTile, libraryTileA11yLabel } from '../../src/features/gacha/library/LibraryCardTile';
@@ -57,7 +57,7 @@ function pressables(tree: renderer.ReactTestRenderer) {
 
 describe('G34 VoiceOver pass', () => {
   it('RatingBar gives every rating a button role and a spoken label', () => {
-    const tree = render(<RatingBar onRate={() => {}} disabled revealed />);
+    const tree = render(<RatingBar onRate={() => {}} disabled revealed fourButtons />);
     const buttons = pressables(tree);
     expect(buttons).toHaveLength(4);
 
@@ -73,10 +73,19 @@ describe('G34 VoiceOver pass', () => {
     }
 
     // Enabled variant mirrors the prop the other way.
-    const enabled = pressables(render(<RatingBar onRate={() => {}} revealed />));
+    const enabled = pressables(render(<RatingBar onRate={() => {}} revealed fourButtons />));
     for (const b of enabled) {
       expect(b.props.accessibilityState.disabled).toBe(false);
     }
+  });
+
+  it('RatingBar two-button default speaks Forgot and Remembered as buttons', () => {
+    const buttons = pressables(render(<RatingBar onRate={() => {}} disabled revealed />));
+    const expectedLabels = TWO_RATING_ITEMS.map((item) => ratingA11yLabel(item));
+    expect(expectedLabels).toEqual(['Forgot, show soon', 'Remembered, normal gap']);
+    expect(buttons.map((b) => b.props.accessibilityRole)).toEqual(['button', 'button']);
+    expect(buttons.map((b) => b.props.accessibilityLabel)).toEqual(expectedLabels);
+    for (const b of buttons) expect(b.props.accessibilityState.disabled).toBe(true);
   });
 
   it('BottomTabBar is a tablist whose active tab reports selected', () => {

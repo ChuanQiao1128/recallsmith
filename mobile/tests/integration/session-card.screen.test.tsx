@@ -114,7 +114,24 @@ vi.mock('../../src/content/activeDeck', () => ({
   setActiveDeckSlug: vi.fn(async () => {}),
 }));
 
+// Backs the study prefs (recallsmith:study-prefs:v1) the screen reads on focus.
+const asyncStore = new Map<string, string>();
+vi.mock('@react-native-async-storage/async-storage', () => ({
+  default: {
+    getItem: vi.fn(async (key: string) => (asyncStore.has(key) ? asyncStore.get(key)! : null)),
+    setItem: vi.fn(async (key: string, value: string) => {
+      asyncStore.set(key, value);
+    }),
+    removeItem: vi.fn(async (key: string) => {
+      asyncStore.delete(key);
+    }),
+    getAllKeys: vi.fn(async () => [...asyncStore.keys()]),
+    multiGet: vi.fn(async (keys: string[]) => keys.map((key) => [key, asyncStore.get(key) ?? null])),
+  },
+}));
+
 vi.mock('../../src/review/storage', () => ({
+  loadAllProgress: vi.fn(async () => ({})),
   loadDeckProgress: vi.fn(async () => [{ stableUid: '1', stage: 0, nextReviewAt: 0 }]),
   saveDeckProgress: vi.fn(async () => {}),
   loadOrInitDailyStats: vi.fn(async () => ({ dateKey: '2026-04-23', plannedCount: 0, doneCount: 0 })),
@@ -215,6 +232,7 @@ import { buildRatedSessionState } from '../../src/features/gacha/session/session
 import { settleRatingReward } from '../../src/features/gacha/rewards/sessionRewards';
 import type { RatingRewardStep } from '../../src/features/gacha/rewards/sessionRewards';
 import { resetSessionStore, useSessionStore } from '../../src/features/gacha/session/sessionStore';
+import { loadAllProgress } from '../../src/review/storage';
 
 async function flush() {
   await act(async () => {
@@ -269,6 +287,7 @@ describe('SessionCardScreen', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    asyncStore.clear();
     resetSessionStore();
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
     vi.mocked(resolveDeckBySlug).mockResolvedValue(buildDeck() as any);
@@ -313,7 +332,7 @@ describe('SessionCardScreen', () => {
     });
 
     await act(async () => {
-      findPressableByLabel(tree, 'Good').props.onPress();
+      findPressableByLabel(tree, 'Remembered').props.onPress();
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -369,7 +388,7 @@ describe('SessionCardScreen', () => {
       await Promise.resolve();
     });
     await act(async () => {
-      findPressableByLabel(tree, 'Good').props.onPress();
+      findPressableByLabel(tree, 'Remembered').props.onPress();
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -405,7 +424,7 @@ describe('SessionCardScreen', () => {
     });
 
     await act(async () => {
-      findPressableByLabel(tree, 'Good').props.onPress();
+      findPressableByLabel(tree, 'Remembered').props.onPress();
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -440,7 +459,7 @@ describe('SessionCardScreen', () => {
     });
 
     await act(async () => {
-      findPressableByLabel(tree, 'Good').props.onPress();
+      findPressableByLabel(tree, 'Remembered').props.onPress();
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -713,7 +732,7 @@ describe('SessionCardScreen', () => {
       });
 
       await act(async () => {
-        findPressableByLabel(tree, 'Good').props.onPress();
+        findPressableByLabel(tree, 'Remembered').props.onPress();
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -795,7 +814,7 @@ describe('SessionCardScreen', () => {
         await Promise.resolve();
       });
       await act(async () => {
-        findPressableByLabel(tree, 'Good').props.onPress();
+        findPressableByLabel(tree, 'Remembered').props.onPress();
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -871,7 +890,7 @@ describe('SessionCardScreen', () => {
         await Promise.resolve();
       });
       await act(async () => {
-        findPressableByLabel(tree, 'Good').props.onPress();
+        findPressableByLabel(tree, 'Remembered').props.onPress();
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1004,17 +1023,17 @@ describe('SessionCardScreen', () => {
       const { tree } = await mount({ limit: 1 });
       const hint = () => byTestID(tree, 'review-rating-hint')[0].props.children;
 
-      expect(hint()).toBe('Think about how well you recalled this before seeing the answer.');
+      expect(hint()).toBe('Try to recall the answer, then reveal it.');
       await act(async () => {
         findPressableByLabel(tree, 'Reveal answer').props.onPress();
         await Promise.resolve();
       });
-      expect(hint()).toBe('How well did you recall it?');
+      expect(hint()).toBe('Did you remember it?');
       await act(async () => {
         findPressableByLabel(tree, 'Hide').props.onPress();
         await Promise.resolve();
       });
-      expect(hint()).toBe('Think about how well you recalled this before seeing the answer.');
+      expect(hint()).toBe('Try to recall the answer, then reveal it.');
     });
 
     it('prints the deck rank in the header badge, not the raw OrderInDeck', async () => {
@@ -1048,6 +1067,66 @@ describe('SessionCardScreen', () => {
       expect(style.borderTopColor).toBeTruthy();
       expect(style.shadowOffset).toEqual({ width: 0, height: -4 });
       expect(style.shadowOpacity).toBeGreaterThan(0);
+    });
+  });
+
+  // R22 §1.4, §6: two rating buttons by default; existing learners keep four.
+  describe('rating buttons (two by default, four as a study setting)', () => {
+    const STUDY_PREFS_KEY = 'recallsmith:study-prefs:v1';
+
+    async function mount() {
+      const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
+      let tree!: renderer.ReactTestRenderer;
+      await act(async () => {
+        tree = renderer.create(
+          <SessionCardScreen
+            navigation={navigation}
+            route={{ key: 'session-card', name: 'SessionCard', params: { slug: 'csharp', mode: 'mixed', limit: 1 } } as any}
+          />,
+        );
+      });
+      await flush();
+      await act(async () => {
+        findPressableByLabel(tree, 'Reveal answer').props.onPress();
+        await Promise.resolve();
+      });
+      return { tree, navigation };
+    }
+
+    const ratingIds = (tree: renderer.ReactTestRenderer) =>
+      tree.root
+        .findAll((node) => (node.type as any) === 'Pressable' && String(node.props.testID ?? '').startsWith('review-rating-'))
+        .map((node) => node.props.testID);
+
+    it('shows Forgot / Remembered to a new learner and stores that default', async () => {
+      const { tree } = await mount();
+      expect(ratingIds(tree)).toEqual(['review-rating-again', 'review-rating-good']);
+      expect(findTextByLabel(tree, 'Hard')).toHaveLength(0);
+      expect(JSON.parse(asyncStore.get(STUDY_PREFS_KEY) as string)).toEqual({ fourButtons: false });
+
+      // Remembered still sends 'good' through the unchanged rating path.
+      await act(async () => {
+        findPressableByLabel(tree, 'Remembered').props.onPress();
+        await Promise.resolve();
+      });
+      await flush();
+      expect(vi.mocked(settleRatingReward).mock.calls[0][0]).toMatchObject({ rating: 'good' });
+    });
+
+    it('keeps all four buttons for an existing learner who already has a learned card', async () => {
+      vi.mocked(loadAllProgress).mockResolvedValueOnce({
+        csharp: [{ stableUid: '9', stage: 2, nextReviewAt: 5, lastReviewedAt: 1_700_000_000_000 }] as any,
+      });
+      const { tree } = await mount();
+      expect(ratingIds(tree)).toEqual(['review-rating-again', 'review-rating-hard', 'review-rating-good', 'review-rating-easy']);
+      expect(JSON.parse(asyncStore.get(STUDY_PREFS_KEY) as string)).toEqual({ fourButtons: true });
+    });
+
+    it('honours a stored choice over the learned-card default', async () => {
+      asyncStore.set(STUDY_PREFS_KEY, JSON.stringify({ fourButtons: true }));
+      const { tree } = await mount();
+      expect(ratingIds(tree)).toHaveLength(4);
+      expect(vi.mocked(loadAllProgress)).not.toHaveBeenCalled();
     });
   });
 });

@@ -10,25 +10,38 @@ import { CHROME_MAX_FONT_SCALE, isLargeFontScale, useFontScale } from '../../../
 // "Normal inte…" on the owner's device (2026-09-21), which is worse than no
 // subtitle at all. Wording stays parallel across the four so the eye reads
 // them as one scale.
-export const RATING_ITEMS: ReadonlyArray<{
+type RatingItem = {
   key: ReviewRating;
   title: string;
   subtitle: string;
   styleKey: 'ratingAgain' | 'ratingHard' | 'ratingGood' | 'ratingEasy';
-}> = [
+};
+
+export const RATING_ITEMS: ReadonlyArray<RatingItem> = [
   { key: 'again', title: 'Again', subtitle: 'Show soon', styleKey: 'ratingAgain' },
   { key: 'hard', title: 'Hard', subtitle: 'Short gap', styleKey: 'ratingHard' },
   { key: 'good', title: 'Good', subtitle: 'Normal gap', styleKey: 'ratingGood' },
   { key: 'easy', title: 'Easy', subtitle: 'Much later', styleKey: 'ratingEasy' },
 ];
 
+// R22 §1.4, §6: the default dock has two buttons. Forgot sends `again` and
+// Remembered sends `good`, so onRate keeps its ReviewRating contract; the four
+// buttons above come back with the 'Show all four rating buttons' study
+// setting (features/gacha/study/studyPrefs.ts). Subtitles reuse the four-up
+// wording of the rating each button sends.
+export const TWO_RATING_ITEMS: ReadonlyArray<RatingItem> = [
+  { key: 'again', title: 'Forgot', subtitle: 'Show soon', styleKey: 'ratingAgain' },
+  { key: 'good', title: 'Remembered', subtitle: 'Normal gap', styleKey: 'ratingGood' },
+];
+
 // The hint changes with the face. Before reveal it asks for the recall
 // attempt; after reveal the old sentence ("…before seeing the answer") kept
 // describing a moment that had already passed, so it now asks the question
-// the four buttons answer.
+// the buttons answer: yes/no for two buttons, how well for four.
 export const RATING_HINT = {
-  beforeReveal: 'Think about how well you recalled this before seeing the answer.',
+  beforeReveal: 'Try to recall the answer, then reveal it.',
   afterReveal: 'How well did you recall it?',
+  afterRevealTwo: 'Did you remember it?',
 } as const;
 
 // Spoken label for a rating button: "Again, show soon" — the title plus the
@@ -41,23 +54,28 @@ export function RatingBar(props: {
   disabled?: boolean;
   /** Whether the answer is showing. Drives the hint copy only; `disabled` still gates the buttons. */
   revealed?: boolean;
+  /** Show Again/Hard/Good/Easy instead of the two-button default (the study setting). */
+  fourButtons?: boolean;
   testID?: string;
   onRate: (rating: ReviewRating) => void;
 }) {
-  const { disabled = false, revealed = false, testID = 'review-rating-bar', onRate } = props;
+  const { disabled = false, revealed = false, fourButtons = false, testID = 'review-rating-bar', onRate } = props;
+  const items = fourButtons ? RATING_ITEMS : TWO_RATING_ITEMS;
+  const afterReveal = fourButtons ? RATING_HINT.afterReveal : RATING_HINT.afterRevealTwo;
 
   // At accessibility text sizes a fixed 4-up row clips the labels; reflow to a
   // 2x2 grid instead so each button gets ~half the width and the full title +
-  // subtitle fit.
-  const large = isLargeFontScale(useFontScale());
+  // subtitle fit. Two buttons already get half the width each.
+  const fontScale = useFontScale();
+  const large = fourButtons && isLargeFontScale(fontScale);
 
   return (
     <View style={styles.wrapper} testID={testID}>
       <Text style={styles.hint} numberOfLines={2} testID="review-rating-hint" maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
-        {revealed ? RATING_HINT.afterReveal : RATING_HINT.beforeReveal}
+        {revealed ? afterReveal : RATING_HINT.beforeReveal}
       </Text>
       <View style={[styles.grid, large && styles.gridTwoByTwo]} testID="review-rating-grid">
-        {RATING_ITEMS.map((item) => (
+        {items.map((item) => (
           <Pressable
             key={item.key}
             style={({ pressed }) => [

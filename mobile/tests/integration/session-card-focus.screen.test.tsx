@@ -359,7 +359,7 @@ describe('SessionCardScreen focus run', () => {
       await Promise.resolve();
     });
     await act(async () => {
-      findPressableByLabel(tree, 'Good').props.onPress();
+      findPressableByLabel(tree, 'Remembered').props.onPress();
       await Promise.resolve();
       await Promise.resolve();
     });
