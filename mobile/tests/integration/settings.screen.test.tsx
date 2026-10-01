@@ -142,6 +142,7 @@ vi.mock('../../src/features/gacha/streaks/streakTracker', () => ({
 }));
 
 import { SettingsScreen } from '../../src/screens/SettingsScreen';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 async function flush() {
   await act(async () => {
@@ -271,6 +272,23 @@ describe('SettingsScreen', () => {
     });
 
     expect(setAudiencePreferenceMock).toHaveBeenCalledWith('junior');
+  });
+
+  it('shows the four-button study setting on for an existing learner and saves the toggle', async () => {
+    // The storage mock reports a learned card and no stored study prefs, so the
+    // first read defaults to four buttons (existing users keep what they know).
+    const { tree } = await renderSettings();
+    const toggle = () => findPressableByTestID(tree, 'settings-four-buttons-toggle');
+    expect(toggle().props.accessibilityLabel).toBe('Show all four rating buttons');
+    expect(toggle().props.accessibilityState).toEqual({ checked: true });
+    expect(vi.mocked(AsyncStorage.setItem)).toHaveBeenCalledWith('recallsmith:study-prefs:v1', JSON.stringify({ fourButtons: true }));
+
+    await act(async () => {
+      toggle().props.onPress();
+      await Promise.resolve();
+    });
+    expect(toggle().props.accessibilityState).toEqual({ checked: false });
+    expect(vi.mocked(AsyncStorage.setItem)).toHaveBeenLastCalledWith('recallsmith:study-prefs:v1', JSON.stringify({ fourButtons: false }));
   });
 
   it('confirms and runs Fresh Start reset flow', async () => {
