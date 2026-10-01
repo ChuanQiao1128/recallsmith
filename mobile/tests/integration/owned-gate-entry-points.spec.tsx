@@ -348,6 +348,13 @@ describe('ownership gate — every entry point', () => {
         />,
       );
 
+      // The drawn card is new, so it is studied first (R22 §6) and checked at the end of the run;
+      // neither the study's next pick nor the check's may reach the stranger.
+      await act(async () => {
+        pressText(tree, 'Got it');
+      });
+      await flush();
+      expect(textBlob(tree)).not.toContain('Stranger question');
       await act(async () => {
         pressText(tree, 'Reveal answer');
       });

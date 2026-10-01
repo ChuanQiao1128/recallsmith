@@ -100,8 +100,10 @@ export function pickNextCard(params: {
   index?: { cards: CardExport[]; cardMap: Map<string, CardExport> } | null;
   ownedSet?: OwnedGate;
   kindHint?: McqKindHint | null;
+  /** R22 §6: cards studied this session wait for their recall check at the end; the planner never deals them again. */
+  excludeUids?: ReadonlySet<string> | null;
 }): CurrentCardLike | null {
-  const { deck, progress, now, mode, avoidUid, index, ownedSet = null, kindHint = null } = params;
+  const { deck, progress, now, mode, avoidUid, index, ownedSet = null, kindHint = null, excludeUids = null } = params;
   const cardMap = index?.cardMap ?? (deck ? buildCardMap(deck) : null);
   const cards = index?.cards ?? (deck ? sortCards(deck) : null);
   if (!cardMap || !cards) return null;
@@ -141,7 +143,7 @@ export function pickNextCard(params: {
   // riding on a single shared line. The cost is that a fourth pick added later
   // must remember `owns` -- if you are adding one, add it.
   // kindHint (D03) is that fourth pick: it narrows or reorders pickNew and nothing else, and its predicates keep owns.
-  const owns = (card: CardExport) => isOwned(card.StableUid, ownedSet);
+  const owns = (card: CardExport) => isOwned(card.StableUid, ownedSet) && !excludeUids?.has(card.StableUid);
   const pickDue = () => pickWith((card, progressEntry) => owns(card) && isDueTodayBucket(progressEntry, now));
   const pickUpdated = () => pickWith((card, progressEntry) => owns(card) && isUpdatedCard(card, progressEntry));
   const isMcq = (card: CardExport) => normalizeMcq(card.Mcq) !== null;

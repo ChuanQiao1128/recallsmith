@@ -305,6 +305,9 @@ const MCQ_CARD = {
 };
 
 const NEW_PROGRESS = (uid: string) => ({ stableUid: uid, stage: 0, nextReviewAt: 0 });
+// A Q/A card the learner has reviewed before: rated directly. A never-reviewed Q/A card opens on
+// the study view (R22 §6), and its recall check never writes the book (session-card.screen.test).
+const LEARNED_PROGRESS = (uid: string) => ({ stableUid: uid, stage: 1, nextReviewAt: 0, lastReviewedAt: FIXED_NOW_MS - 86_400_000 });
 
 const SUMMARY = expect.objectContaining({ slug: 'csharp', sessionDone: 1 });
 
@@ -340,7 +343,7 @@ describe('SessionCardScreen Mistake Book hook', () => {
   });
 
   function serve(card: any) {
-    const progress = NEW_PROGRESS(card.StableUid);
+    const progress = card.Mcq ? NEW_PROGRESS(card.StableUid) : LEARNED_PROGRESS(card.StableUid);
     vi.mocked(resolveDeckBySlug).mockResolvedValue(buildDeck({ Cards: [card] }) as any);
     vi.mocked(pickNextCard).mockReturnValue({ card, progress } as any);
     vi.mocked(loadDeckProgress).mockResolvedValue([progress] as any);

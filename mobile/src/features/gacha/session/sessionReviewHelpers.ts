@@ -60,6 +60,8 @@ export function buildRatedSessionState(params: {
   kindHint?: McqKindHint | null;
   /** A Mistake Book focus run: a card that is not due gets no scheduler credit (scheduleFocusReview). */
   focusRun?: boolean;
+  /** Cards studied this session (R22 §6): their recall check is dealt by the screen, never by the planner. */
+  excludeUids?: ReadonlySet<string> | null;
 }): {
   updatedProgress: CardProgress[];
   updatedOne: CardProgress;
@@ -68,7 +70,7 @@ export function buildRatedSessionState(params: {
   prevLearnedCount: number;
   remainingDueCount: number;
 } {
-  const { current, progress, rating, mode, sessionDone, sessionLimit, now, cardIndex, ownedSet = null, kindHint = null, focusRun = false } = params;
+  const { current, progress, rating, mode, sessionDone, sessionLimit, now, cardIndex, ownedSet = null, kindHint = null, focusRun = false, excludeUids = null } = params;
 
   const schedule = focusRun ? scheduleFocusReview : scheduleNextReview;
   const updatedOne: CardProgress = {
@@ -93,6 +95,7 @@ export function buildRatedSessionState(params: {
           index: cardIndex,
           ownedSet,
           kindHint,
+          excludeUids,
         })
       : null;
   const remainingDueCount = countDueToday(updatedProgress, new Date(now.getTime()), ownedSet);
