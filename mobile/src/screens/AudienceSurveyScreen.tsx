@@ -29,6 +29,7 @@ type Props = NativeStackScreenProps<RootStackParamList, 'AudienceSurvey'>;
 // lives on in Settings as "Card difficulty" (default Balanced); onboarding no longer writes it.
 // Finishing moves the stage to 'starter': Home then sends the learner into the 5-card starter lesson.
 type Step = 'goal' | 'date';
+const FINISH_ERROR = "Couldn't save your choice. Please try again.";
 type DateChoice = { kind: 'none' } | { kind: 'preset'; preset: DatePresetKey; examDate: string };
 
 export function AudienceSurveyScreen({ navigation }: Props) {
@@ -36,20 +37,27 @@ export function AudienceSurveyScreen({ navigation }: Props) {
   const [deckSlug, setDeckSlug] = useState<string>(DEFAULT_GOAL_DECK_SLUG);
   const [dateChoice, setDateChoice] = useState<DateChoice>({ kind: 'none' });
   const [saving, setSaving] = useState(false);
+  const [finishError, setFinishError] = useState<string | null>(null);
 
   async function finish() {
     if (saving) return;
     setSaving(true);
+    setFinishError(null);
     try {
       await setStudyGoal({ deckSlug, examDate: dateChoice.kind === 'preset' ? dateChoice.examDate : null });
       await setActiveDeckSlug(deckSlug);
       // R22 §4: the goal step opens the starter lesson (Home routes into it). The first pack and the
       // reminder prompt both wait for the lesson to complete (starterLesson.completeStarterLesson).
       await startStarterLesson();
-      navigation.replace('Home');
-    } finally {
+    } catch {
+      // A storage write failed: stay on this step and say so. Every write above is idempotent, so
+      // pressing Finish setup again redoes them all.
+      setFinishError(FINISH_ERROR);
       setSaving(false);
+      return;
     }
+    // No state update after this: replace unmounts the screen.
+    navigation.replace('Home');
   }
 
   function pickPreset(preset: DatePresetKey) {
@@ -176,6 +184,12 @@ export function AudienceSurveyScreen({ navigation }: Props) {
         >
           <Text style={styles.primaryButtonText} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>{saving ? 'Saving…' : 'Finish setup'}</Text>
         </Pressable>
+
+        {finishError ? (
+          <Text testID="goal-finish-error" style={styles.finishError} accessibilityLiveRegion="polite">
+            {finishError}
+          </Text>
+        ) : null}
 
         <Pressable
           style={({ pressed }) => [styles.backLink, pressed && styles.pressed]}
@@ -308,4 +322,5 @@ const styles = StyleSheet.create({
   },
   pressed: { opacity: 0.92 },
   buttonDisabled: { opacity: 0.65 },
+  finishError: { marginTop: 12, textAlign: 'center', fontSize: 13, lineHeight: 19, fontWeight: '700', color: colors.danger },
 });

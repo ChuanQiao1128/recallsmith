@@ -61,11 +61,29 @@ vi.mock('expo-linear-gradient', () => {
   };
 });
 
+// Every mounted focus callback is kept so a test can focus Home a second time (back from a paused
+// lesson) without remounting it: refocus() runs each one again, as navigation does on return.
+const focusCallbacks = vi.hoisted(() => new Set<() => unknown>());
 vi.mock('@react-navigation/native', () => ({
   useFocusEffect: (callback: any) => {
-    React.useEffect(() => callback(), [callback]);
+    React.useEffect(() => {
+      focusCallbacks.add(callback);
+      const cleanup = callback();
+      return () => {
+        focusCallbacks.delete(callback);
+        if (typeof cleanup === 'function') cleanup();
+      };
+    }, [callback]);
   },
 }));
+
+async function refocus() {
+  await act(async () => {
+    for (const callback of [...focusCallbacks]) callback();
+  });
+  await flush();
+  await flush();
+}
 
 vi.mock('../../src/content/activeDeck', () => ({
   loadActiveDeckSlug: vi.fn(async () => activeSlugFixture),
@@ -136,6 +154,7 @@ vi.mock('../../src/sync/progressSync', () => ({
 
 import { HomeScreen } from '../../src/screens/HomeScreen';
 import { loadHomeDeckSummaries } from '../../src/features/gacha/home/deckActionResolver';
+import { prepareHomeDeckWallets } from '../../src/features/gacha/rewards/economyFloor';
 
 // Mirrors the mocked module's default snapshot so per-test overrides of
 // loadHomeDeckSummaries can be restored to the shared behaviour in beforeEach.
@@ -239,7 +258,12 @@ describe('HomeScreen starter lesson', () => {
     expect(sessionCalls()).toEqual([['SessionCard', { slug: 'aws-saa-c03', mode: 'learn-new' }]]);
     expect(navigateMock).not.toHaveBeenCalledWith('Draw', expect.anything());
 
-    // Back on Home after a pause: one primary action resumes the lesson.
+    // Back on Home after a pause (a second focus of the same Home): no second automatic trip into
+    // the lesson, so the learner can stay here.
+    await refocus();
+    expect(sessionCalls()).toHaveLength(1);
+
+    // One primary action resumes the lesson.
     const cta = tree.root.findByProps({ testID: 'home-starter-cta' });
     expect(textBlob(tree)).toContain('Continue your first lesson');
     expect(textBlob(tree)).toContain('Learn 5 cards, then open your first pack');
@@ -263,6 +287,30 @@ describe('HomeScreen starter lesson', () => {
     activeSlugFixture = 'csharp-basics';
     await renderHome();
     expect(sessionCalls()).toEqual([['SessionCard', { slug: 'csharp-basics', mode: 'learn-new' }]]);
+  });
+
+  it('ends a lesson that has no deck to teach (no study goal, no active deck) instead of locking every pack', async () => {
+    store.set(STAGE_KEY, 'starter');
+    activeSlugFixture = null;
+    // Record the stage each wallet preparation sees (same wallets as the module mock).
+    const stagesSeen: Array<string | undefined> = [];
+    vi.mocked(prepareHomeDeckWallets).mockImplementation(async ({ deckSummaries }) => {
+      stagesSeen.push(store.get(STAGE_KEY));
+      const out: Record<string, typeof walletFixture> = {};
+      for (const s of deckSummaries) out[s.slug] = walletFixture;
+      return out;
+    });
+
+    const tree = await renderHome();
+
+    expect(sessionCalls()).toHaveLength(0);
+    expect(store.get(STAGE_KEY)).toBe('done');
+    // The economy runs again: Home re-prepares the pack wallets once the stage has closed, so the
+    // bootstrap and the floor are no longer skipped.
+    expect(stagesSeen).toContain('done');
+    expect(tree.root.findAll((node) => node.props?.testID === 'home-starter-cta')).toHaveLength(0);
+    expect(tree.root.findAll((node) => node.props?.testID === 'home-primary-cta' && (node.type as any) === 'Pressable')).toHaveLength(1);
+    expect(textBlob(tree)).not.toContain('first lesson');
   });
 
   it('leaves existing users (stage done) on Home with the usual primary action', async () => {

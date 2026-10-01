@@ -167,13 +167,16 @@ vi.mock('../../src/features/gacha/mistakes/mistakeBook', () => ({
 
 import { SessionCardScreen } from '../../src/screens/SessionCardScreen';
 import { resetSessionStore } from '../../src/features/gacha/session/sessionStore';
-import { loadDeckWallet } from '../../src/features/gacha/rewards/deckWallet';
+import { ensureDeckBootstrap, loadDeckWallet } from '../../src/features/gacha/rewards/deckWallet';
 import { loadDrawState } from '../../src/features/gacha/draw/drawStateStore';
 import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStateCache';
+import { recordReviewEvent } from '../../src/sync/progressSync';
 
 const FIXED_NOW_MS = new Date(2026, 9, 2, 9, 0, 0).getTime();
 const STAGE_KEY = 'recallsmith:onboarding:stage:v1';
 const PROMPT_KEY = 'notifications:permission-prompt:pending:v1';
+const GOAL_KEY = 'recallsmith:study-goal:v1';
+const LESSON_KEY = 'recallsmith:starter-lesson:v1';
 
 function flags() {
   return {
@@ -241,6 +244,7 @@ describe('SessionCardScreen starter lesson', () => {
     deckRepo.resolveDeckBySlug.mockResolvedValue(DECK);
     deckRepo.checkManifestForUpdates.mockResolvedValue({});
     deckRepo.installDeckFromUrl.mockResolvedValue(true);
+    deckRepo.listManifestDecks.mockResolvedValue([]);
     progressState = CARDS.map((c) => untouched(c.StableUid));
     store.set(STAGE_KEY, 'starter');
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -256,14 +260,14 @@ describe('SessionCardScreen starter lesson', () => {
     warnSpy.mockRestore();
   });
 
-  async function mount() {
+  async function mount(slug = 'csharp') {
     const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(
         <SessionCardScreen
           navigation={navigation}
-          route={{ key: 'session-card', name: 'SessionCard', params: { slug: 'csharp', mode: 'learn-new' } } as any}
+          route={{ key: 'session-card', name: 'SessionCard', params: { slug, mode: 'learn-new' } } as any}
         />,
       );
     });
@@ -272,31 +276,60 @@ describe('SessionCardScreen starter lesson', () => {
     return { tree, navigation };
   }
 
-  async function rateGood(tree: renderer.ReactTestRenderer) {
+  async function pressLabel(tree: renderer.ReactTestRenderer, label: string) {
     await act(async () => {
-      findPressableByLabel(tree, 'Reveal answer').props.onPress();
-      await Promise.resolve();
-    });
-    await act(async () => {
-      findPressableByLabel(tree, 'Good').props.onPress();
+      findPressableByLabel(tree, label).props.onPress();
       await Promise.resolve();
     });
     await flush();
   }
 
+  // R22 §6 (S01/S02): a never-reviewed Q/A card opens on the study view with one Got it; it comes
+  // back at the end of the run as a recall check, asked with Forgot / Remembered.
+  async function studyGotIt(tree: renderer.ReactTestRenderer) {
+    await act(async () => {
+      tree.root.find((node) => node.props?.testID === 'learning-study-got-it' && (node.type as any) === 'Pressable').props.onPress();
+      await Promise.resolve();
+    });
+    await flush();
+  }
+
+  async function checkRemembered(tree: renderer.ReactTestRenderer) {
+    await pressLabel(tree, 'Reveal answer');
+    await pressLabel(tree, 'Remembered');
+  }
+
   it('teaches the first 5 non-MCQ cards with nothing drawn, then opens Draw with the 3-pull bootstrap', async () => {
     const { tree, navigation } = await mount();
 
-    const seen: string[] = [];
+    // Study: c1..c5 on the study view (the MCQ is skipped). Got it records nothing.
+    const studied: string[] = [];
     for (const uid of ['c1', 'c2', 'c3', 'c4', 'c5']) {
       expect(hasText(tree, `Question ${uid}`)).toBe(true);
-      seen.push(uid);
-      // Bootstrap only after completion: no pull before the last card, and no R1 pull per card.
+      expect(tree.root.findAll((node) => node.props?.testID === 'learning-study-view').length).toBeGreaterThan(0);
+      studied.push(uid);
+      await studyGotIt(tree);
+      expect(recordReviewEvent).not.toHaveBeenCalled();
+      expect(navigation.replace).not.toHaveBeenCalled();
+    }
+    expect(studied).toEqual(['c1', 'c2', 'c3', 'c4', 'c5']);
+
+    // Checks, in study order. The lesson completes only on the 5th; no R1 pull for any of them.
+    const checked: string[] = [];
+    for (const uid of ['c1', 'c2', 'c3', 'c4', 'c5']) {
+      expect(hasText(tree, `Question ${uid}`)).toBe(true);
       expect(await loadDeckWallet('csharp')).toEqual({ availablePulls: 0, reservePulls: 0 });
       expect(navigation.replace).not.toHaveBeenCalled();
-      await rateGood(tree);
+      checked.push(uid);
+      await checkRemembered(tree);
     }
-    expect(seen).toEqual(['c1', 'c2', 'c3', 'c4', 'c5']);
+    expect(checked).toEqual(['c1', 'c2', 'c3', 'c4', 'c5']);
+
+    // One card_reviewed per check: reviewStage learning_check, Remembered → hard.
+    expect(vi.mocked(recordReviewEvent).mock.calls.map((call) => {
+      const event = call[0] as any;
+      return [event.stableUid, event.reviewStage, event.rating];
+    })).toEqual(['c1', 'c2', 'c3', 'c4', 'c5'].map((uid) => [uid, 'learning_check', 'hard']));
 
     expect(navigation.replace).toHaveBeenCalledTimes(1);
     expect(navigation.replace).toHaveBeenCalledWith('Draw', { slug: 'csharp', rewardPending: true });
@@ -361,6 +394,86 @@ describe('SessionCardScreen starter lesson', () => {
     await flush();
     await flush();
     expect(hasText(tree, 'Question c1')).toBe(true);
+  });
+
+  // ─── The way out when the lesson's deck cannot run (F01: h-correctness-1, h-security-1, h-correctness-2) ───
+  const errorTitle = (tree: renderer.ReactTestRenderer) =>
+    String(tree.root.find((node) => node.props?.testID === 'session-card-error-title' && (node.type as any) === 'Text').props.children);
+  const errorBody = (tree: renderer.ReactTestRenderer) =>
+    String(tree.root.find((node) => node.props?.testID === 'session-card-error-body' && (node.type as any) === 'Text').props.children);
+
+  async function expectEconomyUnlocked() {
+    expect(store.get(STAGE_KEY)).toBe('done');
+    expect(store.has(LESSON_KEY)).toBe(false);
+    expect(store.get(PROMPT_KEY)).toBe('1');
+    // Any never-drawn pack now gets the ordinary first-visit bootstrap.
+    expect((await ensureDeckBootstrap('aws-saa-c03')).granted).toBe(3);
+  }
+
+  it('a premium goal deck ends the lesson before the paywall, so the other packs are not locked', async () => {
+    store.set(GOAL_KEY, JSON.stringify({ deckSlug: 'csharp', examDate: null }));
+    deckRepo.resolveDeckBySlug.mockResolvedValue({ ...DECK, DeckType: 2 });
+
+    const { navigation } = await mount();
+
+    expect(navigation.replace).toHaveBeenCalledWith('Paywall', { reason: 'Premium required for this deck.' });
+    await expectEconomyUnlocked();
+  });
+
+  it('a goal deck that is not published yet shows the plain error (not the offline copy) and ends the lesson', async () => {
+    store.set(GOAL_KEY, JSON.stringify({ deckSlug: 'csharp', examDate: null }));
+    deckRepo.listManifestDecks.mockResolvedValue([{ slug: 'csharp', availability: 'coming', eta: null }]);
+
+    const { tree } = await mount();
+
+    expect(errorTitle(tree)).toBe('Deck not available');
+    expect(errorBody(tree)).not.toContain('connection');
+    expect(hasText(tree, "Can't download your first lesson")).toBe(false);
+    await expectEconomyUnlocked();
+  });
+
+  it('a goal deck missing from a manifest that did load shows the plain error and ends the lesson', async () => {
+    store.set(GOAL_KEY, JSON.stringify({ deckSlug: 'csharp', examDate: null }));
+    deckRepo.resolveDeckBySlug.mockResolvedValue(null);
+    deckRepo.listManifestDecks.mockResolvedValue([{ slug: 'aws-saa-c03', availability: 'available' }]);
+    deckRepo.checkManifestForUpdates.mockResolvedValue({
+      'aws-saa-c03': { slug: 'aws-saa-c03', remoteUrl: 'https://example.invalid/aws.json', remoteVersion: '1', remoteSha256: null },
+    });
+
+    const { tree } = await mount();
+
+    expect(errorTitle(tree)).toBe('Deck not available');
+    expect(errorBody(tree)).not.toContain('connection');
+    expect(hasText(tree, "Can't download your first lesson")).toBe(false);
+    expect(deckRepo.installDeckFromUrl).not.toHaveBeenCalled();
+    await expectEconomyUnlocked();
+  });
+
+  it('keeps the lesson open and the offline copy when the goal deck download itself fails', async () => {
+    store.set(GOAL_KEY, JSON.stringify({ deckSlug: 'csharp', examDate: null }));
+    deckRepo.resolveDeckBySlug.mockResolvedValue(null);
+    deckRepo.checkManifestForUpdates.mockResolvedValue({
+      csharp: { slug: 'csharp', remoteUrl: 'https://example.invalid/csharp.json', remoteVersion: '1', remoteSha256: null },
+    });
+    deckRepo.installDeckFromUrl.mockResolvedValue(false);
+
+    const { tree } = await mount();
+
+    expect(errorTitle(tree)).toBe("Can't download your first lesson");
+    expect(store.get(STAGE_KEY)).toBe('starter');
+  });
+
+  it('another deck that fails during the lesson keeps its own error, not the first-lesson copy', async () => {
+    store.set(GOAL_KEY, JSON.stringify({ deckSlug: 'csharp', examDate: null }));
+    deckRepo.resolveDeckBySlug.mockResolvedValue(null);
+    deckRepo.checkManifestForUpdates.mockRejectedValue(new TypeError('Network request failed'));
+
+    const { tree } = await mount('aws-saa-c03');
+
+    expect(errorTitle(tree)).toBe('Deck not available');
+    expect(hasText(tree, "Can't download your first lesson")).toBe(false);
+    // Not the lesson's deck: the lesson stays open for the goal deck.
+    expect(store.get(STAGE_KEY)).toBe('starter');
   });
 
   it('existing users (stage done) get no lesson: nothing owned means nothing to study', async () => {
