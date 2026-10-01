@@ -3,6 +3,7 @@ import type { CardProgress, ReviewRating } from '../../../review/model';
 import { scheduleNextReview } from '../../../review/model';
 import { countDueToday, pickNextCard } from '../planner/sessionPlanner';
 import { scheduleFocusReview } from '../mistakes/focusSession';
+import { capNextReviewToExam } from '../../goal/studyGoal';
 import type { OwnedGate } from '../contracts';
 import type { McqKindHint } from '../mcq/mcqRotation';
 
@@ -62,6 +63,8 @@ export function buildRatedSessionState(params: {
   focusRun?: boolean;
   /** Cards studied this session (R22 §6): their recall check is dealt by the screen, never by the planner. */
   excludeUids?: ReadonlySet<string> | null;
+  /** The study goal's exam date (R22 §7): no review is scheduled after the start of the day before it. */
+  examDate?: string | null;
 }): {
   updatedProgress: CardProgress[];
   updatedOne: CardProgress;
@@ -70,11 +73,11 @@ export function buildRatedSessionState(params: {
   prevLearnedCount: number;
   remainingDueCount: number;
 } {
-  const { current, progress, rating, mode, sessionDone, sessionLimit, now, cardIndex, ownedSet = null, kindHint = null, focusRun = false, excludeUids = null } = params;
+  const { current, progress, rating, mode, sessionDone, sessionLimit, now, cardIndex, ownedSet = null, kindHint = null, focusRun = false, excludeUids = null, examDate = null } = params;
 
   const schedule = focusRun ? scheduleFocusReview : scheduleNextReview;
   const updatedOne: CardProgress = {
-    ...schedule(current.progress, rating, now),
+    ...capNextReviewToExam(schedule(current.progress, rating, now), examDate, now.getTime()),
     lastSeenRevision: typeof current.card.Revision === 'number' && current.card.Revision > 0 ? current.card.Revision : 1,
   };
 

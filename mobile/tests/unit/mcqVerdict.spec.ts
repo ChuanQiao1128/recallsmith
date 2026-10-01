@@ -370,4 +370,25 @@ describe('mcqVerdict', () => {
     expect(dueGood.after).toEqual(scheduleNextReview(due, 'good', NOW));
     expect(dueGood.line.startsWith('Scheduled as Good · back in ')).toBe(true);
   });
+
+  it('previews the exam-capped day when an exam date is set (R22 §7)', () => {
+    // Local times: exam on 7 Oct, so nothing is scheduled after the start of 6 Oct.
+    const NOW = new Date(2026, 9, 2, 9, 0, 0);
+    const CAP = new Date(2026, 9, 6, 0, 0, 0).getTime();
+    const before: CardProgress = { stableUid: 'u', stage: 3, nextReviewAt: NOW.getTime() - 1, lastReviewedAt: 1 };
+    expect(describeScheduledRating(before, 'good', NOW).line).toBe('Scheduled as Good · back in 15 days');
+
+    const capped = describeScheduledRating(before, 'good', NOW, undefined, '2026-10-07');
+    expect(capped.after.nextReviewAt).toBe(CAP);
+    expect(capped.after.stage).toBe(4);
+    expect(capped.line).toBe('Scheduled as Good · back in 4 days');
+    // The focus-run scheduler is capped the same way.
+    expect(describeScheduledRating(before, 'easy', NOW, scheduleFocusReview, '2026-10-07').after.nextReviewAt).toBe(CAP);
+
+    // An earlier review, no exam date, or an exam tomorrow: unchanged.
+    const early: CardProgress = { ...before, stage: 0 };
+    expect(describeScheduledRating(early, 'good', NOW, undefined, '2026-10-07').line).toBe('Scheduled as Good · back in 2 days');
+    expect(describeScheduledRating(before, 'good', NOW, undefined, null).line).toBe('Scheduled as Good · back in 15 days');
+    expect(describeScheduledRating(before, 'good', NOW, undefined, '2026-10-03').line).toBe('Scheduled as Good · back in 15 days');
+  });
 });
