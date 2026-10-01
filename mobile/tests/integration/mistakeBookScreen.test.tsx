@@ -276,6 +276,21 @@ describe('MistakeBookScreen', () => {
     expect(row.props.accessibilityLabel).not.toContain('`');
   });
 
+  // F01 supervisor-1 / y-tests-3: a fence-only question shows the neutral fallback prose, never a
+  // blank row or a label that starts with a period.
+  it('shows the fallback prose for a fence-only question, in the row and its label', async () => {
+    const dotnet = deck('dotnet', '.NET Interview', [
+      { ...card('fence-1', 1, 'basics'), Question: '```csharp\nConsole.WriteLine(1 + 1);\n```\n' },
+    ]);
+    vi.mocked(getCachedDeck).mockImplementation((async (slug: string) => (slug === 'dotnet' ? dotnet : null)) as any);
+    seedBook([entry('dotnet', 'fence-1', 'basics', NOW - 1000)]);
+    const { tree } = await mount();
+
+    const row = byTestID(tree, 'mistake-row-fence-1')[0];
+    expect(texts(row)[0]).toBe('What does this code do?');
+    expect(row.props.accessibilityLabel).toBe('What does this code do?. basics. Wrong once, last wrong today');
+  });
+
   it('disables the review button and shows a busy indicator while the run is prepared', async () => {
     seedBook([entry('aws', 's3-1', 's3', NOW - 1000)]);
     let releaseProgress!: (value: never[]) => void;
