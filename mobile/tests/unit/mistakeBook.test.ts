@@ -100,6 +100,20 @@ describe('mistakeBook', () => {
     expect(await loadMistakeBook()).toEqual({ v: 1, entries: { 'csharp::c1': entry() } });
   });
 
+  it('never writes a learning-check outcome: mistakes start once a card is learned (R22 §6)', async () => {
+    const failedCheck = outcome({ rating: 'again', learningCheck: true });
+    expect(applyOutcome(EMPTY, failedCheck)).toBe(EMPTY);
+    // Nor does a passed check count toward resolving an entry that already exists.
+    const open = bookWith(entry());
+    expect(applyOutcome(open, outcome({ rating: 'hard', learningCheck: true, at: T0 + DAY_MS }))).toBe(open);
+    expect(applyOutcome(open, outcome({ rating: 'good', learningCheck: true, at: T0 + DAY_MS }))).toBe(open);
+
+    await recordMistakeOutcome(failedCheck);
+    expect(stored()).toBeNull();
+    // An ordinary Again (learningCheck absent or false) is still a mistake.
+    expect(applyOutcome(EMPTY, outcome({ learningCheck: false })).entries['csharp::c1']).toEqual(entry());
+  });
+
   it('records MCQ wrong and partial verdicts as mistakes', () => {
     const wrong = outcome({ rating: 'again', mcqVerdict: 'wrong' });
     // A partial verdict can map to a hard rating: still a mistake.
