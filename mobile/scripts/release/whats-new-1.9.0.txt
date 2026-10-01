@@ -1,4 +1,5 @@
+• Report a card: if a card looks wrong, outdated or unclear, tap Report under the card after you reveal the answer in a review, or use "Report a problem" at the end of the card's page. Follow your reports under Me > My reports. Reporting needs a signed-in account.
 • Mistake Book fixes: mistakes you collected before signing in now keep their counts when you sign in, instead of being replaced.
 • When every mistake already has today's correct answer, the Mistake Book now shows a clear "No mistakes due today" state and tells you to come back tomorrow. A card still leaves the book once you get it right on two different days.
-• The app now sends anonymous crash and performance reports so we can fix problems faster. No account data, name or email address is sent with them.
+• The app now sends crash and performance reports so we can fix problems faster. They never include your name or email address, and they are not used for tracking or advertising.
 • Stability and performance improvements.

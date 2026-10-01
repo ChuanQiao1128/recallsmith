@@ -6,3 +6,5 @@ Auto-renewable subscription (Guideline 3.1.2(c)):
 - App Store metadata: the description includes the Terms of Use (EULA) link and the Privacy Policy link. The Privacy Policy URL field in App Information points to the same policy.
 
 Crash and performance diagnostics (new in 1.9.0): the app sends crash reports and performance timings to Sentry, our error-monitoring provider. They contain no account data, email address or other identifiers, and a remote kill switch can turn the reporting off without an app update.
+
+Report a card (new in 1.9.0): sign in with the demo account, start a review, reveal an answer and tap "Report" under the card (or open any card and use "Report a problem" at the end of the answer). Reports appear under Me > My reports. A report is a private message to the developer: it is never shown to other users, so no user-generated content is published in the app.
