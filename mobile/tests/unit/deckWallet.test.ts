@@ -20,6 +20,7 @@ import { setActiveUserSubForStorage } from '../../src/review/storage';
 import { setActiveDeckSlug } from '../../src/content/activeDeck';
 import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStateCache';
 import { saveDrawState } from '../../src/features/gacha/draw/drawStateStore';
+import { completeStarterLesson } from '../../src/features/gacha/starter/starterLesson';
 import {
   loadRewardWalletState,
   saveRewardWalletState,
@@ -109,6 +110,36 @@ describe('deckWallet per-pack wallets', () => {
     const second = await ensureDeckBootstrap('aws');
     expect(second.granted).toBe(0);
     expect(await loadDeckWallet('aws')).toEqual({ availablePulls: 0, reservePulls: 0 });
+  });
+
+  // R22 §4: the first pack is the reward for the starter lesson, so no pack bootstraps while it is open
+  // (Home, Draw and Library all call ensureDeckBootstrap); completing the lesson grants the 3 pulls.
+  it('grants the bootstrap only after the starter lesson completes', async () => {
+    store.set('recallsmith:onboarding:stage:v1', 'starter');
+    store.set('recallsmith:starter-lesson:v1', JSON.stringify({ slug: 'aws', uids: ['s1'] }));
+
+    expect(await ensureDeckBootstrap('aws')).toEqual({ granted: 0, wallet: { availablePulls: 0, reservePulls: 0 } });
+    expect((await ensureDeckBootstrap('csharp')).granted).toBe(0);
+    // Refused, not spent: the pack is not marked, so it still bootstraps once the lesson is done.
+    expect(readRecord()?.bootstrappedAtMs?.aws).toBeUndefined();
+
+    const done = await completeStarterLesson('aws');
+    expect(done).toMatchObject({ completed: true, granted: 3 });
+    expect(await loadDeckWallet('aws')).toEqual({ availablePulls: 3, reservePulls: 0 });
+    expect(store.get('recallsmith:onboarding:stage:v1')).toBe('done');
+    expect(store.get('notifications:permission-prompt:pending:v1')).toBe('1');
+
+    // Net 3 pulls, as before the lesson existed: a second completion grants nothing.
+    expect((await completeStarterLesson('aws')).granted).toBe(0);
+    expect(await loadDeckWallet('aws')).toEqual({ availablePulls: 3, reservePulls: 0 });
+  });
+
+  it('existing users (stage done) bootstrap exactly as before', async () => {
+    store.set('recallsmith:onboarding:stage:v1', 'done');
+    expect((await ensureDeckBootstrap('aws')).granted).toBe(3);
+    // completeStarterLesson is a no-op for them: no stage change, no prompt armed.
+    expect((await completeStarterLesson('aws')).completed).toBe(false);
+    expect(store.get('notifications:permission-prompt:pending:v1')).toBeUndefined();
   });
 
   it('never bootstraps a pack that already has owned cards, pity or pulls', async () => {

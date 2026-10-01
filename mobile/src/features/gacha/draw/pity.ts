@@ -94,8 +94,9 @@ export function buildPityProgressLabelV9(state: PityState, missingLegCount: numb
   // "card", not "draw": the counter advances per revealed card, so the very
   // next card is the one that pays out, whether it arrives in a single pull or
   // as slot 3 of a ten-card pull.
+  // R22 §5: say what is guaranteed in plain words, not "guaranteed reveal".
   if (remaining === 0) return 'Next card guarantees a missing rare or better';
-  return `${remaining} ${remaining === 1 ? 'card' : 'cards'} until guaranteed reveal`;
+  return `A rare card is guaranteed within ${remaining} ${remaining === 1 ? 'card' : 'cards'}`;
 }
 
 /**

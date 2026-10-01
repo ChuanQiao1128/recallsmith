@@ -82,7 +82,18 @@ describe('welcome sign-in link', () => {
     expect(store.get(ONBOARDING_STAGE_KEY)).toBeUndefined();
   });
 
-  it('still advances new users to the audience survey', async () => {
+  it('features the AWS pack, not a hard-coded C# pack', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(<WelcomeScreen navigation={{ navigate: vi.fn(), replace: vi.fn() } as any} route={{ key: 'welcome', name: 'Welcome' } as any} />);
+    });
+    // The RN mock has no Image, so the pack renders its titled fallback.
+    const texts = tree.root.findAll((node) => (node.type as any) === 'Text').map((node) => node.props.children);
+    expect(texts).toContain('AWS');
+    expect(texts).not.toContain('C#');
+  });
+
+  it('still advances new users to the goal step', async () => {
     const navigate = vi.fn();
     const replace = vi.fn();
     let tree!: renderer.ReactTestRenderer;

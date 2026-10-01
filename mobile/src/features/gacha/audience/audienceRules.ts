@@ -4,8 +4,8 @@ export type AudienceCandidateRow = {
   difficulty: number;
 };
 
-// One vocabulary for the audience preference, shared by the survey, the
-// Settings chips and Profile. These three words are the single label source.
+// One vocabulary for the audience preference (Settings "Card difficulty"),
+// shared by the Settings chips and Profile. These three words are the single label source.
 export const AUDIENCE_LABELS: Readonly<Record<AudiencePreference, string>> = {
   junior: 'Junior',
   both: 'Balanced',

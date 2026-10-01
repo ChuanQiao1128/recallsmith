@@ -157,4 +157,23 @@ describe('per-pack economy rewards', () => {
     expect(wallets.fresh).toEqual({ availablePulls: 3, reservePulls: 0 });
     expect(await loadDeckWallet('fresh')).toEqual({ availablePulls: 3, reservePulls: 0 });
   });
+
+  it('prepares Home wallets with no bootstrap and no floor while the starter lesson is open (R22 §4)', async () => {
+    const now = new Date(2026, 0, 15, 9, 0, 0);
+    store.set('recallsmith:onboarding:stage:v1', 'starter');
+    const summaries = [
+      deckSummary({ slug: 'fresh', totalCards: 50, ownedCount: 5, newToday: 5, dueToday: 0 }),
+      deckSummary({ slug: 'other', totalCards: 50, ownedCount: 0, newToday: 0, dueToday: 0 }),
+    ];
+    const during = await prepareHomeDeckWallets({ deckSummaries: summaries, now });
+    expect(during.fresh ?? EMPTY).toEqual(EMPTY);
+    expect(during.other ?? EMPTY).toEqual(EMPTY);
+
+    // The lesson completes: the next Home load bootstraps every never-drawn pack as before.
+    store.set('recallsmith:onboarding:stage:v1', 'done');
+    const after = await prepareHomeDeckWallets({ deckSummaries: summaries, now });
+    expect(after.fresh).toEqual({ availablePulls: 3, reservePulls: 0 });
+    expect(after.other).toEqual({ availablePulls: 3, reservePulls: 0 });
+  });
 });
+

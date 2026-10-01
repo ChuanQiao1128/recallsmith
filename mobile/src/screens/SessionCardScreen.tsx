@@ -40,6 +40,14 @@ import { rankCardsByOrder } from '../features/gacha/library/cardRank';
 import { computeTomorrowLoad, forecastLine } from '../features/gacha/planner/loadForecast';
 import { resolveEffectiveOwned } from '../features/gacha/draw/effectiveOwned';
 import { settleRatingReward } from '../features/gacha/rewards/sessionRewards';
+import {
+  ensureStarterLesson,
+  isStarterLessonComplete,
+  isStarterLessonOpen,
+  type StarterLesson,
+} from '../features/gacha/starter/starterGate';
+import { completeStarterLesson } from '../features/gacha/starter/starterLesson';
+import { STARTER_COPY } from '../features/gacha/starter/starterCopy';
 import { recordMistakeOutcome } from '../features/gacha/mistakes/mistakeBook';
 import {
   buildFocusIndex,
@@ -201,6 +209,10 @@ export function SessionCardScreen({ navigation, route }: Props) {
   // Bumped by the error state's Retry so the load effect re-runs without a
   // slug change (offline / deck-not-found recovers once the deck is reachable).
   const [reloadToken, setReloadToken] = useState(0);
+  // R22 §4: the deck is being downloaded before the run can start (the starter lesson's first run
+  // on a fresh install), and whether the current load error belongs to the starter lesson.
+  const [installing, setInstalling] = useState(false);
+  const [starterLoadError, setStarterLoadError] = useState(false);
   const [progress, setProgress] = useState<CardProgress[]>([]);
   // The gate for this deck, resolved once per load and then held. It is state
   // rather than a ref because the render path counts due cards with it, and it
@@ -252,6 +264,8 @@ export function SessionCardScreen({ navigation, route }: Props) {
   // Non-null only in a focus run with at least one usable card; ratedUids holds the cards it served.
   const focusIndexRef = useRef<FocusIndex | null>(null);
   const focusRatedUidsRef = useRef<Set<string>>(new Set());
+  // Non-null while this run is the open starter lesson (R22 §4); finishing its cards opens Draw.
+  const starterLessonRef = useRef<StarterLesson | null>(null);
   // stableUid → 1-based position in the deck's OrderInDeck order; the same
   // number the Library tile and DrawResult print, so "#011" means one card.
   const rankMapRef = useRef<Map<string, number>>(new Map());
@@ -381,6 +395,9 @@ export function SessionCardScreen({ navigation, route }: Props) {
         if (!slugValue) return;
         setLoading(true);
         setLoadError(null);
+        setStarterLoadError(false);
+        setInstalling(false);
+        starterLessonRef.current = null;
         setSessionDone(0);
         setShowAnswer(false);
         setMcqState(EMPTY_MCQ_CARD_STATE);
@@ -432,12 +449,18 @@ export function SessionCardScreen({ navigation, route }: Props) {
             const updates = await checkManifestForUpdates();
             const info = (updates as any)[slugValue];
             if (info?.remoteUrl && info?.remoteVersion) {
-              const ok = await installDeckAndInvalidate(
-                slugValue,
-                info.remoteUrl,
-                info.remoteVersion,
-                info.remoteSha256 ?? null,
-              );
+              if (!cancelled) setInstalling(true);
+              let ok = false;
+              try {
+                ok = await installDeckAndInvalidate(
+                  slugValue,
+                  info.remoteUrl,
+                  info.remoteVersion,
+                  info.remoteSha256 ?? null,
+                );
+              } finally {
+                if (!cancelled) setInstalling(false);
+              }
               if (ok) {
                 resolved = await getCachedDeck(slugValue);
               }
@@ -486,6 +509,18 @@ export function SessionCardScreen({ navigation, route }: Props) {
           }
           const nextProgress = await loadDeckProgress(deckForStudy);
           if (cancelled) return;
+          // Recorded before the gate is resolved: the gate unions the lesson's cards from this record.
+          const starterLesson = isTrial ? null : await ensureStarterLesson(resolved);
+          if (cancelled) return;
+          starterLessonRef.current = starterLesson;
+          if (starterLesson && isStarterLessonComplete(starterLesson, nextProgress)) {
+            // Every lesson card is already studied (the app closed between the last rating and the
+            // reward, or the deck holds no lesson card): finish now instead of dealing a run.
+            await completeStarterLesson(starterLesson.slug);
+            if (cancelled) return;
+            navigation.replace('Draw', { slug: starterLesson.slug, rewardPending: true });
+            return;
+          }
           // Resolved against the deck's own slug, not deckForStudy's, so a
           // trial preview (which is a synthesised deck object with the same
           // slug) reads the same collection as the full deck would.
@@ -565,6 +600,9 @@ export function SessionCardScreen({ navigation, route }: Props) {
           void syncDailyReminders({ remainingDueCount, now });
         } catch (e: any) {
           if (cancelled) return;
+          const starterOpen = await isStarterLessonOpen();
+          if (cancelled) return;
+          setStarterLoadError(starterOpen);
           setDeck(null);
           setProgress([]);
           setDailyStats(null);
@@ -686,6 +724,8 @@ export function SessionCardScreen({ navigation, route }: Props) {
       // would delete the progress of every card the gate happened to exclude,
       // and the gate's own grandfather rule reads that progress back.
       await saveDeckProgress(deck, nextState.updatedProgress);
+      // Settled before the lesson check so a starter card's rating is stamped while the lesson is
+      // still open (no R1 pull for it, R22 §4).
       const rewardStep = await settleRatingReward({
         slug: deck.Slug,
         stableUid: current.card.StableUid,
@@ -728,6 +768,15 @@ export function SessionCardScreen({ navigation, route }: Props) {
         }
       }
       recordSessionRating({ stableUid: current.card.StableUid, rating });
+      const starterLesson = starterLessonRef.current;
+      if (starterLesson && isStarterLessonComplete(starterLesson, nextState.updatedProgress)) {
+        // The lesson's last card: the first pack is the reward. The stage closes, the pack's bootstrap
+        // (3 pulls) lands and the reminder prompt is armed, then Draw opens instead of the summary.
+        starterLessonRef.current = null;
+        await completeStarterLesson(starterLesson.slug);
+        navigation.replace('Draw', { slug: starterLesson.slug, rewardPending: true });
+        return;
+      }
       advanceSession();
       const minimumGoal =
         plannedMinimumGoal ??
@@ -870,11 +919,11 @@ export function SessionCardScreen({ navigation, route }: Props) {
           style={styles.gradient}
         >
           <View style={styles.center}>
-            <Text style={styles.errorTitle} numberOfLines={2}>
-              Deck not available
+            <Text style={styles.errorTitle} numberOfLines={2} testID="session-card-error-title">
+              {starterLoadError ? STARTER_COPY.offlineTitle : 'Deck not available'}
             </Text>
-            <Text style={styles.errorBody} numberOfLines={2}>
-              {loadError}
+            <Text style={styles.errorBody} numberOfLines={starterLoadError ? 3 : 2} testID="session-card-error-body">
+              {starterLoadError ? STARTER_COPY.offlineBody : loadError}
             </Text>
             <Pressable
               style={({ pressed }) => [styles.backButton, pressed && styles.pressed, { marginTop: 10 }]}
@@ -922,8 +971,8 @@ export function SessionCardScreen({ navigation, route }: Props) {
         >
           <View style={styles.center}>
             <ActivityIndicator size="large" color={colors.gold} />
-            <Text style={styles.loadingText} numberOfLines={1}>
-              Loading cards...
+            <Text style={styles.loadingText} numberOfLines={1} testID="session-card-loading-text">
+              {installing ? 'Downloading pack…' : 'Loading cards...'}
             </Text>
           </View>
         </LinearGradient>

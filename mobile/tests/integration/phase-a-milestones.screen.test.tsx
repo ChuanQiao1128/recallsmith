@@ -67,4 +67,16 @@ describe('phase A milestone and support routes', () => {
     expect(navigate.mock.calls[0][0]).toBe('Home');
     expect(navigate.mock.calls[0][1]?.firstDrawCoach).toBeUndefined();
   });
+
+  it('asks for reminders with the R22 copy, which no longer mentions a streak', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(<PermissionPromptScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'permission', name: 'PermissionPrompt' } as any} />);
+    });
+    const texts = tree.root
+      .findAll((node) => (node.type as any) === 'Text')
+      .map((node) => String(node.props.children ?? ''));
+    expect(texts).toContain('A short daily reminder to keep your reviews on time');
+    expect(texts.join('\n').toLowerCase()).not.toContain('streak');
+  });
 });

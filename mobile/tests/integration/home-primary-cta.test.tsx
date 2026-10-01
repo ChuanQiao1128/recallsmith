@@ -273,8 +273,9 @@ describe('home primary CTA uniqueness', () => {
       expect(textBlob).toContain('New');
       expect(textBlob).toContain('Learned');
       // Fourth tile is the selected deck's owned cards, not the cross-deck due
-      // sum that read "0 Total" under a 441-card deck.
-      expect(textBlob).toContain('Owned');
+      // sum that read "0 Total" under a 441-card deck. R22 §5: it reads Collected.
+      expect(textBlob).toContain('Collected');
+      expect(textBlob).not.toContain('Owned');
       expect(textBlob).not.toContain('Total');
 
       const metricStyle = tree.root.findByProps({ testID: 'home-today-count-total' }).props.style;

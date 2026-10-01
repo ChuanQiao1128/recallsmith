@@ -12,6 +12,7 @@ import {
   type RewardWalletState,
 } from './rewardWallet';
 import { countPaidEntriesBySlug } from './newCardLedger';
+import { isStarterLessonOpen } from '../starter/starterGate';
 
 // Release 1.7, owner option A: pulls belong to the pack that earned them, and a
 // pull earned in a pack can only open that pack. This module is that per-pack
@@ -249,9 +250,17 @@ export async function refundDeckPulls(slug: string, count: number): Promise<Rewa
  * is 0, and its draw state is untouched (owned.length === 0 && pity == null). The
  * pulls and the bootstrap mark go in one record write. When the pack is not
  * eligible it writes nothing and does not mark it either. Never throws.
+ *
+ * R22 §4: while the starter lesson is open nothing is bootstrapped, on any pack
+ * -- a new learner learns first and the first pack is the reward for finishing.
+ * completeStarterLesson closes the lesson, then calls this. Every caller (Home,
+ * Draw, Library) goes through here, so the rule holds wherever the learner taps.
  */
 export async function ensureDeckBootstrap(slug: string): Promise<{ granted: number; wallet: RewardWalletState }> {
   try {
+    if (await isStarterLessonOpen()) {
+      return { granted: 0, wallet: await loadDeckWallet(slug) };
+    }
     return await withLock(async () => {
       const key = await walletsKey();
       const record = await readRecord(key);

@@ -3,6 +3,7 @@ import {
   buildHomeScreenVM,
   buildHomeVM,
   EMPTY_DECK_CTA_LABEL,
+  HERO_HEADLINE_MAX_CHARS,
   ownedCountOf,
   type HomeCtaKind,
 } from '../../src/features/gacha/selectors/homeSelectors';
@@ -27,6 +28,56 @@ function makeDeck(overrides: Partial<DeckSummary> = {}): DeckSummary {
     ...overrides,
   };
 }
+
+describe('hero headline fits in two lines (R22 §5)', () => {
+  const LONG_TITLE = 'AWS Solutions Architect (SAA-C03)';
+  const kinds: HomeCtaKind[] = [
+    'first_run',
+    'empty_deck',
+    'today_pending',
+    'today_partial',
+    'today_done',
+    'today_full_clear',
+    'due_only',
+    'nothing_to_learn',
+    'wallet_full',
+    'error',
+  ];
+  const decks: Array<Partial<DeckSummary>> = [
+    {},
+    { dueToday: 0, newToday: 4 },
+    { dueToday: 0, newToday: 0 },
+    { canStudy: false },
+    { localCards: 0, studyCards: 0, dueToday: 0, newToday: 0 },
+  ];
+
+  it('stays within the two-line budget and never repeats a long deck title', () => {
+    expect(HERO_HEADLINE_MAX_CHARS).toBeLessThanOrEqual(40);
+    for (const kind of [undefined, ...kinds]) {
+      for (const deck of decks) {
+        const vm = buildHomeVM({
+          selectedSlug: 'csharp',
+          hasSignedInUser: true,
+          deckSummaries: [makeDeck({ title: LONG_TITLE, ...deck })],
+          statusHint: kind,
+          errorMessage: kind === 'error' ? 'boom' : null,
+          wallet: { availablePulls: 0, reservePulls: 0 },
+        });
+        expect(vm.hero.headline.length, `${kind} ${JSON.stringify(deck)}: ${vm.hero.headline}`).toBeLessThanOrEqual(
+          HERO_HEADLINE_MAX_CHARS,
+        );
+        expect(vm.hero.headline).not.toContain(LONG_TITLE);
+      }
+    }
+    const noDeck = buildHomeVM({
+      selectedSlug: null,
+      hasSignedInUser: true,
+      deckSummaries: [],
+      wallet: { availablePulls: 0, reservePulls: 0 },
+    });
+    expect(noDeck.hero.headline.length).toBeLessThanOrEqual(HERO_HEADLINE_MAX_CHARS);
+  });
+});
 
 describe('buildHomeVM CTA kinds', () => {
   const allKinds: HomeCtaKind[] = [
@@ -284,8 +335,8 @@ describe('buildHomeVM CTA kinds', () => {
       });
       expect(vm.routePreview).toEqual([]);
       expect(vm.counts.normalCount + vm.counts.eliteCount + vm.counts.bossCount).toBe(0);
-      expect(vm.goal).toEqual({ minimum: 'No cards yet', fullClear: 'Open a pack to start' });
-      expect(vm.hero.headline).toBe('No cards in C# Interview yet');
+      expect(vm.goal).toEqual({ text: 'No cards yet · Open a pack to start' });
+      expect(vm.hero.headline).toBe('No cards in this deck yet');
       expect(vm.hero.subline).toMatch(/open a pack/i);
       // Locked wallet: the badge says what the floor will do, without claiming cards are "due".
       expect(vm.draw.state).toBe('locked');
@@ -492,7 +543,8 @@ describe('goal line', () => {
 
     // due 4 + new 3 = 7, but sessionBuilder caps a run at 5 and the summary
     // will say "5 / 5 · full clear"; Home used to say "Full clear: 7 cards".
-    expect(vm.goal).toEqual({ minimum: 'Keep streak: 1 card', fullClear: 'Full clear: 5 cards' });
+    // R22 §5: one plain line, no streak and no "full clear" wording.
+    expect(vm.goal).toEqual({ text: 'Today: 5 cards' });
   });
 
   it('uses the singular for a one-card route', () => {
@@ -503,7 +555,7 @@ describe('goal line', () => {
       wallet: { availablePulls: 0, reservePulls: 0 },
     });
 
-    expect(vm.goal?.fullClear).toBe('Full clear: 1 card');
+    expect(vm.goal?.text).toBe('Today: 1 card');
   });
 
   it('is absent when the selected deck has nothing due and nothing new', () => {

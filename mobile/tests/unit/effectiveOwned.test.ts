@@ -22,6 +22,9 @@ import type { CardProgress } from '../../src/review/model';
 import { resolveEffectiveOwned } from '../../src/features/gacha/draw/effectiveOwned';
 import { saveDrawState } from '../../src/features/gacha/draw/drawStateStore';
 import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStateCache';
+import { loadDrawState } from '../../src/features/gacha/draw/drawStateStore';
+import { ensureStarterLesson } from '../../src/features/gacha/starter/starterGate';
+import { completeStarterLesson } from '../../src/features/gacha/starter/starterLesson';
 
 const SLUG = 'csharp';
 
@@ -108,5 +111,45 @@ describe('resolveEffectiveOwned', () => {
     await saveDrawState(SLUG, { owned: ['fresh'], pity: null });
 
     expect([...(await resolveEffectiveOwned(SLUG, []))]).toEqual(['fresh']);
+  });
+
+  // R22 §4: the starter lesson's cards are studiable before anything is drawn, only while the lesson
+  // is open, only on the lesson's deck, and never by writing them into drawState.owned.
+  describe('starter lesson union', () => {
+    const STAGE_KEY = 'recallsmith:onboarding:stage:v1';
+    const card = (StableUid: string, OrderInDeck: number) => ({ StableUid, OrderInDeck });
+    const deck = { Slug: SLUG, Cards: [card('s1', 1), card('s2', 2), card('s3', 3), card('s4', 4), card('s5', 5), card('s6', 6)] };
+
+    it('unions the lesson cards while the lesson is open, without writing them into owned', async () => {
+      store.set(STAGE_KEY, 'starter');
+      await ensureStarterLesson(deck);
+
+      const effective = await resolveEffectiveOwned(SLUG, [untouched('s1'), untouched('s6')]);
+
+      expect([...effective].sort()).toEqual(['s1', 's2', 's3', 's4', 's5']);
+      expect((await loadDrawState(SLUG)).owned).toEqual([]);
+    });
+
+    it('does not union them on another deck', async () => {
+      store.set(STAGE_KEY, 'starter');
+      await ensureStarterLesson(deck);
+      expect((await resolveEffectiveOwned('aws', [])).size).toBe(0);
+    });
+
+    it('stops unioning once the lesson completes; studied lesson cards stay studiable as learned', async () => {
+      store.set(STAGE_KEY, 'starter');
+      await ensureStarterLesson(deck);
+      await completeStarterLesson(SLUG);
+
+      const effective = await resolveEffectiveOwned(SLUG, [learned('s1'), learned('s2'), untouched('s3')]);
+      expect([...effective].sort()).toEqual(['s1', 's2']);
+    });
+
+    it('existing users (stage done) never get the lesson cards', async () => {
+      store.set(STAGE_KEY, 'done');
+      expect(await ensureStarterLesson(deck)).toBeNull();
+      store.set('recallsmith:starter-lesson:v1', JSON.stringify({ slug: SLUG, uids: ['s1'] }));
+      expect((await resolveEffectiveOwned(SLUG, [])).size).toBe(0);
+    });
   });
 });
