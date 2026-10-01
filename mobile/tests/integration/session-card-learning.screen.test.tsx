@@ -609,7 +609,7 @@ describe('SessionCardScreen learning step (R22 §6: teach before testing)', () =
     expect(subtitle(tree)).toBe('Card 1 of 3');
     await press(tree, 'Reveal answer');
     await press(tree, 'Remembered');
-    expect(subtitle(tree)).toBe('Card 2 of 4');
+    expect(subtitle(tree)).toBe('Card 2 of 3');
     await press(tree, 'Got it');
     expect(subtitle(tree)).toBe('Card 3 of 3');
   });
