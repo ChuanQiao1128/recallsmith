@@ -39,7 +39,8 @@ def test_dataset_composition_matches_contract() -> None:
 def test_controls_are_untouched_and_mutations_change_the_card() -> None:
     exported = exported_index()
     for row in load_dataset():
-        original = card_of(exported[(row["deckSlug"], row["sourceUid"])])
+        # v1 is source-less: the deck's own SOURCE (added after v1 was frozen) is nulled in every row.
+        original = {k: (None if k == "source" else v) for k, v in card_of(exported[(row["deckSlug"], row["sourceUid"])]).items()}
         if row["defect"] is None:
             assert row["mutation"] is None
             assert row["card"] == original
