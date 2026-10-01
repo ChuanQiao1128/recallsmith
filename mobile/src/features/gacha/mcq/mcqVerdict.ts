@@ -6,6 +6,7 @@
 import type { ReviewRating, CardProgress } from '../../../review/model';
 import { scheduleNextReview } from '../../../review/model';
 import type { McqExport } from '../../../types/deckExport';
+import { capNextReviewToExam } from '../../goal/studyGoal';
 import { mcqRequiredCount } from './normalizeMcq';
 import { MCQ_FAST_MS } from './mcqConstants';
 
@@ -95,14 +96,16 @@ function formatPracticeGap(delta: number): string {
  *  function that will save the rating (scheduleNextReview by default, scheduleFocusReview in a focus run).
  *  The line formats after.nextReviewAt's delta from now; before is never mutated (the scheduler spreads).
  *  When a non-Again rating leaves stage and nextReviewAt as they were (focus practice), the line says so and
- *  names the gap to the unchanged nextReviewAt instead of a ladder step that is never applied. */
+ *  names the gap to the unchanged nextReviewAt instead of a ladder step that is never applied.
+ *  With an exam date, after is capped exactly as the save caps it (R22 §7), so the line shows the capped day. */
 export function describeScheduledRating(
   before: CardProgress,
   rating: ReviewRating,
   now: Date,
   schedule: RatingScheduler = scheduleNextReview,
+  examDate: string | null = null,
 ): { after: CardProgress; line: string } {
-  const after = schedule(before, rating, now);
+  const after = capNextReviewToExam(schedule(before, rating, now), examDate, now.getTime());
   const delta = after.nextReviewAt - now.getTime();
   if (rating !== 'again' && after.stage === before.stage && after.nextReviewAt === before.nextReviewAt) {
     return { after, line: `Practice · schedule unchanged · back in ${formatPracticeGap(delta)}` };

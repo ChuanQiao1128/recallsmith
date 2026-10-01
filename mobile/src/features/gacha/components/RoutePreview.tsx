@@ -3,11 +3,12 @@ import { StyleSheet, Text, View } from 'react-native';
 import type { RoutePreviewNode } from '../contracts';
 import { colors } from '../../../theme/colors';
 
+// R22 §5: only the elite and boss cards carry a badge; the plain first and
+// normal cards read as cards, with no internal role word.
 function roleLabel(role: RoutePreviewNode['role']) {
-  if (role === 'warmup') return 'Warm-up';
   if (role === 'elite') return 'Elite';
   if (role === 'boss') return 'Boss';
-  return 'Normal';
+  return null;
 }
 
 export function RoutePreview(props: { nodes: RoutePreviewNode[] }) {
@@ -29,12 +30,16 @@ export function RoutePreview(props: { nodes: RoutePreviewNode[] }) {
               <Text style={styles.nodeIndex}>{index + 1}</Text>
             </View>
             <View style={styles.nodeBody}>
-              <Text style={styles.nodeRole} numberOfLines={1}>
-                {roleLabel(node.role)}
-              </Text>
-              <Text style={styles.nodeTitle} numberOfLines={2}>
-                {node.title}
-              </Text>
+              {roleLabel(node.role) ? (
+                <Text style={styles.nodeRole} numberOfLines={1}>
+                  {roleLabel(node.role)}
+                </Text>
+              ) : null}
+              {node.title ? (
+                <Text style={styles.nodeTitle} numberOfLines={2}>
+                  {node.title}
+                </Text>
+              ) : null}
               <Text style={styles.nodeSubtitle} numberOfLines={1}>
                 {node.subtitle}
               </Text>

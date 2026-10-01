@@ -24,7 +24,7 @@ type ToggleRowProps = {
 // A Switch-shaped row without RN's Switch: the per-file RN mocks in the test suite
 // do not provide Switch, so we use a Pressable with accessibilityRole="switch" and a
 // visible On/Off pill instead.
-function ToggleRow({ testID, label, body, value, onPress }: ToggleRowProps) {
+export function ToggleRow({ testID, label, body, value, onPress }: ToggleRowProps) {
   return (
     <Pressable
       testID={testID}

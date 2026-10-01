@@ -125,7 +125,9 @@ describe('ReviewBody — the question is never clamped', () => {
     expect(question.props.children).toBe(LONG_QUESTION);
     expect(question.props.numberOfLines).toBeUndefined();
     expect(hasText(tree, 'QUESTION')).toBe(true);
-    expect(hasText(tree, 'ANSWER')).toBe(true);
+    // R22 §5: no empty ANSWER heading above the EXPLANATION heading.
+    expect(hasText(tree, 'ANSWER')).toBe(false);
+    expect(hasText(tree, 'EXPLANATION')).toBe(true);
     expect(hasText(tree, 'Hide')).toBe(true);
     expect(hasText(tree, longCard.Explanation!)).toBe(true);
 
@@ -239,5 +241,40 @@ describe('ReviewBody — code samples', () => {
   it('omits the caption when the card has no language', () => {
     const tree = render({ ...codeCard, CodeLanguage: null }, true);
     expect(texts(tree).some((node) => node.props.testID === 'code-block-language')).toBe(false);
+  });
+});
+
+describe('ReviewBody — no empty ANSWER heading (R22 §5)', () => {
+  // Cards carry no short-answer field (CardExport: Explanation, CodeSnippet,
+  // RealWorldUsage), so ANSWER was a caption with nothing of its own under it,
+  // sitting right above the EXPLANATION caption.
+  const explanationOnly: CardExport = {
+    StableUid: 'explanation-only',
+    OrderInDeck: 1,
+    Difficulty: 1,
+    Question: 'What is a record type?',
+    Explanation: 'A reference type with value-based equality.',
+  };
+
+  it('shows EXPLANATION directly on a card with only an explanation', () => {
+    const tree = render(explanationOnly, true);
+    expect(hasText(tree, 'ANSWER')).toBe(false);
+    expect(hasText(tree, 'EXPLANATION')).toBe(true);
+    expect(hasText(tree, explanationOnly.Explanation!)).toBe(true);
+    expect(hasText(tree, 'Hide')).toBe(true);
+  });
+
+  it('shows no ANSWER heading over code or usage sections either', () => {
+    for (const card of [codeCard, longCard]) {
+      const tree = render(card, true);
+      expect(hasText(tree, 'ANSWER')).toBe(false);
+    }
+  });
+
+  it('shows no ANSWER heading over the empty-body hint', () => {
+    const tree = render({ ...explanationOnly, Explanation: null }, true);
+    expect(hasText(tree, 'ANSWER')).toBe(false);
+    expect(hasText(tree, 'No answer body for this card yet.')).toBe(true);
+    expect(hasText(tree, 'Hide')).toBe(true);
   });
 });

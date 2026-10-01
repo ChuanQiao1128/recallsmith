@@ -73,10 +73,13 @@ import { useScrollToTopOnChange } from '../features/gacha/session/useScrollToTop
 import SessionProgressHeader from '../features/gacha/components/SessionProgressHeader';
 import RatingBar from '../features/gacha/components/RatingBar';
 import ReviewBody from '../features/gacha/components/ReviewBody';
+import LearningStudyView, { LearningGotItDock } from '../features/gacha/components/LearningStudyView';
 import { getFeatureFlags } from '../config/featureFlags';
 import { SessionReportButton } from '../features/cardReport/SessionReportButton';
 import { loadExpoHaptics } from '../components/ceremonyHaptics';
 import { getFeedbackPrefsSync } from '../features/gacha/settings/feedbackPrefs';
+import { getStudyPrefsSync, loadStudyPrefs } from '../features/gacha/study/studyPrefs';
+import { getStudyGoal } from '../features/goal/studyGoal';
 import { studyHaptic } from '../features/gacha/session/studyHaptics';
 import type { McqExport, McqOption } from '../types/deckExport';
 import { mcqRequiredCount, resolveMcq } from '../features/gacha/mcq/normalizeMcq';
@@ -121,6 +124,8 @@ function readRN<T = any>(key: string, fallback: T): T {
 const AI: any = readRN('AccessibilityInfo', null);
 // Options-stage dock, one row: 8 + count 20 (choose-N only) + 48 + 8 = 84, rounded up.
 const MCQ_DOCK_HEIGHT = 96;
+// Study-view dock: hint line + 56pt "Got it" + padding, rounded up.
+const LEARNING_DOCK_HEIGHT = 112;
 type McqCardState = {
   mcq: McqExport | null;               // resolveMcq(card, getFeatureFlags()) — null ⇒ renderAsMcq false
   stage: McqStage;                     // 'stem' when flags.mcq.recallFirst !== false, else 'options'
@@ -157,6 +162,14 @@ function mcqHaptic(kind: 'success' | 'warning' | 'error'): void {
 
 function isLearned(progress: CardProgress): boolean {
   return typeof progress.lastReviewedAt === 'number' && progress.lastReviewedAt > 0;
+}
+// R22 §6 learning step. 'study' = the first exposure of a never-reviewed Q/A card (read it, "Got it");
+// 'check' = its recall check, re-queued at the end of the same session. null = an ordinary card.
+type LearningPhase = 'study' | 'check' | null;
+// The recall check has two answers whatever the rating-button setting: Remembered (the dock sends
+// 'good') schedules as 'hard' — stage 0, due in a day — and Forgot stays 'again' (due in 10 min).
+function mapLearningCheckRating(rating: ReviewRating): ReviewRating {
+  return rating === 'again' ? 'again' : 'hard';
 }
 function computePremiumActive(customerInfo: any): boolean {
   try {
@@ -225,6 +238,14 @@ export function SessionCardScreen({ navigation, route }: Props) {
   const [sessionDone, setSessionDone] = useState(0);
   const [showAnswer, setShowAnswer] = useState(false);
   const [mcqState, setMcqState] = useState<McqCardState>(EMPTY_MCQ_CARD_STATE);
+  const [learningPhase, setLearningPhase] = useState<LearningPhase>(null);
+  // One extra session slot per card studied this session: its recall check. The header's
+  // "X of Y" and the run's guards count against sessionLimit + learningCheckSlots.
+  const [learningCheckSlots, setLearningCheckSlots] = useState(0);
+  // Two rating buttons unless the learner has the four-button study setting on.
+  // Seeded from the in-memory value, refreshed on focus (the first read decides
+  // the default from whether the learner already has a learned card).
+  const [fourButtons, setFourButtons] = useState<boolean>(() => getStudyPrefsSync().fourButtons);
   const renderAsMcq = mcqState.mcq !== null;
   const [coachSeen, setCoachSeen] = useState<boolean | null>(null);
   // The dock's measured height (onLayout). The scroll surface reserves exactly this much at the
@@ -256,6 +277,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
   const [trialInfo, setTrialInfo] = useState<TrialInfo>(EMPTY_TRIAL_INFO);
   const [loadForecast, setLoadForecast] = useState<string | null>(null);
   const sessionLimit = plannedLimit ?? routeLimit ?? 5;
+  const totalLimit = sessionLimit > 0 ? sessionLimit + learningCheckSlots : sessionLimit;
   const isPremiumUser = usePremiumUser();
   const insets = useSafeAreaInsets();
   const trialRef = useRef<TrialInfo>(EMPTY_TRIAL_INFO);
@@ -276,6 +298,13 @@ export function SessionCardScreen({ navigation, route }: Props) {
   const mcqRunRef = useRef<McqRunState>(EMPTY_MCQ_RUN_STATE);
   const picksRef = useRef<{ landed: number; answered: number }>({ landed: 0, answered: 0 });
   const coachSeenRef = useRef<boolean | null>(null);                 // null = not read yet; latch + last value (gap 3)
+  // R22 §6: uids studied this session (the planner never deals them again), the checks still
+  // waiting at the end of the run in study order, and how many checks have been rated.
+  const studiedUidsRef = useRef<Set<string>>(new Set());
+  const pendingChecksRef = useRef<CurrentCardLike[]>([]);
+  const checksDoneRef = useRef(0);
+  // R22 §7: the study goal's exam date, read once per session; every rating and preview is capped by it.
+  const examDateRef = useRef<string | null>(null);
   const sessionId = useSessionStore((state) => state.sessionId);
   const sessionRoute = useSessionStore((state) => state.route);
   const sessionRouteIndex = useSessionStore((state) => state.currentIndex);
@@ -299,6 +328,17 @@ export function SessionCardScreen({ navigation, route }: Props) {
   useScrollToTopOnChange(
     scrollRef,
     current ? `${current.card.StableUid}:${mcqState.attemptIndex}:${sessionDone}` : null,
+  );
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      void loadStudyPrefs().then((prefs) => {
+        if (!cancelled) setFourButtons(prefs.fourButtons);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }, []),
   );
   useFocusEffect(
     useCallback(() => {
@@ -340,10 +380,24 @@ export function SessionCardScreen({ navigation, route }: Props) {
     setDailyStats(null);
     setCurrent(null);
   }
-  function applyCurrent(next: CurrentCardLike | null, sessionIdForSeed: string): void {
+  function applyCurrent(next: CurrentCardLike | null, sessionIdForSeed: string, asCheck = false): void {
     const flags = getFeatureFlags();
     const mcq = next ? resolveMcq(next.card, flags) : null;
+    // MCQ cards and Mistake Book focus runs keep today's flow; only a Q/A card met for the first
+    // time is taught before it is tested.
+    const phase: LearningPhase =
+      next && mcq === null
+        ? asCheck
+          ? 'check'
+          : focusIndexRef.current === null && !isLearned(next.progress)
+            ? 'study'
+            : null
+        : null;
+    setLearningPhase(phase);
     if (next) {
+      // The check re-serves the card just studied when it was the run's only card, so the
+      // StableUid effect would not fire: restart the dwell clock here.
+      if (phase === 'check') cardShownAtRef.current = Date.now();
       const uid = next.card.StableUid;
       const attemptIndex = attemptIndexRef.current.get(uid) ?? 0;
       attemptIndexRef.current.set(uid, attemptIndex + 1);
@@ -406,6 +460,12 @@ export function SessionCardScreen({ navigation, route }: Props) {
         mcqRunRef.current = EMPTY_MCQ_RUN_STATE;
         picksRef.current = { landed: 0, answered: 0 };
         coachSeenRef.current = null;
+        studiedUidsRef.current = new Set();
+        pendingChecksRef.current = [];
+        checksDoneRef.current = 0;
+        examDateRef.current = null;
+        setLearningCheckSlots(0);
+        setLearningPhase(null);
         setLoadForecast(null);
         setPlannedMinimumGoal(null);
         setPlannedLimit(null);
@@ -547,6 +607,9 @@ export function SessionCardScreen({ navigation, route }: Props) {
           }
           const stats = await loadOrInitDailyStats(deckForStudy, nextProgress);
           if (cancelled) return;
+          const goal = await getStudyGoal();
+          if (cancelled) return;
+          examDateRef.current = goal?.examDate ?? null;
           const plannedChallenge = planChallengeRoute({
             deck: deckForStudy,
             progress: nextProgress,
@@ -637,30 +700,77 @@ export function SessionCardScreen({ navigation, route }: Props) {
     () =>
       buildSessionProgressVM({
         sessionDone,
-        sessionLimit,
+        sessionLimit: totalLimit,
         dueTodayCount,
         mode,
         currentRoleLabel: sessionRoute[sessionRouteIndex]?.title ?? null,
       }),
-    [dueTodayCount, mode, sessionDone, sessionLimit, sessionRoute, sessionRouteIndex],
+    [dueTodayCount, mode, sessionDone, totalLimit, sessionRoute, sessionRouteIndex],
   );
-  async function handleRating(rating: UiRating) {
+  // The next recall check waiting at the end of the run, with the card's latest progress.
+  function takeLearningCheck(progressList: CardProgress[]): CurrentCardLike | null {
+    const queued = pendingChecksRef.current.shift();
+    if (!queued) return null;
+    const latest = progressList.find((item) => item.stableUid === queued.card.StableUid);
+    return { card: queued.card, progress: latest ?? queued.progress };
+  }
+  // R22 §6: the study view's one action. No rating, no review event, no Mistake Book entry, no
+  // reward; the card waits for its recall check at the end of this session (one extra slot).
+  function handleGotIt(): void {
+    if (!current || !deck || reviewing || learningPhase !== 'study') return;
+    studyHaptic('select');
+    const uid = current.card.StableUid;
+    studiedUidsRef.current.add(uid);
+    pendingChecksRef.current.push(current);
+    const nextDone = sessionDone + 1;
+    // The study used this card's planned slot; the check is the extra one.
+    const plannerDone = nextDone - checksDoneRef.current;
+    let next =
+      sessionLimit <= 0 || plannerDone < sessionLimit
+        ? pickNextCard({
+            deck,
+            progress,
+            now: new Date(),
+            mode,
+            avoidUid: uid,
+            index: cardIndexRef.current,
+            ownedSet,
+            kindHint: buildKindHint(mcqRunRef.current, getFeatureFlags()),
+            excludeUids: studiedUidsRef.current,
+          })
+        : null;
+    let asCheck = false;
+    if (!next) {
+      next = takeLearningCheck(progress);
+      asCheck = next !== null;
+    }
+    setLearningCheckSlots((n) => n + 1);
+    setSessionDone(nextDone);
+    setShowAnswer(false);
+    applyCurrent(next, useSessionStore.getState().sessionId ?? '', asCheck);
+  }
+  async function handleRating(uiRating: UiRating) {
     if (!current || !dailyStats || !deck) return;
     if (reviewing) return;
     if (!showAnswer) return;
-    if (sessionLimit > 0 && sessionDone >= sessionLimit) return;
+    if (learningPhase === 'study') return;
+    if (totalLimit > 0 && sessionDone >= totalLimit) return;
+    const isLearningCheck = learningPhase === 'check';
+    const rating = isLearningCheck ? mapLearningCheckRating(uiRating) : uiRating;
     studyHaptic('rate');
     setReviewing(true);
     try {
       const nowAtRating = new Date();
       const nowMs = nowAtRating.getTime();
       const focusIndex = focusIndexRef.current;
+      const checksDoneBefore = checksDoneRef.current;
       const nextState = buildRatedSessionState({
         current,
         progress,
         rating,
         mode,
-        sessionDone,
+        // Planner slots only: the recall checks are dealt from the end-of-run queue below.
+        sessionDone: sessionDone - checksDoneBefore,
         sessionLimit,
         now: nowAtRating,
         cardIndex: cardIndexRef.current,
@@ -668,12 +778,25 @@ export function SessionCardScreen({ navigation, route }: Props) {
         kindHint: buildKindHint(mcqRunRef.current, getFeatureFlags()),
         // A focus run deals cards that are not due; those get no scheduler credit (mobile-12).
         focusRun: focusIndex !== null,
+        excludeUids: studiedUidsRef.current,
+        examDate: examDateRef.current,
       });
       // Focus run: serve the next focus card in order instead of the planner's pick.
       if (focusIndex) focusRatedUidsRef.current.add(current.card.StableUid);
-      const nextCurrent = focusIndex
+      if (isLearningCheck) checksDoneRef.current = checksDoneBefore + 1;
+      // Once the run reaches its recall checks it serves only checks, in study order.
+      let nextCurrent = focusIndex
         ? pickFocusCard({ index: focusIndex, progress: nextState.updatedProgress, ratedUids: focusRatedUidsRef.current })
-        : nextState.nextCurrent;
+        : isLearningCheck
+          ? null
+          : nextState.nextCurrent;
+      let nextIsCheck = false;
+      if (!focusIndex && !nextCurrent) {
+        nextCurrent = takeLearningCheck(nextState.updatedProgress);
+        nextIsCheck = nextCurrent !== null;
+      }
+      // Every step of the run counts: planner cards, studies and checks.
+      const nextDone = sessionDone + 1;
       // Events are facts, progress is a projection; facts must land first. A
       // queued event can rebuild the progress on the next sync, but a saved
       // progress with no event means the server never learns this review
@@ -689,8 +812,9 @@ export function SessionCardScreen({ navigation, route }: Props) {
           cardRevision: typeof current.card.Revision === 'number' ? current.card.Revision : 1,
           statedDifficulty: typeof current.card.Difficulty === 'number' ? current.card.Difficulty : null,
           // A focus-run rating that left the schedule alone is practice, not a review (mobile-18).
-          reviewStage:
-            focusIndex && isFocusPractice(current.progress, rating, nowAtRating)
+          reviewStage: isLearningCheck
+            ? 'learning_check'
+            : focusIndex && isFocusPractice(current.progress, rating, nowAtRating)
               ? 'focus_practice'
               : isLearned(current.progress)
                 ? 'repeat_review'
@@ -713,6 +837,8 @@ export function SessionCardScreen({ navigation, route }: Props) {
           topic: current.card.Topic ?? null,
           rating,
           mcqVerdict: mcqState.mcq !== null ? mcqState.verdict : null,
+          // Mistakes start once a card is learned: a failed recall check writes nothing.
+          ...(isLearningCheck ? { learningCheck: true } : {}),
           at: nowMs,
         }).catch(() => undefined);
       } catch {
@@ -787,9 +913,9 @@ export function SessionCardScreen({ navigation, route }: Props) {
           ownedSet,
           mode,
         }).minimumGoal;
-      setSessionDone(nextState.nextDone);
+      setSessionDone(nextDone);
       setProgress(nextState.updatedProgress);
-      applyCurrent(nextCurrent, useSessionStore.getState().sessionId ?? '');
+      applyCurrent(nextCurrent, useSessionStore.getState().sessionId ?? '', nextIsCheck);
       setShowAnswer(false);
       void syncDailyReminders({
         remainingDueCount: nextState.remainingDueCount,
@@ -800,8 +926,8 @@ export function SessionCardScreen({ navigation, route }: Props) {
           sessionId: useSessionStore.getState().sessionId ?? undefined,
           slug: deck.Slug,
           deckTitle: deck.Title,
-          sessionDone: nextState.nextDone,
-          sessionLimit,
+          sessionDone: nextDone,
+          sessionLimit: totalLimit,
           minimumGoal,
           dueCount: nextState.remainingDueCount,
           streakEarned: useSessionStore.getState().streakEarned,
@@ -868,6 +994,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
       mappedRating,
       new Date(),
       focusIndexRef.current ? scheduleFocusReview : undefined,
+      examDateRef.current,
     ).line;
     setMcqState((prev) => ({ ...prev, stage: 'verdict', picks, confidence, changedPick, verdict, mappedRating, scheduleLine }));
     setShowAnswer(true);
@@ -1039,7 +1166,8 @@ export function SessionCardScreen({ navigation, route }: Props) {
       { text: 'Pause', onPress: () => navigation.goBack() },
     ]);
   }
-  const ratingDockHeight = (renderAsMcq ? MCQ_DOCK_HEIGHT : 164) + Math.max(insets.bottom, 8);
+  const ratingDockHeight =
+    (renderAsMcq ? MCQ_DOCK_HEIGHT : learningPhase === 'study' ? LEARNING_DOCK_HEIGHT : 164) + Math.max(insets.bottom, 8);
   // Reserved bottom padding: the measured dock once it has laid out, the stage default until then.
   const scrollBottomPadding = dockLayoutHeight ?? ratingDockHeight;
   const doneMinimumGoal =
@@ -1119,7 +1247,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
                       slug: deck.Slug,
                       deckTitle: deck.Title,
                       sessionDone,
-                      sessionLimit,
+                      sessionLimit: totalLimit,
                       minimumGoal: doneMinimumGoal,
                       dueCount: dueTodayCount,
                       streakEarned: useSessionStore.getState().streakEarned,
@@ -1150,6 +1278,12 @@ export function SessionCardScreen({ navigation, route }: Props) {
                 onOverLimit={stableOverLimit}
               />
               </>
+            ) : learningPhase === 'study' ? (
+              <LearningStudyView
+                card={current.card}
+                deckSlug={deck.Slug}
+                rank={rankMapRef.current.get(current.card.StableUid) ?? null}
+              />
             ) : (
               <ReviewBody
                 card={current.card}
@@ -1187,17 +1321,21 @@ export function SessionCardScreen({ navigation, route }: Props) {
                   requiredCount={mcqRequiredCount(mcqState.mcq)}
                   selectedCount={mcqState.picks.length}
                   disabled={reviewing}
-                  isLastNode={sessionLimit > 0 && sessionDone + 1 >= sessionLimit}
+                  isLastNode={totalLimit > 0 && sessionDone + 1 >= totalLimit}
                   onShowOptions={handleShowOptions}
                   onSubmit={handleSubmit}
                   onDontKnow={handleDontKnow}
                   onNext={handleMcqNext}
                 />
+              ) : learningPhase === 'study' ? (
+                <LearningGotItDock disabled={reviewing} onGotIt={handleGotIt} />
               ) : (
                 <RatingBar
                   testID="review-rating-bar"
                   disabled={reviewing || !showAnswer}
                   revealed={showAnswer}
+                  // The recall check is a yes/no question: Forgot / Remembered, whatever the setting.
+                  fourButtons={learningPhase === 'check' ? false : fourButtons}
                   onRate={(rating) => void handleRating(rating)}
                 />
               )}

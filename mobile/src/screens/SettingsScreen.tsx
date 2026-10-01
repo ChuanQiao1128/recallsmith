@@ -50,6 +50,13 @@ import {
   setFeedbackPref,
   type FeedbackPrefs,
 } from '../features/gacha/settings/feedbackPrefs';
+import { StudySection } from '../features/gacha/settings/study/StudySection';
+import {
+  getStudyPrefsSync,
+  loadStudyPrefs,
+  setStudyPrefs,
+  type StudyPrefs,
+} from '../features/gacha/study/studyPrefs';
 import AboutSection from '../features/gacha/settings/about/AboutSection';
 import DebugSection from '../features/gacha/settings/debug/DebugSection';
 import { createDebugTapCounter } from '../features/gacha/settings/debug/debugTapCounter';
@@ -112,6 +119,8 @@ export function SettingsScreen({ navigation }: Props) {
   // Device-global feedback prefs. Seeded from the synchronous in-memory value (defaults
   // until App.tsx's mount load runs) and refreshed from storage in the focus load below.
   const [feedbackPrefs, setFeedbackPrefs] = useState<FeedbackPrefs>(() => getFeedbackPrefsSync());
+  // Device-global study prefs (two vs four rating buttons), same seeding as above.
+  const [studyPrefs, setStudyPrefsState] = useState<StudyPrefs>(() => getStudyPrefsSync());
 
   // True once the first load has succeeded. After that, refocus/auth reloads
   // refresh the data silently instead of swapping the whole screen for a spinner
@@ -127,14 +136,16 @@ export function SettingsScreen({ navigation }: Props) {
       setLoadError(null);
     }
     try {
-      const [nextAudience, nextPrefs, nextStreak, nextFeedback] = await Promise.all([
+      const [nextAudience, nextPrefs, nextStreak, nextFeedback, nextStudy] = await Promise.all([
         loadAudiencePreference(),
         getReminderPrefs(),
         loadStreakSnapshot(),
         loadFeedbackPrefs(),
+        loadStudyPrefs(),
       ]);
 
       setFeedbackPrefs(nextFeedback);
+      setStudyPrefsState(nextStudy);
       setAudience(nextAudience);
       setReminderPrefsState(nextPrefs ?? DEFAULT_REMINDER_PREFS);
       setStreak(nextStreak ?? null);
@@ -258,6 +269,12 @@ export function SettingsScreen({ navigation }: Props) {
     // Optimistic: reflect the choice immediately, then persist and store the result.
     setFeedbackPrefs((prev) => ({ ...prev, [key]: value }));
     void setFeedbackPref(key, value).then((saved) => setFeedbackPrefs(saved));
+  }, []);
+
+  const onToggleFourButtons = useCallback((value: boolean) => {
+    // Optimistic, like the feedback toggles above.
+    setStudyPrefsState({ fourButtons: value });
+    void setStudyPrefs({ fourButtons: value }).then((saved) => setStudyPrefsState(saved));
   }, []);
 
   const onSignIn = useCallback(() => {
@@ -397,6 +414,8 @@ export function SettingsScreen({ navigation }: Props) {
           <AppearanceSection />
 
           <FeedbackSection prefs={feedbackPrefs} onToggle={onToggleFeedback} />
+
+          <StudySection prefs={studyPrefs} onToggleFourButtons={onToggleFourButtons} />
 
           {paywallHidden ? null : (
             <View style={styles.sectionCard}>

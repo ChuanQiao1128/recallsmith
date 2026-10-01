@@ -103,10 +103,10 @@ export const ReviewBody = React.memo(function ReviewBody(props: ReviewBodyProps)
         </Pressable>
       ) : (
         <View style={styles.answerWrap}>
+          {/* R22 §5: no ANSWER caption. Cards carry no short-answer field, so it
+              sat empty above the EXPLANATION caption; the sections below carry
+              their own headings and Hide keeps its place on the right. */}
           <View style={styles.answerTopRow}>
-            <Text style={styles.answerTitle} numberOfLines={1}>
-              ANSWER
-            </Text>
             <Pressable
               accessibilityRole="button"
               style={({ pressed }) => [styles.flipBackButton, pressed && styles.pressed]}
@@ -243,15 +243,8 @@ const styles = StyleSheet.create({
   answerTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
     marginBottom: spacing.sm,
-  },
-  answerTitle: {
-    fontSize: typography.caption,
-    color: colors.gold,
-    fontWeight: '900',
-    letterSpacing: 1.4,
-    textTransform: 'uppercase',
   },
   flipBackButton: {
     minHeight: 36,

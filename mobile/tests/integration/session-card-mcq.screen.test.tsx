@@ -157,7 +157,7 @@ vi.mock('../../src/features/gacha/session/sessionReviewHelpers', () => ({
     prevLearnedCount: 0,
     remainingDueCount: 0,
   })),
-  buildSessionProgressVM: vi.fn(() => ({ title: 'Session progress', subtitle: 'Run 0/1 · Mixed', progressText: '0 / 1', hint: '0 due', percent: 0, currentRoleLabel: 'Warm-up node' })),
+  buildSessionProgressVM: vi.fn(() => ({ title: 'Session progress', subtitle: 'Card 1 of 1', progressText: '0 / 1', hint: '0 due', percent: 0, currentRoleLabel: null })),
   modeLabel: vi.fn(() => 'Mixed'),
 }));
 
@@ -184,7 +184,7 @@ vi.mock('../../src/features/gacha/planner/sessionPlanner', () => ({
     minimumGoal: 1,
     dueCount: 0,
     newCount: 1,
-    nodes: [{ id: 'warmup-0', role: 'warmup', title: 'Warm-up node', subtitle: 'Start.' }],
+    nodes: [{ id: 'warmup-0', role: 'warmup', title: '', subtitle: 'Start.' }],
     summary: 'C# Interview',
   })),
 }));
@@ -270,7 +270,7 @@ function buildChallengeRoute(overrides: Record<string, unknown> = {}) {
     minimumGoal: 1,
     dueCount: 0,
     newCount: 1,
-    nodes: [{ id: 'warmup-0', role: 'warmup', title: 'Warm-up node', subtitle: 'Start.' }],
+    nodes: [{ id: 'warmup-0', role: 'warmup', title: '', subtitle: 'Start.' }],
     summary: 'C# Interview',
     ...overrides,
   };
@@ -601,16 +601,22 @@ describe('SessionCardScreen MCQ branch', () => {
     serve(CARD_1, NEW_PROGRESS(CARD_1.StableUid));
     const { tree, navigation } = await mount();
 
-    expect(findPressableByLabel(tree, 'Reveal answer')).toBeTruthy();
+    // Rendered as Q/A, a never-reviewed card is taught first (R22 §6): study view, then the
+    // recall check at the end of the run, which adds one slot.
+    expect(findPressableByLabel(tree, 'Got it')).toBeTruthy();
     expect(byTestIDPrefix(tree, 'mcq-')).toHaveLength(0);
     expect(pickNextCard).toHaveBeenCalledWith(expect.objectContaining({ kindHint: null }));
 
+    await act(async () => {
+      findPressableByLabel(tree, 'Got it').props.onPress();
+      await Promise.resolve();
+    });
     await act(async () => {
       findPressableByLabel(tree, 'Reveal answer').props.onPress();
       await Promise.resolve();
     });
     await act(async () => {
-      findPressableByLabel(tree, 'Good').props.onPress();
+      findPressableByLabel(tree, 'Remembered').props.onPress();
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -620,8 +626,8 @@ describe('SessionCardScreen MCQ branch', () => {
       sessionId: expect.any(String),
       slug: 'csharp',
       deckTitle: 'C# Interview',
-      sessionDone: 1,
-      sessionLimit: 1,
+      sessionDone: 2,
+      sessionLimit: 2,
       minimumGoal: 1,
       dueCount: 0,
       streakEarned: true,
@@ -741,13 +747,53 @@ describe('SessionCardScreen MCQ branch', () => {
     expect(recordReviewEvent).toHaveBeenCalledWith(expect.objectContaining({ rating: 'easy' }));
   });
 
+  it('reads the study goal and previews and saves with the exam-capped day (R22 §7)', async () => {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const today = new Date(FIXED_NOW_MS);
+    const exam = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 5);
+    const examDate = `${exam.getFullYear()}-${pad(exam.getMonth() + 1)}-${pad(exam.getDate())}`;
+    const capMs = new Date(exam.getFullYear(), exam.getMonth(), exam.getDate() - 1).getTime();
+    store.set('recallsmith:study-goal:v1', JSON.stringify({ deckSlug: 'csharp', examDate }));
+    serve(CARD_1, REPEAT_PROGRESS(CARD_1.StableUid));
+    const { tree } = await mount();
+
+    await press(tree, 'mcq-show-options');
+    await press(tree, 'mcq-option-a');
+    await press(tree, 'mcq-option-b');
+    vi.setSystemTime(FIXED_NOW_MS + 3_000);
+    await press(tree, 'mcq-submit-sure');
+
+    // Uncapped, a Good from stage 2 is 8 days; the exam pulls it to the start of the day before.
+    const days = Math.round((capMs - (FIXED_NOW_MS + 3_000)) / 86_400_000);
+    expect(days).toBeLessThan(8);
+    expect(idText(tree, 'mcq-schedule-line')).toBe(`Scheduled as Good · back in ${days} day${days === 1 ? '' : 's'}`);
+
+    await press(tree, 'mcq-next');
+    expect(buildRatedSessionState).toHaveBeenCalledWith(expect.objectContaining({ rating: 'good', examDate }));
+  });
+
+  it('saves with no exam cap when there is no study goal', async () => {
+    serve(CARD_1, REPEAT_PROGRESS(CARD_1.StableUid));
+    const { tree } = await mount();
+
+    await press(tree, 'mcq-show-options');
+    await press(tree, 'mcq-option-a');
+    await press(tree, 'mcq-option-b');
+    vi.setSystemTime(FIXED_NOW_MS + 3_000);
+    await press(tree, 'mcq-submit-sure');
+    expect(idText(tree, 'mcq-schedule-line')).toBe('Scheduled as Good · back in 8 days');
+
+    await press(tree, 'mcq-next');
+    expect(buildRatedSessionState).toHaveBeenCalledWith(expect.objectContaining({ rating: 'good', examDate: null }));
+  });
+
   it('re-deals an again card with a new order and the redeal banner', async () => {
     vi.mocked(planChallengeRoute).mockReturnValue(
       buildChallengeRoute({
         limit: 2,
         nodes: [
-          { id: 'warmup-0', role: 'warmup', title: 'Warm-up node', subtitle: 'Start.' },
-          { id: 'warmup-1', role: 'warmup', title: 'Warm-up node', subtitle: 'Again.' },
+          { id: 'warmup-0', role: 'warmup', title: '', subtitle: 'Start.' },
+          { id: 'warmup-1', role: 'warmup', title: '', subtitle: 'Again.' },
         ],
       }) as any,
     );

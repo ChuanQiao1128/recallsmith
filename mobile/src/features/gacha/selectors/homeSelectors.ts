@@ -194,14 +194,8 @@ function buildRoutePreview(selectedDeck: DeckSummary | null): RoutePreviewNode[]
           ? 'elite'
           : 'normal';
 
-    const title =
-      role === 'warmup'
-        ? 'Warm-up node'
-        : role === 'boss'
-          ? 'Boss check'
-          : role === 'elite'
-            ? 'Elite review'
-            : 'Normal node';
+    // R22 §5: no learner-visible "node" — the plain first and normal cards carry no title.
+    const title = role === 'boss' ? 'Boss check' : role === 'elite' ? 'Elite review' : '';
 
     const subtitle =
       role === 'warmup'
