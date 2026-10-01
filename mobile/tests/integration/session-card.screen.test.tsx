@@ -757,8 +757,15 @@ describe('SessionCardScreen', () => {
 
   // Y01: a fenced code block inside a Q/A question renders as a CodeBlock on the front face
   // (before reveal) and again in the question recap after reveal — never as raw backticks.
-  async function mountWithQuestion(question: string, opts: { neverReviewed?: boolean } = {}) {
-    const card = { StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: question, Answer: 'A1' };
+  async function mountWithQuestion(question: string, opts: { neverReviewed?: boolean; explanation?: string } = {}) {
+    const card = {
+      StableUid: '1',
+      OrderInDeck: 1,
+      Difficulty: 1,
+      Question: question,
+      Answer: 'A1',
+      ...(opts.explanation !== undefined ? { Explanation: opts.explanation } : {}),
+    };
     vi.mocked(resolveDeckBySlug).mockResolvedValue(buildDeck({ Cards: [card] }) as any);
     vi.mocked(pickNextCard).mockReturnValue({
       card,
@@ -898,6 +905,94 @@ describe('SessionCardScreen', () => {
     expect(question[0].props.accessibilityLabel).toBeUndefined();
     expect(hostByTestID(tree, 'question-code')).toHaveLength(0);
     expect(codeBlocks(tree)).toHaveLength(0);
+  });
+
+  // Z01: inline `code` spans render as nested monospace Text segments, never with backticks.
+  const inlineCode = (tree: renderer.ReactTestRenderer) =>
+    tree.root.findAll((node) => typeof node.type === 'string' && node.props?.testID === 'inline-code');
+  const renderedStrings = (tree: renderer.ReactTestRenderer): string[] => {
+    const out: string[] = [];
+    const walk = (node: any) => {
+      if (node === null || node === undefined) return;
+      if (typeof node === 'string') {
+        out.push(node);
+        return;
+      }
+      if (Array.isArray(node)) {
+        node.forEach(walk);
+        return;
+      }
+      (node.children ?? []).forEach(walk);
+    };
+    walk(tree.toJSON());
+    return out;
+  };
+  const textOf = (node: renderer.ReactTestInstance): string =>
+    node.children.map((child) => (typeof child === 'string' ? child : textOf(child))).join('');
+
+  it('renders inline code in the question and the explanation as monospace segments without backticks', async () => {
+    const tree = await mountWithQuestion('What does `List<int>.Add(4)` return when you call `Add` twice?', {
+      explanation: 'It returns `void`; use `Count` to read the size.',
+    });
+
+    const question = hostByTestID(tree, 'review-question');
+    expect(question).toHaveLength(1);
+    expect(textOf(question[0])).toBe('What does List<int>.Add(4) return when you call Add twice?');
+    expect(question[0].props.accessibilityLabel).toBe('What does List<int>.Add(4) return when you call Add twice?');
+    const front = inlineCode(tree);
+    expect(front.map((node) => node.props.children)).toEqual(['List<int>.Add(4)', 'Add']);
+    for (const node of front) {
+      const style = [node.props.style].flat(Infinity).reduce((acc: any, entry: any) => ({ ...acc, ...entry }), {});
+      expect(style.fontFamily).toBe('Menlo');
+      expect(style.fontSize).toBeLessThan(18);
+      expect(typeof style.backgroundColor).toBe('string');
+    }
+    expect(renderedStrings(tree).some((text) => text.includes('`'))).toBe(false);
+
+    await act(async () => {
+      findPressableByLabel(tree, 'Reveal answer').props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(inlineCode(tree).map((node) => node.props.children)).toEqual(['List<int>.Add(4)', 'Add', 'void', 'Count']);
+    expect(renderedStrings(tree).join('')).toContain('It returns void; use Count to read the size.');
+    expect(renderedStrings(tree).some((text) => text.includes('`'))).toBe(false);
+  });
+
+  it('renders inline code on the study view of a never-reviewed card', async () => {
+    const tree = await mountWithQuestion('Why prefer `ConfigureAwait(false)` in a library?', {
+      neverReviewed: true,
+      explanation: 'It skips the captured `SynchronizationContext`.',
+    });
+
+    const question = hostByTestID(tree, 'learning-study-question');
+    expect(question).toHaveLength(1);
+    expect(textOf(question[0])).toBe('Why prefer ConfigureAwait(false) in a library?');
+    expect(question[0].props.accessibilityLabel).toBe('Why prefer ConfigureAwait(false) in a library?');
+    expect(inlineCode(tree).map((node) => node.props.children)).toEqual([
+      'ConfigureAwait(false)',
+      'SynchronizationContext',
+    ]);
+    expect(renderedStrings(tree).some((text) => text.includes('`'))).toBe(false);
+  });
+
+  it('renders an AWS card without backticks exactly as before, answer included', async () => {
+    const aws = 'Which storage class is the LEAST expensive for archives kept 7 years?';
+    const explanation = 'S3 Glacier Deep Archive has the lowest storage price.';
+    const tree = await mountWithQuestion(aws, { explanation });
+
+    const question = hostByTestID(tree, 'review-question');
+    expect(question[0].props.children).toBe(aws);
+    expect(question[0].props.accessibilityLabel).toBeUndefined();
+
+    await act(async () => {
+      findPressableByLabel(tree, 'Reveal answer').props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(findTextByLabel(tree, explanation)).toHaveLength(1);
+    expect(findTextByLabel(tree, explanation)[0].props.accessibilityLabel).toBeUndefined();
+    expect(inlineCode(tree)).toHaveLength(0);
   });
 
   it('offers Retry and Choose another deck when the deck cannot load', async () => {
