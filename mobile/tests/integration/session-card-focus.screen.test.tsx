@@ -171,7 +171,7 @@ vi.mock('../../src/features/gacha/planner/sessionPlanner', () => ({
     minimumGoal: 1,
     dueCount: 0,
     newCount: 1,
-    nodes: [{ id: 'warmup-0', role: 'warmup', title: 'Warm-up node', subtitle: 'Start.' }],
+    nodes: [{ id: 'warmup-0', role: 'warmup', title: '', subtitle: 'Start.' }],
     summary: 'C# Interview',
   })),
 }));
@@ -408,7 +408,7 @@ describe('SessionCardScreen focus run', () => {
       minimumGoal: 1,
       dueCount: 3,
       nodes: [
-        { id: 'warmup-0', role: 'warmup', title: 'Warm-up node', subtitle: 'Start.' },
+        { id: 'warmup-0', role: 'warmup', title: '', subtitle: 'Start.' },
         { id: 'boss-1', role: 'boss', title: 'Boss check', subtitle: 'End.' },
       ],
     } as any);

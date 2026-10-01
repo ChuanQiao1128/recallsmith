@@ -32,15 +32,18 @@ export function buildSessionProgressVM(params: {
   sessionDone: number;
   sessionLimit: number;
   dueTodayCount: number;
+  /** Kept for callers; the subtitle no longer names the mode (R22 §5). */
   mode: string;
   currentRoleLabel?: string | null;
 }): SessionProgressVM {
-  const { sessionDone, sessionLimit, dueTodayCount, mode, currentRoleLabel = null } = params;
+  const { sessionDone, sessionLimit, dueTodayCount, currentRoleLabel = null } = params;
   const percent = sessionLimit > 0 ? Math.min(sessionDone / sessionLimit, 1) : 0;
+  // R22 §5: the card on screen, 1-based, never past the last one; no mode label.
+  const cardNumber = sessionLimit > 0 ? Math.min(sessionDone + 1, sessionLimit) : sessionDone + 1;
 
   return {
     title: 'Session progress',
-    subtitle: `Run ${sessionDone}/${sessionLimit || '∞'} · ${modeLabel(mode)}`,
+    subtitle: sessionLimit > 0 ? `Card ${cardNumber} of ${sessionLimit}` : `Card ${cardNumber}`,
     progressText: `${sessionDone} / ${sessionLimit || '∞'}`,
     hint: `${dueTodayCount} card${dueTodayCount === 1 ? '' : 's'} still count as due in this deck today.`,
     percent,
