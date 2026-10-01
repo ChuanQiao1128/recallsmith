@@ -17,10 +17,9 @@ import {
   type DatePresetKey,
 } from '../features/gacha/audience/goalChoices';
 import { setActiveDeckSlug } from '../content/activeDeck';
-import { completeOnboarding } from '../features/gacha/onboarding/onboardingPrefs';
+import { startStarterLesson } from '../features/gacha/onboarding/onboardingPrefs';
 import { colors } from '../theme/colors';
 import { CHROME_MAX_FONT_SCALE } from '../theme/dynamicType';
-import { markPermissionPromptPending } from './PermissionPromptScreen';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AudienceSurvey'>;
 
@@ -28,6 +27,7 @@ type Props = NativeStackScreenProps<RootStackParamList, 'AudienceSurvey'>;
 // wants to learn, then an optional exam date. The route keeps its 'AudienceSurvey' name (and the
 // 'audience' onboarding stage) so existing installs mid-onboarding resume here. The lane preference
 // lives on in Settings as "Card difficulty" (default Balanced); onboarding no longer writes it.
+// Finishing moves the stage to 'starter': Home then sends the learner into the 5-card starter lesson.
 type Step = 'goal' | 'date';
 type DateChoice = { kind: 'none' } | { kind: 'preset'; preset: DatePresetKey; examDate: string };
 
@@ -43,9 +43,10 @@ export function AudienceSurveyScreen({ navigation }: Props) {
     try {
       await setStudyGoal({ deckSlug, examDate: dateChoice.kind === 'preset' ? dateChoice.examDate : null });
       await setActiveDeckSlug(deckSlug);
-      await completeOnboarding();
-      await markPermissionPromptPending();
-      navigation.replace('Home', { firstDrawCoach: true });
+      // R22 §4: the goal step opens the starter lesson (Home routes into it). The first pack and the
+      // reminder prompt both wait for the lesson to complete (starterLesson.completeStarterLesson).
+      await startStarterLesson();
+      navigation.replace('Home');
     } finally {
       setSaving(false);
     }

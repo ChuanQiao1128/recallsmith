@@ -1,5 +1,6 @@
 import type { CardProgress } from '../../../review/model';
 import { isLearnedProgress } from '../selectors/progressSelectors';
+import { loadStarterUids } from '../starter/starterGate';
 import { loadDrawState } from './drawStateStore';
 
 /**
@@ -28,6 +29,13 @@ import { loadDrawState } from './drawStateStore';
  * loadDrawState is what keeps that affordable now that a per-render caller
  * exists. Callers that already hold a DrawStateRecord should union it
  * themselves rather than paying a second lookup for the same answer.
+ *
+ * One more term while the starter lesson is open (R22 §4): the lesson's cards
+ * on the lesson's deck, so a new learner can study before drawing. It is a
+ * read-time union only -- the cards are never written into drawState.owned,
+ * which would make the pack read as drawn and stop the first-pack bootstrap --
+ * and it ends with the lesson: from then on those cards stay studiable through
+ * the learned-progress term above, like any other studied card.
  */
 export async function resolveEffectiveOwned(
   slug: string,
@@ -44,6 +52,8 @@ export async function resolveEffectiveOwned(
     if (!entry?.stableUid) continue;
     if (isLearnedProgress(entry)) effective.add(entry.stableUid);
   }
+
+  for (const uid of await loadStarterUids(slug)) effective.add(uid);
 
   return effective;
 }

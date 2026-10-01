@@ -145,9 +145,25 @@ describe('phase A onboarding screens', () => {
     expect(store.get('active-deck-slug')).toBe('aws-saa-c03');
     // Onboarding no longer asks the lane: nothing written, Settings default stays Balanced.
     expect(store.get('recallsmith:audience-preference:v1')).toBeUndefined();
-    expect(store.get('recallsmith:onboarding:stage:v1')).toBe('done');
-    expect(replace).toHaveBeenCalledWith('Home', { firstDrawCoach: true });
-    expect(store.get('notifications:permission-prompt:pending:v1')).toBe('1');
+    // R22 §4: the goal step opens the starter lesson; the first pack and the reminder prompt wait
+    // for the lesson to complete, so the prompt is not armed here and Home gets no first-draw coach.
+    expect(store.get('recallsmith:onboarding:stage:v1')).toBe('starter');
+    expect(replace).toHaveBeenCalledWith('Home');
+    expect(replace).not.toHaveBeenCalledWith('Home', { firstDrawCoach: true });
+    expect(store.get('notifications:permission-prompt:pending:v1')).toBeUndefined();
+  });
+
+  it('routes splash to Home for a learner in the starter lesson, and an existing user too', async () => {
+    for (const stage of ['starter', 'done']) {
+      store.set('recallsmith:onboarding:stage:v1', stage);
+      const replace = vi.fn();
+      await act(async () => {
+        renderer.create(<SplashScreen navigation={{ replace } as any} route={{ key: 'splash', name: 'Splash' } as any} />);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(replace).toHaveBeenCalledWith('Home');
+    }
   });
 
   it('saves the chosen deck and a preset exam date, adjusted by the week steppers', async () => {
@@ -171,7 +187,8 @@ describe('phase A onboarding screens', () => {
 
       expect(goal()).toEqual({ deckSlug: 'csharp-basics', examDate: '2026-11-09' });
       expect(store.get('active-deck-slug')).toBe('csharp-basics');
-      expect(replace).toHaveBeenCalledWith('Home', { firstDrawCoach: true });
+      expect(store.get('recallsmith:onboarding:stage:v1')).toBe('starter');
+      expect(replace).toHaveBeenCalledWith('Home');
     } finally {
       vi.useRealTimers();
     }
