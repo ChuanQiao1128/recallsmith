@@ -586,6 +586,53 @@ describe('SessionCardScreen MCQ branch', () => {
     );
   });
 
+  // Y01: a fenced code block inside the stem renders as a CodeBlock between the stem and the
+  // options; the qualifier highlighting runs on the prose only and no raw backticks are printed.
+  it('renders a fenced code block between the stem and the options with the qualifier highlighted', async () => {
+    featureFlagsMock.mockReturnValue(flags({ recallFirst: false }));
+    const card = {
+      ...CARD_1,
+      StableUid: 'dotnet-code-in-stem-mcq-01',
+      Question:
+        'A method allocates on every call. Which change has the LEAST allocation?\n```csharp\nvoid Log(string m)\n{\n    var parts = m.Split(\',\');\n}\n```',
+      Mcq: { ...CARD_1.Mcq, qualifier: 'LEAST allocation' },
+    };
+    serve(card, NEW_PROGRESS(card.StableUid));
+    const { tree } = await mount();
+
+    const stemText = idText(tree, 'mcq-stem');
+    expect(stemText).not.toContain('```');
+    expect(stemText).toContain('Which change has the LEAST allocation?');
+    expect(idText(tree, 'mcq-qualifier')).toBe('LEAST allocation');
+    expect(byTestID(tree, 'mcq-stem')[0].props.accessibilityLabel).toMatch(/, code sample follows$/);
+
+    const code = tree.root.findAll((node) => typeof node.type !== 'string' && typeof node.props?.code === 'string');
+    expect(code).toHaveLength(1);
+    expect(code[0].props.code).toBe("void Log(string m)\n{\n    var parts = m.Split(',');\n}");
+    expect(code[0].props.label).toBe('C#');
+
+    const order = tree.root
+      .findAll(
+        (node) =>
+          typeof node.type === 'string' &&
+          typeof node.props?.testID === 'string' &&
+          (node.props.testID === 'mcq-stem' || node.props.testID === 'question-code' || /^mcq-option-[a-f]$/.test(node.props.testID)),
+      )
+      .map((node) => (node.props.testID.startsWith('mcq-option-') ? 'option' : node.props.testID));
+    expect(order.slice(0, 3)).toEqual(['mcq-stem', 'question-code', 'option']);
+    expect(order.filter((id) => id === 'option')).toHaveLength(4);
+  });
+
+  it('renders an AWS stem without a fence exactly as before (no code block, no label override)', async () => {
+    featureFlagsMock.mockReturnValue(flags({ recallFirst: false }));
+    serve(CARD_1, NEW_PROGRESS(CARD_1.StableUid));
+    const { tree } = await mount();
+
+    expect(byTestID(tree, 'question-code')).toHaveLength(0);
+    expect(byTestID(tree, 'mcq-stem')[0].props.accessibilityLabel).toBeUndefined();
+    expect(idText(tree, 'mcq-qualifier')).toBe('LEAST operational overhead');
+  });
+
   it('skips the stem stage when recallFirst is off', async () => {
     featureFlagsMock.mockReturnValue(flags({ recallFirst: false }));
     serve(CARD_1, NEW_PROGRESS(CARD_1.StableUid));
