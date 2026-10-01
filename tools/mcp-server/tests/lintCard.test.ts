@@ -149,15 +149,19 @@ describe('lint_card', () => {
     expect(codes(blank.issues)).toContain('MISSING_QUESTION');
   });
 
-  it('reads the topic vocabulary of both project decks from FORMAT.md', () => {
+  it('reads the topic vocabulary of every project deck from FORMAT.md', () => {
     const aws = vocabulary.get('aws-saa-c03') ?? [];
     const claude = vocabulary.get('claude-ccdv-f') ?? [];
+    const dotnet = vocabulary.get('csharp-basics') ?? [];
+    expect(dotnet).toContain('4.2 Dependency Injection');
+    expect(dotnet).toContain('1.8 Modern C# (10-12)');
+    expect(dotnet).toHaveLength(21);
     expect(aws).toContain('4.1 Cost-optimized storage');
     expect(claude).toContain('D8 Tools & MCP');
     expect(aws.length).toBeGreaterThanOrEqual(8);
     expect(claude.length).toBeGreaterThanOrEqual(8);
     expect(aws).not.toContain('`TOPIC:` label');
     expect(aws).not.toContain('TOPIC:');
-    expect([...vocabulary.keys()].sort()).toEqual(['aws-saa-c03', 'claude-ccdv-f']);
+    expect([...vocabulary.keys()].sort()).toEqual(['aws-saa-c03', 'claude-ccdv-f', 'csharp-basics']);
   });
 });

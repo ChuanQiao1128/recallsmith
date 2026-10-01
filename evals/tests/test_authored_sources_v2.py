@@ -34,10 +34,10 @@ PREFIX = {"aws-saa-c03": "https://docs.aws.amazon.com/", "claude-ccdv-f": "https
 
 
 def topic_labels() -> dict[str, set[str]]:
-    """The backticked TOPIC labels of the FORMAT.md §5.1 (AWS) and §5.2 (Claude) tables."""
+    """The backticked TOPIC labels of the FORMAT.md §5.1 (AWS) and §5.2 (Claude) tables (§5.3 is the .NET deck)."""
     text = FORMAT_PATH.read_text(encoding="utf-8")
     aws = text.split("### 5.1", 1)[1].split("### 5.2", 1)[0]
-    claude = text.split("### 5.2", 1)[1].split("\n## ", 1)[0]
+    claude = text.split("### 5.2", 1)[1].split("\n## ", 1)[0].split("### 5.3", 1)[0]
     label = re.compile(r"\|\s*`([^`]+)`\s*\|\s*$", re.M)
     return {"aws-saa-c03": set(label.findall(aws)), "claude-ccdv-f": set(label.findall(claude))}
 

@@ -51,7 +51,8 @@ Exactly once, before the first card. Slug: `^[a-z0-9]+(?:[-_][a-z0-9]+)*$`. Miss
 `MISSING_DECK_HEADER` (line 1); empty/blank file → `EMPTY_DOCUMENT`; second one →
 `DUPLICATE_DECK_HEADER`; bad slug → `BAD_DECK_SLUG`. The console additionally blocks the import
 when the file slug differs from the deck you opened (`slugMismatch`). Live slugs:
-`aws-saa-c03` (AWS deck, 154 live cards), `claude-ccdv-f` (planned CCDV-F deck).
+`aws-saa-c03` (AWS deck), `claude-ccdv-f` (CCDV-F deck), `csharp-basics` (.NET 8 / C# 12 interview deck,
+rebuilt in R23).
 
 Any non-blank line before the first card header that is not the deck header →
 `TEXT_BEFORE_CARD` (reported once per stretch). No prose, comments, or headings outside cards.
@@ -315,6 +316,11 @@ Single-answer MCQ: same shape, 4 options, one `*`, no `(Choose …)` in the stem
 
 - One paragraph per section. The lexer drops blank lines, so a stem written as two paragraphs
   renders as one; write continuous lines.
+- Code the learner must read to answer (predict the output, find the bug) goes **inside `Q:`** as one
+  fenced block (a line `` ```csharp ``, the code, a closing `` ``` `` line) after the question sentence.
+  The app shows `CODE:` only after the reveal; since R22 (Y01) it renders a fenced block in the question
+  as a code block on every surface, and older clients show the fence as plain text. `CODE:` stays for
+  code that illustrates the answer. A card never carries both.
 - `A:` on an MCQ card is a letter-free answer *sentence* naming the winning choice by content
   plus the discriminating reason; a Q/A-only client shows exactly `Q:` and `A:`.
 - `USAGE:` is one real-world line. `CODE:` is for API mechanics (JSON / Python / bash), never for
@@ -373,6 +379,32 @@ gets `D2 services` even when its service is also named by a task.
 | D6 | `D6 Prompt & context engineering` |
 | D7 | `D7 Security & safety` |
 | D8 | `D8 Tools & MCP` |
+
+### 5.3 .NET interview deck (`csharp-basics`): one label per R23 topic
+
+| area | `TOPIC:` label |
+|---|---|
+| C# language | `1.1 Types and Memory` |
+| C# language | `1.2 OOP and Interfaces` |
+| C# language | `1.3 Nullability` |
+| C# language | `1.4 Generics, Delegates and Lambdas` |
+| C# language | `1.5 Collections` |
+| C# language | `1.6 LINQ` |
+| C# language | `1.7 Exceptions` |
+| C# language | `1.8 Modern C# (10-12)` |
+| async | `2.1 Async and Task` |
+| async | `2.2 Concurrency and Thread Safety` |
+| runtime and BCL | `3.1 GC and IDisposable` |
+| runtime and BCL | `3.2 BCL: HttpClient, JSON, Time` |
+| ASP.NET Core | `4.1 Hosting, Configuration and Options` |
+| ASP.NET Core | `4.2 Dependency Injection` |
+| ASP.NET Core | `4.3 Middleware Pipeline` |
+| ASP.NET Core | `4.4 Minimal APIs, Controllers, Filters` |
+| ASP.NET Core | `4.5 Auth and CORS` |
+| EF Core | `5.1 EF Core Querying and Tracking` |
+| EF Core | `5.2 Transactions and Indexes` |
+| testing | `6.1 Unit and Integration Testing` |
+| design | `7.1 Design Principles` |
 
 ---
 
