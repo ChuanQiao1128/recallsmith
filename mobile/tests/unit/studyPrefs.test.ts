@@ -12,10 +12,23 @@ const setItem = vi.fn(async (key: string, value: string) => {
   if (mode === 'throw') throw new Error('storage down');
   store.set(key, value);
 });
-vi.mock('@react-native-async-storage/async-storage', () => ({ default: { getItem, setItem } }));
+const getAllKeys = vi.fn(async () => {
+  if (mode === 'throw') throw new Error('storage down');
+  return [...store.keys()];
+});
+const multiGet = vi.fn(async (keys: readonly string[]) => keys.map((key) => [key, store.get(key) ?? null] as const));
+vi.mock('@react-native-async-storage/async-storage', () => ({ default: { getItem, setItem, getAllKeys, multiGet } }));
 
-const loadAllProgress = vi.fn(async (): Promise<Record<string, any[]>> => ({}));
-vi.mock('../../src/review/storage', () => ({ loadAllProgress: () => loadAllProgress() }));
+// The probe must not depend on who is signed in right now (F02 x-deploy-1), so it never asks the
+// scoped storage module; the mock throws to prove it.
+vi.mock('../../src/review/storage', () => ({
+  loadAllProgress: async () => {
+    throw new Error('the learned-card probe must scan the device, not the current scope');
+  },
+}));
+
+const LEARNED_ROW = { stableUid: 'a', stage: 2, nextReviewAt: 5, lastReviewedAt: 1_700_000_000_000 };
+const NEW_ROW = { stableUid: 'b', stage: 0, nextReviewAt: 0 };
 
 async function loadModule() {
   vi.resetModules();
@@ -30,12 +43,10 @@ describe('studyPrefs', () => {
     mode = 'ok';
     getItem.mockClear();
     setItem.mockClear();
-    loadAllProgress.mockReset();
-    loadAllProgress.mockResolvedValue({});
   });
 
   it('defaults a new learner (no learned card) to two buttons and stores that default', async () => {
-    loadAllProgress.mockResolvedValue({ csharp: [{ stableUid: 'a', stage: 0, nextReviewAt: 0 }] });
+    store.set('devcards:u:anon:deck-progress:csharp', JSON.stringify([NEW_ROW]));
     const mod = await loadModule();
     expect(mod.getStudyPrefsSync()).toEqual({ fourButtons: false });
     expect(await mod.loadStudyPrefs()).toEqual({ fourButtons: false });
@@ -43,10 +54,8 @@ describe('studyPrefs', () => {
   });
 
   it('gives an existing learner (any learned card) four buttons and stores it so they keep them', async () => {
-    loadAllProgress.mockResolvedValue({
-      dotnet: [],
-      csharp: [{ stableUid: 'a', stage: 2, nextReviewAt: 5, lastReviewedAt: 1_700_000_000_000 }],
-    });
+    store.set('devcards:u:anon:deck-progress:dotnet', JSON.stringify([]));
+    store.set('devcards:u:anon:deck-progress:csharp', JSON.stringify([NEW_ROW, LEARNED_ROW]));
     const mod = await loadModule();
     expect(await mod.loadStudyPrefs()).toEqual({ fourButtons: true });
     expect(mod.getStudyPrefsSync()).toEqual({ fourButtons: true });
@@ -93,5 +102,37 @@ describe('studyPrefs', () => {
     expect(await mod.loadStudyPrefs()).toEqual({ fourButtons: true });
     expect(await mod.setStudyPrefs({ fourButtons: false })).toEqual({ fourButtons: false });
     expect(mod.getStudyPrefsSync()).toEqual({ fourButtons: false });
+  });
+
+  // F02 x-deploy-1: the default is decided once and stored device-wide, so it must see every
+  // learned card on the device, not only the ones in the scope of whoever is signed in.
+  it('keeps four buttons for a user who upgrades while signed out (progress under their own sub)', async () => {
+    store.set('devcards:u:anon:deck-progress:csharp', JSON.stringify([NEW_ROW]));
+    store.set('devcards:u:0f9c-sub:deck-progress:csharp', JSON.stringify([LEARNED_ROW]));
+    const mod = await loadModule();
+    expect(await mod.loadStudyPrefs()).toEqual({ fourButtons: true });
+    expect(JSON.parse(store.get(KEY) as string)).toEqual({ fourButtons: true });
+  });
+
+  it('counts progress still held only in legacy versioned or unscoped keys', async () => {
+    for (const key of [
+      'devcards:u:0f9c-sub:deck-progress:csharp:12',
+      'deck-progress:dotnet',
+      'deck-progress:dotnet:3',
+    ]) {
+      store.clear();
+      store.set(key, JSON.stringify([NEW_ROW, LEARNED_ROW]));
+      const mod = await loadModule();
+      expect(await mod.loadStudyPrefs()).toEqual({ fourButtons: true });
+    }
+  });
+
+  it('ignores other keys and unreadable progress when deciding', async () => {
+    store.set('devcards:u:anon:deck-daily-stats:csharp', JSON.stringify([LEARNED_ROW]));
+    store.set('devcards:u:anon:deck-progress:csharp', '{not json');
+    store.set('devcards:u:anon:deck-progress:dotnet', JSON.stringify({ rows: [LEARNED_ROW] }));
+    const mod = await loadModule();
+    expect(await mod.hasAnyLearnedCard()).toBe(false);
+    expect(await mod.loadStudyPrefs()).toEqual({ fourButtons: false });
   });
 });

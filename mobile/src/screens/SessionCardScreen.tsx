@@ -166,8 +166,9 @@ function isLearned(progress: CardProgress): boolean {
 // R22 §6 learning step. 'study' = the first exposure of a never-reviewed Q/A card (read it, "Got it");
 // 'check' = its recall check, re-queued at the end of the same session. null = an ordinary card.
 type LearningPhase = 'study' | 'check' | null;
-// The recall check has two answers whatever the rating-button setting: Remembered (the dock sends
-// 'good') schedules as 'hard' — stage 0, due in a day — and Forgot stays 'again' (due in 10 min).
+// The recall check has two answers whatever the rating-button setting: Remembered (the check dock
+// sends 'hard') schedules as 'hard' — stage 0, due in a day — and Forgot stays 'again' (due in
+// 10 min). Any other rating that reaches a check is folded onto those two.
 function mapLearningCheckRating(rating: ReviewRating): ReviewRating {
   return rating === 'again' ? 'again' : 'hard';
 }
@@ -1334,8 +1335,10 @@ export function SessionCardScreen({ navigation, route }: Props) {
                   testID="review-rating-bar"
                   disabled={reviewing || !showAnswer}
                   revealed={showAnswer}
-                  // The recall check is a yes/no question: Forgot / Remembered, whatever the setting.
-                  fourButtons={learningPhase === 'check' ? false : fourButtons}
+                  fourButtons={fourButtons}
+                  // The recall check is a yes/no question: Forgot / Remembered, whatever the setting,
+                  // with Remembered worded as what it schedules (due tomorrow).
+                  learningCheck={learningPhase === 'check'}
                   onRate={(rating) => void handleRating(rating)}
                 />
               )}

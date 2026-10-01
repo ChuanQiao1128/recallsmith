@@ -485,6 +485,10 @@ describe('SessionCardScreen learning step (R22 §6: teach before testing)', () =
     expect(pressables(tree, 'Forgot')).toHaveLength(1);
     expect(pressables(tree, 'Remembered')).toHaveLength(1);
     expect(pressables(tree, 'Hard')).toHaveLength(0);
+    // Remembered is worded as what it schedules (hard: due tomorrow), not the two-button 'Normal gap'.
+    expect(pressables(tree, 'Remembered')[0].props.accessibilityLabel).toBe('Remembered, see it tomorrow');
+    expect(texts(tree)).toContain('See it tomorrow');
+    expect(texts(tree)).not.toContain('Normal gap');
     await press(tree, 'Remembered');
     expect(vi.mocked(recordReviewEvent).mock.calls[0][0]).toEqual(
       expect.objectContaining({ rating: 'hard', reviewStage: 'learning_check' }),
