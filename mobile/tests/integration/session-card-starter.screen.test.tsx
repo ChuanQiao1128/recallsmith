@@ -170,6 +170,7 @@ import { resetSessionStore } from '../../src/features/gacha/session/sessionStore
 import { loadDeckWallet } from '../../src/features/gacha/rewards/deckWallet';
 import { loadDrawState } from '../../src/features/gacha/draw/drawStateStore';
 import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStateCache';
+import { recordReviewEvent } from '../../src/sync/progressSync';
 
 const FIXED_NOW_MS = new Date(2026, 9, 2, 9, 0, 0).getTime();
 const STAGE_KEY = 'recallsmith:onboarding:stage:v1';
@@ -272,31 +273,60 @@ describe('SessionCardScreen starter lesson', () => {
     return { tree, navigation };
   }
 
-  async function rateGood(tree: renderer.ReactTestRenderer) {
+  async function pressLabel(tree: renderer.ReactTestRenderer, label: string) {
     await act(async () => {
-      findPressableByLabel(tree, 'Reveal answer').props.onPress();
-      await Promise.resolve();
-    });
-    await act(async () => {
-      findPressableByLabel(tree, 'Good').props.onPress();
+      findPressableByLabel(tree, label).props.onPress();
       await Promise.resolve();
     });
     await flush();
   }
 
+  // R22 §6 (S01/S02): a never-reviewed Q/A card opens on the study view with one Got it; it comes
+  // back at the end of the run as a recall check, asked with Forgot / Remembered.
+  async function studyGotIt(tree: renderer.ReactTestRenderer) {
+    await act(async () => {
+      tree.root.find((node) => node.props?.testID === 'learning-study-got-it' && (node.type as any) === 'Pressable').props.onPress();
+      await Promise.resolve();
+    });
+    await flush();
+  }
+
+  async function checkRemembered(tree: renderer.ReactTestRenderer) {
+    await pressLabel(tree, 'Reveal answer');
+    await pressLabel(tree, 'Remembered');
+  }
+
   it('teaches the first 5 non-MCQ cards with nothing drawn, then opens Draw with the 3-pull bootstrap', async () => {
     const { tree, navigation } = await mount();
 
-    const seen: string[] = [];
+    // Study: c1..c5 on the study view (the MCQ is skipped). Got it records nothing.
+    const studied: string[] = [];
     for (const uid of ['c1', 'c2', 'c3', 'c4', 'c5']) {
       expect(hasText(tree, `Question ${uid}`)).toBe(true);
-      seen.push(uid);
-      // Bootstrap only after completion: no pull before the last card, and no R1 pull per card.
+      expect(tree.root.findAll((node) => node.props?.testID === 'learning-study-view').length).toBeGreaterThan(0);
+      studied.push(uid);
+      await studyGotIt(tree);
+      expect(recordReviewEvent).not.toHaveBeenCalled();
+      expect(navigation.replace).not.toHaveBeenCalled();
+    }
+    expect(studied).toEqual(['c1', 'c2', 'c3', 'c4', 'c5']);
+
+    // Checks, in study order. The lesson completes only on the 5th; no R1 pull for any of them.
+    const checked: string[] = [];
+    for (const uid of ['c1', 'c2', 'c3', 'c4', 'c5']) {
+      expect(hasText(tree, `Question ${uid}`)).toBe(true);
       expect(await loadDeckWallet('csharp')).toEqual({ availablePulls: 0, reservePulls: 0 });
       expect(navigation.replace).not.toHaveBeenCalled();
-      await rateGood(tree);
+      checked.push(uid);
+      await checkRemembered(tree);
     }
-    expect(seen).toEqual(['c1', 'c2', 'c3', 'c4', 'c5']);
+    expect(checked).toEqual(['c1', 'c2', 'c3', 'c4', 'c5']);
+
+    // One card_reviewed per check: reviewStage learning_check, Remembered → hard.
+    expect(vi.mocked(recordReviewEvent).mock.calls.map((call) => {
+      const event = call[0] as any;
+      return [event.stableUid, event.reviewStage, event.rating];
+    })).toEqual(['c1', 'c2', 'c3', 'c4', 'c5'].map((uid) => [uid, 'learning_check', 'hard']));
 
     expect(navigation.replace).toHaveBeenCalledTimes(1);
     expect(navigation.replace).toHaveBeenCalledWith('Draw', { slug: 'csharp', rewardPending: true });
