@@ -18,8 +18,8 @@ explanations, REAL USAGE, MCQ options and WHY texts. Every surface printed the r
 | `mobile/src/features/gacha/components/LearningStudyView.tsx` | Question uses `InlineCodeText`; label is stripped. |
 | `mobile/src/features/gacha/components/CardAnswerSections.tsx` | EXPLANATION uses `InlineCodeText`. |
 | `mobile/src/features/gacha/session/reviewContentHelpers.tsx` | `renderSimpleMarkdown` paragraphs and bullets (REAL USAGE) use `InlineCodeText`. |
-| `mobile/src/features/gacha/components/McqReviewBody.tsx` | Stem: spans applied inside every stem segment, so the qualifier and caps emphasis still work; the clamped lead-in too. Option texts, WHY texts and EXPLANATION use `InlineCodeText`. The stem and option labels are stripped. |
-| `mobile/src/screens/CardDetailScreen.tsx` | Question card uses `InlineCodeText` (this is also the page's title text); the fenced-question label is stripped. |
+| `mobile/src/features/gacha/components/McqReviewBody.tsx` | Stem: spans applied inside every stem segment, so the qualifier and caps emphasis still work; the clamped lead-in too. Since F01 (r22zx), `stemSegments` skips any qualifier or caps match that overlaps a span, so emphasis never cuts a span. Option texts, WHY texts and EXPLANATION use `InlineCodeText`. The stem and option labels are stripped. |
+| `mobile/src/screens/CardDetailScreen.tsx` | Question card uses `InlineCodeText` (this is also the page's title text); the fenced-question label is stripped. Since F01 (r22zx), the CORRECT ANSWER option texts use `InlineCodeText` too (Z01 had missed them). |
 | `mobile/src/screens/MistakeBookScreen.tsx` | Row text and row label use `stripInlineCode`. |
 | `mobile/src/screens/DrawResultScreen.tsx` | Grid tile, featured label and detail-modal title use `stripInlineCode`. |
 | `mobile/src/components/ceremony/RevealCardFace.tsx` | Question slab uses `stripInlineCode`. |
@@ -76,6 +76,14 @@ explanations, REAL USAGE, MCQ options and WHY texts. Every surface printed the r
   (qualifier still highlighted), an option text and label, and a WHY text.
 - `mobile/tests/integration/mistakeBookScreen.test.tsx` covers a row and its label without backticks,
   including a question with both an inline span and a fence.
+- Added in F01 (r22zx), see `docs/delivery/r22zx-issues/F01-fixes.md`:
+  - `card-detail-answer.screen.test.tsx`: the CardDetail question card and its CORRECT ANSWER option
+  - `mcqReviewBody.test.tsx`: a caps word and a qualifier hit inside a span
+  - `drawCommitFaces.test.ts`: the drawn-card `question`
+  - `myReports.test.tsx`: the report row and its label
+  - `question-code-surfaces.test.tsx`: the DrawResult featured face (RevealCardFace), its label, the grid tiles and the detail sheet
+- Z01 itself shipped without tests for CardDetail, DrawResult, RevealCardFace, MyReports or drawCommit,
+  and its MCQ EXPLANATION check could pass without the section (fixed in F01).
 - The new screen tests fail on the base (`c3c7774`) and pass with the change.
 - Gates:
   - `npx tsc --noEmit`
@@ -93,12 +101,12 @@ explanations, REAL USAGE, MCQ options and WHY texts. Every surface printed the r
 ## Deferred
 - iOS ignores padding on nested `<Text>`, so the span background sits flush to the glyphs there.
   A true chip would need a `View`, and that would break line wrapping. The brief ranks wrapping first.
-- Other surfaces print card text outside this issue's scope and still show raw backticks, for example:
-  - `DrawSummaryGrid` (it gets text that `drawCommit` already stripped)
-  - share images
-  - search
-  - console pages
-
-  Audit them in a follow-up if any of them reads `card.Question` directly.
-- A span that straddles an MCQ qualifier match (the qualifier phrase is inside backticks) keeps its
-  backticks in that one segment. The deck has no such card today.
+- Surfaces that print the drawn or library question as given (`DrawSummaryGrid`, `TapCard`,
+  `RevealSpotlight`'s full-question sheet, `LibraryCardTile`) show no backticks: they only receive text that
+  `drawCommit` or `libraryMapper` already stripped. They are not a follow-up. (Corrected in F01. An earlier
+  version of this note listed `DrawSummaryGrid` as still showing backticks.)
+- Inside `mobile/src`, `card.Question` is read raw only by the surfaces in the table above. The mobile app
+  has no search surface. Console pages (`frontend/`) were not audited.
+- Fixed in F01: an MCQ qualifier or caps match that falls inside or across a code span used to cut the
+  span and leave its backticks visible. `stemSegments` now skips such a match. For a qualifier it takes
+  the next match in prose, or falls back to caps emphasis outside spans.

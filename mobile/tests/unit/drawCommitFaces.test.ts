@@ -92,9 +92,9 @@ const PLAN_CARD_2_MCQ = {
 };
 
 const deckCards = [
-  { StableUid: 'c1', Question: 'Q1', Difficulty: 1, OrderInDeck: 1, Topic: 'IAM' },
+  { StableUid: 'c1', Question: 'Q1 with `List<int>` and `Add(4)`', Difficulty: 1, OrderInDeck: 1, Topic: 'IAM' },
   { StableUid: 'c2', Question: 'Q2', Difficulty: 2, OrderInDeck: 2, Topic: 'Compute', Mcq: PLAN_CARD_1_MCQ },
-  { StableUid: 'c3', Question: 'Q3', Difficulty: 3, OrderInDeck: 3, Mcq: PLAN_CARD_2_MCQ },
+  { StableUid: 'c3', Question: 'Q3 prints?\n```csharp\nvar s = `x`;\n```', Difficulty: 3, OrderInDeck: 3, Mcq: PLAN_CARD_2_MCQ },
   { StableUid: 'c4', Question: 'Q4', Difficulty: 1, OrderInDeck: 4, Topic: '   ', Mcq: { v: 2 } },
 ];
 
@@ -145,6 +145,12 @@ describe('drawCommit MCQ faces', () => {
     expect(result).not.toBeNull();
     const cards = result!.cards;
     const { c1, c2, c3, c4 } = byUid(cards);
+
+    // F01 z-tests-2: the drawn-card question (reveal, grid and summary text) carries no
+    // inline-code backticks and no fenced block.
+    expect(c1.question).toBe('Q1 with List<int> and Add(4)');
+    expect(c3.question).toBe('Q3 prints?');
+    expect(c2.question).toBe('Q2');
 
     expect(c1.tag).toBe('IAM');
     expect('kind' in c1).toBe(false);

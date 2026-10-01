@@ -682,7 +682,7 @@ describe('SessionCardScreen MCQ branch', () => {
       ...CARD_1,
       StableUid: 'dotnet-inline-code-mcq-01',
       Question: 'You append to a `List<int>` in a hot loop. Which `Add` pattern has the LEAST allocation?',
-      Explanation: 'Pre-size it with `new List<int>(n)` so `Add` never regrows the array.',
+      Explanation: 'Pre-size it so `Capacity` covers every item and `EnsureCapacity` never regrows the array.',
       Mcq: {
         ...CARD_1.Mcq,
         qualifier: 'LEAST allocation',
@@ -730,10 +730,10 @@ describe('SessionCardScreen MCQ branch', () => {
     expect(getTextContent(why.props.children)).toBe('A LinkedList<int> allocates a node per Add(4).');
     expect(codeSegments(why).map((node) => node.props.children)).toEqual(['LinkedList<int>', 'Add(4)']);
     expect(flatStyle(codeSegments(why)[0].props.style).fontFamily).toBe('Menlo');
-    const explanation = byTestID(tree, 'mcq-section-explanation')[0] ?? tree.root;
-    expect(codeSegments(explanation).map((node) => node.props.children)).toEqual(
-      expect.arrayContaining(['new List<int>(n)', 'Add']),
-    );
+    // F01 z-tests-1: the section must exist, and its identifiers appear nowhere else on the card.
+    const explanations = byTestID(tree, 'mcq-section-explanation');
+    expect(explanations).toHaveLength(1);
+    expect(codeSegments(explanations[0]).map((node) => node.props.children)).toEqual(['Capacity', 'EnsureCapacity']);
     noBackticks();
   });
 
