@@ -81,8 +81,11 @@ inside `Question` (opening line with a language word, closing line on its own).
   `QuestionCodeBlock` the same way ReviewBody does.
 - `MyReportsScreen` shows the question echoed back by the card-report API; it is outside scope and would need
   `questionText` too.
-- Pre-existing on the base (`delivery/r22y-y`, before any Y01 change):
-  `tests/integration/session-card-starter.screen.test.tsx` > "teaches the first 5 non-MCQ cards…" fails
-  (cannot find "Reveal answer"). Unrelated to Y01; left for the owner of that flow.
+- `tests/integration/session-card-starter.screen.test.tsx` > "teaches the first 5 non-MCQ cards…" failed on the
+  base (`delivery/r22y-y`) before any Y01 change: the H02 starter test predates the merged R22 §6 learning step
+  (r22-s), so it looked for "Reveal answer" / "Good" on a study view. To make the root mobile gate pass, the test
+  now walks the merged flow: study c1..c5 ("Got it"), then their recall checks in study order (Reveal →
+  "Remembered"). Every original assertion is kept (no pull before the last card, Draw opens with the 3-pull
+  bootstrap, stage closed, prompt armed, owned set empty, c1..c5 learned). No source change.
 - Pre-existing on the base too: `npm run test:smoke` stops on 32 TypeScript errors inside `node_modules`
   (react-native `globals.d.ts` against `lib.dom.d.ts`) in this worktree setup; Y01 changes nothing there.
