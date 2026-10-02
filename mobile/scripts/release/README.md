@@ -28,7 +28,7 @@ and `tests/unit/storeSubscriptionMetadata.test.ts` checks both for every `descri
 Review-notes checklist (from the version after 2.0.0 on, R25 G02): every `review-notes-<v>.txt` names the Delete account
 path, "Me > Settings > Account > Delete account", and says that following it permanently deletes the demo account (server
 data and sign-in), so the owner must re-create it after review before it is used again. `tests/unit/reviewNotesChecklist.test.ts`
-fails for any review-notes file after 2.0.0 that does not contain "Delete account".
+fails for any review-notes file after 2.0.0 that does not contain the full path "Me > Settings > Account > Delete account".
 
 Always publish OTAs through `ota.sh`; a bare `eas update` without `--environment production` ships empty `EXPO_PUBLIC_*` values.
 

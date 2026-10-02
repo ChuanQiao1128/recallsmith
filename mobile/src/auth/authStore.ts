@@ -24,7 +24,7 @@ import { deleteServerAccountData } from './deleteServerAccount';
 import { setSyncAccessToken, forceProgressSync, setActiveUserSub } from '../sync/progressSync';
 import { adoptAnonGachaState } from '../sync/drawStateSync';
 import { unblockSync } from '../sync/syncGuard';
-import { stopSyncForDeletion } from '../sync/stopSyncForDeletion';
+import { resumeSyncAfterFailedDeletion, stopSyncForDeletion } from '../sync/stopSyncForDeletion';
 import { invalidateProgressQueueCache } from '../sync/progressQueueCache';
 import { invalidateDrawStateCache } from '../features/gacha/draw/drawStateCache';
 
@@ -534,8 +534,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // foreground) BEFORE the token refresh: handing the refreshed token to the
     // sync layer would otherwise start a sync that writes rows back after the
     // DELETE. The block stays on after a successful delete until the next
-    // sign-in; a failed delete lifts it, since the account still exists.
-    await stopSyncForDeletion();
+    // sign-in; a failed delete lifts it and re-runs the sync it suppressed,
+    // since the account still exists. A sync still on the wire when the wait
+    // ends fails the deletion here, before any DELETE is sent.
+    try {
+      await stopSyncForDeletion();
+    } catch (err: any) {
+      set({ lastError: err?.message ?? 'Delete account failed' });
+      throw err;
+    }
 
     // (a) Get a fresh access token for the authenticated server delete. Prefer
     // getFreshAccessToken (G05) — loaded lazily to avoid a static import cycle —
@@ -555,7 +562,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       await deleteServerAccountData(token);
     } catch (err: any) {
-      unblockSync();
+      resumeSyncAfterFailedDeletion();
       set({ lastError: err?.message ?? 'Delete account failed' });
       throw err;
     }
@@ -565,7 +572,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       await deleteUser();
     } catch (err: any) {
       // Account still exists: keep the session, surface the error, purge nothing.
-      unblockSync();
+      resumeSyncAfterFailedDeletion();
       const msg = err?.message ?? 'Delete account failed';
       set({ lastError: msg });
       throw new Error(msg);
