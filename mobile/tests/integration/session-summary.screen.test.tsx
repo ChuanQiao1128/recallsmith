@@ -224,8 +224,12 @@ describe('SessionSummaryScreen', () => {
     return tree;
   }
 
+  // Numbers count too ('extra {a} → {b}' renders as mixed string and number children).
+  const textOf = (node: renderer.ReactTestInstance) =>
+    ([] as unknown[]).concat(node.props.children).map((child) => (typeof child === 'object' ? '' : String(child))).join('');
+
   function visibleWords(tree: renderer.ReactTestRenderer): string {
-    const texts = tree.root.findAll((node) => (node.type as any) === 'Text').map(getTextContent);
+    const texts = tree.root.findAll((node) => (node.type as any) === 'Text').map(textOf);
     const labels = tree.root
       .findAll((node) => typeof node.type === 'string')
       .flatMap((node) => [node.props?.accessibilityLabel, node.props?.accessibilityHint])
@@ -250,7 +254,7 @@ describe('SessionSummaryScreen', () => {
     const card = earned.root.find(
       (node) => typeof node.type === 'string' && node.props?.testID === 'summary-reward-block',
     );
-    const cardTexts = card.findAll((node) => (node.type as any) === 'Text').map(getTextContent);
+    const cardTexts = card.findAll((node) => (node.type as any) === 'Text').map(textOf);
     expect(cardTexts).toContain('draws');
     expect(cardTexts).toContain('Saved draws');
     expect(cardTexts).toContain('extra 0 → 0');
