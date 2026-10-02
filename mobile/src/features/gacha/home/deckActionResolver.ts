@@ -6,6 +6,7 @@ import {
   type UpdateInfo,
 } from '../../../content/deckRepository';
 import { getCachedDeck, installDeckAndInvalidate } from '../../../content/deckCache';
+import { listInstalledDeckEntries } from '../../../content/starterOffline';
 import { syncDailyReminders } from '../../../notifications/reminders';
 import { loadDeckProgress } from '../../../review/storage';
 import { applyCachedRemoteProgress } from '../../../sync/progressSync';
@@ -144,8 +145,13 @@ export async function loadHomeDeckSummaries(params: {
     manifestDecks = [];
   }
 
-  const deckEntries =
+  let deckEntries =
     manifestDecks.length > 0 ? manifestDecks : toDeckEntriesFromUpdates(updates);
+  if (deckEntries.length === 0) {
+    // R24 §2.2: no manifest at all (an offline first run). The decks already on this phone -- the
+    // bundled starter pack included -- still go on the shelf, read from their install metas.
+    deckEntries = await listInstalledDeckEntries();
+  }
 
   const allUpcoming30 = buildUpcoming([], now, 30);
   const deckSummaries: DeckSummary[] = [];
