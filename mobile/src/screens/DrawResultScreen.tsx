@@ -472,7 +472,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
           ) : null}
 
           {/* Summary chips: only meaningful when multi-pull. For single-pull
-              they'd always say "0 COM, 1 RAR, 0 LEG" or similar — pure noise.
+              they'd always say "0 Common, 1 Rare, 0 Legendary" or similar — pure noise.
               Hidden when length === 1 (kept in tree as 0×0 so testID stays). */}
           <View
             style={[styles.summaryStrip, cards.length <= 1 && styles.summaryStripHidden]}
@@ -481,19 +481,19 @@ export function DrawResultScreen({ navigation, route }: Props) {
             <View style={[styles.summaryChip, styles.summaryChipCom]}>
               <View style={[styles.summaryChipDot, { backgroundColor: colors.rarityCommon }]} />
               <Text style={styles.summaryChipText} numberOfLines={1}>
-                {`${summary.COM} COM`}
+                {`${summary.COM} ${rarityLabel('COM')}`}
               </Text>
             </View>
             <View style={[styles.summaryChip, styles.summaryChipRar]}>
               <View style={[styles.summaryChipDot, { backgroundColor: colors.rarityRare }]} />
               <Text style={styles.summaryChipText} numberOfLines={1}>
-                {`${summary.RAR} RAR`}
+                {`${summary.RAR} ${rarityLabel('RAR')}`}
               </Text>
             </View>
             <View style={[styles.summaryChip, styles.summaryChipLeg]}>
               <View style={[styles.summaryChipDot, { backgroundColor: colors.rarityLegendary }]} />
               <Text style={styles.summaryChipText} numberOfLines={1}>
-                {`${summary.LEG} LEG`}
+                {`${summary.LEG} ${rarityLabel('LEG')}`}
               </Text>
             </View>
           </View>

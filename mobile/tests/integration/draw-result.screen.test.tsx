@@ -202,7 +202,7 @@ describe('DrawResultScreen v9', () => {
     expect(text).toBe('No. 004 / 20');
   });
 
-  it('renders rarity strip in COM, RAR, LEG order', async () => {
+  it('renders rarity strip in Common, Rare, Legendary order with plain words', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(
@@ -219,7 +219,9 @@ describe('DrawResultScreen v9', () => {
       const c = node.props.children;
       return Array.isArray(c) ? c.join('') : String(c ?? '');
     });
-    expect(stripTexts).toEqual(['0 COM', '1 RAR', '1 LEG']);
+    // Learners see the kept collection words, never the internal rarity codes.
+    expect(stripTexts).toEqual(['0 Common', '1 Rare', '1 Legendary']);
+    expect(stripTexts.join(' ')).not.toMatch(/\b(COM|RAR|LEG)\b/);
   });
 
   it('routes primary action to Draw when pulls remain', async () => {
@@ -296,6 +298,8 @@ describe('DrawResultScreen v9', () => {
 
     const primary = tree.root.findByProps({ testID: 'screen-draw-result-primary-cta' });
     expect(collectText(tree)).toContain('Checking draws...');
+    // VoiceOver hears plain words while the saved draws load.
+    expect(primary.props.accessibilityLabel).toBe('Checking remaining draws');
     act(() => {
       primary.props.onPress();
     });
