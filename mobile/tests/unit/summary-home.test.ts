@@ -55,7 +55,7 @@ describe('buildSessionSummaryVM', () => {
     });
 
     expect(summary.vm.rewardBadge).toBe('Progress saved');
-    expect(summary.vm.rewardBody).toMatch(/no free pulls this run/i);
+    expect(summary.vm.rewardBody).toMatch(/no free draws this session/i);
   });
 });
 
