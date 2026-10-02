@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Amazon.Lambda.APIGatewayEvents;
 using RecallSmith.Lambda.Common;
+using RecallSmith.Lambda.Db;
 using RecallSmith.Lambda.Vpc.Analytics;
 
 namespace RecallSmith.Lambda.IntegrationTests;
@@ -10,7 +11,7 @@ namespace RecallSmith.Lambda.IntegrationTests;
 /// R24 A01 anonymous funnel (contract R24-00 §3.1-§3.2): <c>POST /api/v1/public/events</c> through the whole Vpc function
 /// (exact route, no auth, bearer ignored, 8 KB cap, per-event validation, per-container budget, 202 accepted/rejected),
 /// <c>GET /api/v1/admin/analytics/funnel</c> (cohort weeks, overall, conversion from first_open, by deck) and the
-/// 400-day retention delete inside the <c>analytics_daily</c> step. Every test runs in its own scratch database with a
+/// 400-day retention delete, its own <c>anon_funnel_retention</c> tick step (R24X F05), and the global daily row cap. Every test runs in its own scratch database with a
 /// fixed "today" (2026-03-20 UTC); the clocks and the budget are restored afterwards.
 /// </summary>
 /// <remarks>
@@ -27,6 +28,8 @@ public sealed class AnonFunnelTests : IDisposable
   private readonly PostgresFixture _db;
   private readonly Func<DateTime> _savedFunnelClock = AnonFunnel.UtcNow;
   private readonly Func<DateTime> _savedUsageClock = UsageAnalytics.UtcNow;
+  private readonly int _savedRetentionBatch = AnonFunnel.RetentionBatch;
+  private readonly TimeSpan _savedRetentionTimeout = AnonFunnel.RetentionStatementTimeout;
 
   public AnonFunnelTests(PostgresFixture db)
   {
@@ -43,6 +46,8 @@ public sealed class AnonFunnelTests : IDisposable
     AnonFunnel.UtcNow = _savedFunnelClock;
     UsageAnalytics.UtcNow = _savedUsageClock;
     UsageAnalytics.ResetBackoff();
+    AnonFunnel.RetentionBatch = _savedRetentionBatch;
+    AnonFunnel.RetentionStatementTimeout = _savedRetentionTimeout;
   }
 
   // ---------------------------------------------------------------- kit
@@ -54,7 +59,8 @@ public sealed class AnonFunnelTests : IDisposable
   /// A gateway event. With <paramref name="sub"/> it carries both an authorizer claims block (what the gateway would add)
   /// and an <c>Authorization</c> bearer, so a test can prove neither reaches the ingest.
   /// </summary>
-  private static JsonElement Event(string method, string path, string? body, string? sub = null, IDictionary<string, string>? query = null)
+  private static JsonElement Event(string method, string path, string? body, string? sub = null, IDictionary<string, string>? query = null,
+    IDictionary<string, string>? extraHeaders = null)
   {
     var requestContext = new Dictionary<string, object?>(StringComparer.Ordinal)
     {
@@ -78,6 +84,7 @@ public sealed class AnonFunnelTests : IDisposable
       };
       headers["authorization"] = "Bearer a01-not-a-real-token";
     }
+    foreach (var (k, v) in extraHeaders ?? new Dictionary<string, string>()) headers[k] = v;
 
     return JsonSerializer.SerializeToElement(new Dictionary<string, object?>
     {
@@ -266,14 +273,114 @@ public sealed class AnonFunnelTests : IDisposable
       {
         Assert.Equal(202, (await PostAsync(body)).StatusCode);
       }
-      var limited = await PostAsync(body);
-      AutomationTestKit.AssertError(limited, 429, "RATE_LIMITED");
+
+      // Two refusals in the window: both 429 with Retry-After: 60, and exactly one anon_funnel_budget warn line.
+      APIGatewayProxyResponse? first = null, second = null;
+      var (stdout, stderr) = await CaptureAsync(async () =>
+      {
+        first = await PostAsync(body);
+        second = await PostAsync(body);
+      });
+      foreach (var limited in new[] { first!, second! })
+      {
+        AutomationTestKit.AssertError(limited, 429, "RATE_LIMITED");
+        Assert.Equal("60", limited.Headers["Retry-After"]);
+      }
+      Assert.Equal(1, Occurrences(stdout + stderr, "\"anon_funnel_budget\""));
       Assert.Equal(120L, await sql.CountAsync("select count(*) from anon_funnel_events"));
 
       // The window rolls over after 60 s.
       AnonFunnel.UtcNow = () => Now.AddSeconds(61);
       Assert.Equal(202, (await PostAsync(body)).StatusCode);
       Assert.Equal(121L, await sql.CountAsync("select count(*) from anon_funnel_events"));
+    });
+  }
+
+  [Fact]
+  public async Task Ingest_OversizeBodies_DoNotSpendTheBudget()
+  {
+    await InScratchAsync(async sql =>
+    {
+      var padded = JsonSerializer.Serialize(new { platform = "ios", appVersion = "1.9.0", events = new[] { Ev("first_open") }, pad = new string('x', 8200) });
+      for (var i = 0; i < AnonFunnel.MaxRequestsPerWindow + 5; i++)
+      {
+        AutomationTestKit.AssertError(await PostAsync(padded), 413, "PAYLOAD_TOO_LARGE");
+      }
+      Assert.Equal((1L, 0L), Counts(await PostAsync(Batch(Ev("first_open")))));
+      Assert.Equal(1L, await sql.CountAsync("select count(*) from anon_funnel_events"));
+    });
+  }
+
+  private static int Occurrences(string text, string needle)
+  {
+    var n = 0;
+    for (var i = text.IndexOf(needle, StringComparison.Ordinal); i >= 0; i = text.IndexOf(needle, i + needle.Length, StringComparison.Ordinal)) n++;
+    return n;
+  }
+
+  /// <summary>Seeds <paramref name="n"/> rows received now (the server clock the daily cap reads).</summary>
+  private static Task SeedReceivedNowAsync(A04Kit.Sql sql, int n) =>
+    sql.ScalarAsync(
+      "insert into anon_funnel_events (event, cohort_day, event_day, platform, app_version) " +
+      "select 'first_open', '2026-03-16'::date, '2026-03-16'::date, 'ios', '1.9.0' from generate_series(1, $1)", n);
+
+  [Fact]
+  public async Task Ingest_DailyCap_Over20000RowsInADay_AcceptsNothing_AndWarnsOncePerHour()
+  {
+    await InScratchAsync(async sql =>
+    {
+      // At the cap (not over it) a batch is still stored.
+      await SeedReceivedNowAsync(sql, AnonFunnel.DailyRowCap);
+      Assert.Equal((1L, 0L), Counts(await PostAsync(Batch(Ev("first_open")))));
+      Assert.Equal(AnonFunnel.DailyRowCap + 1L, await sql.CountAsync("select count(*) from anon_funnel_events"));
+
+      // Over it: 202 with every event counted as rejected, nothing stored, one warn line for two requests.
+      (long, long) firstCounts = default, secondCounts = default;
+      var (stdout, stderr) = await CaptureAsync(async () =>
+      {
+        firstCounts = Counts(await PostAsync(Batch(Ev("first_open"), Ev("goal_chosen", deckSlug: "aws-saa-c03"), Ev("app_crashed"))));
+        secondCounts = Counts(await PostAsync(Batch(Ev("first_open"))));
+      });
+      Assert.Equal((0L, 3L), firstCounts);
+      Assert.Equal((0L, 1L), secondCounts);
+      Assert.Equal(AnonFunnel.DailyRowCap + 1L, await sql.CountAsync("select count(*) from anon_funnel_events"));
+      Assert.Equal(1, Occurrences(stderr, "\"anon_funnel_daily_cap\""));
+      Assert.Contains("\"level\":\"warn\"", stderr, StringComparison.Ordinal);
+
+      // Within the hour: no new line; an hour later: one more.
+      AnonFunnel.UtcNow = () => Now.AddMinutes(59);
+      var (_, quiet) = await CaptureAsync(async () => Counts(await PostAsync(Batch(Ev("first_open")))));
+      Assert.Equal(0, Occurrences(quiet, "anon_funnel_daily_cap"));
+      AnonFunnel.UtcNow = () => Now.AddMinutes(61);
+      var (_, again) = await CaptureAsync(async () => Assert.Equal((0L, 1L), Counts(await PostAsync(Batch(Ev("first_open"))))));
+      Assert.Equal(1, Occurrences(again, "\"anon_funnel_daily_cap\""));
+      Assert.Equal(AnonFunnel.DailyRowCap + 1L, await sql.CountAsync("select count(*) from anon_funnel_events"));
+
+      // Rows received more than a day ago do not count against the cap.
+      await sql.ScalarAsync("update anon_funnel_events set received_at = now() - interval '25 hours'");
+      Assert.Equal((1L, 0L), Counts(await PostAsync(Batch(Ev("first_open")))));
+    });
+  }
+
+  [Fact]
+  public async Task Ingest_NoPgEnv_Is503ConfigError_EvenWhenNoEventIsValid()
+  {
+    await InScratchAsync(async _ =>
+    {
+      var saved = Environment.GetEnvironmentVariable("PGHOST");
+      try
+      {
+        Environment.SetEnvironmentVariable("PGHOST", null);
+        Pg.Reset();
+        AutomationTestKit.AssertError(await PostAsync(Batch(Ev("first_open"))), 503, "CONFIG_ERROR");
+        AutomationTestKit.AssertError(await PostAsync(Batch()), 503, "CONFIG_ERROR");
+        AutomationTestKit.AssertError(await PostAsync(Batch(Ev("app_crashed"))), 503, "CONFIG_ERROR");
+      }
+      finally
+      {
+        Environment.SetEnvironmentVariable("PGHOST", saved);
+        Pg.Reset();
+      }
     });
   }
 
@@ -288,8 +395,17 @@ public sealed class AnonFunnelTests : IDisposable
         response = await PostAsync(Batch(Ev("signup_completed", deckSlug: "csharp-basics"), Ev("app_crashed")), sub));
 
       Assert.Equal((1L, 1L), Counts(response!));
-      Assert.Equal(0L, await sql.CountAsync("select count(*) from users"));
+      // A live slug on a step that carries no deck is accepted but stored as null.
+      Assert.Equal(1L, await sql.CountAsync("select count(*) from anon_funnel_events where event = 'signup_completed' and deck_slug is null"));
+      // Smoke check only: nothing on this path writes users; the log assertions below are the real proof.
       Assert.Equal(0L, await sql.CountAsync("select count(*) from users where user_sub = $1", sub));
+
+      // Positive control: the capture worked and holds the dispatcher line for this route, with no user.
+      Assert.True(Log.IsEnabled("info"), "LOG_LEVEL must allow info lines for this test to prove anything");
+      var dispatcherLine = stdout.Split('\n').SingleOrDefault(l => l.Contains("\"path\":\"/api/v1/public/events\"", StringComparison.Ordinal));
+      Assert.NotNull(dispatcherLine);
+      Assert.Contains("\"userSub\":null", dispatcherLine, StringComparison.Ordinal);
+      Assert.Contains("\"isAdmin\":false", dispatcherLine, StringComparison.Ordinal);
 
       var logs = stdout + stderr;
       Assert.DoesNotContain(sub, logs, StringComparison.Ordinal);
@@ -300,11 +416,39 @@ public sealed class AnonFunnelTests : IDisposable
   }
 
   [Fact]
+  public async Task Ingest_NeverLogsTheClientTraceId_WhichIsTheSentryTraceId()
+  {
+    await InScratchAsync(async _ =>
+    {
+      // The app's apiClient sends x-dc-trace-id = its Sentry trace id in X-Ray form (mobile toDcTraceHeader). Logged on
+      // the ingest's metric line, it would join a funnel batch to a Sentry event; it must not be written for this route.
+      const string sentryTraceRoot = "1-5f0e2c1a-9b8d7c6e5f4a3b2c1d0e9f8a";
+      var headers = new Dictionary<string, string> { ["x-dc-trace-id"] = sentryTraceRoot, ["sentry-trace"] = "5f0e2c1a9b8d7c6e5f4a3b2c1d0e9f8a-0123456789abcdef-1" };
+      var (stdout, stderr) = await CaptureAsync(async () =>
+        Assert.Equal((1L, 0L), Counts(await new VpcFunction().Handler(Event("POST", EventsPath, Batch(Ev("first_open")), extraHeaders: headers)))));
+
+      // Positive control: the route's metric line was captured.
+      var metricLine = stdout.Split('\n').SingleOrDefault(l => l.Contains("\"_aws\"", StringComparison.Ordinal) && l.Contains("\"Route\":\"/api/v1/public/events\"", StringComparison.Ordinal));
+      Assert.NotNull(metricLine);
+      Assert.DoesNotContain("upstreamTraceId", metricLine, StringComparison.Ordinal);
+      Assert.DoesNotContain("5f0e2c1a", stdout + stderr, StringComparison.Ordinal);
+
+      // Every other route keeps the field (TraceLogFieldsTests covers its format).
+      var (other, _) = await CaptureAsync(async () =>
+        await new VpcFunction().Handler(Event("GET", FunnelPath, null, extraHeaders: headers)));
+      Assert.Contains($"\"upstreamTraceId\":\"{sentryTraceRoot}\"", other, StringComparison.Ordinal);
+    });
+  }
+
+  [Fact]
   public async Task Ingest_BeforeMigration043_Answers503_AndTheStepStillRuns()
   {
     await InScratchAsync(async sql =>
     {
       AutomationTestKit.AssertError(await PostAsync(Batch(Ev("first_open"))), 503, "NOT_READY");
+      // A readiness probe with no valid event still reaches the table.
+      AutomationTestKit.AssertError(await PostAsync(Batch()), 503, "NOT_READY");
+      AutomationTestKit.AssertError(await PostAsync(Batch(Ev("app_crashed"), Ev("first_open", cohortDay: "2026-03-22"))), 503, "NOT_READY");
       AutomationTestKit.AssertError(await FunnelAsync(Admin()), 503, "NOT_READY");
 
       await using var conn = await sql.OpenAsync();
@@ -316,7 +460,7 @@ public sealed class AnonFunnelTests : IDisposable
   // ---------------------------------------------------------------- retention
 
   [Fact]
-  public async Task Retention_TheDailyAnalyticsStep_DeletesRowsReceivedMoreThan400DaysAgo()
+  public async Task Retention_DeletesRowsReceivedMoreThan400DaysAgo_ByTheFunnelClock()
   {
     await InScratchAsync(async sql =>
     {
@@ -325,15 +469,26 @@ public sealed class AnonFunnelTests : IDisposable
       await InsertAsync(sql, "first_open", "2025-02-14", receivedAt: Now.AddDays(-400).AddMinutes(1));
       await InsertAsync(sql, "goal_chosen", "2026-03-16", "aws-saa-c03");
 
+      // The delete reads AnonFunnel.UtcNow, not the usage analytics clock.
+      UsageAnalytics.UtcNow = () => Now.AddDays(-30);
       await using var conn = await sql.OpenAsync();
-      Assert.Equal(UsageAnalytics.Outcome.Computed, await UsageAnalytics.RunIfDueAsync(conn));
+      Assert.Equal(2L, await AnonFunnel.DeleteExpiredAsync(conn));
       Assert.Equal(2L, await sql.CountAsync("select count(*) from anon_funnel_events"));
       Assert.Equal(0L, await sql.CountAsync("select count(*) from anon_funnel_events where received_at < $1", Now.AddDays(-400)));
+    });
+  }
 
-      // Once per UTC day, with the rollups: a second run the same day does nothing.
-      await InsertAsync(sql, "first_open", "2025-02-01", receivedAt: Now.AddDays(-500));
-      Assert.Equal(UsageAnalytics.Outcome.NotDue, await UsageAnalytics.RunIfDueAsync(conn));
-      Assert.Equal(3L, await sql.CountAsync("select count(*) from anon_funnel_events"));
+  [Fact]
+  public async Task Retention_DeletesInCappedBatches()
+  {
+    await InScratchAsync(async sql =>
+    {
+      for (var i = 0; i < 3; i++) await InsertAsync(sql, "first_open", "2025-02-01", receivedAt: Now.AddDays(-401 - i));
+      AnonFunnel.RetentionBatch = 2;
+      await using var conn = await sql.OpenAsync();
+      Assert.Equal(2L, await AnonFunnel.DeleteExpiredAsync(conn));
+      Assert.Equal(1L, await AnonFunnel.DeleteExpiredAsync(conn));
+      Assert.Equal(0L, await AnonFunnel.DeleteExpiredAsync(conn));
     });
   }
 
@@ -349,6 +504,60 @@ public sealed class AnonFunnelTests : IDisposable
       var tick = AutomationTestKit.Data(await A04Kit.TickAsync());
       Assert.Empty(tick.GetProperty("failedSteps").EnumerateArray());
       Assert.Equal(1L, await sql.CountAsync("select count(*) from anon_funnel_events"));
+
+      // Its own step, so it runs on every tick, not only on the tick that computes the daily rollup.
+      await InsertAsync(sql, "first_open", "2025-02-01", receivedAt: Now.AddDays(-500));
+      Assert.Empty(AutomationTestKit.Data(await A04Kit.TickAsync()).GetProperty("failedSteps").EnumerateArray());
+      Assert.Equal(1L, await sql.CountAsync("select count(*) from anon_funnel_events"));
+    });
+  }
+
+  private static string[] FailedSteps(APIGatewayProxyResponse tick) =>
+    AutomationTestKit.Data(tick).GetProperty("failedSteps").EnumerateArray().Select(e => e.GetString()!).ToArray();
+
+  [Fact]
+  public async Task Retention_StillRuns_WhenTheDailyRollupFails()
+  {
+    await using var scope = new A04Kit.Scope();
+    await InScratchAsync(async sql =>
+    {
+      await InsertAsync(sql, "first_open", "2025-02-01", receivedAt: Now.AddDays(-401));
+      // Every rollup insert now violates a check: the analytics step throws (not a missing table).
+      await sql.ScalarAsync("alter table analytics_daily add constraint it_f05_rollup_fails check (dau < 0)");
+
+      var failed = FailedSteps(await A04Kit.TickAsync());
+      Assert.Contains("analytics_daily", failed);
+      Assert.DoesNotContain("anon_funnel_retention", failed);
+      Assert.Equal(0L, await sql.CountAsync("select count(*) from anon_funnel_events"));
+
+      // A later tick the same day: the rollup backs off, the retention still runs.
+      await InsertAsync(sql, "first_open", "2025-02-01", receivedAt: Now.AddDays(-402));
+      Assert.Empty(FailedSteps(await A04Kit.TickAsync()));
+      Assert.Equal(0L, await sql.CountAsync("select count(*) from anon_funnel_events"));
+    });
+  }
+
+  [Fact]
+  public async Task Retention_Failure_HitsItsStatementTimeout_IsRecordedAsItsOwnFailedStep_AndTheRollupStillComputes()
+  {
+    await using var scope = new A04Kit.Scope();
+    await InScratchAsync(async sql =>
+    {
+      await InsertAsync(sql, "first_open", "2025-02-01", receivedAt: Now.AddDays(-401));
+      await sql.ScalarAsync(
+        """
+        create function it_f05_slow_delete() returns trigger language plpgsql as $$ begin perform pg_sleep(2); return old; end $$;
+        create trigger it_f05_slow_delete before delete on anon_funnel_events for each row execute function it_f05_slow_delete();
+        """);
+      AnonFunnel.RetentionStatementTimeout = TimeSpan.FromMilliseconds(100);
+
+      APIGatewayProxyResponse? tick = null;
+      var (_, stderr) = await CaptureAsync(async () => tick = await A04Kit.TickAsync());
+      Assert.Equal(["anon_funnel_retention"], FailedSteps(tick!));
+      Assert.Contains("\"anon_funnel_retention_failed\"", stderr, StringComparison.Ordinal);
+      Assert.Contains("\"sqlState\":\"57014\"", stderr, StringComparison.Ordinal);
+      Assert.Equal(1L, await sql.CountAsync("select count(*) from anon_funnel_events"));
+      Assert.Equal(UsageAnalytics.RecomputeDays, await sql.CountAsync("select count(*) from analytics_daily"));
     });
   }
 
@@ -449,6 +658,50 @@ public sealed class AnonFunnelTests : IDisposable
       var csharp = decks[2].GetProperty("counts");
       Assert.Equal(1L, C(csharp, "goal_chosen"));
       Assert.Equal(4, decks[0].GetProperty("counts").EnumerateObject().Count());
+    });
+  }
+
+  private static AuthContext Editor(string sub) => new(
+    Claims: new Dictionary<string, JsonElement>(), UserSub: sub, Username: null, Groups: ["editor"], IsSuperAdmin: false, IsEditor: true, IsAdmin: true);
+
+  private static async Task<long> DeckAsync(A04Kit.Sql sql, string slug) =>
+    Convert.ToInt64(await sql.ScalarAsync("insert into decks (slug, title, author) values ($1, $1, 'tests') returning id", slug),
+      System.Globalization.CultureInfo.InvariantCulture);
+
+  [Fact]
+  public async Task Funnel_EditorWithOneReadableDeck_SeesThatDeckOnly_InByDeck_Overall_AndWeeks()
+  {
+    await InScratchAsync(async sql =>
+    {
+      await SeedFunnelAsync(sql);
+      var aws = await DeckAsync(sql, "aws-saa-c03");
+      var claude = await DeckAsync(sql, "claude-ccdv-f");
+      await sql.ScalarAsync("insert into admin_deck_permissions (admin_sub, deck_id, can_read, can_write) values ($1, $2, 1, 0)", "it-a01-editor", aws);
+      await sql.ScalarAsync("insert into admin_deck_permissions (admin_sub, deck_id, can_read, can_write) values ($1, $2, 0, 0)", "it-a01-editor", claude);
+
+      var data = AutomationTestKit.Data(await FunnelAsync(Editor("it-a01-editor")));
+      Assert.Equal(["aws-saa-c03"], data.GetProperty("byDeck").EnumerateArray().Select(d => d.GetProperty("deckSlug").GetString()!).ToArray());
+
+      // Overall and weeks drop the rows of decks the caller cannot read, so byDeck cannot be subtracted from them;
+      // rows with no deck are kept.
+      var oc = data.GetProperty("overall").GetProperty("counts");
+      Assert.Equal((6L, 2L, 1L, 0L, 0L, 1L, 1L),
+        (C(oc, "first_open"), C(oc, "goal_chosen"), C(oc, "starter_started"), C(oc, "starter_completed"), C(oc, "first_pack_opened"),
+         C(oc, "returned_day_1"), C(oc, "signup_started")));
+      var weeks = data.GetProperty("weeks").EnumerateArray().ToArray();
+      Assert.Equal(["2026-03-09", "2026-03-16"], weeks.Select(w => w.GetProperty("weekStart").GetString()!).ToArray());
+      Assert.Equal(0L, C(weeks[1].GetProperty("counts"), "goal_chosen"));
+      Assert.Equal(0L, C(weeks[1].GetProperty("counts"), "first_pack_opened"));
+      Assert.Equal(2L, C(weeks[1].GetProperty("counts"), "first_open"));
+
+      // An editor with no grant at all: no deck, and no deck-carrying step in overall.
+      var none = AutomationTestKit.Data(await FunnelAsync(Editor("it-a01-editor-none")));
+      Assert.Empty(none.GetProperty("byDeck").EnumerateArray());
+      var nc = none.GetProperty("overall").GetProperty("counts");
+      Assert.Equal((6L, 0L, 0L, 0L, 0L), (C(nc, "first_open"), C(nc, "goal_chosen"), C(nc, "starter_started"), C(nc, "starter_completed"), C(nc, "first_pack_opened")));
+
+      // A super_admin still sees every deck.
+      Assert.Equal(3, AutomationTestKit.Data(await FunnelAsync(Admin())).GetProperty("byDeck").GetArrayLength());
     });
   }
 

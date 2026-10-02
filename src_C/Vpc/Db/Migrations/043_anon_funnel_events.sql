@@ -6,9 +6,10 @@
 --   * event: one of the nine steps of §3.1 (check constraint).
 --   * cohort_day / event_day: local dates the app sent; deck_slug only for goal/starter/first-pack steps (else null).
 --   * platform / app_version: batch fields; received_at: server time, the clock of the 400-day retention delete the
---     analytics_daily automation step runs.
+--     anon_funnel_retention automation step runs (R24X F05) and of the ingest's 24-hour row cap.
 -- Additive only, no extension needed. Deploy order: code, then migrate; until this file runs the ingest answers
--- 503 NOT_READY, the admin read 503 NOT_READY and the retention delete skips.
+-- 503 NOT_READY for every well-formed batch (an empty or all-invalid one included), the admin read 503 NOT_READY and
+-- the retention delete skips.
 -- Idempotent; Migrate.ApplyOne wraps this file in one transaction.
 -- =========================
 

@@ -189,9 +189,12 @@ public static class AutomationTick
     await Step("eval_gate", () => EvalGateAsync(conn, mode, a));
     await Step("live_quality", () => LiveQualityAsync(conn, a));
     await Step("resend", async () => a.NotificationsResent = await Notifications.ResendAsync(conn, StepBatch));
+    // R24 A01 / R24X F05: every tick, a capped delete (own statement_timeout) of anonymous funnel rows received more
+    // than 400 days ago; its own step, so a failing or deferred rollup never stops the retention, and a failing delete
+    // is recorded as this step. Before the rollup, which may use most of the remaining budget.
+    await Step("anon_funnel_retention", () => Analytics.AnonFunnel.DeleteExpiredAsync(conn));
     // R20 V08: once per UTC day, the usage rollups of the last 8 complete days (skips with a log line before 040).
     // R20X F02 (§10.8): deferred to the next tick when less than half the budget remains; statement_timeout inside.
-    // R24 A01: the same daily run deletes anonymous funnel rows received more than 400 days ago.
     await Step("analytics_daily", () => Analytics.UsageAnalytics.RunIfDueAsync(conn, Budget - clock.Elapsed, Budget));
   }
 
