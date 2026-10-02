@@ -52,6 +52,5 @@ Nothing else; `tags_only_updates` false.
 
 - The server handler, validation and storage of the events, the mobile sender and the console funnel
   view are other R24 issues (contract §3.1–§3.5).
-- The verify scope pattern `docs/delivery/r24-issues/P01-.*` does not match the required file name
-  `P01.plan-allow.json` (R20 V12 used `V12[-.].*`); the file is written under the name the issue and the
-  contract require.
+- The first verify script's scope pattern `P01-.*` did not admit `P01.plan-allow.json`; the regenerated
+  script adds `P01\..*`, so the file keeps the name the issue and contract require.
