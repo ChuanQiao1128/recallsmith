@@ -45,6 +45,11 @@ vi.mock('../../src/features/gacha/draw/drawStateStore', () => ({
   loadDrawState: vi.fn(async () => ({ owned: [], pity: null })),
 }));
 
+// F01: the domain row only shows when an installed deck resolves.
+vi.mock('../../src/features/domains/domainProgressDeck', () => ({
+  resolveDomainProgressSlug: vi.fn(async () => 'aws-saa-c03'),
+}));
+
 import { LibraryHeader } from '../../src/features/gacha/library/LibraryHeader';
 import { MoreScreen } from '../../src/screens/MoreScreen';
 import { applyRemoteFeatures } from '../../src/config/featureFlags';

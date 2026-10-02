@@ -34,21 +34,26 @@ Screen loads with the existing loaders — `getCachedDeck`, `loadDeckProgress`, 
   "Learn a card in this domain first" shows under it (`domain-practice-note-<key>`).
 
 Footer (`domain-progress-footer`), exactly: "Cards you have studied, not an exam score. DeveloperCards is not an
-exam simulator." A deck not on the device shows `domain-progress-empty`.
+exam simulator." A deck not on the device (`getCachedDeck` returns null) shows `domain-progress-empty`. A failed
+read (F01) shows an inline error with "Try again" (`domain-progress-error`, `domain-progress-retry`) and keeps
+the rows from the last good load on screen.
 
 Entry points: Library header link "By domain" (always shown for the selected deck, next to the Mistakes pill);
-More row "Progress by domain" → active deck (`loadActiveDeckSlug`), else the first drawn deck
-(`listDrawStateSlugs`), else `Library`.
+More row "Progress by domain" → the active deck only while it is installed, else the first installed deck,
+else the row is hidden (F01, `features/domains/domainProgressDeck.ts`). The original D02 rule (active slug, else
+the first drawn deck, else Library) never checked that the active deck resolved.
 
 No percentage text about the learner: the only `%` on screen is the exam's own weight line.
 
 ## Tests
 
 - `tests/integration/domain-progress.screen.test.tsx` (new): counts/weight/chips/bar render, no learner
-  percentage, Practice passes the right `focusUids` in order, disabled state + note, exact footer, missing deck.
+  percentage, Practice passes the right `focusUids` in order, disabled state + note, exact footer, missing deck; F01 adds
+  reload on focus, unsubscribe on unmount, and the load-error cases.
 - `tests/unit/domainPractice.test.ts` (new): ordering, owned/learned filter, cap at 15, empty result.
 - `tests/integration/library.screen.test.tsx`: "By domain" link navigates to `DomainProgress { slug }`.
-- `tests/integration/more.screen.test.tsx`: More row opens the active deck; falls back to a drawn deck, then Library.
+- `tests/integration/more.screen.test.tsx`: More row opens the active deck (F01: only when installed; else the
+  first installed deck; hidden with none).
 - `tests/integration/mistake-entry-points.test.tsx`: row order pin updated (Profile, Mistake Book, Progress by
   domain, Settings).
 - `tests/unit/retiredScreens.test.ts` stays green.

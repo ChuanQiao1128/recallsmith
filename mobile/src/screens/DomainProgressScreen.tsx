@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -25,6 +25,8 @@ export const DOMAIN_PROGRESS_FOOTER =
   'Cards you have studied, not an exam score. DeveloperCards is not an exam simulator.';
 /** Shown under a disabled Practice button. */
 export const PRACTICE_DISABLED_TEXT = 'Learn a card in this domain first';
+/** A failed read (storage or deck), never "the deck is missing": rows already on screen stay. */
+export const DOMAIN_PROGRESS_ERROR_TEXT = "Couldn't load your progress just now.";
 
 /** One domain row plus the focus cards its Practice button starts with (empty = disabled). */
 type Row = { domain: DomainProgress; practiceUids: string[] };
@@ -59,18 +61,26 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 export function DomainProgressScreen({ navigation, route }: Props) {
   const slug = route.params.slug;
   const [loaded, setLoaded] = useState<Loaded | null>(null);
+  // A failed load keeps whatever `loaded` holds (rows from an earlier load stay on screen); only a
+  // deck that resolves to null is 'missing'.
+  const [failed, setFailed] = useState(false);
+  const reloadRef = useRef<() => void>(() => undefined);
 
   // Load at mount and again on every focus: a Practice session changes the counts.
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
-      let next: Loaded;
       try {
-        next = await loadRows(slug);
+        const next = await loadRows(slug);
+        if (cancelled) return;
+        setLoaded(next);
+        setFailed(false);
       } catch {
-        next = 'missing';
+        if (!cancelled) setFailed(true);
       }
-      if (!cancelled) setLoaded(next);
+    };
+    reloadRef.current = () => {
+      void load();
     };
     void load();
     const unsubscribe = navigation.addListener?.('focus', () => {
@@ -104,16 +114,32 @@ export function DomainProgressScreen({ navigation, route }: Props) {
             <Text style={styles.subtitle}>{loaded.deckTitle}</Text>
           ) : null}
 
-          {loaded === null ? (
-            <View
-              testID="domain-progress-loading"
-              accessible
-              accessibilityLabel="Loading progress by domain"
-              accessibilityState={{ busy: true }}
-            >
-              <View style={styles.skeletonRow} />
-              <View style={styles.skeletonRow} />
+          {failed ? (
+            <View testID="domain-progress-error" style={styles.card}>
+              <Text style={styles.emptyBody}>{DOMAIN_PROGRESS_ERROR_TEXT}</Text>
+              <Pressable
+                testID="domain-progress-retry"
+                accessibilityRole="button"
+                style={({ pressed }) => [styles.practice, pressed && styles.pressed]}
+                onPress={() => reloadRef.current()}
+              >
+                <Text style={styles.practiceText}>Try again</Text>
+              </Pressable>
             </View>
+          ) : null}
+
+          {loaded === null ? (
+            failed ? null : (
+              <View
+                testID="domain-progress-loading"
+                accessible
+                accessibilityLabel="Loading progress by domain"
+                accessibilityState={{ busy: true }}
+              >
+                <View style={styles.skeletonRow} />
+                <View style={styles.skeletonRow} />
+              </View>
+            )
           ) : loaded === 'missing' || loaded.rows.length === 0 ? (
             <View testID="domain-progress-empty" style={styles.card}>
               <Text style={styles.emptyTitle}>No cards here yet</Text>
