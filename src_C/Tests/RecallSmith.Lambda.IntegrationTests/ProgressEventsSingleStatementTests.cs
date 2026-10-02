@@ -316,16 +316,6 @@ public class ProgressEventsSingleStatementTests
       var latestMs = Base + ((RaceParallel - 1) * 1000L) + (RaceEventsPerBatch - 1);
       Assert.Equal(latestMs, Convert.ToInt64(progress["reviewed_ms"], CultureInfo.InvariantCulture));
       Assert.Equal(((RaceParallel - 1) % 4) + 1, AsInt(progress["last_rating"]));
-
-      var outbox = await CountAsync(
-        """
-        select count(*)
-        from analytics_event_outbox o
-        join user_progress_events e on e.event_id = o.event_id
-        where e.user_sub = $1
-        """,
-        user);
-      Assert.Equal(Total, outbox);
     }
   }
 
@@ -441,7 +431,8 @@ public class ProgressEventsSingleStatementTests
     Assert.Contains("ensure_user", sql, StringComparison.Ordinal);
     Assert.Contains("into user_progress_events", sql, StringComparison.Ordinal);
     Assert.Contains("into user_progress", sql, StringComparison.Ordinal);
-    Assert.Contains("analytics_event_outbox", sql, StringComparison.Ordinal);
+    // R26 S01: the analytics outbox is retired; the ingest no longer writes it.
+    Assert.DoesNotContain("analytics_event_outbox", sql, StringComparison.Ordinal);
 
     // Named separately from the count so that a returning shell reads as what
     // it is rather than as an off-by-one.
@@ -453,9 +444,9 @@ public class ProgressEventsSingleStatementTests
   }
 
   /// <summary>
-  /// The two envelope markers ride the same single statement as everything else.
-  /// clientFeatures and updateId add two payload keys and two bound parameters,
-  /// not a second write: a second billable statement here would be the
+  /// The two envelope markers the frozen client still sends (clientFeatures, updateId) only fed the
+  /// analytics outbox payload, which R26 S01 retired. They are accepted and ignored: the ingest is
+  /// still one statement and binds neither of them. A second billable statement here would be the
   /// transaction shell F5 removed growing back under a new name.
   /// </summary>
   [Fact]
@@ -477,8 +468,8 @@ public class ProgressEventsSingleStatementTests
       $"expected exactly one statement per ingest, saw {billable.Count}:\n{Render(onIngestBackend)}");
 
     var sql = billable[0].Sql;
-    Assert.Contains("client_features", sql, StringComparison.Ordinal);
-    Assert.Contains("update_id", sql, StringComparison.Ordinal);
+    Assert.DoesNotContain("client_features", sql, StringComparison.Ordinal);
+    Assert.DoesNotContain("update_id", sql, StringComparison.Ordinal);
 
     Assert.DoesNotContain(
       onIngestBackend,
