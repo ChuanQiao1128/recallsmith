@@ -36,7 +36,6 @@ type Props = {
   // control is not rendered at all. That is the same three-state shape the
   // callbacks had; only the payload changed.
   decksHref?: string;
-  contentIntelligenceHref?: string;
   adminUsersHref?: string;
   // super_admin only, like adminUsersHref: rendered only for a super_admin session.
   webhooksHref?: string;
@@ -75,7 +74,6 @@ export function ConsoleShell({
   userLabel,
   superAdmin,
   decksHref,
-  contentIntelligenceHref,
   adminUsersHref,
   webhooksHref,
   ledgerHref,
@@ -127,12 +125,12 @@ export function ConsoleShell({
             {/* A landmark, so "skip to the console's sections" is answerable by
                 assistive technology without reading the header out. It needs the
                 three links to be adjacent, which is why the user pill now sits
-                after them rather than between Content Intelligence and Admin
+                after them rather than between the section links and Admin
                 Management — that position was incidental, and identity beside
                 Sign out is where a shell usually puts it. */}
             <nav aria-label="Console sections" className="flex items-center gap-2 flex-wrap">
-              {/* Grouped: authoring (Decks, Review queue, AI QA, Content
-                  Intelligence, Reports, Usage), then the ledger and Automation, then the super_admin-only
+              {/* Grouped: authoring (Decks, Review queue, AI QA, Reports,
+                  Usage), then the ledger and Automation, then the super_admin-only
                   sections together at the end (frontend-console-27). */}
               {decksHref ? (
                 <Link to={decksHref} {...navProps('decks')}>
@@ -149,12 +147,6 @@ export function ConsoleShell({
               {qaHref ? (
                 <Link to={qaHref} {...navProps('qa')}>
                   AI QA
-                </Link>
-              ) : null}
-
-              {contentIntelligenceHref ? (
-                <Link to={contentIntelligenceHref} {...navProps('contentIntelligence')}>
-                  Content Intelligence
                 </Link>
               ) : null}
 

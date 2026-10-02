@@ -142,6 +142,18 @@ function readDocs(): Doc[] {
 const docs = readDocs();
 const onDisk = (repoRelative: string): boolean => existsSync(`${REPO_ROOT}${repoRelative}`);
 
+// Historical citations of files a frontend-only change deleted, recorded here
+// until the citing document's own `paths-not-on-disk` block lists them. R26 C01
+// (2026-10-02) retired the Content Intelligence page with Snowflake, and that
+// change may only touch frontend/, so it cannot edit docs/ itself. Each entry is
+// held to the same two-way rule as a block entry (cited, and really gone), and
+// must leave this list once the document registers it.
+const RETIRED_CITATIONS: ReadonlyArray<readonly [doc: string, path: string]> = [
+  ['delivery-wave-1.6-plan-2026-09-19.md', 'frontend/src/pages/ContentIntelligencePage.tsx'],
+];
+const retiredFor = (name: string): string[] =>
+  RETIRED_CITATIONS.filter(([doc]) => doc === name).map(([, path]) => path);
+
 describe('the paths docs/ cites', () => {
   it('are being read at all', () => {
     // Hardcoded, and NOT derived from `docs` — a floor computed from the thing
@@ -156,7 +168,7 @@ describe('the paths docs/ cites', () => {
   it('exist on disk, unless the document says they do not', () => {
     const unaccounted = docs.flatMap(doc =>
       doc.cited
-        .filter(path => !onDisk(path) && !doc.exempt.includes(path))
+        .filter(path => !onDisk(path) && !doc.exempt.includes(path) && !retiredFor(doc.name).includes(path))
         .map(path => `${doc.name} -> ${path}`),
     );
 
@@ -165,6 +177,22 @@ describe('the paths docs/ cites', () => {
       'a docs/ file cites a repository path that is not on disk. If the path is ' +
         'gone and the sentence is a historical record, leave the sentence alone ' +
         'and add the path to that document\'s `<!-- paths-not-on-disk … -->` block.',
+    ).toEqual([]);
+  });
+});
+
+describe('the citations a frontend-only change retired (RETIRED_CITATIONS)', () => {
+  it('are still cited, really gone, and not yet registered by the document', () => {
+    const stale = RETIRED_CITATIONS.filter(([name, path]) => {
+      const doc = docs.find(d => d.name === name);
+      return doc === undefined || !doc.cited.includes(path) || onDisk(path) || doc.exempt.includes(path);
+    }).map(([name, path]) => `${name} -> ${path}`);
+
+    expect(
+      stale,
+      'a RETIRED_CITATIONS entry no longer describes the repo: the document stopped ' +
+        'citing the path, the path is back on disk, or the document now registers it ' +
+        'in its own block. Remove the entry.',
     ).toEqual([]);
   });
 });
