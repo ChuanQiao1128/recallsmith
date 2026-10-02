@@ -86,8 +86,11 @@ const DOCS = `${REPO_ROOT}docs`;
 
 // The same top-level list rootReadmePaths.test.ts uses. Duplicated rather than
 // shared for the same reason its walker is: two guards that import one constant
-// stop being two guards the moment that constant is wrong.
-const TOP_LEVEL = ['frontend', 'mobile', 'src_C', 'pg-layer', 'snowflake', 'docs', '\\.github'];
+// stop being two guards the moment that constant is wrong. Plus `infra`, which
+// README.md does not cite but docs/ does: the R24 privacy review rests on
+// infra/modules/api/gateway.tf, and a citation nobody checks is the drift this
+// file exists for. Every infra/ path docs/ cited when it was added was on disk.
+const TOP_LEVEL = ['frontend', 'mobile', 'src_C', 'pg-layer', 'snowflake', 'docs', '\\.github', 'infra'];
 
 // A trailing :123 or :12-34 is tolerated and stripped — docs cite line ranges
 // constantly, and dropping those citations would have left a quarter of the
@@ -197,5 +200,37 @@ describe('the paths docs/ registers as gone', () => {
     const scattered = docs.filter(doc => doc.blockCount > 1).map(doc => doc.name);
 
     expect(scattered).toEqual([]);
+  });
+});
+
+describe('the anonymous funnel privacy review (R24 A02)', () => {
+  // The review is what the owner checks the App Privacy answers against before
+  // the remote flag goes on. These are the facts it must keep stating; the
+  // paths it cites are already held to the checks above like any other doc.
+  const NAME = 'privacy-anonymous-funnel-2026-10-02.md';
+
+  it('exists, so the citation checks above cover it', () => {
+    expect(docs.map(doc => doc.name)).toContain(NAME);
+  });
+
+  it('cites the server, the table, the retention and the gateway access log', () => {
+    const cited = docs.find(doc => doc.name === NAME)?.cited ?? [];
+
+    expect(cited).toEqual(
+      expect.arrayContaining([
+        'src_C/Vpc/Analytics/AnonFunnel.cs',
+        'src_C/Vpc/Db/Migrations/043_anon_funnel_events.sql',
+        'infra/modules/api/gateway.tf',
+        'infra/modules/observability/api_logs.tf',
+      ]),
+    );
+  });
+
+  it('states the App Privacy mapping, the 400 days and the 30 days', () => {
+    const markdown = readFileSync(`${DOCS}/${NAME}`, 'utf8');
+
+    for (const fact of ['Product Interaction', 'Analytics', 'Device ID', '400 days', '30 days', 'not used for tracking']) {
+      expect(markdown, fact).toContain(fact);
+    }
   });
 });
