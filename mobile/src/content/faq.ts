@@ -4,9 +4,9 @@
 // day for clearing that pack's due cards (sessionRewards.ts), 3 the first time
 // a pack is opened and 3 at the end of the starter lesson, 60 saved + 5 waiting
 // per pack, a 1-draw daily floor per starved pack (economyFloor.ts), the rare
-// guarantee after 10 Commons (draw/), no duplicates, iOS only. No score,
+// guarantee after 10 Commons (draw/), no repeat draws, iOS only. No score,
 // no claim of an offline first run without the bundled starter cards, and no
-// claim that the developer personally checks every card.
+// claim that the developer personally checks or spot-checks cards.
 
 export type FaqEntry = { q: string; a: string };
 
@@ -21,7 +21,7 @@ export const FAQ_LIST: readonly FaqEntry[] = [
   },
   {
     q: 'When is a rare card guaranteed?',
-    a: "After 10 Commons in a row, the next card is Rare or better, so a rare card is guaranteed within 11 cards while the pack still has a Rare or Legendary you don't own. Every card is drawn from the cards you're still missing, so you never get a duplicate. Open 1 or Open 10: you only spend draws for the cards you receive.",
+    a: "After 10 Commons in a row, the next card is Rare or better, so a rare card is guaranteed within 11 cards while the pack still has a Rare or Legendary you don't own. There are no repeat draws: a card you have drawn never comes up again. Open 1 or Open 10: you only spend draws for the cards you receive.",
   },
   {
     q: 'What do I study?',
@@ -37,7 +37,7 @@ export const FAQ_LIST: readonly FaqEntry[] = [
   },
   {
     q: 'How are the cards made?',
-    a: 'Cards are drafted with AI assistance from official documentation (AWS, Anthropic and Microsoft Learn), then checked by automated checks and AI review passes, and spot-checked by the developer. Mistakes still happen: if a card looks wrong, use Report a card on it or tell me through Support.',
+    a: 'Cards are drafted with AI assistance from official documentation and checked by automated checks and AI review passes. If a card looks wrong, sign in and use Report a problem. The sources are AWS, Anthropic and Microsoft Learn documentation, and you can also tell me through Support.',
   },
 ];
 
