@@ -8,7 +8,7 @@ import type { FeedbackPrefs } from '../feedbackPrefs';
 export const FEEDBACK_COPY = {
   title: 'Sound & haptics',
   soundLabel: 'Sound effects',
-  soundBody: 'Draw ceremony sounds. They stay quiet when your ringer is on silent.',
+  soundBody: 'Pack opening sounds. They stay quiet when your ringer is on silent.',
   hapticsLabel: 'Haptics',
   hapticsBody: 'A light tap when you reveal, pick and rate cards.',
 } as const;

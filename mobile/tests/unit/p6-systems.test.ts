@@ -97,5 +97,8 @@ describe('p6 systems', () => {
     expect(vm.statusLine).toContain('08:00');
     expect(vm.statusLine).toContain('20:00');
     expect(vm.eveningLine.toLowerCase()).toContain('due cards remain');
+    expect(vm.statusLine).toContain('Evening reminder at 20:00');
+    expect(buildReminderPlanVM({ morningEnabled: false, morningTime: '08:00', eveningEnabled: false, eveningTime: '20:00' }).statusLine).toBe('Morning nudge off · Evening reminder off');
+    expect(vm.statusLine).not.toMatch(/rescue/i);
   });
 });

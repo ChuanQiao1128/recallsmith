@@ -281,7 +281,7 @@ async function syncEveningSmart(prefs: ReminderPrefs, remainingDueCount: number,
   const id = await Notifications.scheduleNotificationAsync({
     content: {
       title: 'Evening check‑in',
-      body: "You still have cards due today. Finish a quick run to stay on track.",
+      body: "You still have cards due today. Finish a quick session to stay on track.",
       sound: false,
     },
     trigger: {

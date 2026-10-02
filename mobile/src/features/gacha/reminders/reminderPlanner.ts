@@ -9,8 +9,8 @@ export type ReminderPlanVM = {
 export function buildReminderPlanVM(prefs: ReminderPrefs): ReminderPlanVM {
   const morning = prefs.morningEnabled ? `Morning nudge at ${prefs.morningTime}` : 'Morning nudge off';
   const evening = prefs.eveningEnabled
-    ? `Evening rescue at ${prefs.eveningTime} · only if due cards remain`
-    : 'Evening rescue off';
+    ? `Evening reminder at ${prefs.eveningTime} · only if due cards remain`
+    : 'Evening reminder off';
 
   return {
     statusLine: `${morning} · ${evening}`,

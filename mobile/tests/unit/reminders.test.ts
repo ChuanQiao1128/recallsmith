@@ -42,7 +42,7 @@ vi.mock('expo-notifications', () => ({
   AndroidImportance: { DEFAULT: 3 },
 }));
 
-import { getReminderPrefs, syncDailyReminders } from '../../src/notifications/reminders';
+import { getReminderPrefs, setReminderPrefs, syncDailyReminders } from '../../src/notifications/reminders';
 import {
   PERMISSION_PROMPT_PENDING_KEY,
   clearPermissionPromptPending,
@@ -84,6 +84,14 @@ describe('reminders (R2): sync is read-only on permission', () => {
       eveningEnabled: false,
       eveningTime: '20:00',
     });
+  });
+
+  it('evening reminder asks for a quick session, in plain words (R24B)', async () => {
+    await setReminderPrefs({ eveningEnabled: true });
+    await syncDailyReminders({ remainingDueCount: 3, now: NOW });
+    const bodies = h.scheduleNotificationAsync.mock.calls.map((call) => (call[0] as any).content.body as string);
+    expect(bodies).toContain('You still have cards due today. Finish a quick session to stay on track.');
+    expect(bodies.join('\n')).not.toMatch(/\brun\b/i);
   });
 });
 

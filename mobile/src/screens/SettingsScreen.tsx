@@ -393,10 +393,10 @@ export function SettingsScreen({ navigation }: Props) {
 
           <View style={styles.sectionCard}>
             <Text style={styles.sectionTitle} numberOfLines={1}>
-              Momentum
+              Progress
             </Text>
             <Text style={styles.sectionBody}>
-              {momentumDays} days streak · {totalSessions} qualified sessions
+              {momentumDays} days streak · {totalSessions} sessions that counted
             </Text>
             <Text style={styles.metaText}>
               {reminderPlan.statusLine}
