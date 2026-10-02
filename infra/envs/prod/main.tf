@@ -58,7 +58,6 @@ module "identity" {
   manage_cognito        = true
   console_pool_id       = var.console_pool_id
   mobile_pool_id        = var.mobile_pool_id
-  snowflake_external_id = var.snowflake_external_id
 
   worker_role_name       = "developercards-worker-lambda-role"
   content_bucket_name    = "core-vpc"

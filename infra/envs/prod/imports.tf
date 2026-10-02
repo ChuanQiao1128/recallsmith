@@ -38,18 +38,6 @@ import {
   id = "edge-public-role-zezx326f/arn:aws:iam::622994489535:policy/service-role/AWSLambdaBasicExecutionRole-4587d025-3600-45c8-9409-a1ead0afc685"
 }
 import {
-  to = module.identity.aws_iam_role.snowflake
-  id = "snowflake-recallsmith-s3-role"
-}
-import {
-  to = module.identity.aws_iam_policy.snowflake_read
-  id = "arn:aws:iam::622994489535:policy/snowflake-recallsmith-s3-read"
-}
-import {
-  to = module.identity.aws_iam_role_policy_attachment.snowflake["read"]
-  id = "snowflake-recallsmith-s3-role/arn:aws:iam::622994489535:policy/snowflake-recallsmith-s3-read"
-}
-import {
   to = module.identity.aws_iam_role.rds_monitoring
   id = "rds-monitoring-role"
 }

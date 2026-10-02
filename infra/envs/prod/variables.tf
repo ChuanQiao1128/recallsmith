@@ -48,12 +48,6 @@ variable "cors_allowed_origins" {
   default = ["http://localhost:5173", "https://d12pfy1rhi3ekm.cloudfront.net"]
 }
 
-variable "snowflake_external_id" {
-  type      = string
-  sensitive = true
-  default   = null
-}
-
 variable "alert_email" {
   type      = string
   sensitive = true
