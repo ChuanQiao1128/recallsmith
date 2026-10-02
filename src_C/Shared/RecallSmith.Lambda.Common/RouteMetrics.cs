@@ -226,6 +226,10 @@ public static class RouteMetrics
     "/api/v1/admin/automation/eval-gate/:gateId/revoke",
     "/api/v1/admin/card-reports/:reportId/resolve",
     "/api/v1/admin/decks/:deckId/semantic-duplicates",
+    "/api/v1/admin/analytics/funnel",
+
+    // R24 A01: the public anonymous funnel ingest, matched exactly by the dispatcher.
+    "/api/v1/public/events",
 
     // Internal machine-caller routes: the dispatcher matches these exactly (no suffix match, see
     // VpcFunction), so they are labelled by exact match too.

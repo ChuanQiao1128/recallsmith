@@ -113,7 +113,10 @@ public static class UsageAnalytics
     }
     try
     {
-      return await ComputeAsync(conn, today);
+      var outcome = await ComputeAsync(conn, today);
+      // R24 A01 (contract R24-00 §3.2): the anonymous funnel's 400-day retention, once per UTC day with the rollups.
+      if (outcome == Outcome.Computed) await AnonFunnel.DeleteExpiredAsync(conn);
+      return outcome;
     }
     catch (Exception ex)
     {

@@ -60,23 +60,28 @@ public sealed class VpcFunction
     return await RouteMetrics.MeasureAsync(ServiceName, req, () => DispatchAsync(req, res));
   }
 
+  private static AuthContext Anonymous() => new(
+    Claims: new Dictionary<string, JsonElement>(StringComparer.Ordinal),
+    UserSub: null,
+    Username: null,
+    Groups: [],
+    IsSuperAdmin: false,
+    IsEditor: false,
+    IsAdmin: false);
+
   private static async Task<APIGatewayProxyResponse> DispatchAsync(LambdaRequest req, Res res)
   {
+    // R24 A01: the anonymous funnel ingest never resolves a bearer, so a signed-in caller is never linked to (or logged
+    // with) the events it sends. Matched exactly, like the internal routes below.
+    var publicEvents = RouteMatcher.Match("/api/v1/public/events", req.Path.TrimEnd('/')) is not null;
     AuthContext auth;
     try
     {
-      auth = await Auth.GetAuthContextAsync(req);
+      auth = publicEvents ? Anonymous() : await Auth.GetAuthContextAsync(req);
     }
     catch
     {
-      auth = new AuthContext(
-        Claims: new Dictionary<string, JsonElement>(StringComparer.Ordinal),
-        UserSub: null,
-        Username: null,
-        Groups: [],
-        IsSuperAdmin: false,
-        IsEditor: false,
-        IsAdmin: false);
+      auth = Anonymous();
     }
 
     if (string.Equals(req.Method, "OPTIONS", StringComparison.OrdinalIgnoreCase))
@@ -107,6 +112,12 @@ public sealed class VpcFunction
       if (agentDeny is not null) return agentDeny;
 
       if (p.EndsWith("/health", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase)) return res.Ok(new { ok = true });
+
+      // R24 A01 (contract R24-00 §3.2): public, no auth, exact path; the handler takes no AuthContext.
+      if (publicEvents)
+      {
+        return await Vpc.Analytics.AnonFunnel.HandleEvents(req, res);
+      }
 
       // RevenueCat webhooks
       if (
@@ -365,6 +376,10 @@ public sealed class VpcFunction
       if (p.EndsWith("/api/v1/admin/analytics/usage", StringComparison.OrdinalIgnoreCase))
       {
         return await Vpc.Analytics.UsageAnalytics.HandleUsage(req, res, auth);
+      }
+      if (RouteMatcher.Match("/api/v1/admin/analytics/funnel", p) is not null)
+      {
+        return await Vpc.Analytics.AnonFunnel.HandleFunnel(req, res, auth);
       }
       if (p.EndsWith("/api/v1/admin/automation/runs", StringComparison.OrdinalIgnoreCase))
       {
