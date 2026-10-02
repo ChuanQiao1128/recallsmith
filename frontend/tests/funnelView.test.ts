@@ -46,8 +46,8 @@ describe('overallFunnelSteps', () => {
       'signup_started',
       'signup_completed',
     ]);
-    expect(steps[0]).toEqual({ event: 'first_open', label: 'First open', count: 40, conversion: 1, fraction: 1 });
-    expect(steps[1]).toEqual({ event: 'goal_chosen', label: 'Goal chosen', count: 30, conversion: 0.75, fraction: 0.75 });
+    expect(steps[0]).toEqual({ event: 'first_open', label: 'First open', count: 40, isBase: true, conversion: 1, fraction: 1 });
+    expect(steps[1]).toEqual({ event: 'goal_chosen', label: 'Goal chosen', count: 30, isBase: false, conversion: 0.75, fraction: 0.75 });
     expect(steps[2].conversion).toBe(0.25);
     // Not computed stays null (shown as "—"), a real zero stays zero.
     expect(steps[3]).toMatchObject({ count: null, conversion: null, fraction: 0 });
@@ -119,6 +119,9 @@ describe('formatting', () => {
     expect(formatStep(first)).toBe('1,200');
     expect(formatStep(goal)).toBe('900 (75.0%)');
     expect(formatStep(started)).toBe('3 (0.3%)');
+    // A later step as large as the first still shows its conversion.
+    const [, same] = overallFunnelSteps(counts({ first_open: 9, goal_chosen: 9 }));
+    expect(formatStep(same)).toBe('9 (100.0%)');
     expect(formatStep(completed)).toBe('—');
     const [noBase] = overallFunnelSteps(counts({ goal_chosen: 5 })).slice(1);
     expect(formatStep(noBase)).toBe('5');
