@@ -669,7 +669,7 @@ export function HomeScreen({ navigation, route }: Props) {
     : totalDueAcrossDecks > 0
       ? `${totalDueAcrossDecks} cards waiting today`
       : homeState.vm.draw.state === 'available' || homeState.vm.draw.state === 'reserve'
-        ? 'A reward draw is ready'
+        ? 'A reward pack is ready'
         : !heroSaysClear
           ? null
           : selectedDeckRow?.deck.canStudy &&
@@ -822,7 +822,7 @@ export function HomeScreen({ navigation, route }: Props) {
 
               // Action-driven hero title — NEVER duplicate the pack name.
               // Priority: deck-mastered celebration → due count →
-              // reward draw ready → vm fallback.
+              // reward pack ready → vm fallback.
               const isFeaturedMastered = featuredDeck.isFullyMastered;
               const heroTitle =
                 starterSlug
@@ -832,7 +832,7 @@ export function HomeScreen({ navigation, route }: Props) {
                   : totalDueAcrossDecks > 0
                     ? `${totalDueAcrossDecks} cards waiting`
                     : (homeState.vm.draw.state === 'available' || homeState.vm.draw.state === 'reserve')
-                      ? 'A reward draw is ready'
+                      ? 'A reward pack is ready'
                       : homeState.vm.hero.headline;
 
               // Status dot color for selector tiles (replaces text badge)
@@ -863,7 +863,7 @@ export function HomeScreen({ navigation, route }: Props) {
                 : !featuredDeck.realRow
                 ? 'Connect to load packs'
                 : firstDrawCoach
-                  ? 'Open reward draw'
+                  ? 'Open reward pack'
                   : resolvesFeaturedDeck
                     ? `${featuredDeck.status} ${featuredDeck.title}`
                     : homeState.vm.cta.label;
