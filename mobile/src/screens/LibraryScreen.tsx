@@ -21,6 +21,7 @@ import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
 import { getFeatureFlags } from '../config/featureFlags';
 import { checkManifestForUpdates, listManifestDecks } from '../content/deckRepository';
 import { getCachedDeck, installDeckAndInvalidate } from '../content/deckCache';
+import { ensureStarterDeckInstalled } from '../content/starterOffline';
 import { loadDeckProgress } from '../review/storage';
 import {
   buildLibraryVM,
@@ -185,20 +186,37 @@ export function LibraryScreen({ navigation, route }: Props) {
 
         let resolvedDeck = await getCachedDeck(currentSlug);
         if (!resolvedDeck) {
-          const updates = await checkManifestForUpdates(false);
-          const update = updates[currentSlug];
-          if (!update?.remoteUrl) {
-            throw friendlyError('This deck is not available on this device yet.');
+          // A thrown manifest check is held, not rethrown at once: offline, or with the download
+          // failed, a goal deck starts from the bundled starter pack (R24 §2.2).
+          let manifestError: unknown = null;
+          let updates: Awaited<ReturnType<typeof checkManifestForUpdates>> | null = null;
+          try {
+            updates = await checkManifestForUpdates(false);
+          } catch (err) {
+            manifestError = err;
           }
-          const installed = await installDeckAndInvalidate(
-            currentSlug,
-            update.remoteUrl,
-            update.remoteVersion,
-            update.remoteSha256,
-          ).catch(() => false);
+          const update = updates?.[currentSlug];
+          let installed = false;
+          if (update?.remoteUrl) {
+            installed = await installDeckAndInvalidate(
+              currentSlug,
+              update.remoteUrl,
+              update.remoteVersion,
+              update.remoteSha256,
+            ).catch(() => false);
+          }
           resolvedDeck = installed ? await getCachedDeck(currentSlug) : null;
+          const downloadFailed = !updates || Object.keys(updates).length === 0 || !!update?.remoteUrl;
+          if (!resolvedDeck && downloadFailed && (await ensureStarterDeckInstalled(currentSlug)) !== 'unavailable') {
+            resolvedDeck = await getCachedDeck(currentSlug);
+          }
           if (!resolvedDeck) {
-            throw friendlyError('Install failed. Check your connection and retry.');
+            if (manifestError) throw manifestError;
+            throw friendlyError(
+              update?.remoteUrl
+                ? 'Install failed. Check your connection and retry.'
+                : 'This deck is not available on this device yet.',
+            );
           }
         }
 

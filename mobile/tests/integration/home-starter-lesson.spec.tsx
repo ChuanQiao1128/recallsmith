@@ -90,6 +90,12 @@ vi.mock('../../src/content/activeDeck', () => ({
   setActiveDeckSlug: vi.fn(async (slug: string) => setActiveDeckSlugMock(slug)),
 }));
 
+// R24 §2.2: Home asks the starter module (lazily imported) to upgrade an installed starter pack.
+const upgradeStarterDecksMock = vi.hoisted(() => vi.fn(async (): Promise<string[]> => []));
+vi.mock('../../src/content/starterOffline', () => ({
+  upgradeStarterDecks: () => upgradeStarterDecksMock(),
+}));
+
 vi.mock('../../src/features/gacha/home/deckActionResolver', () => ({
   loadHomeDeckSummaries: vi.fn(async () => {
     const now = Date.now();
@@ -245,6 +251,8 @@ describe('HomeScreen starter lesson', () => {
     deckSummariesFixture = [deck('aws-saa-c03', { newToday: 5 }), deck('csharp-basics')];
     updatesFixture = {};
     navigateMock.mockReset();
+    upgradeStarterDecksMock.mockReset();
+    upgradeStarterDecksMock.mockResolvedValue([]);
     vi.mocked(loadHomeDeckSummaries).mockReset();
     vi.mocked(loadHomeDeckSummaries).mockImplementation(async () => makeHomeSummary() as any);
   });
@@ -324,5 +332,24 @@ describe('HomeScreen starter lesson', () => {
     expect(tree.root.findAll((node) => node.props?.testID === 'home-starter-cta')).toHaveLength(0);
     expect(tree.root.findAll((node) => node.props?.testID === 'home-primary-cta' && (node.type as any) === 'Pressable')).toHaveLength(1);
     expect(textBlob(tree)).not.toContain('first lesson');
+  });
+
+  it('upgrades an installed starter pack on every Home focus and refreshes Home when the full deck went in', async () => {
+    store.set(STAGE_KEY, 'done');
+    await renderHome();
+    expect(upgradeStarterDecksMock).toHaveBeenCalledTimes(1);
+    const loadsBefore = vi.mocked(loadHomeDeckSummaries).mock.calls.length;
+
+    // Nothing upgraded: the focus refresh is the only reload.
+    await refocus();
+    expect(upgradeStarterDecksMock).toHaveBeenCalledTimes(2);
+    const loadsAfterQuietFocus = vi.mocked(loadHomeDeckSummaries).mock.calls.length;
+
+    // The full deck replaced the starter pack: Home reloads its shelf once more.
+    upgradeStarterDecksMock.mockResolvedValue(['aws-saa-c03']);
+    await refocus();
+    expect(upgradeStarterDecksMock).toHaveBeenCalledTimes(3);
+    const quietFocusLoads = loadsAfterQuietFocus - loadsBefore;
+    expect(vi.mocked(loadHomeDeckSummaries).mock.calls.length - loadsAfterQuietFocus).toBeGreaterThan(quietFocusLoads);
   });
 });

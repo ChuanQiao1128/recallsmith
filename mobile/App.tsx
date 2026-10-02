@@ -51,6 +51,7 @@ import { createAppStateSyncHandler } from './src/sync/appStateSync';
 import { useForceUpdateGate, type ForceUpdateGate } from './src/config/forceUpdateGate';
 import { DEFAULT_APP_STORE_URL } from './src/config/remoteConfig';
 import { loadFeedbackPrefs } from './src/features/gacha/settings/feedbackPrefs';
+import { upgradeStarterDecks } from './src/content/starterOffline';
 import { createOtaUpdateChecker, getExpoUpdatesModule } from './src/updates/otaUpdateCheck';
 import { collectDeviceInfo } from './src/features/gacha/draw/ceremonyPerf';
 import {
@@ -174,6 +175,8 @@ function App() {
       syncOnAppState(state);
       if (state === 'active') {
         void refreshAuthOnForeground();
+        // R24 §2.2: an installed starter pack becomes the full deck once the network is back.
+        void upgradeStarterDecks();
         void otaUpdateChecker.onForeground(() => (navigationRef.isReady() ? navigationRef.getCurrentRoute()?.name : undefined));
       }
     });

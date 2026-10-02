@@ -1,0 +1,1110 @@
+{
+  "slug": "csharp-basics",
+  "title": ".NET & C# Interview",
+  "locale": "en-US",
+  "deckType": 1,
+  "version": "20261001T230339Z-689d6340-starter",
+  "totalCards": 217,
+  "cards": [
+    {
+      "stableUid": "net-types-03",
+      "orderInDeck": 5,
+      "difficulty": 1,
+      "question": "Why should a product price be stored as a `decimal` rather than a `double`, and what goes wrong with `double`?",
+      "explanation": "Because `decimal` represents base-10 amounts such as 0.10 exactly, while `double` is binary floating point and cannot represent 0.1. With `double`, sums drift (`0.1 + 0.2 == 0.3` is false), so totals and comparisons can be off by a cent.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Remember the `m` suffix (`19.99m`); use `double` only when speed or range matters more than exact decimal digits.",
+      "revision": 1,
+      "topic": "1.1 Types and Memory",
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/floating-point-numeric-types",
+        "quote": "Even numbers that are precise to only one decimal digit are handled more accurately by the decimal type: 0.1, for example, can be exactly represented by a decimal instance, while there's no double or float instance that exactly represents 0.1. Because of this difference in numeric types, unexpected rounding errors can occur in arithmetic calculations when you use double or float for decimal data."
+      }
+    },
+    {
+      "stableUid": "net-oop-01",
+      "orderInDeck": 10,
+      "difficulty": 1,
+      "question": "A `Customer` class already derives from `Entity`, and it must also be comparable and auditable. Why model \"comparable\" and \"auditable\" as interfaces rather than as abstract base classes?",
+      "explanation": "Because a C# class can have only one direct base class, and `Entity` already takes that slot, while it can implement any number of interfaces. Interfaces also describe capabilities without an \"is a\" relationship, so unrelated types such as `Order` can share them too.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "In an interview, say \"single inheritance of classes, multiple inheritance of contracts.\"",
+      "revision": 1,
+      "topic": "1.2 OOP and Interfaces",
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/object-oriented/inheritance",
+        "quote": "A class can implement multiple interfaces even though it can derive from only a single direct base class."
+      }
+    },
+    {
+      "stableUid": "net-oop-03",
+      "orderInDeck": 20,
+      "difficulty": 1,
+      "question": "Other teams may derive from your `PaymentProcessor`, but its overridden `Validate` method must not be overridden further down the hierarchy. How do you enforce that without sealing the whole class?",
+      "explanation": "Mark the override sealed: `public sealed override bool Validate(...)`. The class stays inheritable, but a subclass that tries to override `Validate` gets compiler error CS0239. `sealed` on a member is valid only together with `override`, because it ends a virtual chain that a base class started.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "",
+      "revision": 1,
+      "topic": "1.2 OOP and Interfaces",
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/sealed",
+        "quote": "You can also use the sealed modifier on a method or property that overrides a virtual method or property in a base class. By using this approach, you enable developers to derive classes from your class while preventing them from overriding specific virtual methods or properties."
+      }
+    },
+    {
+      "stableUid": "net-oop-05",
+      "orderInDeck": 30,
+      "difficulty": 1,
+      "question": "Every report generator needs the same `_createdAt` and `_author` fields, set by one shared constructor. Why is an abstract base class a better fit here than an interface?",
+      "explanation": "Because an interface can't hold instance state: it can't declare instance fields or instance constructors, so every implementer would redeclare and initialize those fields itself. An abstract class declares the fields and a protected constructor once, and each derived generator inherits both.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "",
+      "revision": 1,
+      "topic": "1.2 OOP and Interfaces",
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/interface",
+        "quote": "Interfaces can't contain instance state. While static fields are now permitted, instance fields aren't permitted in interfaces. Instance auto-properties aren't supported in interfaces, as they would implicitly declare a hidden field."
+      }
+    },
+    {
+      "stableUid": "net-oop-06",
+      "orderInDeck": 40,
+      "difficulty": 1,
+      "question": "`OrderService` and `EmailSender` both inherit from a `LoggingBase` class only to reuse its `Log` method. What is wrong with that design, and what would you do instead?",
+      "explanation": "It misuses inheritance: an `OrderService` is not a kind of logger, yet it spends its only base-class slot and couples itself to `LoggingBase`. Instead, use composition: inject an `ILogger<OrderService>` through the constructor, so the class reuses logging by having a collaborator rather than by being one.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Rule of thumb to say out loud: inherit for \"is a\", compose for \"has a\" or \"uses a\".",
+      "revision": 1,
+      "topic": "1.2 OOP and Interfaces",
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/object-oriented/inheritance",
+        "quote": "Conceptually, a derived class is a specialization of the base class. For example, if you have a base class Animal, you might have one derived class that is named Mammal and another derived class that is named Reptile. A Mammal is an Animal, and a Reptile is an Animal, but each derived class represents different specializations of the base class."
+      }
+    },
+    {
+      "stableUid": "net-types-01",
+      "orderInDeck": 50,
+      "difficulty": 1,
+      "question": "A method takes a `List<int>` parameter with no modifier and calls `Add(4)` on it. After the call, does the caller's list contain 4, and why?",
+      "explanation": "Yes, because the reference is passed by value: the parameter holds a copy of the reference, both copies point to the same list on the heap, and `Add` mutates that single shared object.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Say \"the reference is passed by value\": the object is shared, only the variable is copied.",
+      "revision": 1,
+      "topic": "1.1 Types and Memory",
+      "mcq": {
+        "v": 1,
+        "options": [
+          {
+            "key": "a",
+            "why": "Passing by value copies the variable, and for a reference type that variable holds only a reference. The list object itself is not duplicated, so `Add` changes the one list the caller holds.",
+            "text": "No: an argument passed without `ref` is a copy of the whole list, so the caller's list is unchanged",
+            "correct": false
+          },
+          {
+            "key": "b",
+            "why": null,
+            "text": "Yes: the method gets a copy of the reference, and both copies point to the same list",
+            "correct": true
+          },
+          {
+            "key": "c",
+            "why": "No modifier is needed to mutate a shared object: `Add` runs on the list that the copied reference points to, and the caller holds a reference to that same list.",
+            "text": "No: a change to the object reaches the caller only when the parameter is declared `ref`",
+            "correct": false
+          },
+          {
+            "key": "d",
+            "why": "Right verdict, wrong reason: without `ref`, the parameter is its own variable holding a copy of the reference. The two variables merely point to the same list object.",
+            "text": "Yes: reference types are passed by reference exactly like `ref`, so the method uses the caller's variable",
+            "correct": false
+          }
+        ],
+        "shuffle": true,
+        "qualifier": null
+      },
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/method-parameters",
+        "quote": "When you pass a reference type by value to a method, the method gets a copy of the reference to the instance. Both variables refer to the same object. The parameter is a copy of the reference."
+      }
+    },
+    {
+      "stableUid": "net-types-02",
+      "orderInDeck": 60,
+      "difficulty": 1,
+      "question": "What does this program print?\n```csharp\nstring a = \"cat\";\nstring b = a;\na += \"s\";\nConsole.WriteLine($\"{a} {b}\");\n```",
+      "explanation": "It prints `cats cat`. Strings are immutable, so `+=` builds a new string and points `a` at it, while `b` still refers to the original \"cat\" object.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "The same rule explains why string methods such as `Replace` or `ToUpper` return a result you must assign.",
+      "revision": 1,
+      "topic": "1.1 Types and Memory",
+      "mcq": {
+        "v": 1,
+        "options": [
+          {
+            "key": "a",
+            "why": "This assumes `a` and `b` share one mutable string. Strings are immutable: `+=` builds a new string and points only `a` at it, so `b` still refers to the original \"cat\".",
+            "text": "It prints `cats cats`",
+            "correct": false
+          },
+          {
+            "key": "b",
+            "why": "This treats `+=` as if its new string were thrown away. `+=` is an assignment: the new string \"cats\" is stored back in `a`, and only `b` still refers to the original \"cat\".",
+            "text": "It prints `cat cat`",
+            "correct": false
+          },
+          {
+            "key": "c",
+            "why": null,
+            "text": "It prints `cats cat`",
+            "correct": true
+          },
+          {
+            "key": "d",
+            "why": "Immutability applies to the string object, not the variable. `a += \"s\"` compiles to `a = a + \"s\"`, which assigns a new string to `a` and leaves the original \"cat\" untouched.",
+            "text": "Compile error: `string` is immutable",
+            "correct": false
+          }
+        ],
+        "shuffle": true,
+        "qualifier": null
+      },
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/strings/",
+        "quote": "Because a string \"modification\" is actually a new string creation, you must use caution when you create references to strings. If you create a reference to a string, and then \"modify\" the original string, the reference continues to point to the original object."
+      }
+    },
+    {
+      "stableUid": "net-types-04",
+      "orderInDeck": 70,
+      "difficulty": 1,
+      "question": "What does this program print?\n```csharp\nvar items = new List<int> { 1, 2, 3 };\nReset(ref items);\nConsole.WriteLine(items.Count);\nstatic void Reset(ref List<int> list) => list = new List<int>();\n```",
+      "explanation": "It prints `0`. With `ref`, the parameter is an alias for the caller's `items` variable, so assigning a new list replaces what `items` refers to; the original three-item list is simply abandoned.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Use `ref` only when the method must replace the caller's variable; returning the new value is usually clearer.",
+      "revision": 1,
+      "topic": "1.1 Types and Memory",
+      "mcq": {
+        "v": 1,
+        "options": [
+          {
+            "key": "a",
+            "why": "`ref` is not redundant for reference types: it makes `list` an alias of the caller's `items` variable, so assigning a new list replaces what `items` refers to, not a local copy.",
+            "text": "It prints `3`: `List<int>` is a reference type, so `ref` adds nothing",
+            "correct": false
+          },
+          {
+            "key": "b",
+            "why": "`ref` works with a variable of any type, including `List<int>`. It passes a reference to the variable itself, and `items` is an assigned local, so the call compiles.",
+            "text": "It fails to compile: `ref` cannot be applied to a reference-type argument",
+            "correct": false
+          },
+          {
+            "key": "c",
+            "why": "`static` only stops a local function from capturing outer locals. `Reset` captures nothing; it receives the variable through its `ref` parameter, which is allowed.",
+            "text": "It fails to compile: a static local function cannot modify the caller's `items`",
+            "correct": false
+          },
+          {
+            "key": "d",
+            "why": null,
+            "text": "It prints `0`: the method replaces the list that `items` refers to",
+            "correct": true
+          }
+        ],
+        "shuffle": true,
+        "qualifier": null
+      },
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/method-parameters",
+        "quote": "The preceding example shows how reassigning the value of a parameter that is passed by reference is visible in the calling context."
+      }
+    },
+    {
+      "stableUid": "net-types-05",
+      "orderInDeck": 80,
+      "difficulty": 1,
+      "question": "An optional database column maps to `int? discount`, which is null for some rows, and the code does `int d = (int)discount;`. What happens when a row's `discount` is null?",
+      "explanation": "It throws `InvalidOperationException` (\"Nullable object must have a value\") because the explicit cast reads the value while `HasValue` is false. Decide what null means: `discount ?? 0` or `GetValueOrDefault()` for a default, or `if (discount is int d)` to branch.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "It usually surfaces in production on the first row with a null column, so include null rows in the test data for every `int?` mapping.",
+      "revision": 1,
+      "topic": "1.1 Types and Memory",
+      "mcq": {
+        "v": 1,
+        "options": [
+          {
+            "key": "a",
+            "why": "`int?` is `Nullable<int>`, a struct, so there is no reference to dereference. The explicit cast reads `Value`, which reports the missing value with a different exception type.",
+            "text": "It throws `NullReferenceException` because the cast dereferences a null reference",
+            "correct": false
+          },
+          {
+            "key": "b",
+            "why": null,
+            "text": "It throws `InvalidOperationException` because the nullable has no value",
+            "correct": true
+          },
+          {
+            "key": "c",
+            "why": "Falling back to 0 is what `GetValueOrDefault()` or `discount ?? 0` does. An explicit cast does not substitute a default; it demands a value and fails when there is none.",
+            "text": "`d` is set to 0, the default value of `int`",
+            "correct": false
+          },
+          {
+            "key": "d",
+            "why": "An explicit conversion from `int?` to `int` exists, so the line compiles. Only the implicit direction is missing: `int d = discount;` without a cast is what the compiler rejects.",
+            "text": "The line does not compile: `int?` cannot be cast to `int`",
+            "correct": false
+          }
+        ],
+        "shuffle": true,
+        "qualifier": null
+      },
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/nullable-value-types",
+        "quote": "At run time, if the value of a nullable value type is null, the explicit cast throws an InvalidOperationException."
+      }
+    },
+    {
+      "stableUid": "net-types-06",
+      "orderInDeck": 90,
+      "difficulty": 1,
+      "question": "A `TryParse`-style method must hand back its result through a variable that the caller declares but does not initialize. Which parameter modifier fits?",
+      "explanation": "`out` fits: the caller may pass an unassigned variable, and the compiler forces the method to assign it on every return path, so the caller can read it afterward. That is the `bool TryParse(string s, out int value)` contract.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Call it as `int.TryParse(input, out var n)`: the declaration inline is idiomatic and avoids a dummy initial value.",
+      "revision": 1,
+      "topic": "1.1 Types and Memory",
+      "mcq": {
+        "v": 1,
+        "options": [
+          {
+            "key": "a",
+            "why": "`ref` requires the argument to be definitely assigned before the call, so passing an uninitialized local is a compile error.",
+            "text": "`ref`, so the method can overwrite the caller's variable",
+            "correct": false
+          },
+          {
+            "key": "b",
+            "why": null,
+            "text": "`out`, because the method must assign it before returning",
+            "correct": true
+          },
+          {
+            "key": "c",
+            "why": "`in` is a read-only reference: the method cannot assign it, and the caller must initialize the argument first.",
+            "text": "`in`, so the variable is passed by reference without a copy",
+            "correct": false
+          },
+          {
+            "key": "d",
+            "why": "`ref readonly` is read-only inside the method, so it cannot carry a result back, and it expects an initialized variable.",
+            "text": "`ref readonly`, so the caller's variable is shared but protected",
+            "correct": false
+          }
+        ],
+        "shuffle": true,
+        "qualifier": null
+      },
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/method-parameters",
+        "quote": "out: The calling method doesn't need to initialize the argument before calling the method. The method must assign a value to the parameter."
+      }
+    },
+    {
+      "stableUid": "net-types-07",
+      "orderInDeck": 100,
+      "difficulty": 1,
+      "question": "Given `int i = 42;`, which statement boxes `i`, allocating an object on the managed heap?",
+      "explanation": "`IComparable c = i;` boxes: converting a value type to an interface it implements needs a reference, so the CLR copies the `int` into a new heap object. Passing structs as interfaces is where boxing hides.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "In hot paths, prefer generic methods constrained to the interface (`where T : IComparable<T>`), which call the struct without boxing.",
+      "revision": 1,
+      "topic": "1.1 Types and Memory",
+      "mcq": {
+        "v": 1,
+        "options": [
+          {
+            "key": "a",
+            "why": null,
+            "text": "`IComparable c = i;`",
+            "correct": true
+          },
+          {
+            "key": "b",
+            "why": "`List<int>` is generic and stores the values in an internal `int[]`, so no box is created; boxing happens with the non-generic `ArrayList`.",
+            "text": "`numbers.Add(i);` where `numbers` is a `List<int>`",
+            "correct": false
+          },
+          {
+            "key": "c",
+            "why": "An implicit numeric widening conversion produces a new `long` value; no heap object is involved.",
+            "text": "`long total = i + 1L;`",
+            "correct": false
+          },
+          {
+            "key": "d",
+            "why": "`Nullable<int>` is itself a struct holding the value and a `HasValue` flag, so wrapping an `int` in it does not allocate.",
+            "text": "`int? maybe = i;`",
+            "correct": false
+          }
+        ],
+        "shuffle": true,
+        "qualifier": null
+      },
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/types/boxing-and-unboxing",
+        "quote": "Boxing is the process of converting a value type to the type object or to any interface type implemented by this value type. When the common language runtime (CLR) boxes a value type, it wraps the value inside a System.Object instance and stores it on the managed heap."
+      }
+    },
+    {
+      "stableUid": "net-types-08",
+      "orderInDeck": 110,
+      "difficulty": 1,
+      "question": "What happens with this code?\n```csharp\nvar points = new List<Point> { new Point() };\npoints[0].X = 5;\nConsole.WriteLine(points[0].X);\nstruct Point { public int X; }\n```",
+      "explanation": "It fails to compile with CS1612: the `List<T>` indexer returns a copy of the `Point`, which is not a variable, so assigning its field would be lost. Copy the element, change it, and write it back (`var p = points[0]; p.X = 5; points[0] = p;`), or make the struct immutable.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Mutable structs in collections are a classic bug source; declaring them `readonly struct` makes the copy semantics explicit.",
+      "revision": 1,
+      "topic": "1.1 Types and Memory",
+      "mcq": {
+        "v": 1,
+        "options": [
+          {
+            "key": "a",
+            "why": "That is how an array element behaves, because an array access is a variable; a `List<T>` indexer is a method that returns a copy of the struct.",
+            "text": "It prints 5, because the indexer updates the stored element",
+            "correct": false
+          },
+          {
+            "key": "b",
+            "why": "The compiler blocks this silent data loss: a change to a returned copy would be discarded, so it reports an error instead of compiling it.",
+            "text": "It prints 0, because only a temporary copy is modified",
+            "correct": false
+          },
+          {
+            "key": "c",
+            "why": null,
+            "text": "It fails to compile with error CS1612",
+            "correct": true
+          },
+          {
+            "key": "d",
+            "why": "Nothing runs: the problem is detected at compile time, and the `List<T>` indexer does not throw for a valid index.",
+            "text": "It throws InvalidOperationException when the indexer is used",
+            "correct": false
+          }
+        ],
+        "shuffle": true,
+        "qualifier": null
+      },
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/compiler-messages/cs1612",
+        "quote": "This error occurs because value types are copied on assignment. When you retrieve a value type from a property or indexer, you are getting a copy of the object, not a reference to the object itself."
+      }
+    },
+    {
+      "stableUid": "net-types-09",
+      "orderInDeck": 120,
+      "difficulty": 1,
+      "question": "A report job builds a 20,000-line CSV with `csv += line;` inside a loop, and profiling shows heavy allocation. Which change is BEST?",
+      "explanation": "Use a `StringBuilder`: it appends into a growable internal buffer, so each line is copied about once instead of re-copying all accumulated text into a new immutable string every iteration. Call `ToString` once at the end.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "For a handful of fixed pieces, plain concatenation or interpolation is fine; `StringBuilder` pays off in loops.",
+      "revision": 1,
+      "topic": "1.1 Types and Memory",
+      "mcq": {
+        "v": 1,
+        "options": [
+          {
+            "key": "a",
+            "why": null,
+            "text": "Append lines to a `StringBuilder`, then call `ToString` once",
+            "correct": true
+          },
+          {
+            "key": "b",
+            "why": "Interning deduplicates identical strings, but each concatenation still copies the whole growing `csv` into a new string, so the cost is unchanged.",
+            "text": "Pass each line through `string.Intern` before appending it",
+            "correct": false
+          },
+          {
+            "key": "c",
+            "why": "Interpolation still creates a brand-new string containing all previous text on every pass, so the copying stays quadratic.",
+            "text": "Use interpolation, `csv = $\"{csv}{line}\";`, inside the loop",
+            "correct": false
+          },
+          {
+            "key": "d",
+            "why": "String `+=` already compiles to `string.Concat`, so this is the same allocation and copy per iteration.",
+            "text": "Call `string.Concat(csv, line)` explicitly on each iteration",
+            "correct": false
+          }
+        ],
+        "shuffle": true,
+        "qualifier": "BEST"
+      },
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/standard/base-types/stringbuilder",
+        "quote": "In situations where you need to perform repeated modifications to a string, the overhead associated with creating a new String object can be costly. The System.Text.StringBuilder class can be used when you want to modify a string without creating a new object."
+      }
+    },
+    {
+      "stableUid": "net-types-10",
+      "orderInDeck": 130,
+      "difficulty": 2,
+      "question": "A candidate says \"structs live on the stack and classes on the heap.\" Where does an `int` field of a class instance actually live, and where do the elements of a `Point[]` array live, where `Point` is a struct?",
+      "explanation": "Both are on the heap, because a value type lives inline wherever its container lives. The `int` field sits inside the class instance, and `Point[]` elements sit inline in the array object. Locals and parameters usually live on the stack, but even they move to the heap when captured by a lambda or held across an `await`. So the real difference is copy-on-assignment semantics, not location.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "In an interview, correct the myth politely, then pivot to what matters: value types copy on assignment, reference types share.",
+      "revision": 1,
+      "topic": "1.1 Types and Memory",
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/choosing-between-class-and-struct",
+        "quote": "The first difference between reference types and value types we will consider is that reference types are allocated on the heap and garbage-collected, whereas value types are allocated either on the stack or inline in containing types and deallocated when the stack unwinds or when their containing type gets deallocated."
+      }
+    },
+    {
+      "stableUid": "net-types-11",
+      "orderInDeck": 140,
+      "difficulty": 2,
+      "question": "A `Customer` class overrides `Equals` to compare `Id` but does not override `GetHashCode`. Looking up a new `Customer` with the same `Id` in a `Dictionary<Customer, Order>` finds nothing. Why, and what is the contract?",
+      "explanation": "Because `Dictionary` picks a bucket by hash code before calling `Equals`, and the inherited identity-based `GetHashCode` gives the two instances different codes. So the lookup searches the wrong bucket and `Equals` is not even called. The contract: equal objects must return the same hash code, so derive it from the fields `Equals` uses (`HashCode.Combine(Id)`) and keep them unchanged while the object is a key.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "The compiler warns (CS0659) when you override `Equals` alone; records generate both members for you.",
+      "revision": 1,
+      "topic": "1.1 Types and Memory",
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/api/system.object.gethashcode?view=net-8.0",
+        "quote": "If you override the GetHashCode method, you should also override Equals, and vice versa. If your overridden Equals method returns true when two objects are tested for equality, your overridden GetHashCode method must return the same value for the two objects."
+      }
+    },
+    {
+      "stableUid": "net-types-12",
+      "orderInDeck": 150,
+      "difficulty": 2,
+      "question": "Why does this class not compile, and what do you store in the field instead when the buffer must outlive a single method call?\n```csharp\nclass Parser\n{\n    private Span<byte> _buffer;\n}\n```",
+      "explanation": "`Span<T>` is a `ref struct`, which must stay on the stack, and a class field lives on the heap, so the compiler rejects the field with CS8345. A span may point at stack memory (`stackalloc`), and that reference must not outlive its frame. Store a `Memory<byte>` (or the `byte[]`) in the field instead and call `.Span` inside each synchronous method that processes it.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "The same rule blocks spans in lambdas and across `await`; `Memory<T>` is the heap-safe handle you keep.",
+      "revision": 1,
+      "topic": "1.1 Types and Memory",
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/ref-struct",
+        "quote": "You can't declare a ref struct as the type of a field in a class or a non-ref struct."
+      }
+    },
+    {
+      "stableUid": "net-types-13",
+      "orderInDeck": 160,
+      "difficulty": 2,
+      "question": "Library v1 declares `public const int MaxRetries = 3;`. In v2 it becomes 5, and only the library DLL is redeployed; the app that reads `MaxRetries` is not recompiled. What value does the app use?",
+      "explanation": "3: the compiler substitutes a `const` value at every use site, including in other assemblies, so the app carries the literal 3 until it is recompiled. Expose values that may change as `public static readonly`, which callers read from the library at run time.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Keep `public const` for true constants such as protocol limits; versioned settings belong in `static readonly` fields or configuration.",
+      "revision": 1,
+      "topic": "1.1 Types and Memory",
+      "mcq": {
+        "v": 1,
+        "options": [
+          {
+            "key": "a",
+            "why": "The app never reads the field from the library: the literal 3 was compiled into its own IL, so the new DLL's value is not consulted.",
+            "text": "5, because the app loads the new library DLL at run time",
+            "correct": false
+          },
+          {
+            "key": "b",
+            "why": null,
+            "text": "3, because the compiler copied the value into the app's IL",
+            "correct": true
+          },
+          {
+            "key": "c",
+            "why": "The field still exists in v2, and the app does not access it at run time anyway because it holds the literal, so nothing fails to bind.",
+            "text": "A MissingFieldException is thrown when the field is first read",
+            "correct": false
+          },
+          {
+            "key": "d",
+            "why": "Constant substitution is done by the C# compiler in every configuration, not by the optimizer or the JIT, so both builds embed 3.",
+            "text": "5 in Release builds, and 3 in Debug builds where constants are not inlined",
+            "correct": false
+          }
+        ],
+        "shuffle": true,
+        "qualifier": null
+      },
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/const",
+        "quote": "These values can change over time, and because compilers propagate constants, other code compiled with your libraries needs to be recompiled to see the changes."
+      }
+    },
+    {
+      "stableUid": "net-types-14",
+      "orderInDeck": 170,
+      "difficulty": 2,
+      "question": "A hot path declares `double Area(in BigShape s)` to avoid copying a large struct. A caller writes `Area(GetShape())`, without `in` at the call site. What does the compiler pass?",
+      "explanation": "The compiler stores the returned value in a hidden temporary and passes a readonly reference to it. So the copy still happens for method results, literals and converted arguments; `in` at the call site makes the compiler reject them, and a `ref readonly` parameter makes it warn on a non-variable.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Measure before adding `in`: for small structs, passing a reference can cost more than the copy it saves.",
+      "revision": 1,
+      "topic": "1.1 Types and Memory",
+      "mcq": {
+        "v": 1,
+        "options": [
+          {
+            "key": "a",
+            "why": null,
+            "text": "A readonly reference to a compiler-created temporary copy",
+            "correct": true
+          },
+          {
+            "key": "b",
+            "why": "Only an explicit `in` at the call site requires a variable; without it, the compiler accepts any value and materializes a temporary for it.",
+            "text": "Nothing: it reports an error because `in` arguments must be variables",
+            "correct": false
+          },
+          {
+            "key": "c",
+            "why": "`in` is a language-level by-reference contract, not a hint: the method receives a reference, so the compiler needs a location to point at.",
+            "text": "The struct by value, since `in` is only an optimization hint to the JIT",
+            "correct": false
+          },
+          {
+            "key": "d",
+            "why": "`in` parameters do not box; the temporary is an ordinary local, and a box would be an `object`, not a reference to a `BigShape`.",
+            "text": "A boxed copy on the heap, so the method can hold a stable reference",
+            "correct": false
+          }
+        ],
+        "shuffle": true,
+        "qualifier": null
+      },
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/method-parameters",
+        "quote": "The in modifier enables the compiler to create a temporary variable for the argument and pass a readonly reference to that argument. The compiler always creates a temporary variable when the argument must be converted, when there's an implicit conversion from the argument type, or when the argument is a value that isn't a variable."
+      }
+    },
+    {
+      "stableUid": "net-oop-02",
+      "orderInDeck": 180,
+      "difficulty": 1,
+      "question": "These two constructors repeat the same initialization. Which version of the one-argument constructor reuses the two-argument one instead of copying its code?\n```csharp\npublic class Employee\n{\n    public string Name { get; }\n    public int Salary { get; }\n    public Employee(string name) { Name = name.Trim(); Salary = 30000; }\n    public Employee(string name, int salary) { Name = name.Trim(); Salary = salary; }\n}\n```",
+      "explanation": "Chain with `: this(name, 30000)` in the one-argument constructor's initializer. It forwards to the full constructor, which runs first, so the trimming and assignments live in one place and the get-only properties are still set inside a constructor.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "In an interview, add that the `this(...)` target runs before the calling constructor's body, so that body only adds what differs.",
+      "revision": 1,
+      "topic": "1.2 OOP and Interfaces",
+      "mcq": {
+        "v": 1,
+        "options": [
+          {
+            "key": "a",
+            "why": "`base(...)` calls a constructor of the base class, not a sibling. `Employee` derives only from `object`, which has no two-argument constructor, so this does not compile.",
+            "text": "`public Employee(string name) : base(name, 30000) { }`",
+            "correct": false
+          },
+          {
+            "key": "b",
+            "why": "Calling `this(...)` as a statement in the body is Java syntax. In C# another constructor can be invoked only from the initializer after the parameter list, so this line is a compile error.",
+            "text": "`public Employee(string name) { this(name, 30000); }`",
+            "correct": false
+          },
+          {
+            "key": "c",
+            "why": null,
+            "text": "`public Employee(string name) : this(name, 30000) { }`",
+            "correct": true
+          },
+          {
+            "key": "d",
+            "why": "This compiles, but `new Employee(...)` builds a second object that is thrown away. The instance being constructed is not initialized, so its `Name` stays null and its `Salary` stays 0.",
+            "text": "`public Employee(string name) { new Employee(name, 30000); }`",
+            "correct": false
+          }
+        ],
+        "shuffle": true,
+        "qualifier": null
+      },
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/classes-and-structs/using-constructors",
+        "quote": "A constructor can invoke another constructor in the same object by using the this keyword. Like base, this can be used with or without parameters, and any parameters in the constructor are available as parameters to this, or as part of an expression."
+      }
+    },
+    {
+      "stableUid": "net-oop-04",
+      "orderInDeck": 190,
+      "difficulty": 1,
+      "question": "What does this program print?\n```csharp\nBase b = new Derived();\nConsole.WriteLine($\"{b.Name()} {b.Kind()}\");\nclass Base {\n    public virtual string Name() => \"Base\";\n    public string Kind() => \"Base\"; }\nclass Derived : Base {\n    public override string Name() => \"Derived\";\n    public new string Kind() => \"Derived\"; }\n```",
+      "explanation": "It prints `Derived Base`. `Name` is virtual and overridden, so the call dispatches on the object's run-time type (`Derived`); `Kind` is only hidden with `new`, so the call binds to the variable's compile-time type (`Base`).",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Bites when code holds a base-type reference: a `new` method in the subclass is silently skipped.",
+      "revision": 1,
+      "topic": "1.2 OOP and Interfaces",
+      "mcq": {
+        "v": 1,
+        "options": [
+          {
+            "key": "a",
+            "why": "This assumes a `new` method also dispatches on the object's run-time type. `new` only hides `Kind`, so a call through a `Base` variable still binds to `Base.Kind`.",
+            "text": "`Derived Derived`",
+            "correct": false
+          },
+          {
+            "key": "b",
+            "why": null,
+            "text": "`Derived Base`",
+            "correct": true
+          },
+          {
+            "key": "c",
+            "why": "This assumes the variable's declared type decides every call. `Name` is virtual and overridden, so it dispatches on the run-time object, which is a `Derived`.",
+            "text": "`Base Base`",
+            "correct": false
+          },
+          {
+            "key": "d",
+            "why": "This swaps the two rules: an override follows the object's run-time type, while a `new` method follows the compile-time type of the variable `b`.",
+            "text": "`Base Derived`",
+            "correct": false
+          }
+        ],
+        "shuffle": true,
+        "qualifier": null
+      },
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/object-oriented/polymorphism",
+        "quote": "When you use the new keyword, you're creating a method that hides the base class method rather than overriding it. This is different from virtual methods. With method hiding, the method that gets called depends on the compile-time type of the variable, not the run-time type of the object."
+      }
+    },
+    {
+      "stableUid": "net-oop-07",
+      "orderInDeck": 200,
+      "difficulty": 1,
+      "question": "A class implements `IControl` and `ISurface`, and both declare `void Paint()`. Painting must behave differently depending on which interface the caller uses. Which approach is BEST?",
+      "explanation": "Explicit implementations `IControl.Paint()` and `ISurface.Paint()` give each interface its own method body. Each is callable only through its interface reference, so the call site's interface type picks the behavior, and neither method appears on the class's public surface.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Also handy for hiding a member such as `IDisposable.Dispose` behind a domain-friendly public name like `Close`.",
+      "revision": 1,
+      "topic": "1.2 OOP and Interfaces",
+      "mcq": {
+        "v": 1,
+        "options": [
+          {
+            "key": "a",
+            "why": null,
+            "text": "Implement `void IControl.Paint()` and `void ISurface.Paint()` explicitly",
+            "correct": true
+          },
+          {
+            "key": "b",
+            "why": "A single public `Paint()` becomes the implementation for both interfaces, and the method has no way to know which interface reference it was called through.",
+            "text": "Declare one public `Paint()` and check inside it which interface the caller used",
+            "correct": false
+          },
+          {
+            "key": "c",
+            "why": "`new` hides an inherited base-class member; it can't add a second `Paint()` with the same signature to one class, which is a duplicate-member error.",
+            "text": "Add a second `Paint()` marked with the `new` modifier for `ISurface`",
+            "correct": false
+          },
+          {
+            "key": "d",
+            "why": "An overload has a different signature, so it implements neither interface; `ISurface.Paint()` still maps to the same parameterless method as `IControl.Paint()`.",
+            "text": "Add an overload `Paint(int mode)` that `ISurface` callers use",
+            "correct": false
+          }
+        ],
+        "shuffle": true,
+        "qualifier": "BEST"
+      },
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/interfaces/explicit-interface-implementation",
+        "quote": "To call a different implementation depending on which interface is in use, you can implement an interface member explicitly. An explicit interface implementation is a class member that is only called through the specified interface."
+      }
+    },
+    {
+      "stableUid": "net-oop-08",
+      "orderInDeck": 210,
+      "difficulty": 1,
+      "question": "A library declares `class PriceCalculator { }` directly in a namespace, with no access modifier. A referencing app gets an error that `PriceCalculator` is inaccessible due to its protection level. Why?",
+      "explanation": "The class defaults to internal, so only code in the library's own assembly can use it. Declaring it `public` (or granting access with `InternalsVisibleTo`) lets the referencing app see it.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Bites when you split a project into a library: classes that compiled fine before become invisible to the app.",
+      "revision": 1,
+      "topic": "1.2 OOP and Interfaces",
+      "mcq": {
+        "v": 1,
+        "options": [
+          {
+            "key": "a",
+            "why": null,
+            "text": "It defaults to internal, visible only inside the library assembly",
+            "correct": true
+          },
+          {
+            "key": "b",
+            "why": "A namespace-level class can't be private at all; restricting a type to one source file needs the explicit `file` modifier.",
+            "text": "It defaults to private, visible only inside the file that declares it",
+            "correct": false
+          },
+          {
+            "key": "c",
+            "why": "`protected` isn't allowed on a type declared directly in a namespace; it applies only to members and nested types.",
+            "text": "It defaults to protected, visible only to classes that derive from it",
+            "correct": false
+          },
+          {
+            "key": "d",
+            "why": "A missing `using` produces a \"type or namespace not found\" error, not an inaccessibility error; even a fully qualified name would still fail here.",
+            "text": "The app lacks a `using` directive for the library's namespace",
+            "correct": false
+          }
+        ],
+        "shuffle": true,
+        "qualifier": null
+      },
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/classes-and-structs/access-modifiers",
+        "quote": "Classes and structs declared directly within a namespace (aren't nested within other classes or structs) can have public or internal access. If you don't specify an access modifier, the default is internal."
+      }
+    },
+    {
+      "stableUid": "net-oop-09",
+      "orderInDeck": 220,
+      "difficulty": 2,
+      "question": "Why does this not compile, and what is the minimal fix?\n```csharp\nvar bot = new Bot();\nConsole.WriteLine(bot.Greet());\ninterface IGreeter { string Greet() => \"Hi\"; }\nclass Bot : IGreeter { }\n```",
+      "explanation": "A default interface member is not inherited as a class member, so `bot.Greet()` fails with CS1061; the fix is `IGreeter bot = new Bot();`. The default `Greet` is reachable only through an `IGreeter` reference, because it never joins `Bot`'s public surface. That is deliberate: adding a default member to a published interface can't clash with or change existing class members.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "",
+      "revision": 1,
+      "topic": "1.2 OOP and Interfaces",
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/interfaces/explicit-interface-implementation",
+        "quote": "If a class inherits a method implementation from an interface, that method is only accessible through a reference of the interface type. The inherited member doesn't appear as part of the public interface."
+      }
+    },
+    {
+      "stableUid": "net-oop-10",
+      "orderInDeck": 230,
+      "difficulty": 2,
+      "question": "What does this program print?\n```csharp\nnew Logger().Write(\"hi\");\nclass Logger\n{\n    public void Write(object o) => Console.WriteLine(\"instance\");\n}\nstatic class LoggerExtensions\n{\n    public static void Write(this Logger l, string s) => Console.WriteLine(\"extension\");\n}\n```",
+      "explanation": "It prints `instance`. The compiler first looks for an applicable instance method, and `Write(object)` accepts the string through an implicit conversion, so extension methods are not considered even though `Write(string)` matches better. Adding an applicable instance method therefore silently redirects calls away from existing extensions.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Before naming an extension method, check the type's own overloads: one that takes `object` or a base type captures every call first.",
+      "revision": 1,
+      "topic": "1.2 OOP and Interfaces",
+      "mcq": {
+        "v": 1,
+        "options": [
+          {
+            "key": "a",
+            "why": "`Write(string)` would be the better overload, but the two are not compared: the compiler searches the type's own members first, finds the applicable `Write(object)`, and stops before looking at extension methods.",
+            "text": "`extension`",
+            "correct": false
+          },
+          {
+            "key": "b",
+            "why": "Instance and extension methods do not compete in one candidate set, so there is no ambiguity. Extensions are searched only when no applicable instance member exists, and `Write(object)` applies here.",
+            "text": "A compile error: ambiguous call (CS0121)",
+            "correct": false
+          },
+          {
+            "key": "c",
+            "why": null,
+            "text": "`instance`",
+            "correct": true
+          },
+          {
+            "key": "d",
+            "why": "An extension method may share its name, even its signature, with an instance method. The declaration compiles; the extension is simply not chosen while an applicable instance method exists.",
+            "text": "A compile error: duplicate method name",
+            "correct": false
+          }
+        ],
+        "shuffle": true,
+        "qualifier": null
+      },
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/classes-and-structs/extension-methods",
+        "quote": "When the compiler encounters a member invocation, it first looks for a match in the type's members. If no match is found, it searches for any extension members that are defined for the type."
+      }
+    },
+    {
+      "stableUid": "net-oop-11",
+      "orderInDeck": 240,
+      "difficulty": 2,
+      "question": "A public library base class has a helper that only its derived classes inside the library may call. Subclasses in customer assemblies must not. Which choice is BEST?",
+      "explanation": "`private protected` is an intersection: the caller must be in the same assembly and in the class or a derived class. Customer subclasses fail the assembly check, and non-derived library classes fail the inheritance check.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Mnemonic: protected internal means \"or\", private protected means \"and\".",
+      "revision": 1,
+      "topic": "1.2 OOP and Interfaces",
+      "mcq": {
+        "v": 1,
+        "options": [
+          {
+            "key": "a",
+            "why": null,
+            "text": "private protected",
+            "correct": true
+          },
+          {
+            "key": "b",
+            "why": "`protected internal` is a union: derived classes in any assembly and every class in the library can call it, so customer subclasses still get access.",
+            "text": "protected internal",
+            "correct": false
+          },
+          {
+            "key": "c",
+            "why": "Sealing the library subclasses doesn't stop a customer from deriving from the public base class itself, where `protected` still grants access to the helper.",
+            "text": "protected, plus `sealed` on every library subclass",
+            "correct": false
+          },
+          {
+            "key": "d",
+            "why": "`internal` blocks customer assemblies, but every class in the library can call the helper, not just derived ones.",
+            "text": "internal",
+            "correct": false
+          }
+        ],
+        "shuffle": true,
+        "qualifier": "BEST"
+      },
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/classes-and-structs/access-modifiers",
+        "quote": "private protected: Only code in the same assembly and in the same class or a derived class can access the type or member."
+      }
+    },
+    {
+      "stableUid": "net-oop-12",
+      "orderInDeck": 250,
+      "difficulty": 2,
+      "question": "A class's static constructor reads a setting and throws on first use. An operator fixes the setting, and the running app touches the type again without restarting. What happens?",
+      "explanation": "It throws `TypeInitializationException` again: the runtime never reruns a failed static constructor, so the type stays unusable until the process restarts. That is why static constructors should not depend on configuration that can be wrong at startup.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "In production this shows up as every request failing with the same TypeInitializationException until the app is recycled.",
+      "revision": 1,
+      "topic": "1.2 OOP and Interfaces",
+      "mcq": {
+        "v": 1,
+        "options": [
+          {
+            "key": "a",
+            "why": null,
+            "text": "It throws `TypeInitializationException` again without rerunning the static constructor",
+            "correct": true
+          },
+          {
+            "key": "b",
+            "why": "The runtime invokes a static constructor at most once per application domain, even when that attempt failed, so the fixed setting is never read.",
+            "text": "The static constructor runs again and succeeds with the corrected setting",
+            "correct": false
+          },
+          {
+            "key": "c",
+            "why": "A failed static constructor leaves the type uninitialized, and the runtime refuses further use of it instead of exposing default-valued fields.",
+            "text": "The type works, but its static fields keep their default values",
+            "correct": false
+          },
+          {
+            "key": "d",
+            "why": "Exceptions escaping a static constructor surface wrapped in `TypeInitializationException`, with the original exception in `InnerException`, on the first access and every later one.",
+            "text": "It throws the constructor's original exception directly, unwrapped",
+            "correct": false
+          }
+        ],
+        "shuffle": true,
+        "qualifier": null
+      },
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/classes-and-structs/static-constructors",
+        "quote": "If a static constructor throws an exception, the runtime doesn't invoke it a second time, and the type remains uninitialized for the lifetime of the application domain. Most commonly, a TypeInitializationException exception is thrown when a static constructor is unable to instantiate a type or for an unhandled exception occurring within a static constructor."
+      }
+    },
+    {
+      "stableUid": "net-null-01",
+      "orderInDeck": 260,
+      "difficulty": 1,
+      "question": "A setting is read into `string? theme`, which may be null. How do you fall back to `LoadDefaultTheme()` in one expression, and when does that method actually run?",
+      "explanation": "Write `var t = theme ?? LoadDefaultTheme();`. The `??` operator returns the left operand when it is not null and evaluates the right operand only when the left is null, so the fallback method runs only when needed. `theme ??= LoadDefaultTheme();` does the same but also stores the fallback back into `theme`.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Combine with `?.`: `user?.Address?.City ?? \"unknown\"` turns a null anywhere in the chain into one default.",
+      "revision": 1,
+      "topic": "1.3 Nullability",
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/null-coalescing-operator",
+        "quote": "The null-coalescing operator ?? returns the value of its left-hand operand if it's not null. Otherwise, it evaluates the right-hand operand and returns its result. The ?? operator doesn't evaluate its right-hand operand if the left-hand operand evaluates to non-null."
+      }
+    },
+    {
+      "stableUid": "net-null-02",
+      "orderInDeck": 270,
+      "difficulty": 1,
+      "question": "In a brand-new .NET 8 console project, `string name = null;` produces a nullable warning. The same line in a project created from a .NET 5 template shows no nullable warning. What explains the difference?",
+      "explanation": "The .NET 8 template sets `<Nullable>enable</Nullable>` in the .csproj, so plain `string` is non-nullable and assigning null warns (CS8600). The .NET 5 template lacks that property, so the nullable context is disabled and the line gets no nullable check.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "If a project shows no nullable warnings at all, check the .csproj first: the setting is per project, not per SDK.",
+      "revision": 1,
+      "topic": "1.3 Nullability",
+      "mcq": {
+        "v": 1,
+        "options": [
+          {
+            "key": "a",
+            "why": null,
+            "text": "The .NET 8 template sets `<Nullable>enable</Nullable>` in the .csproj; the .NET 5 template omits it",
+            "correct": true
+          },
+          {
+            "key": "b",
+            "why": "The language version does not switch it on: the nullable context comes from the project's `<Nullable>` property or `#nullable` directives, and without them it is disabled, so a C# 12 project lacking the property shows no nullable warning either.",
+            "text": "The C# 12 compiler turns nullable checking on for every project, whatever the .csproj file contains",
+            "correct": false
+          },
+          {
+            "key": "c",
+            "why": "Nullable reference types arrived in C# 8, so C# 9 supports them fully. The .NET 5 project shows no nullable warning because nothing enables the nullable context, not because the language lacks the feature.",
+            "text": "C# 9, the default language version on .NET 5, predates nullable reference types and cannot check them",
+            "correct": false
+          },
+          {
+            "key": "d",
+            "why": "The template puts the setting in the project file, not in source: the generated Program.cs has no `#nullable` line, and a directive would cover only that one file, not the whole project.",
+            "text": "The .NET 8 template adds a `#nullable enable` directive at the top of the generated Program.cs",
+            "correct": false
+          }
+        ],
+        "shuffle": true,
+        "qualifier": null
+      },
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/nullable-migration-strategies",
+        "quote": "New projects created from .NET 6 or later templates already have <Nullable>enable</Nullable> set."
+      }
+    },
+    {
+      "stableUid": "net-null-03",
+      "orderInDeck": 280,
+      "difficulty": 1,
+      "question": "With nullable enabled, a public library method declares a non-nullable `string name` parameter. Can a caller still pass null at run time, and should the method still check for it?",
+      "explanation": "Yes, and the method should still guard. Nullable reference types only drive compiler warnings and change nothing at run time, so callers with nullable disabled, callers using `!`, or reflection can pass null; public entry points keep `ArgumentNullException.ThrowIfNull(name);`.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "In an interview, say \"`string` and `string?` are the same runtime type; the `?` is only design intent for the compiler.\"",
+      "revision": 1,
+      "topic": "1.3 Nullability",
+      "mcq": {
+        "v": 1,
+        "options": [
+          {
+            "key": "a",
+            "why": null,
+            "text": "Yes; the annotations are compile-time only, so keep a guard like `ArgumentNullException.ThrowIfNull`",
+            "correct": true
+          },
+          {
+            "key": "b",
+            "why": "The runtime knows nothing about the annotation: `string` and `string?` are the same `System.String`, so null flows into the method and fails later, typically as a `NullReferenceException`, unless the method checks.",
+            "text": "No; the runtime throws `ArgumentNullException` by itself whenever null reaches a non-nullable parameter",
+            "correct": false
+          },
+          {
+            "key": "c",
+            "why": "Passing null to a non-nullable parameter is only a warning, and callers compiled with nullable disabled get no diagnostic at all, so the call compiles and null arrives at run time.",
+            "text": "No; any call that passes null to a non-nullable parameter is a compile error, so null cannot arrive",
+            "correct": false
+          },
+          {
+            "key": "d",
+            "why": "A warning stops nothing: callers can ignore it, suppress it with `!`, compile with nullable disabled, or call through reflection, so null still reaches a public method that does not check.",
+            "text": "Yes, but no guard is needed because every caller already gets a compiler warning for passing null",
+            "correct": false
+          }
+        ],
+        "shuffle": true,
+        "qualifier": null
+      },
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/nullable-references",
+        "quote": "The runtime behavior of your program is unchanged. Nullable reference types are entirely a compile-time feature."
+      }
+    },
+    {
+      "stableUid": "net-null-04",
+      "orderInDeck": 290,
+      "difficulty": 1,
+      "question": "What does this program print?\n```csharp\nvar a = new Odd();\nConsole.WriteLine(a == null);\nConsole.WriteLine(a is null);\nclass Odd\n{\n    public static bool operator ==(Odd? x, Odd? y) => true;\n    public static bool operator !=(Odd? x, Odd? y) => false;\n}\n```",
+      "explanation": "It prints `True` then `False`. `a == null` calls the user-defined operator, which returns true, while the `is null` pattern never calls an overloaded `==`, so it reports the real reference check.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Prefer `is null` / `is not null` in library code: a buggy or odd equality overload cannot change the result.",
+      "revision": 1,
+      "topic": "1.3 Nullability",
+      "mcq": {
+        "v": 1,
+        "options": [
+          {
+            "key": "a",
+            "why": null,
+            "text": "`True`, then `False`",
+            "correct": true
+          },
+          {
+            "key": "b",
+            "why": "That assumes `is null` calls the overloaded `==`. The compiler guarantees it does not, so `a is null` checks the reference itself and prints `False`.",
+            "text": "`True`, then `True`",
+            "correct": false
+          },
+          {
+            "key": "c",
+            "why": "Comparing with the `null` literal still binds to the user-defined `operator ==(Odd?, Odd?)`, and that operator returns true here, so the first line prints `True`.",
+            "text": "`False`, then `False`",
+            "correct": false
+          },
+          {
+            "key": "d",
+            "why": "The null constant pattern works on any reference type, with or without operator overloads; the program compiles and runs.",
+            "text": "It does not compile: `is null` is rejected on a type that overloads `==`",
+            "correct": false
+          }
+        ],
+        "shuffle": true,
+        "qualifier": null
+      },
+      "source": {
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/patterns",
+        "quote": "The compiler guarantees that it doesn't invoke a user-overloaded equality operator == when it evaluates expression x is null."
+      }
+    }
+  ]
+}
