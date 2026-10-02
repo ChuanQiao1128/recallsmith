@@ -137,12 +137,15 @@ function inventory(): string[] {
 // Re-measured again (R20 V10, 2026-10-01): the Usage section (learner usage and
 // publish freshness) joined the shared set, so both roles gained `a:Usage`.
 // Nothing else in either list moved.
+//
+// Re-measured again (R26 C01, 2026-10-02): the Content Intelligence page was
+// retired with Snowflake, so both roles lost `a:Content Intelligence`. Nothing
+// else in either list moved.
 const SUPER_ADMIN_CONTROLS = [
   'a:AI QA',
   'a:Admin Management',
   'a:Automation',
   'a:Automation ledger',
-  'a:Content Intelligence',
   'a:Reports',
   'a:Review queue',
   'a:Usage',
@@ -176,7 +179,6 @@ const EDITOR_CONTROLS = [
   'a:AI QA',
   'a:Automation',
   'a:Automation ledger',
-  'a:Content Intelligence',
   'a:Reports',
   'a:Review queue',
   'a:Usage',
