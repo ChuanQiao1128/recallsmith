@@ -84,7 +84,7 @@ import appJson from '../../app.json';
 import { MoreScreen, MORE_LINKS, MORE_BYLINE } from '../../src/screens/MoreScreen';
 import { ProfileScreen } from '../../src/screens/ProfileScreen';
 import { HelpFAQScreen } from '../../src/screens/HelpFAQScreen';
-import { FAQ_LIST } from '../../src/content/faq';
+import { FAQ_DISCLAIMER, FAQ_LIST } from '../../src/content/faq';
 
 function collectText(node: renderer.ReactTestInstance): string {
   const parts: string[] = [];
@@ -305,6 +305,9 @@ describe('Me tab · MoreScreen + Profile + Help real copy', () => {
       );
       expect(matches).toHaveLength(1);
     }
+    // R24B §1: the Help row names its topics in plain words.
+    expect(blob).toContain('Draws, rare cards, offline, devices');
+    expect(blob).not.toMatch(/Pulls|pity|Android/);
   });
 
   it('Profile keeps its real data and drops the placeholders', async () => {
@@ -321,7 +324,8 @@ describe('Me tab · MoreScreen + Profile + Help real copy', () => {
       expect(blob).not.toContain(leftover);
     }
     expect(blob).toContain('Current setup');
-    expect(blob).toContain('Momentum this week');
+    expect(blob).toContain('Progress this week');
+    expect(blob).not.toContain('Momentum');
     const editRow = tree.root.find(
       (node) =>
         (node.type as any) === 'Pressable' &&
@@ -345,6 +349,29 @@ describe('Me tab · MoreScreen + Profile + Help real copy', () => {
     expect(blob).toContain('AI assistance');
     expect(blob).toContain('iOS only');
     expect(blob).toContain('Why is Draw locked?');
+    // R24B §4: every answer states what the app really does, in plain words.
+    expect(blob).toContain('earn a draw');
+    expect(blob).toContain('never sold');
+    expect(blob).toContain('a rare card is guaranteed');
+    expect(blob).toContain('The first cards of each deck are in the app, so your first lesson works offline');
+    expect(blob).toContain('official documentation');
+    expect(blob).toContain('automated checks and AI review passes');
+    expect(blob).toContain('spot-checked');
+    expect(blob).toContain('Report a card');
+    expect(blob).not.toMatch(/\b(pulls?|pity|wallet|reserve|run|runs|readiness)\b/i);
+    expect(blob).not.toMatch(/no account needed|checked by me|Android|thousands of cards/i);
+    const answers = FAQ_LIST.map((entry) => `${entry.q} ${entry.a}`).join('\n');
+    expect(answers).not.toMatch(/exam simulator|pass probability|readiness|score/i);
+    expect(blob).not.toMatch(/verified by (Amazon|Microsoft|Anthropic)/i);
+    // R24B §2: both disclaimer lines render as the screen's footer.
+    expect(FAQ_DISCLAIMER).toEqual([
+      'Not official exam material and not an exam simulator.',
+      'AWS is a trademark of Amazon.com, Inc. Claude and Anthropic are trademarks of Anthropic, PBC. .NET and C# are trademarks of Microsoft Corporation. DeveloperCards is not affiliated with, sponsored by, or endorsed by Amazon, Anthropic or Microsoft.',
+    ]);
+    const disclaimer = tree.root.findAll(
+      (node) => (node.type as any) === 'Text' && node.props.testID === 'help-faq-disclaimer',
+    );
+    expect(disclaimer.map((node) => collectText(node))).toEqual([...FAQ_DISCLAIMER]);
     expect(blob).not.toContain('support companion');
     expect(blob).not.toContain('route pressure');
     expect(blob).not.toContain('Fresh Start');

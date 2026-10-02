@@ -391,8 +391,9 @@ describe('SettingsScreen', () => {
       .map((node) => nodeText(node))
       .join('\n');
 
-    expect(textBlob).toContain('Momentum');
-    expect(textBlob).toContain('0 days streak');
+    expect(textBlob).toContain('Progress');
+    expect(textBlob).toContain('0 days streak · 0 sessions that counted');
+    expect(textBlob).not.toMatch(/Momentum|qualified sessions/);
 
     const roots = findHostNodesByTestID(tree, 'SafeAreaView', 'screen-settings-root');
     const primaryCtas = findHostNodesByTestID(tree, 'Pressable', 'screen-settings-primary-cta');
@@ -423,7 +424,7 @@ describe('SettingsScreen', () => {
       .findAll((node) => (node.type as any) === 'Text')
       .map((node) => nodeText(node))
       .join('\n');
-    expect(postRetryBlob).toContain('Momentum');
+    expect(postRetryBlob).toContain('Progress');
   });
   it('opens the Debug menu after 7 taps on the version label within 3 s, even outside __DEV__', async () => {
     vi.useFakeTimers();
