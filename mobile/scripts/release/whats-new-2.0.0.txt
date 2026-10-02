@@ -1,0 +1,9 @@
+DeveloperCards 2.0
+• New .NET & C# Interview deck: 217 cards for .NET 8 / C# 12, junior to mid, including 127 multiple-choice cards. Every wrong option is explained and every card quotes Microsoft Learn.
+• A new first lesson: study each card first, then check what you recall. The lesson ends with 3 draws for that pack.
+• Your first lesson works offline: the first cards of each deck ship inside the app, and the full deck downloads when you are online.
+• Progress by domain: card counts for each exam domain, never a score.
+• Reviews are now scheduled with FSRS, the open-source spaced-repetition algorithm, never more than 90 days out.
+• Plainer words across the app: learn a new card to earn a draw, and a rare card is guaranteed after 10 Commons in a row.
+• Settings › Privacy has a new switch to share anonymous usage counts, like finishing setup or opening a first pack. You can turn it off at any time.
+• Stability and performance improvements.

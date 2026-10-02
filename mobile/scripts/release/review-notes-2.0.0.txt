@@ -1,0 +1,12 @@
+The app works without signing in: new users pick a goal, then take a 5-card starter lesson that ends with 3 draws for that pack. The first launch works offline: the first cards of each deck ship inside the app, and the full deck downloads once the device is online. The demo account above is needed only for cloud sync and to buy or restore Premium. The Mistake Book (Me tab > Mistake Book) arrived in 1.8.0; 1.9.0 added crash and performance reporting; 2.0.0 adds the .NET & C# Interview deck, FSRS review scheduling, Progress by domain and plainer wording across the app.
+
+Auto-renewable subscription (Guideline 3.1.2(c)):
+- Subscription: Premium, auto-renewing, 1-month period. The price comes from StoreKit and is shown in the app as "<price> / month".
+- Where to find it: Me tab > Settings > Premium > "Open premium" (also Home > gear icon > Settings). The Premium screen shows the subscription title (Premium), its length and price ("Billing: <price> / month"), the Unlock Premium and Restore Purchases buttons, and working links to the Terms of Use (Apple's standard EULA) and our Privacy Policy at the bottom of the screen.
+- App Store metadata: the description includes the Terms of Use (EULA) link and the Privacy Policy link. The Privacy Policy URL field in App Information points to the same policy.
+
+Crash and performance diagnostics (since 1.9.0): the app sends crash reports and performance timings to Sentry, our error-monitoring provider. They contain no account data, email address or other identifiers, and a remote kill switch can turn the reporting off without an app update.
+
+Report a card (since 1.9.0): sign in with the demo account, then either open any card and use "Report a problem" at the end of the card's page, or start a review and tap "Report" under the card on a recall check after you reveal the answer (a new card's first study view has no Report button). Reports appear under Me > My reports. A report is a private message to the developer: it is never shown to other users, so no user-generated content is published in the app.
+
+Anonymous usage counts (new in 2.0.0): Settings > Privacy > "Share anonymous usage counts" (on by default) lets the app send counts of first steps, like finishing setup or opening a first pack. No account, email address, device or install identifier is sent, and turning the switch off stops sending.
