@@ -76,6 +76,7 @@ vi.mock('../../src/sync/progressSync', () => ({
   setActiveUserSub: vi.fn(async () => {}),
   forceProgressSync: vi.fn(async () => {}),
   scheduleProgressSync: vi.fn(async () => {}),
+  isProgressSyncInFlight: vi.fn(() => false),
 }));
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
