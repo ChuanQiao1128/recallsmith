@@ -30,13 +30,17 @@ vi.mock('expo-linear-gradient', () => {
 
 const fixtures = vi.hoisted(() => ({
   deck: null as any,
+  deckError: null as Error | null,
   progress: [] as any[],
   owned: new Set<string>(),
   book: { v: 1, entries: {} } as any,
 }));
 
 vi.mock('../../src/content/deckCache', () => ({
-  getCachedDeck: vi.fn(async (slug: string) => (fixtures.deck && fixtures.deck.Slug === slug ? fixtures.deck : null)),
+  getCachedDeck: vi.fn(async (slug: string) => {
+    if (fixtures.deckError) throw fixtures.deckError;
+    return fixtures.deck && fixtures.deck.Slug === slug ? fixtures.deck : null;
+  }),
 }));
 
 vi.mock('../../src/review/storage', () => ({
@@ -53,6 +57,7 @@ vi.mock('../../src/features/gacha/mistakes/mistakeBook', async (importOriginal) 
 });
 
 import {
+  DOMAIN_PROGRESS_ERROR_TEXT,
   DOMAIN_PROGRESS_FOOTER,
   DOMAIN_PROGRESS_TITLE,
   DomainProgressScreen,
@@ -139,7 +144,16 @@ function allText(tree: renderer.ReactTestRenderer): string {
 
 async function renderScreen(slug = 'aws-saa-c03', navigate = vi.fn()) {
   let tree!: renderer.ReactTestRenderer;
-  const navigation = { navigate, goBack: vi.fn(), addListener: vi.fn(() => () => {}) };
+  const focusListeners: Array<() => void> = [];
+  const unsubscribe = vi.fn();
+  const navigation = {
+    navigate,
+    goBack: vi.fn(),
+    addListener: vi.fn((event: string, listener: () => void) => {
+      if (event === 'focus') focusListeners.push(listener);
+      return unsubscribe;
+    }),
+  };
   await act(async () => {
     tree = renderer.create(
       <DomainProgressScreen
@@ -149,13 +163,20 @@ async function renderScreen(slug = 'aws-saa-c03', navigate = vi.fn()) {
     );
   });
   await flush();
-  return { tree, navigate };
+  const focus = async () => {
+    await act(async () => {
+      for (const listener of focusListeners) listener();
+    });
+    await flush();
+  };
+  return { tree, navigate, focus, unsubscribe, focusListeners };
 }
 
 describe('DomainProgressScreen', () => {
   beforeEach(() => {
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
     order = 0;
+    fixtures.deckError = null;
     // d1: s1..s4 (1.x), d2: r1..r2 (2.x), plus one untagged card.
     fixtures.deck = deck('aws-saa-c03', [
       card('s1', '1.1 Secure access'),
@@ -247,5 +268,59 @@ describe('DomainProgressScreen', () => {
     const { tree } = await renderScreen('missing-deck');
     expect(byTestID(tree, 'domain-progress-empty')).toHaveLength(1);
     expect(byTestID(tree, 'domain-row-d1')).toHaveLength(0);
+  });
+
+  it('reloads the counts on every focus and unsubscribes on unmount', async () => {
+    const { tree, focus, unsubscribe, focusListeners } = await renderScreen();
+    expect(focusListeners).toHaveLength(1);
+    expect(textOf(byTestID(tree, 'domain-counts-d2')[0])).toBe('0 of 2 learned · 0 mastered');
+
+    // A Practice session learned r1; coming back refreshes the row.
+    fixtures.progress = [...fixtures.progress, learned('r1', 1, 0, 1)];
+    await focus();
+    expect(textOf(byTestID(tree, 'domain-counts-d2')[0])).toBe('1 of 2 learned · 0 mastered');
+
+    expect(unsubscribe).not.toHaveBeenCalled();
+    act(() => {
+      tree.unmount();
+    });
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the rows on screen when a reload on focus fails, with an inline error and retry', async () => {
+    const { tree, focus } = await renderScreen();
+    expect(byTestID(tree, 'domain-row-d1')).toHaveLength(1);
+
+    fixtures.deckError = new Error('storage read failed');
+    await focus();
+    expect(byTestID(tree, 'domain-row-d1')).toHaveLength(1);
+    expect(textOf(byTestID(tree, 'domain-counts-d1')[0])).toBe('3 of 4 learned · 1 mastered');
+    expect(byTestID(tree, 'domain-progress-empty')).toHaveLength(0);
+    expect(textOf(byTestID(tree, 'domain-progress-error')[0])).toContain(DOMAIN_PROGRESS_ERROR_TEXT);
+
+    fixtures.deckError = null;
+    fixtures.progress = [...fixtures.progress, learned('r1', 1, 0, 1)];
+    await act(async () => {
+      byTestID(tree, 'domain-progress-retry')[0].props.onPress();
+    });
+    await flush();
+    expect(byTestID(tree, 'domain-progress-error')).toHaveLength(0);
+    expect(textOf(byTestID(tree, 'domain-counts-d2')[0])).toBe('1 of 2 learned · 0 mastered');
+  });
+
+  it('shows an error with retry, not the deck-missing empty state, when the first load fails', async () => {
+    fixtures.deckError = new Error('storage read failed');
+    const { tree } = await renderScreen();
+    expect(byTestID(tree, 'domain-progress-empty')).toHaveLength(0);
+    expect(byTestID(tree, 'domain-progress-loading')).toHaveLength(0);
+    expect(textOf(byTestID(tree, 'domain-progress-error')[0])).toContain(DOMAIN_PROGRESS_ERROR_TEXT);
+
+    fixtures.deckError = null;
+    await act(async () => {
+      byTestID(tree, 'domain-progress-retry')[0].props.onPress();
+    });
+    await flush();
+    expect(byTestID(tree, 'domain-progress-error')).toHaveLength(0);
+    expect(byTestID(tree, 'domain-row-d1')).toHaveLength(1);
   });
 });
