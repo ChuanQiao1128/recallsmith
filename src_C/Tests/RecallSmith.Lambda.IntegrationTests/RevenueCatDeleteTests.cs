@@ -85,7 +85,7 @@ public class RevenueCatDeleteTests
   {
     await using (var conn = await _db.OpenAsync())
     {
-      await DbUtil.ExecuteAsync(conn, null, "insert into users (user_sub, email) values ($1, 'g04@example.test')", [sub]);
+      await DbUtil.ExecuteAsync(conn, null, "insert into users (user_sub) values ($1)", [sub]);
     }
 
     var savedKey = Environment.GetEnvironmentVariable(RevenueCatCustomerDeletion.KeyEnv);
