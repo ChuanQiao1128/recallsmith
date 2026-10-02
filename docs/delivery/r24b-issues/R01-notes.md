@@ -49,6 +49,10 @@ Issue #673, round r24b, wave r. Contract `~/.rimv-delivery/r24b-common/R24B-00-c
 - `tests/unit/storeSubscriptionMetadata.test.ts`: the 2.0.0 description and review notes, same checks as 1.9.0.
 - The tests were committed first and failed on the base (20 failures), then passed after the change.
 - Gates (from `mobile/`): `npm run test:typecheck`, `npx vitest run`.
+- The first verify attempt failed the root-mobile gate on `tests/unit/otaReleaseScript.test.ts`, with 5 s timeouts only.
+  - Each case runs the real `ota.sh`, which starts several `node` processes. At load average ~20 from parallel workers, a case takes longer than vitest's 5 s default, and the base branch fails the same way.
+  - The two `ota.sh` suites, and the two `ios-build.sh` suites in `releasePlumbing190.test.ts`, now pass `{ timeout: 30_000 }` to their `describe`.
+  - No assertion, skip or global config changed.
 
 ## Owner steps
 
