@@ -52,7 +52,7 @@ import { createAppStateSyncHandler } from './src/sync/appStateSync';
 import { useForceUpdateGate, type ForceUpdateGate } from './src/config/forceUpdateGate';
 import { DEFAULT_APP_STORE_URL, getCurrentAppVersion } from './src/config/remoteConfig';
 import { getFeatureFlags, subscribeFeatureFlags } from './src/config/featureFlags';
-import { apiJson } from './src/api/apiClient';
+import { resolveApiBase, resolveApiFallback } from './src/config/hosts';
 import { loadFeedbackPrefs } from './src/features/gacha/settings/feedbackPrefs';
 import { upgradeStarterDecks } from './src/content/starterOffline';
 import { getPrivacyPrefsSync, loadPrivacyPrefs } from './src/features/gacha/settings/privacyPrefs';
@@ -63,7 +63,13 @@ import {
   configureClientErrorReporting,
   installGlobalErrorHandlers,
 } from './src/telemetry/clientErrorReporter';
-import { configureFunnel, flushFunnel, funnelOnForeground, startFunnel } from './src/telemetry/funnel';
+import {
+  configureFunnel,
+  createAppFunnelDeps,
+  funnelOnForeground,
+  startAppFunnel,
+  type AppFunnelInputs,
+} from './src/telemetry/funnel';
 import {
   captureException,
   registerNavigationContainer,
@@ -124,24 +130,23 @@ void startObservability({ installInterimHandlers: () => installGlobalErrorHandle
 // Anonymous install funnel (R24 M01, contract §3.4). The module imports nothing at runtime;
 // everything is injected here. It sends only on the production channel (the Sentry rule), with
 // features.anonFunnel.enabled === true, and while Settings › Privacy "Share anonymous usage
-// counts" is on. The POST carries no access token, so a batch is never linked to an account.
-const privacyPrefsLoaded = loadPrivacyPrefs();
-configureFunnel({
+// counts" is on. The POST is a plain XHR with content-type only: no access token and no trace
+// header (x-dc-trace-id, sentry-trace, baggage), so a batch is never linked to an account.
+const funnelInputs: AppFunnelInputs = {
   storage: AsyncStorage,
-  post: (path, body) => apiJson(path, { method: 'POST', body }),
-  isProductionChannel: () => {
-    if (__DEV__) return false;
-    const channel = (getExpoUpdatesModule() as { channel?: unknown } | null)?.channel;
-    return String(channel ?? '').trim().toLowerCase() === 'production';
-  },
-  isRemoteEnabled: () => getFeatureFlags().anonFunnel?.enabled === true,
-  isShareEnabled: async () => {
-    await privacyPrefsLoaded;
-    return getPrivacyPrefsSync().shareUsageCounts;
-  },
-  getEnv: () => ({ platform: Platform.OS, appVersion: getCurrentAppVersion() }),
-  now: () => Date.now(),
-});
+  createXhr: () => new XMLHttpRequest(),
+  getApiBases: () => [resolveApiBase(), resolveApiFallback()],
+  isDevBuild: __DEV__,
+  getUpdatesChannel: () => (getExpoUpdatesModule() as { channel?: unknown } | null)?.channel,
+  getAnonFunnelFlag: () => getFeatureFlags().anonFunnel,
+  subscribeFeatureFlags,
+  privacyPrefsLoaded: loadPrivacyPrefs(),
+  getShareUsageCounts: () => getPrivacyPrefsSync().shareUsageCounts,
+  getOnboardingStage,
+  getPlatform: () => Platform.OS,
+  getAppVersion: () => getCurrentAppVersion(),
+};
+configureFunnel(createAppFunnelDeps(funnelInputs));
 
 // Recovery target for a per-screen error boundary's "Back to Home".
 function goHomeAfterScreenError() {
@@ -195,11 +200,10 @@ function App() {
     // Load the device-global sound/haptics choice early so the ceremony audio,
     // ceremony haptics and study haptics see the stored value on first use.
     void loadFeedbackPrefs();
-    // first_open (once per install), then the day-1/day-7 return check. An install that finished
-    // onboarding before the funnel shipped is not a new install and records nothing.
-    void getOnboardingStage().then((stage) => startFunnel({ existingInstall: stage === 'done' }));
-    // The remote flag lands after the config fetch; a flip to on sends what is already queued.
-    return subscribeFeatureFlags(() => flushFunnel());
+    // first_open (once per install), then the day-1/day-7 return check. An install that already
+    // had study progress or a finished onboarding when the funnel first ran records nothing. The
+    // remote flag lands after the config fetch; a flip to on sends what is already queued.
+    return startAppFunnel(funnelInputs);
   }, []);
 
   useEffect(() => {

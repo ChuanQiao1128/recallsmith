@@ -8,22 +8,34 @@
 // the injected `post` sends no bearer token. The state lives under one device-global AsyncStorage
 // key (not user-scoped): `{ cohortDay, sent, queue }`.
 //
-// Recording is local and always cheap. Sending happens in the background (fire-and-forget, never
-// throws, batches of at most FUNNEL_BATCH_MAX, at most FUNNEL_QUEUE_MAX queued, a failed batch
-// stays queued for the next foreground) and only when ALL hold:
+// Recording is local and always cheap; a record does not send by itself. Sending happens in the
+// background (fire-and-forget, never throws) at launch, on foreground, when the remote flag flips
+// and FUNNEL_FLUSH_DEBOUNCE_MS after the last record. A flush sends ONE POST with at most
+// FUNNEL_BATCH_MAX events; at most FUNNEL_QUEUE_MAX are queued. Only a validation rejection
+// (400/413/422) drops a batch; anything else (401/403/404/408/429/5xx, network, timeout) keeps it
+// queued for the next flush. Sending happens only when ALL hold:
 //   - the production update channel (the Sentry rule: not a dev build, channel 'production');
 //   - the remote flag features.anonFunnel.enabled === true (default false in code);
 //   - Settings › Privacy "Share anonymous usage counts" is on (default on).
 // With the Settings toggle off nothing is queued and the queue is dropped.
 //
+// The POST (createFunnelXhrPost) does not go through apiClient: it sets only content-type, so it
+// carries no Authorization, no x-dc-trace-id and, because the XHR is flagged as Sentry's own
+// request, no sentry-trace/baggage either. A shared trace id would let a batch be joined to the
+// signed-in requests around it in the server logs (contract §3).
+//
 // IMPORTANT: like clientErrorReporter.ts this module imports nothing at runtime. Storage, the
-// POST, the gates, the clock and the build facts are injected from App.tsx via configureFunnel,
-// so screens and tests can import it without pulling AsyncStorage, apiClient or expo modules.
+// POST, the gates, the clock and the build facts are injected from App.tsx (createAppFunnelDeps,
+// startAppFunnel), so screens and tests can import it without pulling AsyncStorage, apiClient
+// or expo modules.
 
 export const FUNNEL_STATE_KEY = 'recallsmith:funnel:v1';
 export const FUNNEL_EVENTS_PATH = '/api/v1/public/events';
 export const FUNNEL_BATCH_MAX = 20;
 export const FUNNEL_QUEUE_MAX = 50;
+/** A record schedules one flush this long after the LAST record, so a first run sends 1–2 POSTs. */
+export const FUNNEL_FLUSH_DEBOUNCE_MS = 60_000;
+export const FUNNEL_POST_TIMEOUT_MS = 12_000;
 
 export const FUNNEL_EVENTS = Object.freeze([
   'first_open',
@@ -75,15 +87,18 @@ export type FunnelDeps = {
   isShareEnabled: () => boolean | Promise<boolean>;
   getEnv: () => { platform: string | null; appVersion: string | null };
   now: () => number;
+  /** Timer for the debounced flush after a record (default: global setTimeout/clearTimeout). */
+  setTimer: (run: () => void, ms: number) => unknown;
+  clearTimer: (handle: unknown) => void;
 };
 
 export type Funnel = {
-  /** Records `event` once per install (later calls are no-ops), then tries to send. */
+  /** Records `event` once per install (later calls are no-ops); a send follows after the debounce. */
   record(event: FunnelEvent, deckSlug?: string | null): Promise<void>;
   /**
-   * App launch: records first_open. An install that already finished onboarding before this
-   * module shipped (`existingInstall`) is not a new install: every event is marked done and
-   * nothing is ever queued for it.
+   * App launch: records first_open. An install that already had study progress or a finished
+   * onboarding when this module first ran (`existingInstall`) is not a new install: every event
+   * is marked done and nothing is ever queued for it.
    */
   start(opts?: { existingInstall?: boolean }): Promise<void>;
   /** App foreground: returned_day_1 / returned_day_7 on cohortDay + 1 / + 7, then a send attempt. */
@@ -168,10 +183,16 @@ export function parseFunnelState(raw: string | null): FunnelState {
   }
 }
 
-/** A 4xx other than 408/429 will not get better on retry: the batch is dropped. */
+/**
+ * Only a validation rejection (400/413/422) will not get better on retry: the batch is dropped.
+ * 401/403/404 come from routing or auth (the route not applied yet, a wrong base), not from the
+ * payload, and every event is already marked sent, so dropping them would lose the step for good.
+ */
+const PERMANENT_STATUSES = new Set([400, 413, 422]);
+
 function isPermanentRejection(error: unknown): boolean {
   const status = isRecord(error) ? error.status : undefined;
-  return typeof status === 'number' && status >= 400 && status < 500 && status !== 408 && status !== 429;
+  return typeof status === 'number' && PERMANENT_STATUSES.has(status);
 }
 
 export function createFunnel(deps: Partial<FunnelDeps>): Funnel {
@@ -247,20 +268,46 @@ export function createFunnel(deps: Partial<FunnelDeps>): Funnel {
     const appVersion = env?.appVersion ?? '';
     if (!PLATFORMS.has(platform) || !APP_VERSION_RE.test(appVersion)) return;
 
-    while (state.queue.length > 0) {
-      const events = state.queue.slice(0, FUNNEL_BATCH_MAX);
-      try {
-        await deps.post(FUNNEL_EVENTS_PATH, { platform, appVersion, events });
-      } catch (error) {
-        if (!isPermanentRejection(error)) return; // stays queued; next foreground retries
-      }
-      state.queue = state.queue.slice(events.length);
-      await save(state);
+    // One POST per flush; anything past FUNNEL_BATCH_MAX waits for the next flush.
+    const events = state.queue.slice(0, FUNNEL_BATCH_MAX);
+    try {
+      await deps.post(FUNNEL_EVENTS_PATH, { platform, appVersion, events });
+    } catch (error) {
+      if (!isPermanentRejection(error)) return; // stays queued; the next flush retries
+    }
+    state.queue = state.queue.slice(events.length);
+    await save(state);
+  }
+
+  let timer: unknown = null;
+
+  function cancelTimer(): void {
+    if (timer === null) return;
+    const handle = timer;
+    timer = null;
+    try {
+      (deps.clearTimer ?? ((h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>)))(handle);
+    } catch {
+      // never throw
     }
   }
 
   function flush(): Promise<void> {
+    cancelTimer();
     return serial(flushLocked, undefined);
+  }
+
+  /** (Re)starts the debounce: one flush FUNNEL_FLUSH_DEBOUNCE_MS after the last record. */
+  function scheduleFlush(): void {
+    cancelTimer();
+    try {
+      timer = (deps.setTimer ?? setTimeout)(() => {
+        timer = null;
+        void flush();
+      }, FUNNEL_FLUSH_DEBOUNCE_MS);
+    } catch {
+      timer = null;
+    }
   }
 
   function record(event: FunnelEvent, deckSlug?: string | null): Promise<void> {
@@ -268,8 +315,11 @@ export function createFunnel(deps: Partial<FunnelDeps>): Funnel {
     return serial(async () => {
       const state = await load();
       if (!state) return;
-      if (await recordInto(state, event, deckSlug)) await save(state);
-    }, undefined).then(flush);
+      if (await recordInto(state, event, deckSlug)) {
+        await save(state);
+        scheduleFlush();
+      }
+    }, undefined);
   }
 
   function start(opts?: { existingInstall?: boolean }): Promise<void> {
@@ -344,4 +394,155 @@ export function flushFunnel(): void {
 
 export function clearFunnelQueue(): void {
   fireAndForget(() => funnel.clearQueue());
+}
+
+// ---- The POST: a plain XHR with content-type only (no apiClient, no token, no trace) ----
+
+/** The slice of XMLHttpRequest the funnel POST uses. */
+export type FunnelXhr = {
+  open(method: string, url: string): void;
+  setRequestHeader(name: string, value: string): void;
+  send(body: string): void;
+  timeout: number;
+  readonly status: number;
+  // `ev: never` so a real XMLHttpRequest (whose handlers take a ProgressEvent) fits this slice.
+  onload: ((ev: never) => unknown) | null;
+  onerror: ((ev: never) => unknown) | null;
+  ontimeout: ((ev: never) => unknown) | null;
+  /** Sentry's XHR instrumentation skips a request with this flag: no span, no sentry-trace/baggage. */
+  __sentry_own_request__?: boolean;
+};
+
+/** The only request header the funnel POST ever sets. */
+export const FUNNEL_REQUEST_HEADERS: Readonly<Record<string, string>> = Object.freeze({
+  'content-type': 'application/json',
+});
+
+function sendOnce(createXhr: () => FunnelXhr, url: string, payload: string, timeoutMs: number): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const xhr = createXhr();
+    xhr.__sentry_own_request__ = true;
+    xhr.onload = () => {
+      const status = xhr.status;
+      if (status >= 200 && status < 300) resolve();
+      else reject(Object.assign(new Error(`HTTP ${status}`), { status }));
+    };
+    xhr.onerror = () => reject(Object.assign(new Error('Network request failed'), { kind: 'offline' }));
+    xhr.ontimeout = () => reject(Object.assign(new Error('Request timed out'), { kind: 'timeout' }));
+    xhr.open('POST', url);
+    xhr.timeout = timeoutMs;
+    for (const [name, value] of Object.entries(FUNNEL_REQUEST_HEADERS)) xhr.setRequestHeader(name, value);
+    xhr.send(payload);
+  });
+}
+
+/**
+ * The injected `post`: tries each API base in order, moving on only after a network failure (an
+ * HTTP status answers for the route). It never sends Authorization, x-dc-trace-id, sentry-trace
+ * or baggage, so a batch shares no key with any other request.
+ */
+export function createFunnelXhrPost(opts: {
+  createXhr: () => FunnelXhr;
+  getBases: () => ReadonlyArray<string | null | undefined>;
+  timeoutMs?: number;
+}): FunnelDeps['post'] {
+  return async (path, body) => {
+    const bases: string[] = [];
+    for (const raw of opts.getBases()) {
+      const base = typeof raw === 'string' ? raw.trim().replace(/\/+$/, '') : '';
+      if (base && !bases.includes(base)) bases.push(base);
+    }
+    if (bases.length === 0) throw Object.assign(new Error('No API base'), { kind: 'offline' });
+    const payload = JSON.stringify(body);
+    let lastError: unknown = null;
+    for (const base of bases) {
+      try {
+        await sendOnce(opts.createXhr, `${base}${path}`, payload, opts.timeoutMs ?? FUNNEL_POST_TIMEOUT_MS);
+        return null;
+      } catch (error) {
+        lastError = error;
+        if (!(isRecord(error) && error.kind === 'offline')) throw error;
+      }
+    }
+    throw lastError;
+  };
+}
+
+// ---- App wiring (App.tsx passes the real modules; tests pass fakes) ----
+
+export type AppFunnelInputs = {
+  storage: FunnelStorage & { getAllKeys?: () => Promise<readonly string[]> };
+  createXhr: () => FunnelXhr;
+  getApiBases: () => ReadonlyArray<string | null | undefined>;
+  isDevBuild: boolean;
+  /** expo-updates `channel`. */
+  getUpdatesChannel: () => unknown;
+  /** getFeatureFlags().anonFunnel */
+  getAnonFunnelFlag: () => { enabled?: unknown } | null | undefined;
+  subscribeFeatureFlags: (listener: () => void) => () => void;
+  /** Resolves once the stored Settings › Privacy choice is in memory. */
+  privacyPrefsLoaded: Promise<unknown>;
+  getShareUsageCounts: () => boolean;
+  getOnboardingStage: () => Promise<string>;
+  getPlatform: () => string | null;
+  getAppVersion: () => string | null;
+  now?: () => number;
+};
+
+/** Device-wide study progress: any deck-progress row, signed in or not (review/storage.ts keys). */
+const PROGRESS_KEY_RE = /(^|:)deck-progress:/;
+
+/**
+ * True when this install already had study progress or a finished onboarding when the funnel
+ * first ran on it: an install that updated into the funnel, not a new one. A brand-new install
+ * that gets this code by OTA early in its first session (no progress, onboarding not done) is new.
+ */
+export async function detectExistingInstall(
+  inputs: Pick<AppFunnelInputs, 'storage' | 'getOnboardingStage'>,
+): Promise<boolean> {
+  let stage = '';
+  try {
+    stage = await inputs.getOnboardingStage();
+  } catch {
+    stage = '';
+  }
+  if (stage === 'done') return true;
+  try {
+    const keys = inputs.storage.getAllKeys ? await inputs.storage.getAllKeys() : [];
+    return keys.some((key) => PROGRESS_KEY_RE.test(key));
+  } catch {
+    return false;
+  }
+}
+
+export function createAppFunnelDeps(inputs: AppFunnelInputs): Partial<FunnelDeps> {
+  return {
+    storage: inputs.storage,
+    post: createFunnelXhrPost({ createXhr: inputs.createXhr, getBases: inputs.getApiBases }),
+    isProductionChannel: () => {
+      if (inputs.isDevBuild) return false;
+      return String(inputs.getUpdatesChannel() ?? '').trim().toLowerCase() === 'production';
+    },
+    isRemoteEnabled: () => inputs.getAnonFunnelFlag()?.enabled === true,
+    isShareEnabled: async () => {
+      await inputs.privacyPrefsLoaded;
+      return inputs.getShareUsageCounts();
+    },
+    getEnv: () => ({ platform: inputs.getPlatform(), appVersion: inputs.getAppVersion() }),
+    now: inputs.now ?? (() => Date.now()),
+  };
+}
+
+/**
+ * App mount: first_open (or the existing-install seed), then the day-1/day-7 check and a send.
+ * A remote flag change (the config fetch lands after launch) sends what is already queued.
+ * Returns the flag unsubscribe.
+ */
+export function startAppFunnel(inputs: Pick<AppFunnelInputs, 'storage' | 'getOnboardingStage' | 'subscribeFeatureFlags'>): () => void {
+  fireAndForget(() => detectExistingInstall(inputs).then((existingInstall) => funnel.start({ existingInstall })));
+  try {
+    return inputs.subscribeFeatureFlags(() => flushFunnel());
+  } catch {
+    return () => {};
+  }
 }
