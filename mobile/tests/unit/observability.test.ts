@@ -86,6 +86,32 @@ describe('startObservability — active path', () => {
     expect(options.beforeBreadcrumb({ category: 'console', message: 'x' })).toBeNull();
   });
 
+  it('turns off native network breadcrumbs and tracking and keeps RevenueCat and the sub out of every hook (2.0 privacy)', async () => {
+    const { obs } = await load();
+    await obs.startObservability(activeDeps());
+    const options = initOptions();
+    expect(options.enableNetworkBreadcrumbs).toBe(false);
+    expect(options.enableNetworkTracking).toBe(false);
+
+    const sub = '3f2a9c1e-7b4d-4e8a-9c3b-2d1e0f9a8b7c';
+    const rcUrl = `https://api.revenuecat.com/v1/subscribers/${sub}/offerings`;
+    expect(options.beforeBreadcrumb({ category: 'http', type: 'http', data: { url: rcUrl } })).toBeNull();
+    expect(options.beforeBreadcrumb({ category: 'fetch', data: { url: `https://api.developercards.app/u/${sub}` } }))
+      .toEqual({ category: 'fetch', data: { url: 'https://api.developercards.app/u/<id>' } });
+
+    const transaction = options.beforeSendTransaction({
+      transaction: 'Home',
+      spans: [{ op: 'http.client', description: `GET ${rcUrl}` }, { op: 'http.client', description: `GET /x/${sub}` }],
+    });
+    expect(transaction.spans).toEqual([{ op: 'http.client', description: 'GET /x/<id>' }]);
+
+    const event = options.beforeSend(
+      { message: `failed for ${sub}`, breadcrumbs: [{ category: 'http', data: { url: rcUrl } }] },
+      {},
+    );
+    expect(event).toEqual({ message: 'failed for <id>', breadcrumbs: [] });
+  });
+
   it('also sets the OTA tags through setTags after init so native crash events carry them (M02-R3)', async () => {
     const { obs } = await load();
     await obs.startObservability(

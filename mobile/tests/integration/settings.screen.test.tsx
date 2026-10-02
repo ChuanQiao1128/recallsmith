@@ -307,6 +307,12 @@ describe('SettingsScreen', () => {
       .map((node) => nodeText(node))
       .join('\n');
     expect(blob).toContain('Privacy');
+    // 2.0 privacy: the counts carry platform and app version, so the body only
+    // promises no account, email or device ID.
+    expect(blob).toContain(
+      'Counts of first steps, like finishing setup or opening a first pack. No account, email or device ID is sent.',
+    );
+    expect(blob).not.toContain('device details');
 
     const toggle = () => findPressableByTestID(tree, 'settings-share-usage-counts-toggle');
     expect(toggle().props.accessibilityRole).toBe('switch');

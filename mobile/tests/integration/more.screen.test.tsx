@@ -355,8 +355,14 @@ describe('Me tab · MoreScreen + Profile + Help real copy', () => {
     expect(blob).toContain('a rare card is guaranteed');
     expect(blob).toContain('The first cards of each deck are in the app, so your first lesson works offline');
     expect(blob).toContain('official documentation');
-    expect(blob).toContain('automated checks and AI review passes');
-    expect(blob).toContain('spot-checked');
+    // 2.0: no record supports a developer spot-check; checks are automated + AI review passes.
+    expect(blob).toContain(
+      'Cards are drafted with AI assistance from official documentation and checked by automated checks and AI review passes. If a card looks wrong, sign in and use Report a problem.',
+    );
+    expect(blob).not.toMatch(/spot-check/i);
+    // Draws never repeat a card; say so without promising "only missing cards".
+    expect(blob).toContain('no repeat draws: a card you have drawn never comes up again');
+    expect(blob).not.toMatch(/never (get )?a duplicate|only cards missing from your collection/i);
     expect(blob).toContain('Report a card');
     expect(blob).not.toMatch(/\b(pulls?|pity|wallet|reserve|run|runs|readiness)\b/i);
     expect(blob).not.toMatch(/no account needed|checked by me|Android|thousands of cards/i);
