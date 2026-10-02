@@ -59,7 +59,8 @@ public sealed class AnonFunnelTests : IDisposable
   /// A gateway event. With <paramref name="sub"/> it carries both an authorizer claims block (what the gateway would add)
   /// and an <c>Authorization</c> bearer, so a test can prove neither reaches the ingest.
   /// </summary>
-  private static JsonElement Event(string method, string path, string? body, string? sub = null, IDictionary<string, string>? query = null)
+  private static JsonElement Event(string method, string path, string? body, string? sub = null, IDictionary<string, string>? query = null,
+    IDictionary<string, string>? extraHeaders = null)
   {
     var requestContext = new Dictionary<string, object?>(StringComparer.Ordinal)
     {
@@ -83,6 +84,7 @@ public sealed class AnonFunnelTests : IDisposable
       };
       headers["authorization"] = "Bearer a01-not-a-real-token";
     }
+    foreach (var (k, v) in extraHeaders ?? new Dictionary<string, string>()) headers[k] = v;
 
     return JsonSerializer.SerializeToElement(new Dictionary<string, object?>
     {
@@ -410,6 +412,31 @@ public sealed class AnonFunnelTests : IDisposable
       Assert.DoesNotContain("signup_completed", logs, StringComparison.Ordinal);
       Assert.DoesNotContain("app_crashed", logs, StringComparison.Ordinal);
       Assert.DoesNotContain("2026-03-16", logs, StringComparison.Ordinal);
+    });
+  }
+
+  [Fact]
+  public async Task Ingest_NeverLogsTheClientTraceId_WhichIsTheSentryTraceId()
+  {
+    await InScratchAsync(async _ =>
+    {
+      // The app's apiClient sends x-dc-trace-id = its Sentry trace id in X-Ray form (mobile toDcTraceHeader). Logged on
+      // the ingest's metric line, it would join a funnel batch to a Sentry event; it must not be written for this route.
+      const string sentryTraceRoot = "1-5f0e2c1a-9b8d7c6e5f4a3b2c1d0e9f8a";
+      var headers = new Dictionary<string, string> { ["x-dc-trace-id"] = sentryTraceRoot, ["sentry-trace"] = "5f0e2c1a9b8d7c6e5f4a3b2c1d0e9f8a-0123456789abcdef-1" };
+      var (stdout, stderr) = await CaptureAsync(async () =>
+        Assert.Equal((1L, 0L), Counts(await new VpcFunction().Handler(Event("POST", EventsPath, Batch(Ev("first_open")), extraHeaders: headers)))));
+
+      // Positive control: the route's metric line was captured.
+      var metricLine = stdout.Split('\n').SingleOrDefault(l => l.Contains("\"_aws\"", StringComparison.Ordinal) && l.Contains("\"Route\":\"/api/v1/public/events\"", StringComparison.Ordinal));
+      Assert.NotNull(metricLine);
+      Assert.DoesNotContain("upstreamTraceId", metricLine, StringComparison.Ordinal);
+      Assert.DoesNotContain("5f0e2c1a", stdout + stderr, StringComparison.Ordinal);
+
+      // Every other route keeps the field (TraceLogFieldsTests covers its format).
+      var (other, _) = await CaptureAsync(async () =>
+        await new VpcFunction().Handler(Event("GET", FunnelPath, null, extraHeaders: headers)));
+      Assert.Contains($"\"upstreamTraceId\":\"{sentryTraceRoot}\"", other, StringComparison.Ordinal);
     });
   }
 
