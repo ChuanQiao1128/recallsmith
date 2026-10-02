@@ -161,7 +161,7 @@ public sealed class AnalyticsOutboxRetiredTests
 
   // ---------------------------------------------------------------- routes
 
-  private static JsonElement Event(string method, string path) => JsonSerializer.SerializeToElement(new
+  private static JsonElement Event(string method, string path, string? sub = null, string[]? groups = null) => JsonSerializer.SerializeToElement(new
   {
     rawPath = path,
     requestContext = new
@@ -174,8 +174,8 @@ public sealed class AnalyticsOutboxRetiredTests
         {
           claims = new Dictionary<string, object>(StringComparer.Ordinal)
           {
-            ["sub"] = NewUser("admin"),
-            ["cognito:groups"] = new[] { "super_admin" },
+            ["sub"] = sub ?? NewUser("admin"),
+            ["cognito:groups"] = groups ?? new[] { "super_admin" },
           },
         },
       },
@@ -267,5 +267,78 @@ public sealed class AnalyticsOutboxRetiredTests
     Assert.Equal(0, r.OutboxRows);
     Assert.Equal(1, r.UserRows);
     Assert.Equal(0, await CountAsync(conn, "select count(*) from user_progress_events where user_sub = $1", sub));
+  }
+
+  [Fact]
+  public async Task AccountDeletion_OutboxDroppedAfterTheCheck_CountsZero_AndTheDeletionStillCommits()
+  {
+    // R26X F01 (s-tests-1): 045 can commit between the to_regclass check and the delete. Model that moment on the
+    // post-045 database: the outbox delete runs as if the check had said "present", inside the deletion's transaction.
+    await using var conn = await _db.OpenAsync();
+    Assert.False(await TableExistsAsync(conn, "analytics_event_outbox"));
+
+    var sub = NewUser("del-race");
+    await DbUtil.ExecuteAsync(conn, null, "insert into users (user_sub) values ($1)", [sub]);
+
+    await using (var tx = await conn.BeginTransactionAsync())
+    {
+      Assert.Equal(0, await AccountDeletion.DeleteOutboxRowsAsync(conn, tx, sub));
+      // The transaction is not aborted: the rest of the deletion runs and commits.
+      Assert.Equal(1, await DbUtil.ExecuteAsync(conn, tx, "delete from users where user_sub = $1", [sub]));
+      await tx.CommitAsync();
+    }
+
+    Assert.Equal(0, await CountAsync(conn, "select count(*) from users where user_sub = $1", sub));
+  }
+
+  [Theory]
+  [InlineData("/api/v1/me")]
+  [InlineData("/api/v1/user/me")]
+  public async Task DeleteMeRoute_BeforeMigration045_Is204_AndDeletesTheCallersOutboxRows(string path)
+  {
+    // R26X F01 (s-tests-2): the route itself, through VpcFunction.Handler, on a database frozen at 044.
+    var name = path.EndsWith("/user/me", StringComparison.Ordinal) ? "r26xf01_delroute_user" : "r26xf01_delroute_me";
+    var cs = await Pre045DatabaseAsync(name);
+    var sub = NewUser("route-pre");
+    var other = NewUser("route-other");
+    var mine = Guid.NewGuid();
+    var theirs = Guid.NewGuid();
+    await using (var conn = new NpgsqlConnection(cs))
+    {
+      await conn.OpenAsync();
+      foreach (var (s, e) in new[] { (sub, mine), (other, theirs) })
+      {
+        await DbUtil.ExecuteAsync(conn, null, "insert into users (user_sub) values ($1)", [s]);
+        await DbUtil.ExecuteAsync(conn, null,
+          "insert into user_progress_events (event_id, user_sub, deck_slug, stable_uid, event_time) values ($1, $2, 'd', 'u', now())", [e, s]);
+        await DbUtil.ExecuteAsync(conn, null,
+          "insert into analytics_event_outbox (event_id, event_type, aggregate_type, aggregate_id, payload) values ($1, 'card_reviewed', 'card', 'd:u', '{}'::jsonb)", [e]);
+      }
+    }
+
+    var prevDb = Environment.GetEnvironmentVariable("PGDATABASE");
+    Environment.SetEnvironmentVariable("PGDATABASE", name);
+    Pg.Reset();
+    RecallSmith.Lambda.Vpc.Db.Pg.Reset();
+    try
+    {
+      var resp = await new VpcFunction().Handler(Event("DELETE", path, sub, groups: []));
+      Assert.Equal(204, resp.StatusCode);
+    }
+    finally
+    {
+      Environment.SetEnvironmentVariable("PGDATABASE", prevDb);
+      Pg.Reset();
+      RecallSmith.Lambda.Vpc.Db.Pg.Reset();
+    }
+
+    await using (var conn = new NpgsqlConnection(cs))
+    {
+      await conn.OpenAsync();
+      Assert.Equal(0, await CountAsync(conn, "select count(*) from analytics_event_outbox where event_id = $1", mine));
+      Assert.Equal(1, await CountAsync(conn, "select count(*) from analytics_event_outbox where event_id = $1", theirs));
+      Assert.Equal(0, await CountAsync(conn, "select count(*) from users where user_sub = $1", sub));
+      Assert.Equal(1, await CountAsync(conn, "select count(*) from users where user_sub = $1", other));
+    }
   }
 }
