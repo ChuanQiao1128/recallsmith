@@ -27,6 +27,9 @@ Contract: R24-00 §4.2. Builds on F01 (`mobile/src/review/fsrs.ts`). No call sit
   `fsrsAnchorAt === lastReviewedAt`. Otherwise it is derived: `S = max(0.5, (nextReviewAt − lastReviewedAt)/day)`
   when `nextReviewAt > 0`, else the ladder interval of `stage`; `D = clamp(5 + 0.5·lapses + 0.3·hardStreak, 1, 10)`.
   New state = `nextState(state, grade, elapsedDays)` with `elapsedDays = max(0, (now − lastReviewedAt)/day)`.
+  r24x: when the stored state is trusted, elapsed runs from `fsrsReviewedAt` (the review the state was
+  computed at) if it is set and not after `lastReviewedAt`. It differs from `lastReviewedAt` only after a
+  Mistake Book practice tap (see `docs/delivery/r24x-issues/F03-fixes.md`).
 - `nextReviewAt`: again → now + 10 minutes; otherwise now + FSRS days; learning check → now + 1 day; always
   capped at now + `MAX_NEXT_REVIEW_HORIZON_MS`.
 - `stage`: again → `max(0, stage − 2)`; otherwise the largest ladder rung ≤ the interval
