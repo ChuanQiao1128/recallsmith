@@ -3,8 +3,8 @@
 A spaced-repetition flashcard product for developers: an Expo/React Native app
 where people review cards, a React admin console for authoring and publishing
 decks, and a .NET Lambda backend on AWS behind API Gateway and PostgreSQL. Card
-review events flow onward into Snowflake, where a small analytics pipeline scores
-how well each card's stated difficulty matches how people actually perform on it.
+usage numbers come from daily rollups kept in PostgreSQL (`analytics_daily`). An
+earlier Snowflake analytics pipeline was retired on 2026-10-02 (see §1).
 
 This is a personal project, written and maintained by one person.
 
@@ -30,9 +30,17 @@ documents explain it; every number in them cites a committed file:
 | `mobile/` | React Native, Expo, TypeScript | The app people actually review cards in |
 | `src_C/` | C# / .NET 8 | Backend. `src_C` is short for "source, C#" — it is the API, not a frontend `src/` |
 | `pg-layer/` | Node.js | AWS Lambda layer packaging the `pg` PostgreSQL driver |
-| `snowflake/` | SQL | Warehouse setup and the marts that model card quality |
 | `docs/` | Markdown | Design notes and refactor plans |
 | `.github/` | YAML | CI workflow |
+
+Snowflake was retired on 2026-10-02, and the warehouse folder that held its
+setup SQL, marts and sample exports was deleted with it. The trial ended and
+continuing meant paying for a pipeline that had run by hand once and never on a
+schedule; the PostgreSQL `analytics_daily` rollups already give usage and
+per-card numbers; and the analytics outbox that fed it carried an unsalted user
+hash and a device id with no consumer reading them. The outbox table, its
+publisher and the console's Content Intelligence page were retired in the same
+round (R26).
 
 File counts are `git ls-files <dir> | wc -l` as of this commit, and
 `frontend/tests/rootReadmePaths.test.ts` fails if they drift.
@@ -349,8 +357,6 @@ themselves; prose gets the claim that does not expire.)
   moved to vite's default 4173 would be serving a different application.
 - `pg-layer/` — the `pg` driver packaged as a Lambda layer, so the VPC functions
   do not each bundle their own copy.
-- `snowflake/*.csv` — real sample output from `marts.mart_card_quality_daily`,
-  exported from the Snowflake UI, kept as evidence the pipeline ran.
 - `mobile/scripts/` — a screenshot-quality pipeline that drives the simulator and
   scores screens against `mobile/docs/qa/screen-quality-rubric.md`.
 

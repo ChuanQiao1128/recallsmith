@@ -496,4 +496,6 @@ Phase 4 的非阻断警告：正确选项明显最长（≥ 1.4× 错误选项�
 计划中、尚未创建的文件（frontend/tests/docsPaths.test.ts 的守卫要求在此登记）：
      - docs/aws-saa-mcq-authoring-guide.md
      - snowflake/002_mcq_marts.sql
+Snowflake 已于 2026-10-02 退役（R26），snowflake/ 目录整体删除：
+     - snowflake/001_content_intelligence_setup.sql
 -->
