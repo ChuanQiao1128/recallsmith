@@ -89,6 +89,7 @@ describe('CardProgress storage schema', () => {
       fsrsStability: 10.7389,
       fsrsDifficulty: 5.273,
       fsrsAnchorAt: NOW - DAY_MS,
+      fsrsReviewedAt: NOW - 2 * DAY_MS,
     };
 
     await saveDeckProgress(deck, [saved]);
@@ -97,6 +98,7 @@ describe('CardProgress storage schema', () => {
     expect(loaded.fsrsStability).toBe(10.7389);
     expect(loaded.fsrsDifficulty).toBe(5.273);
     expect(loaded.fsrsAnchorAt).toBe(NOW - DAY_MS);
+    expect(loaded.fsrsReviewedAt).toBe(NOW - 2 * DAY_MS);
   });
 
   it('drops FSRS fields that are not finite numbers', async () => {
@@ -109,6 +111,7 @@ describe('CardProgress storage schema', () => {
       fsrsStability: '3.2',
       fsrsDifficulty: null,
       fsrsAnchorAt: { at: NOW },
+      fsrsReviewedAt: 'yesterday',
     };
 
     await saveDeckProgress(deck, [saved]);
@@ -117,6 +120,7 @@ describe('CardProgress storage schema', () => {
     expect(loaded.fsrsStability).toBeUndefined();
     expect(loaded.fsrsDifficulty).toBeUndefined();
     expect(loaded.fsrsAnchorAt).toBeUndefined();
+    expect(loaded.fsrsReviewedAt).toBeUndefined();
   });
 
   it('drops fields that are not in the whitelist, and keeps absent counters absent', async () => {

@@ -14,7 +14,9 @@ Source (all JS-only, OTA-safe; no frozen file other than the §0 unfreeze of `pr
   folds it to `hard`) is scheduled as a learning check. A Forgot (`again`) keeps the 10 minute relearn step.
 - `mobile/src/features/gacha/mistakes/focusSession.ts` — the `scheduleFocusReview` fallback (a due card,
   or any Again) calls `scheduleWithFsrs` instead of `scheduleNextReview`. Practice ratings on cards that are
-  not due are unchanged: only `lastReviewedAt` moves.
+  not due keep the schedule. As first shipped only `lastReviewedAt` moved, which made a trusted FSRS state
+  look stale on the next review (fixed in r24x, see `docs/delivery/r24x-issues/F03-fixes.md`): practice now
+  also moves `fsrsAnchorAt` when the state was trusted and keeps the real review in `fsrsReviewedAt`.
 - `mobile/src/features/gacha/mcq/mcqVerdict.ts` — `describeScheduledRating` now defaults to
   `scheduleWithFsrs`, so the MCQ preview line shows what the save will write. Comments updated.
 - `mobile/src/screens/SessionCardScreen.tsx` — passes `learningCheck: isLearningCheck` to
@@ -34,7 +36,9 @@ one code path and the kill switch lives in a single place (`fsrsScheduler.ts`, u
 - `export function getSchedulerVersion(): string` in `mobile/src/sync/progressSync.ts`
 - Wire: `card_reviewed.schedulerVersion` is `'fsrs-5'` while `features.fsrs.enabled` is on (the default) and
   `'ladder-v1'` when it is off. `progressAfter` also carries `fsrsStability` / `fsrsDifficulty` /
-  `fsrsAnchorAt` (F02 fields). The server stores them without reading them.
+  `fsrsAnchorAt` (F02 fields). The server ignores and drops them: `ProgressEvents.cs` reads only
+  `nextReviewAt`, `lastSeenRevision` and `stage` from `progressAfter`, and persists `schedulerVersion`,
+  `nextReviewAtMs` (due date) and `srs_stage`. The FSRS memory state lives only on the device.
 - No new learner-facing text. With FSRS on, existing lines such as "back in N days" and "See it tomorrow"
   show FSRS numbers.
 
