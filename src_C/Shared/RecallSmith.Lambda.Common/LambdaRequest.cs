@@ -31,7 +31,8 @@ public sealed class LambdaRequest
     RawEvent = rawEvent;
 
     Headers = ReadStringMap(rawEvent, "headers", StringComparer.OrdinalIgnoreCase);
-    Query = ReadStringMap(rawEvent, "queryStringParameters", StringComparer.Ordinal);
+    var (rawPath, pathQuery) = SplitPathQuery(GetPath(rawEvent));
+    Query = MergeQuery(ReadStringMap(rawEvent, "queryStringParameters", StringComparer.Ordinal), pathQuery);
 
     Body = rawEvent.TryGetProperty("body", out var bodyEl) && bodyEl.ValueKind == JsonValueKind.String
       ? bodyEl.GetString()
@@ -41,7 +42,7 @@ public sealed class LambdaRequest
     RawBody = Validation.DecodeBody(Body, IsBase64Encoded);
 
     Method = GetMethod(rawEvent);
-    Path = Validation.NormalizePath(GetPath(rawEvent));
+    Path = Validation.NormalizePath(rawPath);
     TraceId = GetTraceId(rawEvent);
   }
 
@@ -143,6 +144,37 @@ public sealed class LambdaRequest
     }
 
     return "/";
+  }
+
+  /// <summary>
+  /// API Gateway never puts a query string in rawPath, but a hand-built event does: scripts/invoke-as-admin.sh sends
+  /// the path it is given as rawPath with an empty rawQueryString (e.g. the owner's
+  /// <c>/api/v1/admin/db/migrate?confirmDestructive=45</c>, R26X F01). Split it off so the route still matches and
+  /// the parameters reach <see cref="Query"/>.
+  /// </summary>
+  private static (string Path, Dictionary<string, string> Query) SplitPathQuery(string rawPath)
+  {
+    var query = new Dictionary<string, string>(StringComparer.Ordinal);
+    var q = rawPath.IndexOf('?', StringComparison.Ordinal);
+    if (q < 0) return (rawPath, query);
+
+    foreach (var pair in rawPath[(q + 1)..].Split('&', StringSplitOptions.RemoveEmptyEntries))
+    {
+      var eq = pair.IndexOf('=', StringComparison.Ordinal);
+      var name = Uri.UnescapeDataString(eq < 0 ? pair : pair[..eq]);
+      var value = eq < 0 ? string.Empty : Uri.UnescapeDataString(pair[(eq + 1)..]);
+      if (name.Length > 0) query.TryAdd(name, value);
+    }
+
+    return (rawPath[..q], query);
+  }
+
+  /// <summary>queryStringParameters wins over a parameter of the same name taken from rawPath.</summary>
+  private static IReadOnlyDictionary<string, string> MergeQuery(IReadOnlyDictionary<string, string> fromEvent, Dictionary<string, string> fromPath)
+  {
+    if (fromPath.Count == 0) return fromEvent;
+    foreach (var (name, value) in fromEvent) fromPath[name] = value;
+    return fromPath;
   }
 
   private static string? GetTraceId(JsonElement evt)

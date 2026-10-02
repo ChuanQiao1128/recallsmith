@@ -22,10 +22,18 @@ namespace RecallSmith.Lambda.Vpc.Runtime;
 /// gone (via the users cascade) they can no longer be located. This is the ordering migration 016
 /// established. The ingest no longer writes the outbox (R26 S01) and migration 045 drops it; until
 /// 045 has run, old rows may still be there, so they are deleted while the table exists and the step
-/// counts zero once it is gone.
+/// counts zero once it is gone -- also when 045 drops it between the check and the delete (a 42P01 is
+/// rolled back to a savepoint, R26X F01).
 ///
 /// Out of reach on purpose: the Cognito user itself is the phone's job -- the app deletes it after
 /// this call succeeds.
+///
+/// Also out of reach: outbox rows the retired OutboxPublisher had already exported to the core-vpc
+/// bucket under analytics/raw/ (each with an unsalted SHA-256 of the sub and the device id). This code
+/// cannot delete them. As of 2026-10-02 that prefix holds no object versions (the owner deleted the only
+/// test export that day), and nothing writes there any more. What is left under analytics/ is the
+/// content-intelligence demo snapshot (aggregate rows for the demo deck, no user identifiers) and empty
+/// folder keys, which the owner deletes.
 /// </summary>
 public static class AccountDeletion
 {
@@ -46,11 +54,9 @@ public static class AccountDeletion
   {
     await using var tx = await conn.BeginTransactionAsync();
 
-    // Checked first so the missing table (after migration 045) is never a 42P01 that aborts the transaction.
+    // Checked first so the usual post-045 call never raises 42P01; the savepoint covers 045 committing in between.
     var outboxRows = await DbUtil.ExecuteScalarAsync(conn, tx, "select to_regclass('analytics_event_outbox') is not null", []) is true
-      ? await DbUtil.ExecuteAsync(conn, tx,
-        "delete from analytics_event_outbox o using user_progress_events e where o.event_id = e.event_id and e.user_sub = $1",
-        [userSub])
+      ? await DeleteOutboxRowsAsync(conn, tx, userSub)
       : 0;
 
     var premiumStateRows = await DbUtil.ExecuteAsync(conn, tx,
@@ -75,6 +81,30 @@ public static class AccountDeletion
     await tx.CommitAsync();
 
     return new AccountDeletionResult(outboxRows, premiumStateRows, webhookEventRows, userRows, cardReportRows, revenueCatQueued);
+  }
+
+  /// <summary>
+  /// Deletes the caller's outbox rows inside a savepoint. Nothing locks the table between the to_regclass check and
+  /// this statement, so migration 045 can drop it in between; the 42P01 then rolls back to the savepoint and counts
+  /// zero instead of aborting the whole deletion (contract R26-00 §0).
+  /// </summary>
+  internal static async Task<int> DeleteOutboxRowsAsync(NpgsqlConnection conn, NpgsqlTransaction tx, string userSub)
+  {
+    const string savepoint = "account_delete_outbox";
+    await tx.SaveAsync(savepoint);
+    try
+    {
+      var rows = await DbUtil.ExecuteAsync(conn, tx,
+        "delete from analytics_event_outbox o using user_progress_events e where o.event_id = e.event_id and e.user_sub = $1",
+        [userSub]);
+      await tx.ReleaseAsync(savepoint);
+      return rows;
+    }
+    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+    {
+      await tx.RollbackAsync(savepoint);
+      return 0;
+    }
   }
 
   public static async Task<APIGatewayProxyResponse> HandleDeleteMe(LambdaRequest req, Res res, AuthContext auth)

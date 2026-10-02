@@ -9,7 +9,15 @@
 -- No foreign key points at any of these tables (009 and 010 declare none, and no later migration adds one), so the
 -- drops cascade nothing. Not additive by design: this permanently deletes the rows. The owner runs it after the code
 -- that stops using these tables is deployed; that code tolerates the tables being absent (42P01) and present.
+-- Owner only (R26X F01): Migrate stops before this file unless the call carries confirmDestructive=45, so a later
+-- additive migration never applies it along the way. The owner runs it only after the supervisor has smoke-tested the
+-- deployed R26 core-vpc build in prod (one signed-in sync push and one account deletion of a test account):
+--   POST /api/v1/admin/db/migrate?confirmDestructive=45 through scripts/invoke-as-admin.sh.
+-- Roll forward only: once this has run, no core-vpc version older than R26 may become the prod alias target. Those
+-- builds still insert into analytics_event_outbox on every sync push and delete from it on account deletion, so both
+-- would fail with 42P01 (500).
 -- Idempotent (drop ... if exists); Migrate.ApplyOne wraps this file in one transaction.
+-- destructive: true
 -- =========================
 
 -- DROP TABLE takes an exclusive lock: fail fast instead of queueing behind an open transaction (safe to retry;
