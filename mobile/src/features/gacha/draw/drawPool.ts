@@ -6,17 +6,22 @@ import { loadDrawState } from './drawStateStore';
 import { buildPityProgressLabelV9, DEFAULT_PITY_STATE, normalizePityState } from './pity';
 
 /**
- * R25 G01: what a draw treats as "already collected" -- the same effective set
- * the Library counts (resolveEffectiveOwned: drawState.owned + learned cards +
- * open starter-lesson cards). Excluding drawState.owned alone let a draw hand
- * over, mark NEW and charge for a card the Library was already showing as
- * collected.
+ * R25 G01: what a draw treats as "already collected" -- the effective set
+ * (resolveEffectiveOwned: drawState.owned + learned cards + open starter-lesson
+ * cards). Excluding drawState.owned alone let a draw hand over, mark NEW and
+ * charge for a card the Library was already showing as collected.
  *
- * Progress comes from readStoredDeckProgress: a read of what is on disk with
- * none of loadDeckProgress's migration or reconcile writes, so a draw still
- * never writes review state. A failed read (or no stored progress yet) counts
- * as "nothing learned": the draw falls back to owned + starter rather than
- * failing the pull.
+ * Progress comes from readStoredDeckProgress: a read of the current progress
+ * key with none of loadDeckProgress's migration or reconcile writes, so a draw
+ * still never writes review state. Two consequences, both deliberate:
+ * - Progress that still sits only under a legacy or global key is not seen
+ *   until the Library or Home has run loadDeckProgress (which migrates it).
+ *   Until then the set matches the Library's only for migrated progress.
+ * - Entries are not filtered to the deck, so a retired uid can be in the set.
+ *   It never reaches the pool (the pool is deck cards), and drawCommit counts
+ *   ownedAfter over deck cards only.
+ * A failed read (or no stored progress yet) counts as "nothing learned": the
+ * draw falls back to owned + starter rather than failing the pull.
  */
 export async function loadDrawPoolOwned(slug: string): Promise<Set<string>> {
   let progress: CardProgress[] = [];
