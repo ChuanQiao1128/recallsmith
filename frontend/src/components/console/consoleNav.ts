@@ -12,7 +12,6 @@
 
 export type ConsoleNavHrefs = {
   decksHref?: string;
-  contentIntelligenceHref?: string;
   reviewHref?: string;
   qaHref?: string;
   reportsHref?: string;
@@ -28,7 +27,6 @@ export type ConsoleNavHrefs = {
 // passed only by the four pages of the automation area.
 export const CONSOLE_NAV: Readonly<Required<ConsoleNavHrefs>> = {
   decksHref: '/',
-  contentIntelligenceHref: '/content-intelligence',
   reviewHref: '/review',
   qaHref: '/decks/qa',
   // R20 V09: learner card reports, triaged by the deck's editors.
@@ -49,7 +47,6 @@ export type ConsoleSection =
   | 'decks'
   | 'review'
   | 'qa'
-  | 'contentIntelligence'
   | 'reports'
   | 'usage'
   | 'ledger'
@@ -61,7 +58,6 @@ export type ConsoleSection =
 export function consoleSectionFor(pathname: string): ConsoleSection | null {
   if (pathname === '/review') return 'review';
   if (pathname === '/decks/qa') return 'qa';
-  if (pathname === '/content-intelligence') return 'contentIntelligence';
   if (pathname === '/reports') return 'reports';
   if (pathname === '/usage') return 'usage';
   if (pathname === '/ledger') return 'ledger';

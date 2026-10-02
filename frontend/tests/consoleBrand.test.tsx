@@ -109,11 +109,12 @@ describe('one console name', () => {
     expect(documentTitleFor('/decks/cards/edit')).toBe('Edit card · DeveloperCards Console');
     expect(documentTitleFor('/decks/cards/import')).toBe('Import cards · DeveloperCards Console');
     expect(documentTitleFor('/admin/users')).toBe('Users & permissions · DeveloperCards Console');
-    expect(documentTitleFor('/content-intelligence')).toBe('Content intelligence · DeveloperCards Console');
     // A trailing slash names the same page.
     expect(documentTitleFor('/decks/new/')).toBe('New deck · DeveloperCards Console');
     // Anything unknown falls back to the console name alone.
     expect(documentTitleFor('/nowhere')).toBe('DeveloperCards Console');
+    // R26 C01: the retired Content Intelligence page has no title of its own.
+    expect(documentTitleFor('/content-intelligence')).toBe('DeveloperCards Console');
   });
 
   it('App sets document.title from the current route', async () => {

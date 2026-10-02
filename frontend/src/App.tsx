@@ -15,8 +15,8 @@ import { LoginPage } from './pages/LoginPage';
 import { AuthCallbackPage } from './pages/AuthCallbackPage';
 
 // Every protected page is loaded on demand. These pages carry the expensive
-// dependencies — highlight.js rides in with CardForm, and the import, admin and
-// content-intelligence screens are ones most sessions never open — and before
+// dependencies — highlight.js rides in with CardForm, and the import and admin
+// screens are ones most sessions never open — and before
 // this split all of them were downloaded before the login screen could paint.
 //
 // The `.then` remap is required, not stylistic: React.lazy resolves to a module
@@ -48,9 +48,6 @@ const DeckImportPage = lazy(() => import('./pages/DeckImportPage').then(m => ({ 
 const DeckPreviewPage = lazy(() => import('./pages/DeckPreviewPage').then(m => ({ default: m.DeckPreviewPage })));
 const AdminUsersPage = lazy(() => import('./pages/AdminUsersPage').then(m => ({ default: m.AdminUsersPage })));
 const DeckEditPage = lazy(() => import('./pages/DeckEditPage').then(m => ({ default: m.DeckEditPage })));
-const ContentIntelligencePage = lazy(() =>
-  import('./pages/ContentIntelligencePage').then(m => ({ default: m.ContentIntelligencePage })),
-);
 const WebhooksPage = lazy(() => import('./pages/WebhooksPage').then(m => ({ default: m.WebhooksPage })));
 const LedgerPage = lazy(() => import('./pages/LedgerPage').then(m => ({ default: m.LedgerPage })));
 const ReviewQueuePage = lazy(() => import('./pages/ReviewQueuePage').then(m => ({ default: m.ReviewQueuePage })));
@@ -131,7 +128,6 @@ function App() {
                 <Route path="/decks/preview" element={<DeckPreviewPage />} />
 
                 <Route path="/admin/users" element={<AdminUsersPage />} />
-                <Route path="/content-intelligence" element={<ContentIntelligencePage />} />
                 <Route path="/decks/edit" element={<DeckEditPage />} />
                 <Route path="/admin/webhooks" element={<WebhooksPage />} />
                 <Route path="/ledger" element={<LedgerPage />} />
