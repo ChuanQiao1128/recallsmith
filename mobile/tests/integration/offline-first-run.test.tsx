@@ -235,9 +235,12 @@ import { STARTER_BUILD, STARTER_PACKS } from '../../src/content/starter';
 import {
   STARTER_UPGRADE_BACKOFF_MS,
   ensureStarterDeckInstalled,
+  listInstalledDeckEntries,
   resetStarterUpgradeBackoff,
+  subscribeStarterUpgrades,
   upgradeStarterDecks,
 } from '../../src/content/starterOffline';
+import { STUDY_GOAL_KEY } from '../../src/features/goal/studyGoal';
 import { pickStarterUids, STARTER_LESSON_KEY } from '../../src/features/gacha/starter/starterGate';
 import { STARTER_COPY } from '../../src/features/gacha/starter/starterCopy';
 import { resetSessionStore } from '../../src/features/gacha/session/sessionStore';
@@ -482,12 +485,15 @@ describe('offline first run with the bundled starter pack (R24 §2.2)', () => {
     expect((await loadDrawState(SLUG)).owned.sort()).toEqual([...drawn].sort());
     expect(await loadDeckWallet(SLUG)).toEqual({ availablePulls: 2, reservePulls: 0 });
 
-    // Every network attempt failed; nothing reached the deck download.
+    // The manifest was tried (and failed) before the bundled pack; nothing reached the deck download.
+    expect(fetchCalls).toContain(MANIFEST_URL);
     expect(fetchCalls.every((url) => url === MANIFEST_URL)).toBe(true);
 
-    // Home with no manifest: the installed deck is on the shelf, studiable.
+    // Home with no manifest: the installed deck is on the shelf, studiable, at the full deck's size.
     const summary = await loadHomeDeckSummaries({ premium: false, remote: true });
     expect(summary.deckSummaries.map((d) => [d.slug, d.canStudy])).toEqual([[SLUG, true]]);
+    expect(summary.deckSummaries[0]).toMatchObject({ totalCards: PACK.totalCards, localCards: PACK.cards.length });
+    expect(PACK.totalCards).toBeGreaterThan(PACK.cards.length);
   });
 
   it('replaces the starter deck with the full deck once the manifest is reachable, keeping progress, owned cards and the lesson', async () => {
@@ -512,8 +518,13 @@ describe('offline first run with the bundled starter pack (R24 §2.2)', () => {
     expect((await getCachedDeck(SLUG))!.Version).toBe(PACK.version);
 
     // Five minutes later the manifest answers and the full deck goes in through the normal path.
+    // Subscribers (Home) hear about it, whoever started the upgrade (App on foreground, or Home).
+    const heard: string[][] = [];
+    const unsubscribe = subscribeStarterUpgrades((slugs) => heard.push(slugs));
     vi.setSystemTime(FIXED_NOW_MS + STARTER_UPGRADE_BACKOFF_MS + 1);
     expect(await upgradeStarterDecks()).toEqual([SLUG]);
+    expect(heard).toEqual([[SLUG]]);
+    unsubscribe();
     expect(fetchCalls).toContain(DECK_URL);
 
     const fullDeck = (await getCachedDeck(SLUG))!;
@@ -527,11 +538,16 @@ describe('offline first run with the bundled starter pack (R24 §2.2)', () => {
     const progressAfter = (await loadDeckProgress(fullDeck)).filter((p) => (p.lastReviewedAt ?? 0) > 0);
     expect(progressAfter).toEqual(progressBefore);
 
-    // Nothing left to upgrade.
+    // Nothing left to upgrade, and nobody is told about an empty run.
+    const heardLater: string[][] = [];
+    const unsubscribeLater = subscribeStarterUpgrades((slugs) => heardLater.push(slugs));
     vi.setSystemTime(FIXED_NOW_MS + 2 * STARTER_UPGRADE_BACKOFF_MS + 2);
     const callsAfter = fetchCalls.length;
     expect(await upgradeStarterDecks()).toEqual([]);
     expect(fetchCalls.length).toBe(callsAfter);
+    expect(heardLater).toEqual([]);
+    expect(heard).toEqual([[SLUG]]);
+    unsubscribeLater();
   });
 
   it('online, the normal install wins: the full deck installs and no starter notice shows', async () => {
@@ -629,7 +645,42 @@ describe('offline first run with the bundled starter pack (R24 §2.2)', () => {
     });
     await flush();
     expect(hasText(draw, 'No active pack yet')).toBe(true);
-    expect(store.has(META_KEY)).toBe(false);
+    expect(store.has('devcards:content:deckmeta:v2:anon:not-a-bundled-deck')).toBe(false);
+    expect([...store.keys()].filter((key) => key.startsWith('devcards:content:deckmeta:'))).toEqual([]);
     act(() => draw.unmount());
+  });
+
+  it('shelf entries carry the full deck size for a starter pack and the installed size otherwise', async () => {
+    expect(await ensureStarterDeckInstalled(SLUG)).toBe('installed-starter');
+    const entries = await listInstalledDeckEntries();
+    expect(entries.map((e) => [e.slug, e.totalCards])).toEqual([[SLUG, PACK.totalCards]]);
+
+    // Once the full deck replaces the pack, the entry is the installed deck's own size.
+    online = true;
+    expect(await upgradeStarterDecks()).toEqual([SLUG]);
+    online = false;
+    const after = await listInstalledDeckEntries();
+    expect(after.map((e) => [e.slug, e.totalCards])).toEqual([[SLUG, FULL_DECK.cards.length]]);
+  });
+
+  it('SessionCard keeps the plain error offline for a bundled deck that is not the lesson deck', async () => {
+    store.set(STAGE_KEY, 'starter');
+    store.set(STUDY_GOAL_KEY, JSON.stringify({ deckSlug: 'csharp-basics', examDate: null }));
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <SessionCardScreen
+          navigation={{ navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any}
+          route={{ key: 'session-card', name: 'SessionCard', params: { slug: SLUG, mode: 'learn-new' } } as any}
+        />,
+      );
+    });
+    await flush();
+    expect(fetchCalls).toContain(MANIFEST_URL);
+    expect(store.has(META_KEY)).toBe(false);
+    expect(tree.root.findAll((node) => node.props?.testID === 'session-card-offline-starter')).toHaveLength(0);
+    expect(hasText(tree, STARTER_COPY.offlineStarterNotice)).toBe(false);
+    expect(hasText(tree, 'Deck not available')).toBe(true);
+    act(() => tree.unmount());
   });
 });
