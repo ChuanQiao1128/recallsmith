@@ -41,6 +41,14 @@ export type DrawCommitResult = {
   pityAfter: number;
 };
 
+function countInDeck(deckCards: readonly CardExport[], owned: ReadonlySet<string>): number {
+  const seen = new Set<string>();
+  for (const card of deckCards) {
+    if (owned.has(card.StableUid)) seen.add(card.StableUid);
+  }
+  return seen.size;
+}
+
 function buildDrawId(slug: string, ts: number, seed: number): string {
   return `${slug}:${ts}:${seed >>> 0}`;
 }
@@ -182,8 +190,11 @@ export async function commitDraw(
     poolExhausted: selection.poolExhausted,
     pityFiredFor: selection.pityFiredFor,
     highlightedRarity,
-    // Effective count, the number the Library shows as collected.
-    ownedAfter: ownedAfterSet.size,
+    // Effective count over the deck's current cards only. The effective set
+    // is not deck-filtered (drawState.owned, stored progress and the starter
+    // lesson can keep a retired uid until loadDeckProgress reconciles), so its
+    // raw size could read past totalCards; the Library counts deck rows.
+    ownedAfter: countInDeck(deck.Cards, ownedAfterSet),
     totalCards: deck.Cards.length,
     pityBefore: pityState.draws,
     pityAfter: selection.pityNext.draws,

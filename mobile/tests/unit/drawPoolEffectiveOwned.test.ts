@@ -6,10 +6,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // and the starter gate all stay real here: the claim is about how those three
 // sources meet in a draw, and stubbing any of them would answer it for the code.
 const store = new Map<string, string>();
+// Keys whose read rejects, to stand in for a storage error on that key.
+const failingReads = new Set<string>();
+let failEveryRead = false;
 
 vi.mock('@react-native-async-storage/async-storage', () => ({
   default: {
-    getItem: vi.fn(async (key: string) => store.get(key) ?? null),
+    getItem: vi.fn(async (key: string) => {
+      if (failEveryRead || failingReads.has(key)) throw new Error(`read failed: ${key}`);
+      return store.get(key) ?? null;
+    }),
+    getAllKeys: vi.fn(async () => [...store.keys()]),
+    multiGet: vi.fn(async (keys: string[]) => keys.map((key) => [key, store.get(key) ?? null])),
     setItem: vi.fn(async (key: string, value: string) => {
       store.set(key, value);
     }),
@@ -23,7 +31,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
 }));
 
 import type { CardProgress } from '../../src/review/model';
-import { saveDeckProgress, setActiveUserSubForStorage } from '../../src/review/storage';
+import { loadDeckProgress, saveDeckProgress, setActiveUserSubForStorage } from '../../src/review/storage';
 import { commitDraw, flushDrawHistory, replayDraw } from '../../src/features/gacha/draw/drawCommit';
 import { loadDrawHistory, loadDrawState, saveDrawState } from '../../src/features/gacha/draw/drawStateStore';
 import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStateCache';
@@ -32,6 +40,8 @@ import { ensureStarterLesson } from '../../src/features/gacha/starter/starterGat
 
 const SLUG = 'csharp';
 const STAGE_KEY = 'recallsmith:onboarding:stage:v1';
+// The anon partition's progress key (review/storage.ts progressKey).
+const PROGRESS_KEY = `devcards:u:anon:deck-progress:${SLUG}`;
 
 type Card = { StableUid: string; Question: string; Difficulty: number; OrderInDeck: number };
 
@@ -65,6 +75,8 @@ describe('draw pool uses the effective owned set', () => {
   beforeEach(async () => {
     await flushDrawHistory();
     store.clear();
+    failingReads.clear();
+    failEveryRead = false;
     invalidateDrawStateCache();
     setActiveUserSubForStorage(null);
   });
@@ -172,6 +184,86 @@ describe('draw pool uses the effective owned set', () => {
     expect(replay.drawnUids).toEqual(result!.cards.map((c) => c.stableUid));
   });
 
+  // r25x F01 g-correctness-1 / g-tests-1: the effective set is not filtered to
+  // the deck (drawState.owned and stored progress keep a retired card until
+  // something reconciles them), so its size is not the Library's count.
+  it('ownedAfter counts only cards still in the deck', async () => {
+    const deck = deckOf([card('c1', 1), card('c2', 2), card('c3', 3), card('c4', 4)]);
+    // Written raw: saveDeckProgress would filter the retired entry out, and the
+    // point is what sits on disk before loadDeckProgress reconciles it.
+    store.set(PROGRESS_KEY, JSON.stringify([learned('c2'), learned('retired-learned')]));
+    await saveDrawState(SLUG, { owned: ['c1', 'retired-drawn'], pity: null });
+
+    const result = await commitDraw(SLUG, 10, { deck });
+
+    expect(result!.cards.map((c) => c.stableUid).sort()).toEqual(['c3', 'c4']);
+    expect(result!.totalCards).toBe(4);
+    expect(result!.ownedAfter).toBe(4);
+    expect(result!.ownedAfter).toBeLessThanOrEqual(result!.totalCards);
+  });
+
+  it('ownedAfter does not count a retired starter-lesson card', async () => {
+    const lessonDeck = deckOf([card('s1', 1), card('s2', 2), card('s3', 3), card('s4', 4), card('s5', 5), card('s6', 6)]);
+    store.set(STAGE_KEY, 'starter');
+    await ensureStarterLesson(lessonDeck);
+    // A deck update retires s5: the open lesson still lists it.
+    const deck = deckOf([card('s1', 1), card('s2', 2), card('s3', 3), card('s4', 4), card('s6', 6), card('s7', 7)]);
+
+    const result = await commitDraw(SLUG, 10, { deck });
+
+    expect(result!.cards.map((c) => c.stableUid).sort()).toEqual(['s6', 's7']);
+    expect(result!.ownedAfter).toBe(6);
+    expect(result!.totalCards).toBe(6);
+  });
+
+  // r25x F01 g-tests-2: a progress read that fails counts as "nothing learned";
+  // the pull still runs on drawState.owned + starter.
+  it('a failed progress read still draws from the deck minus owned and starter', async () => {
+    const lessonDeck = deckOf([card('s1', 1), card('s2', 2), card('s3', 3), card('s4', 4), card('s5', 5)]);
+    store.set(STAGE_KEY, 'starter');
+    await ensureStarterLesson(lessonDeck);
+    const deck = deckOf([...lessonDeck.Cards, card('c6', 6), card('c7', 7), card('c8', 8)]);
+    store.set(PROGRESS_KEY, JSON.stringify([learned('c6')]));
+    await saveDrawState(SLUG, { owned: ['c7'], pity: null });
+    failingReads.add(PROGRESS_KEY);
+
+    const result = await commitDraw(SLUG, 10, { deck });
+
+    // c6 is learned on disk but unreadable, so it is drawable again.
+    expect(result!.cards.map((c) => c.stableUid).sort()).toEqual(['c6', 'c8']);
+    expect(result!.poolExhausted).toBe(true);
+    expect([...(await loadDrawState(SLUG)).owned].sort()).toEqual(['c6', 'c7', 'c8']);
+  });
+
+  it('corrupt stored progress counts as nothing learned', async () => {
+    const deck = deckOf([card('c1', 1), card('c2', 2)]);
+    store.set(PROGRESS_KEY, '{not json');
+    await saveDrawState(SLUG, { owned: ['c1'], pity: null });
+
+    const result = await commitDraw(SLUG, 10, { deck });
+
+    expect(result!.cards.map((c) => c.stableUid)).toEqual(['c2']);
+  });
+
+  // r25x F01 g-tests-3: the draw reads only the current progress key; it never
+  // runs loadDeckProgress's legacy migration (that would be a write). Progress
+  // that still sits only under a legacy key is not seen until the Library or
+  // Home has migrated it.
+  it('progress only under a legacy key is not read until it is migrated', async () => {
+    const deck = deckOf([card('c1', 1), card('c2', 2), card('c3', 3)]);
+    const legacyKey = `${PROGRESS_KEY}:${deck.Version}`;
+    store.set(legacyKey, JSON.stringify([learned('c1')]));
+
+    expect((await loadDrawPoolOwned(SLUG)).has('c1')).toBe(false);
+    // The draw itself never migrates: no new progress key, legacy key intact.
+    await commitDraw(SLUG, 1, { deck: deckOf([card('c2', 2)]) });
+    expect(store.has(PROGRESS_KEY)).toBe(false);
+    expect(store.has(legacyKey)).toBe(true);
+
+    await loadDeckProgress(deck);
+    expect((await loadDrawPoolOwned(SLUG)).has('c1')).toBe(true);
+  });
+
   describe('loadDrawStatus (the Draw screen pack-complete state)', () => {
     it('reads pack complete when only learned cards were missing from drawState.owned', async () => {
       const cards = [card('c1', 1), card('c2', 2, 3), card('c3', 3)];
@@ -206,6 +298,33 @@ describe('draw pool uses the effective owned set', () => {
 
       expect(status.collectionComplete).toBe(false);
       expect(status.pityLabel).toBe('A rare card is guaranteed within 6 cards');
+      expect(status.pityThreshold).toBe(10);
+    });
+
+    it('a failed progress read falls back to owned + starter, keeping the countdown', async () => {
+      const cards = [card('c1', 1), card('c2', 2, 3), card('c3', 3)];
+      const deck = deckOf(cards);
+      await saveDeckProgress(deck, [learned('c2'), learned('c3')]);
+      await saveDrawState(SLUG, { owned: ['c1'], pity: { draws: 4, threshold: 10 } });
+      failingReads.add(PROGRESS_KEY);
+
+      const status = await loadDrawStatus(SLUG, cards);
+
+      expect(status.collectionComplete).toBe(false);
+      // Not the outer failure branch (which drops the label): only the
+      // progress term was lost.
+      expect(status.pityLabel).toBe('A rare card is guaranteed within 6 cards');
+    });
+
+    it('is not complete when every read fails', async () => {
+      const cards = [card('c1', 1), card('c2', 2, 3)];
+      await saveDrawState(SLUG, { owned: ['c1', 'c2'], pity: { draws: 4, threshold: 10 } });
+      invalidateDrawStateCache();
+      failEveryRead = true;
+
+      const status = await loadDrawStatus(SLUG, cards);
+
+      expect(status.collectionComplete).toBe(false);
       expect(status.pityThreshold).toBe(10);
     });
 
