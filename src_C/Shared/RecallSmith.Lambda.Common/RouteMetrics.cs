@@ -241,6 +241,9 @@ public static class RouteMetrics
     "/api/internal/automation/notifications/report",
     "/api/internal/source-watch/targets",
     "/api/internal/source-watch/report",
+    // R25X F04: the notifier's RevenueCat deletion queue.
+    "/api/v1/internal/revenuecat-deletions",
+    "/api/v1/internal/revenuecat-deletions/report",
   ];
 
   // Longest first, so the table stays order-independent: appending an entry to the arrays

@@ -31,6 +31,7 @@ import MoreScreen from './src/screens/MoreScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 import HelpFAQScreen from './src/screens/HelpFAQScreen';
 import DebugMenuScreen from './src/screens/DebugMenuScreen';
+import { debugMenuRoute } from './src/navigation/debugMenuRoute';
 import CeremonyTuningScreen from './src/screens/dev/CeremonyTuning';
 import DrawCeremonyScreen from './src/screens/DrawCeremonyScreen';
 import DrawResultScreen from './src/screens/DrawResultScreen';
@@ -259,7 +260,7 @@ function App() {
         <Stack.Screen name="More" component={MoreScreen} />
         <Stack.Screen name="Profile" component={ProfileScreen} />
         <Stack.Screen name="HelpFAQ" component={HelpFAQScreen} />
-        <Stack.Screen name="DebugMenu" component={DebugMenuScreen} />
+        {debugMenuRoute(() => <Stack.Screen name="DebugMenu" component={DebugMenuScreen} />)}
         {__DEV__ ? <Stack.Screen name="CeremonyTuning" component={CeremonyTuningScreen} /> : null}
         {/* Draw flow uses cross-fade transitions so the pack art continuity
             from Draw → Ceremony → Result feels like a single moment. */}

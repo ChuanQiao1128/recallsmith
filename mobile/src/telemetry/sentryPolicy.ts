@@ -25,10 +25,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // rejects anything else without throwing and then sends nothing (R19N M02-R1).
 const SENTRY_DSN_SHAPE = /^https:\/\/[^@\s/]+@[^/\s]+\/\d+$/;
 
+/** The one "is this the production update channel" rule (Sentry gate, Debug menu gate). */
+export function isProductionChannel(channel: unknown): boolean {
+  return String(channel).trim().toLowerCase() === 'production';
+}
+
 /** First failing gate wins: dev, channel, no-dsn (absent, blank or malformed), kill-switch. */
 export function decideSentry(i: { isDev: boolean; channel: unknown; dsn: unknown; killed: boolean }): SentryGate {
   if (i.isDev) return { enabled: false, reason: 'dev' };
-  if (String(i.channel).trim().toLowerCase() !== 'production') return { enabled: false, reason: 'channel' };
+  if (!isProductionChannel(i.channel)) return { enabled: false, reason: 'channel' };
   if (typeof i.dsn !== 'string' || !SENTRY_DSN_SHAPE.test(i.dsn.trim())) return { enabled: false, reason: 'no-dsn' };
   if (i.killed) return { enabled: false, reason: 'kill-switch' };
   return { enabled: true, dsn: i.dsn.trim(), environment: 'production' };

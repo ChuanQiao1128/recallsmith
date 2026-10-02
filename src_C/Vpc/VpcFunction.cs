@@ -548,6 +548,15 @@ public sealed class VpcFunction
       {
         return await Vpc.Automation.SourceWatchRoutes.HandleReport(req, res);
       }
+      // R25X F04: the notifier's RevenueCat deletion queue (HMAC, INTERNAL_SECRET_NOTIFIER).
+      if (RouteMatcher.Match("/api/v1/internal/revenuecat-deletions", p) is not null)
+      {
+        return await Vpc.Runtime.RevenueCatDeletions.HandlePending(req, res);
+      }
+      if (RouteMatcher.Match("/api/v1/internal/revenuecat-deletions/report", p) is not null)
+      {
+        return await Vpc.Runtime.RevenueCatDeletions.HandleReport(req, res);
+      }
 
       return res.NotFound("Route not found");
     }

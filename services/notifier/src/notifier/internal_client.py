@@ -27,6 +27,9 @@ from . import tracectx
 # INTERNAL_SECRET_NOTIFIER (+_PREVIOUS).
 REPORT_PATH = "/api/internal/automation/notifications/report"
 TICK_PATH = "/api/internal/automation/tick"
+# R25X F04: the RevenueCat deletion queue, same secret. The GET has no body, so it is signed over "<ts>.".
+REVENUECAT_PENDING_PATH = "/api/v1/internal/revenuecat-deletions"
+REVENUECAT_REPORT_PATH = "/api/v1/internal/revenuecat-deletions/report"
 
 HEADER_TIMESTAMP = "x-internal-timestamp"
 HEADER_SIGNATURE = "x-internal-signature"
@@ -130,6 +133,17 @@ class InternalClient:
             index += 1
         return result
 
+    def get(self, path: str, *, timeout_s: float | None = None) -> InternalResult:
+        """GET a signed route (empty body, so the signature covers "<ts>."). One attempt, plus the
+        previous-secret retry on 401/403. Never raises."""
+        timeout = self._timeout_s if timeout_s is None else timeout_s
+        result, _ = self._attempt(path, "", timeout, self._secret, method="GET")
+        if result.status in (401, 403):
+            previous = self._load_previous()
+            if previous is not None:
+                result, _ = self._attempt(path, "", timeout, previous, method="GET")
+        return result
+
     def _load_previous(self) -> str | None:
         if self._previous_secret is None:
             return None
@@ -139,20 +153,23 @@ class InternalClient:
             return None
         return previous if previous and previous != self._secret else None
 
-    def _attempt(self, path: str, body: str, timeout: float, secret: str) -> tuple[InternalResult, bool]:
+    def _attempt(
+        self, path: str, body: str, timeout: float, secret: str, *, method: str = "POST"
+    ) -> tuple[InternalResult, bool]:
         ts = self._clock_ms()
         headers = {
-            "content-type": "application/json",
             HEADER_TIMESTAMP: str(ts),
             HEADER_SIGNATURE: sign_internal(secret, ts, body),
         }
+        if method == "POST":
+            headers["content-type"] = "application/json"
         root = tracectx.current_root()
         if root is not None:
             headers[tracectx.HEADER] = root
         request = urllib.request.Request(
             self._base_url + path,
-            data=body.encode("ascii"),
-            method="POST",
+            data=body.encode("ascii") if method == "POST" else None,
+            method=method,
             headers=headers,
         )
         try:

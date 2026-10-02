@@ -20,6 +20,11 @@ set -euo pipefail
 set +x
 HERE="$(cd "$(dirname "$0")" && pwd)"; cd "$HERE"
 source "$HERE/scripts/merge-env.sh"
+# R25X F04: the RevenueCat secret key leaf is the notifier's (it calls RevenueCat from outside the VPC); core-vpc has no
+# egress and never gets it. Skipped like notify-recipient, and listed as optional with no mapping, so every injecting
+# deploy also removes a stale REVENUECAT_SECRET_API_KEY that the R25 G04 mapping may have left on core-vpc.
+SSM_NOT_ENV="${SSM_NOT_ENV%]},\"revenuecat-secret-api-key\"]"
+SSM_OPTIONAL_ENV="${SSM_OPTIONAL_ENV%]},\"REVENUECAT_SECRET_API_KEY\"]"
 export AWS_PROFILE="${AWS_PROFILE:-dev}"
 REGION="${AWS_REGION:-ap-southeast-2}"
 ARCH="${LAMBDA_ARCH:-linux-arm64}"          # both functions are arm64 (aws lambda get-function-configuration)

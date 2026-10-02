@@ -21,6 +21,8 @@ const loadStreakSnapshotMock = vi.fn(async () => ({
   lastQualifiedDateKey: '2026-04-24',
   currentWeekKey: '2026-W17',
 }));
+// The expo-updates channel the Debug menu gate reads (G03); each test sets it.
+const updatesChannel = vi.hoisted(() => ({ value: 'preview' as unknown }));
 
 vi.mock('react-native', () => {
   const React = require('react');
@@ -94,6 +96,11 @@ vi.mock('react-native-purchases', () => ({
     restorePurchases: vi.fn(async () => ({})),
   },
 }));
+
+vi.mock('../../src/updates/otaUpdateCheck', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/updates/otaUpdateCheck')>();
+  return { ...actual, getExpoUpdatesModule: () => ({ channel: updatesChannel.value }) as any };
+});
 
 vi.mock('../../src/auth/authStore', () => ({
   useAuthStore: (selector: any) =>
@@ -235,6 +242,7 @@ describe('SettingsScreen', () => {
     });
 
     (globalThis as any).__DEV__ = false;
+    updatesChannel.value = 'preview';
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
     errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -432,7 +440,7 @@ describe('SettingsScreen', () => {
       .join('\n');
     expect(postRetryBlob).toContain('Progress');
   });
-  it('opens the Debug menu after 7 taps on the version label within 3 s, even outside __DEV__', async () => {
+  it('opens the Debug menu after 7 taps on the version label within 3 s on the preview channel outside __DEV__', async () => {
     vi.useFakeTimers();
     try {
       const { tree, navigate } = await renderSettings();
@@ -462,5 +470,53 @@ describe('SettingsScreen', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('7 taps on the version label do nothing on the production channel', async () => {
+    updatesChannel.value = 'production';
+    vi.useFakeTimers();
+    try {
+      const { tree, navigate } = await renderSettings();
+      expect((globalThis as any).__DEV__).toBe(false);
+      const label = findPressableByTestID(tree, 'settings-version-label');
+      for (let i = 0; i < 14; i += 1) {
+        act(() => { label.props.onPress?.(); });
+        vi.advanceTimersByTime(100);
+      }
+      expect(navigate).not.toHaveBeenCalledWith('DebugMenu');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // F03 (q-correctness-1, q-security-1): no readable channel outside __DEV__ keeps the door shut.
+  it('7 taps on the version label do nothing when the update channel is missing', async () => {
+    for (const channel of [undefined, null, '']) {
+      updatesChannel.value = channel;
+      vi.useFakeTimers();
+      try {
+        const { tree, navigate } = await renderSettings();
+        expect((globalThis as any).__DEV__).toBe(false);
+        const label = findPressableByTestID(tree, 'settings-version-label');
+        for (let i = 0; i < 14; i += 1) {
+          act(() => { label.props.onPress?.(); });
+          vi.advanceTimersByTime(100);
+        }
+        expect(navigate).not.toHaveBeenCalledWith('DebugMenu');
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  });
+
+  it('opens the Debug menu after 7 taps in __DEV__ even on the production channel', async () => {
+    updatesChannel.value = 'production';
+    (globalThis as any).__DEV__ = true;
+    const { tree, navigate } = await renderSettings();
+    const label = findPressableByTestID(tree, 'settings-version-label');
+    for (let i = 0; i < 7; i += 1) {
+      act(() => { label.props.onPress(); });
+    }
+    expect(navigate).toHaveBeenCalledWith('DebugMenu');
   });
 });

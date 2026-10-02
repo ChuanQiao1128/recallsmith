@@ -28,6 +28,7 @@ import {
 } from '../features/gacha/rewards/deckWallet';
 import type { PityState } from '../features/gacha/draw/pity';
 import { setDrawStateSyncInFlight } from './syncActivity';
+import { isSyncBlocked } from './syncGuard';
 
 /**
  * ============================
@@ -302,6 +303,8 @@ export function adoptAnonGachaState(): Promise<AnonGachaAdoption> {
  * throws: every failure path returns a skipped result.
  */
 export async function syncDrawStateNow(accessToken: string | null): Promise<DrawStateSyncResult> {
+  // Account deletion in progress or done (syncGuard.ts): never talk to the server.
+  if (isSyncBlocked()) return SKIPPED;
   const token = accessToken && accessToken.trim() ? accessToken.trim() : null;
   if (!token) return SKIPPED;
   if (_inFlight) return SKIPPED;
@@ -433,6 +436,9 @@ export async function syncDrawStateNow(accessToken: string | null): Promise<Draw
       });
     }
 
+    // Deletion may have started while this run read local state; the block
+    // wins over a push that has not left the device yet.
+    if (isSyncBlocked()) return SKIPPED;
     const resp = await apiJson<ApiOk<DrawStateSyncResp>>('/api/v1/draw-state/sync', {
       method: 'POST',
       accessToken: token,
