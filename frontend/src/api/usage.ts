@@ -180,28 +180,35 @@ function normalizeFreshnessItem(value: unknown): FreshnessItem | null {
 }
 
 /**
- * The counts of `events` read from `value.counts` when the server nests them,
- * else from `value` itself, keyed by the event name.
+ * The counts of `events` from `value.counts`, keyed by the snake_case event
+ * name. The server always sends every event (0 when none), so a missing
+ * `counts` object or a missing key means a shape this client does not know:
+ * null, which the caller turns into BAD_RESPONSE rather than an empty funnel.
  */
-function readCounts<E extends string>(value: Raw, events: readonly E[]): Record<E, number | null> {
-  const source = isRecord(value.counts) ? value.counts : value;
+function readCounts<E extends string>(value: unknown, events: readonly E[]): Record<E, number | null> | null {
+  if (!isRecord(value) || !isRecord(value.counts)) return null;
+  const source = value.counts;
   const out = {} as Record<E, number | null>;
-  for (const event of events) out[event] = nullableNumber(source[event]);
+  for (const event of events) {
+    if (!(event in source)) return null;
+    out[event] = nullableNumber(source[event]);
+  }
   return out;
 }
 
 function normalizeFunnelWeek(value: unknown): FunnelWeek | null {
   if (!isRecord(value)) return null;
-  const weekStart = nullableText(value.cohortWeek) ?? nullableText(value.weekStart) ?? nullableText(value.week);
-  if (weekStart === null) return null;
-  return { weekStart, counts: readCounts(value, FUNNEL_EVENTS) };
+  const weekStart = nullableText(value.weekStart);
+  const counts = readCounts(value, FUNNEL_EVENTS);
+  return weekStart === null || counts === null ? null : { weekStart, counts };
 }
 
+/** The server leaves out events without a deck slug, so a row without one is a shape error. */
 function normalizeFunnelDeck(value: unknown): FunnelDeck | null {
   if (!isRecord(value)) return null;
   const deckSlug = nullableText(value.deckSlug);
-  if (deckSlug === null) return null;
-  return { deckSlug, counts: readCounts(value, FUNNEL_DECK_EVENTS) };
+  const counts = readCounts(value, FUNNEL_DECK_EVENTS);
+  return deckSlug === null || counts === null ? null : { deckSlug, counts };
 }
 
 /** GET /api/v1/admin/analytics/usage?days=. `503 NOT_READY` passes through as the error code. */
@@ -253,9 +260,13 @@ export async function fetchFreshness(days: number = USAGE_DAYS): Promise<ApiResu
 }
 
 /**
- * GET /api/v1/admin/analytics/funnel?days=. Counts per event overall, per ISO
- * cohort week and per deck; the page derives the conversions. `503 NOT_READY`
- * passes through as the error code.
+ * GET /api/v1/admin/analytics/funnel?days=. The server (AnonFunnel.HandleFunnel)
+ * sends { days, fromCohortDay, events, overall: { counts, conversion },
+ * weeks: [{ weekStart, counts, conversion }], byDeck: [{ deckSlug, counts }] }
+ * with counts keyed by the snake_case event names; the page derives the
+ * conversions. Anything else (a missing overall, weeks or byDeck, or any row
+ * in another shape) is BAD_RESPONSE, never an empty funnel. A refusal such as
+ * `503 NOT_READY` passes through with its error code.
  */
 export async function fetchFunnel(days: number = FUNNEL_DAYS): Promise<ApiResult<FunnelReport>> {
   try {
@@ -263,18 +274,18 @@ export async function fetchFunnel(days: number = FUNNEL_DAYS): Promise<ApiResult
     const res = resp.data;
     if (!res.success) return { ...res, data: null };
     const data = res.data;
-    if (!isRecord(data) || (!isRecord(data.overall) && !Array.isArray(data.weeks))) return badResponse('funnel');
+    if (!isRecord(data) || !Array.isArray(data.weeks) || !Array.isArray(data.byDeck)) return badResponse('funnel');
+    const overall = readCounts(data.overall, FUNNEL_EVENTS);
+    const weeks = data.weeks.map(normalizeFunnelWeek);
+    const decks = data.byDeck.map(normalizeFunnelDeck);
+    if (overall === null || weeks.includes(null) || decks.includes(null)) return badResponse('funnel');
     return {
       ...res,
       data: {
         days: nullableNumber(data.days) ?? days,
-        overall: readCounts(asRecord(data.overall), FUNNEL_EVENTS),
-        weeks: Array.isArray(data.weeks)
-          ? data.weeks.map(normalizeFunnelWeek).filter((w): w is FunnelWeek => w !== null)
-          : [],
-        decks: Array.isArray(data.decks)
-          ? data.decks.map(normalizeFunnelDeck).filter((d): d is FunnelDeck => d !== null)
-          : [],
+        overall,
+        weeks: weeks.filter((w): w is FunnelWeek => w !== null),
+        decks: decks.filter((d): d is FunnelDeck => d !== null),
       },
     };
   } catch (err) {
