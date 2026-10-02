@@ -67,5 +67,5 @@ Gate: `cd src_C && dotnet test Tests/RecallSmith.Lambda.IntegrationTests` (full 
 ## Deferred / not in scope
 
 - The console page and its API client: C01. Infra, alarms, IAM and the `ANALYTICS_S3_*` Lambda env wiring in Terraform: P03. The `snowflake/` folder and docs: D01.
-- The `AWSSDK.S3` package reference in the Vpc project is left alone. Other code may still use it, and changing the package graph is outside this issue.
+- The `AWSSDK.S3` package reference in the Vpc project stays, because `Publish`, `AdminManifest` and `PremiumDeckUrl` still use S3.
 - Historical migrations 009, 010, 016 and 024 still mention the dropped tables. They are already applied and must not be edited.
