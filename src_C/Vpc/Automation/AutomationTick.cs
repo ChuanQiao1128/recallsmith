@@ -193,6 +193,8 @@ public static class AutomationTick
     // than 400 days ago; its own step, so a failing or deferred rollup never stops the retention, and a failing delete
     // is recorded as this step. Before the rollup, which may use most of the remaining budget.
     await Step("anon_funnel_retention", () => Analytics.AnonFunnel.DeleteExpiredAsync(conn));
+    // R25X F04: every tick, drop RevenueCat deletion rows requested more than 30 days ago (skips before 044).
+    await Step("revenuecat_deletions_retention", () => Runtime.RevenueCatDeletions.DeleteExpiredAsync(conn));
     // R20 V08: once per UTC day, the usage rollups of the last 8 complete days (skips with a log line before 040).
     // R20X F02 (§10.8): deferred to the next tick when less than half the budget remains; statement_timeout inside.
     await Step("analytics_daily", () => Analytics.UsageAnalytics.RunIfDueAsync(conn, Budget - clock.Elapsed, Budget));

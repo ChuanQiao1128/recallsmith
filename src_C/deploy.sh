@@ -20,9 +20,10 @@ set -euo pipefail
 set +x
 HERE="$(cd "$(dirname "$0")" && pwd)"; cd "$HERE"
 source "$HERE/scripts/merge-env.sh"
-# R25 G04: the RevenueCat secret API key core-vpc uses to delete a customer record after account deletion.
-# Optional: with no leaf under the path nothing is injected (and a stale copy leaves the env), and the server skips the call.
-SSM_TO_ENV="${SSM_TO_ENV%\}},\"revenuecat-secret-api-key\":\"REVENUECAT_SECRET_API_KEY\"}"
+# R25X F04: the RevenueCat secret key leaf is the notifier's (it calls RevenueCat from outside the VPC); core-vpc has no
+# egress and never gets it. Skipped like notify-recipient, and listed as optional with no mapping, so every injecting
+# deploy also removes a stale REVENUECAT_SECRET_API_KEY that the R25 G04 mapping may have left on core-vpc.
+SSM_NOT_ENV="${SSM_NOT_ENV%]},\"revenuecat-secret-api-key\"]"
 SSM_OPTIONAL_ENV="${SSM_OPTIONAL_ENV%]},\"REVENUECAT_SECRET_API_KEY\"]"
 export AWS_PROFILE="${AWS_PROFILE:-dev}"
 REGION="${AWS_REGION:-ap-southeast-2}"
