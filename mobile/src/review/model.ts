@@ -30,10 +30,15 @@ export interface CardProgress {
    * fsrsAnchorAt is the lastReviewedAt the state belongs to: when it differs
    * (another device or the ladder reviewed the card since), the state is stale
    * and the scheduler derives a fresh one from the ladder fields instead.
+   * fsrsReviewedAt is the scheduled review the state was computed at. It equals
+   * fsrsAnchorAt except after a Mistake Book practice tap, which moves
+   * lastReviewedAt and the anchor but not the state, so the next review's
+   * elapsed time still runs from the real review.
    */
   fsrsStability?: number;
   fsrsDifficulty?: number;
   fsrsAnchorAt?: number;
+  fsrsReviewedAt?: number;
 }
 
 /**

@@ -52,16 +52,27 @@ function hasReview(p: CardProgress): p is CardProgress & { lastReviewedAt: numbe
  * its anchor equals lastReviewedAt; otherwise someone else (another device, or
  * the ladder with the flag off) reviewed the card since, and the state is
  * rebuilt from what every client writes: the scheduled interval and the
- * failure counters.
+ * failure counters. reviewedAt is where elapsed time is measured from: the
+ * review the trusted state was computed at, else lastReviewedAt.
  */
-function currentMemoryState(p: CardProgress & { lastReviewedAt: number }): FsrsMemoryState {
+function currentMemoryState(p: CardProgress & { lastReviewedAt: number }): FsrsMemoryState & { reviewedAt: number } {
   if (
     finite(p.fsrsStability)
     && p.fsrsStability > 0
     && finite(p.fsrsDifficulty)
     && p.fsrsAnchorAt === p.lastReviewedAt
   ) {
-    return { stability: p.fsrsStability, difficulty: Math.min(10, Math.max(1, p.fsrsDifficulty)) };
+    // A trusted state belongs to its own review: after a focus practice tap that is
+    // fsrsReviewedAt, earlier than lastReviewedAt. Older rows lack it and use the anchor.
+    const reviewedAt =
+      finite(p.fsrsReviewedAt) && p.fsrsReviewedAt > 0 && p.fsrsReviewedAt <= p.lastReviewedAt
+        ? p.fsrsReviewedAt
+        : p.lastReviewedAt;
+    return {
+      stability: p.fsrsStability,
+      difficulty: Math.min(10, Math.max(1, p.fsrsDifficulty)),
+      reviewedAt,
+    };
   }
 
   const stability =
@@ -69,7 +80,7 @@ function currentMemoryState(p: CardProgress & { lastReviewedAt: number }): FsrsM
       ? Math.max(0.5, (p.nextReviewAt - p.lastReviewedAt) / DAY_MS)
       : LADDER_DAYS[clampStage(p.stage ?? 0)];
   const difficulty = Math.min(10, Math.max(1, 5 + 0.5 * count(p.lapses) + 0.3 * count(p.hardStreak)));
-  return { stability, difficulty };
+  return { stability, difficulty, reviewedAt: p.lastReviewedAt };
 }
 
 /**
@@ -97,8 +108,9 @@ export function scheduleWithFsrs(
   if (learningCheck) {
     state = initState(GRADE.hard);
   } else if (hasReview(progress)) {
-    const elapsedDays = Math.max(0, (nowMs - progress.lastReviewedAt) / DAY_MS);
-    state = nextState(currentMemoryState(progress), grade, elapsedDays);
+    const { reviewedAt, ...memory } = currentMemoryState(progress);
+    const elapsedDays = Math.max(0, (nowMs - reviewedAt) / DAY_MS);
+    state = nextState(memory, grade, elapsedDays);
   } else {
     state = initState(grade);
   }
@@ -139,5 +151,6 @@ export function scheduleWithFsrs(
     fsrsStability: state.stability,
     fsrsDifficulty: state.difficulty,
     fsrsAnchorAt: nowMs,
+    fsrsReviewedAt: nowMs,
   };
 }

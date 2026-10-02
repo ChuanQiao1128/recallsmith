@@ -248,6 +248,9 @@ describe('scheduleWithFsrs: learning check', () => {
   });
 });
 
+// With the real model these pin the end-to-end result only: fsrs.ts clamps every interval to
+// MAX_INTERVAL_DAYS (90 days, equal to the horizon), so they pass with or without the horizon
+// guard in fsrsScheduler.ts. fsrsSchedulerHorizon.test.ts tests the guard itself.
 describe('scheduleWithFsrs: horizon cap', () => {
   it('never schedules beyond MAX_NEXT_REVIEW_HORIZON_MS', () => {
     const start: CardProgress = {

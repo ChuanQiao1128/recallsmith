@@ -181,6 +181,7 @@ function normalizeProgressEntry(raw: any): CardProgress | null {
   const fsrsStability = normalizeFinite(raw.fsrsStability);
   const fsrsDifficulty = normalizeFinite(raw.fsrsDifficulty);
   const fsrsAnchorAt = normalizeFinite(raw.fsrsAnchorAt);
+  const fsrsReviewedAt = normalizeFinite(raw.fsrsReviewedAt);
 
   return {
     stableUid,
@@ -194,6 +195,7 @@ function normalizeProgressEntry(raw: any): CardProgress | null {
     fsrsStability,
     fsrsDifficulty,
     fsrsAnchorAt,
+    fsrsReviewedAt,
   };
 }
 
