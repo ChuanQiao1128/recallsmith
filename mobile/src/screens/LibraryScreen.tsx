@@ -527,6 +527,7 @@ export function LibraryScreen({ navigation, route }: Props) {
                       onOpenMistakes: () => navigation.navigate('MistakeBook', { slug: vm.selectedDeckSlug }),
                     }
                   : {})}
+                onOpenDomains={() => navigation.navigate('DomainProgress', { slug: vm.selectedDeckSlug })}
               />
               </View>
             }

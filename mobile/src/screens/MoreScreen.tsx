@@ -5,6 +5,7 @@ import type { RootStackParamList } from '../navigation/types';
 import AppInfoScreen from '../components/AppInfoScreen';
 import { loadStreakSnapshot, type StreakSnapshot } from '../features/gacha/streaks/streakTracker';
 import { listDrawStateSlugs, loadDrawState } from '../features/gacha/draw/drawStateStore';
+import { loadActiveDeckSlug } from '../content/activeDeck';
 import appJson from '../../app.json';
 import { useFeatureFlags } from '../config/featureFlags';
 import { colors } from '../theme/colors';
@@ -69,6 +70,19 @@ export function MoreScreen({ navigation }: Props) {
   const dayStreak = snapshot === null ? '—' : String(snapshot.currentDailyStreak);
   const cardsCollected = collected === null ? '—' : String(collected);
 
+  // Progress by domain opens the active deck; before one is chosen, the first drawn deck; with
+  // neither, the Library, which picks a deck itself.
+  const openDomains = async () => {
+    let slug: string | null = null;
+    try {
+      slug = (await loadActiveDeckSlug()) ?? (await listDrawStateSlugs())[0] ?? null;
+    } catch {
+      slug = null;
+    }
+    if (slug) navigation.navigate('DomainProgress', { slug });
+    else navigation.navigate('Library');
+  };
+
   const openLink = (url: string) => {
     void Linking.openURL(url).catch(() => undefined);
   };
@@ -106,6 +120,17 @@ export function MoreScreen({ navigation }: Props) {
                 <Text style={styles.rowSubtitle}>Cards you missed, plus related review</Text>
               </Pressable>
             ) : null}
+            <Pressable
+              accessibilityRole="button"
+              testID="more-row-domains"
+              style={styles.row}
+              onPress={() => {
+                void openDomains();
+              }}
+            >
+              <Text style={styles.rowTitle}>Progress by domain</Text>
+              <Text style={styles.rowSubtitle}>Cards learned in each exam area</Text>
+            </Pressable>
             {showReports ? (
               <Pressable
                 accessibilityRole="button"
