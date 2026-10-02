@@ -159,24 +159,7 @@ locals {
       type   = "metric"
       x      = 0
       y      = 24
-      width  = 12
-      height = 6
-      properties = {
-        region  = var.region
-        view    = "timeSeries"
-        stacked = false
-        period  = 3600
-        title   = "OutboxPending"
-        metrics = [
-          [var.metrics_namespace, "OutboxPending", { stat = "Maximum" }],
-        ]
-      }
-    },
-    {
-      type   = "metric"
-      x      = 12
-      y      = 24
-      width  = 12
+      width  = 24
       height = 6
       properties = {
         region  = var.region

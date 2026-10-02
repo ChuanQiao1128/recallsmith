@@ -25,8 +25,8 @@ use an empty local state via a gitignored override:
    ```
    (Terraform's `_override.tf` merge replaces the `backend` block; the S3 bucket is never contacted.)
 2. `terraform -chdir=infra/envs/prod init -input=false -reconfigure`.
-3. Supply the Snowflake ExternalId read-only:
-   `TF_VAR_snowflake_external_id="$(aws iam get-role --role-name snowflake-recallsmith-s3-role --query 'Role.AssumeRolePolicyDocument.Statement[0].Condition.StringEquals."sts:ExternalId"' --output text)"`.
+3. Export `TF_VAR_alert_email` (or use a gitignored `prod.auto.tfvars`). The Snowflake ExternalId
+   step is gone: the Snowflake role was retired in R26 P03 (2026-10-02).
 4. `terraform -chdir=infra/envs/prod plan -input=false -out=<tag>.tfplan`.
 5. `terraform -chdir=infra/envs/prod show -json <tag>.tfplan > <tag>.plan.json`.
 6. `python3 infra/scripts/check-plan.py --plan <tag>.plan.json --allow docs/delivery/r16-issues/<TAG>.plan-allow.json` (run from repo root).

@@ -30,12 +30,6 @@ variable "mobile_pool_id" {
   type = string
 }
 
-variable "snowflake_external_id" {
-  type      = string
-  sensitive = true
-  default   = null
-}
-
 variable "tags" {
   type    = map(string)
   default = {}
