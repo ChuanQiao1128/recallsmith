@@ -150,6 +150,11 @@ vi.mock('../../src/review/storage', () => ({
   loadDeckProgress: vi.fn(async () => []),
 }));
 
+const recordFunnelEventMock = vi.fn();
+vi.mock('../../src/telemetry/funnel', () => ({
+  recordFunnelEvent: (...args: unknown[]) => recordFunnelEventMock(...args),
+}));
+
 const scheduleProgressSyncMock = vi.fn();
 vi.mock('../../src/sync/progressSync', () => ({
   scheduleProgressSync: (arg?: any) => scheduleProgressSyncMock(arg),
@@ -224,6 +229,7 @@ describe('draw screen · exhausted pool', () => {
     failSetItemFor = null;
     afterSetItem = null;
     scheduleProgressSyncMock.mockClear();
+    recordFunnelEventMock.mockClear();
   });
 
   it('charges nothing and refuses the pull when every card is already owned', async () => {
@@ -324,6 +330,7 @@ describe('draw screen · sync trigger', () => {
     failSetItemFor = null;
     afterSetItem = null;
     scheduleProgressSyncMock.mockClear();
+    recordFunnelEventMock.mockClear();
   });
 
   it('asks for a sync as soon as a draw commits', async () => {
@@ -343,6 +350,8 @@ describe('draw screen · sync trigger', () => {
     // pull whitelist in syncProgressOnce. The delay is deferred past the longest
     // ceremony (MGACHA-03) so its work never lands on the JS thread mid-ceremony.
     expect(scheduleProgressSyncMock).toHaveBeenCalledWith({ delayMs: DRAW_COMMITTED_SYNC_DELAY_MS, reason: 'draw_committed' });
+    // R24 M01: a committed pack is the funnel's first_pack_opened, with the pack's deck.
+    expect(recordFunnelEventMock.mock.calls).toEqual([['first_pack_opened', SLUG]]);
   });
 
   it('does not ask for a sync when the pull bought nothing', async () => {
@@ -363,6 +372,7 @@ describe('draw screen · sync trigger', () => {
     });
 
     expect(scheduleProgressSyncMock).not.toHaveBeenCalled();
+    expect(recordFunnelEventMock).not.toHaveBeenCalled();
   });
 });
 
@@ -379,6 +389,7 @@ describe('draw screen · wallet/draw-state ordering', () => {
     failSetItemFor = null;
     afterSetItem = null;
     scheduleProgressSyncMock.mockClear();
+    recordFunnelEventMock.mockClear();
   });
 
   it('does not touch the wallet until the draw state has landed', async () => {
@@ -427,6 +438,8 @@ describe('draw screen · wallet/draw-state ordering', () => {
     expect(readWallet()).toEqual({ availablePulls: 12, reservePulls: 0 });
     expect(store.has(HISTORY_KEY)).toBe(false);
     expect(navigate).not.toHaveBeenCalled();
+    // A failed commit is not a funnel step.
+    expect(recordFunnelEventMock).not.toHaveBeenCalled();
   });
 
   it('refunds incrementally, keeping pulls granted while the draw was in flight', async () => {

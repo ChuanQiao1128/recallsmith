@@ -154,6 +154,11 @@ vi.mock('../../src/features/gacha/streaks/streakTracker', () => ({
   })),
 }));
 
+const recordFunnelEventMock = vi.fn();
+vi.mock('../../src/telemetry/funnel', () => ({
+  recordFunnelEvent: (...args: unknown[]) => recordFunnelEventMock(...args),
+}));
+
 vi.mock('../../src/sync/progressSync', () => ({
   forceProgressSync: vi.fn(async () => {}),
 }));
@@ -251,6 +256,7 @@ describe('HomeScreen starter lesson', () => {
     deckSummariesFixture = [deck('aws-saa-c03', { newToday: 5 }), deck('csharp-basics')];
     updatesFixture = {};
     navigateMock.mockReset();
+    recordFunnelEventMock.mockReset();
     upgradeStarterDecksMock.mockReset();
     upgradeStarterDecksMock.mockResolvedValue([]);
     vi.mocked(loadHomeDeckSummaries).mockReset();
@@ -265,6 +271,8 @@ describe('HomeScreen starter lesson', () => {
 
     expect(sessionCalls()).toEqual([['SessionCard', { slug: 'aws-saa-c03', mode: 'learn-new' }]]);
     expect(navigateMock).not.toHaveBeenCalledWith('Draw', expect.anything());
+    // R24 M01: opening the lesson is the funnel's starter_started, with the lesson deck.
+    expect(recordFunnelEventMock.mock.calls).toEqual([['starter_started', 'aws-saa-c03']]);
 
     // Back on Home after a pause (a second focus of the same Home): no second automatic trip into
     // the lesson, so the learner can stay here.
@@ -288,6 +296,8 @@ describe('HomeScreen starter lesson', () => {
     });
     expect(sessionCalls()).toHaveLength(3);
     expect(navigateMock).not.toHaveBeenCalledWith('Draw', expect.anything());
+    // Every open passes the same step; the funnel module keeps it to once per install.
+    expect(recordFunnelEventMock.mock.calls).toEqual(Array(3).fill(['starter_started', 'aws-saa-c03']));
   });
 
   it('falls back to the active deck when no study goal is stored', async () => {
@@ -332,6 +342,7 @@ describe('HomeScreen starter lesson', () => {
     expect(tree.root.findAll((node) => node.props?.testID === 'home-starter-cta')).toHaveLength(0);
     expect(tree.root.findAll((node) => node.props?.testID === 'home-primary-cta' && (node.type as any) === 'Pressable')).toHaveLength(1);
     expect(textBlob(tree)).not.toContain('first lesson');
+    expect(recordFunnelEventMock).not.toHaveBeenCalled();
   });
 
   it('upgrades an installed starter pack on every Home focus and refreshes Home when the full deck went in', async () => {

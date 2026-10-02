@@ -15,6 +15,11 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
   },
 }));
 
+const recordFunnelEventMock = vi.fn();
+vi.mock('../../src/telemetry/funnel', () => ({
+  recordFunnelEvent: (...args: unknown[]) => recordFunnelEventMock(...args),
+}));
+
 import type { CardProgress } from '../../src/review/model';
 import { setActiveUserSubForStorage } from '../../src/review/storage';
 import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStateCache';
@@ -62,6 +67,7 @@ function untouched(stableUid: string): CardProgress {
 describe('starter lesson', () => {
   beforeEach(() => {
     store.clear();
+    recordFunnelEventMock.mockClear();
     invalidateDrawStateCache();
     setActiveUserSubForStorage(null);
   });
@@ -116,6 +122,9 @@ describe('starter lesson', () => {
     expect(await isPermissionPromptPending()).toBe(true);
     // The lesson's cards were never written into the draw state.
     expect((await loadDrawState('aws')).owned).toEqual([]);
+    // R24 M01: the anonymous funnel step, once, with the lesson deck.
+    expect(recordFunnelEventMock).toHaveBeenCalledTimes(1);
+    expect(recordFunnelEventMock).toHaveBeenCalledWith('starter_completed', 'aws');
   });
 
   it('existing users (stage done) never see the lesson', async () => {
@@ -125,6 +134,7 @@ describe('starter lesson', () => {
     expect(store.has(STARTER_LESSON_KEY)).toBe(false);
     expect((await completeStarterLesson('aws')).completed).toBe(false);
     expect(await isPermissionPromptPending()).toBe(false);
+    expect(recordFunnelEventMock).not.toHaveBeenCalled();
   });
 
   it('skipping a lesson that cannot run closes the stage and lets every pack bootstrap as before', async () => {
