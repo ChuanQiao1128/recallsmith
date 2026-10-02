@@ -90,10 +90,22 @@ vi.mock('../../src/content/activeDeck', () => ({
   setActiveDeckSlug: vi.fn(async (slug: string) => setActiveDeckSlugMock(slug)),
 }));
 
-// R24 §2.2: Home asks the starter module (lazily imported) to upgrade an installed starter pack.
+// R24 §2.2: Home asks the starter module (lazily imported) to upgrade an installed starter pack and
+// listens for upgrades. Like the real module, a run that upgraded something tells every listener.
 const upgradeStarterDecksMock = vi.hoisted(() => vi.fn(async (): Promise<string[]> => []));
+const starterUpgradeListeners = vi.hoisted(() => new Set<(slugs: string[]) => void>());
 vi.mock('../../src/content/starterOffline', () => ({
-  upgradeStarterDecks: () => upgradeStarterDecksMock(),
+  upgradeStarterDecks: async () => {
+    const upgraded = await upgradeStarterDecksMock();
+    if (upgraded.length > 0) for (const listener of [...starterUpgradeListeners]) listener(upgraded);
+    return upgraded;
+  },
+  subscribeStarterUpgrades: (listener: (slugs: string[]) => void) => {
+    starterUpgradeListeners.add(listener);
+    return () => {
+      starterUpgradeListeners.delete(listener);
+    };
+  },
 }));
 
 vi.mock('../../src/features/gacha/home/deckActionResolver', () => ({
@@ -253,6 +265,9 @@ describe('HomeScreen starter lesson', () => {
     navigateMock.mockReset();
     upgradeStarterDecksMock.mockReset();
     upgradeStarterDecksMock.mockResolvedValue([]);
+    // Earlier tests leave their Home mounted; refocus() and the listeners reach this test's Home only.
+    focusCallbacks.clear();
+    starterUpgradeListeners.clear();
     vi.mocked(loadHomeDeckSummaries).mockReset();
     vi.mocked(loadHomeDeckSummaries).mockImplementation(async () => makeHomeSummary() as any);
   });
@@ -351,5 +366,23 @@ describe('HomeScreen starter lesson', () => {
     expect(upgradeStarterDecksMock).toHaveBeenCalledTimes(3);
     const quietFocusLoads = loadsAfterQuietFocus - loadsBefore;
     expect(vi.mocked(loadHomeDeckSummaries).mock.calls.length - loadsAfterQuietFocus).toBeGreaterThan(quietFocusLoads);
+  });
+
+  it('refreshes a Home that is already showing when an upgrade started elsewhere (App on foreground) went in', async () => {
+    store.set(STAGE_KEY, 'done');
+    const tree = await renderHome();
+    expect(starterUpgradeListeners.size).toBe(1);
+    const loadsBefore = vi.mocked(loadHomeDeckSummaries).mock.calls.length;
+
+    // No focus: the App-level foreground run replaced the starter pack.
+    await act(async () => {
+      for (const listener of [...starterUpgradeListeners]) listener(['aws-saa-c03']);
+    });
+    await flush();
+    await flush();
+    expect(vi.mocked(loadHomeDeckSummaries).mock.calls.length).toBeGreaterThan(loadsBefore);
+
+    act(() => tree.unmount());
+    expect(starterUpgradeListeners.size).toBe(0);
   });
 });

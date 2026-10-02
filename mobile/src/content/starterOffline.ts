@@ -101,6 +101,32 @@ export async function ensureStarterDeckInstalled(slug: string): Promise<StarterI
 const lastUpgradeAttemptMs = new Map<string, number>();
 let upgradeInFlight: Promise<string[]> | null = null;
 
+export type StarterUpgradeListener = (upgradedSlugs: string[]) => void;
+const upgradeListeners = new Set<StarterUpgradeListener>();
+
+/**
+ * Calls `listener` with the upgraded slugs after every upgrade run that replaced at least one
+ * starter deck, whoever started it (App on foreground, or Home on focus). Home uses it to reload a
+ * shelf that is already showing. Returns the unsubscribe function.
+ */
+export function subscribeStarterUpgrades(listener: StarterUpgradeListener): () => void {
+  upgradeListeners.add(listener);
+  return () => {
+    upgradeListeners.delete(listener);
+  };
+}
+
+function notifyUpgraded(slugs: string[]): void {
+  if (slugs.length === 0) return;
+  for (const listener of [...upgradeListeners]) {
+    try {
+      listener([...slugs]);
+    } catch {
+      // A listener's failure is its own; the others still hear about the upgrade.
+    }
+  }
+}
+
 /** Test seam: the backoff map is module state and vitest shares modules within a file. */
 export function resetStarterUpgradeBackoff(): void {
   lastUpgradeAttemptMs.clear();
@@ -149,12 +175,17 @@ async function runStarterUpgrade(): Promise<string[]> {
 /**
  * Replaces each installed starter deck (Version ending "-starter") with the full deck from the
  * manifest, through the normal install path. One attempt per slug per STARTER_UPGRADE_BACKOFF_MS;
- * concurrent callers share one run. Returns the slugs that were upgraded. Never throws.
+ * concurrent callers share one run. Returns the slugs that were upgraded and tells the
+ * subscribeStarterUpgrades listeners about them. Never throws.
  */
 export function upgradeStarterDecks(): Promise<string[]> {
   if (upgradeInFlight) return upgradeInFlight;
   const run = runStarterUpgrade()
     .catch(() => [] as string[])
+    .then((upgraded) => {
+      notifyUpgraded(upgraded);
+      return upgraded;
+    })
     .finally(() => {
       upgradeInFlight = null;
     });
@@ -192,6 +223,9 @@ export async function listInstalledDeckEntries(): Promise<ManifestDeckEntry[]> {
       deck = null;
     }
     if (!deck) continue;
+    // A starter pack holds a prefix; the shelf shows the full deck's size, which the pack carries.
+    const totalCards =
+      hasStarterPack(slug) && isStarterVersion(deck.Version) ? STARTER_PACKS[slug].totalCards : (deck.Cards?.length ?? 0);
     entries.push({
       slug,
       title: deck.Title ?? slug,
@@ -203,6 +237,7 @@ export async function listInstalledDeckEntries(): Promise<ManifestDeckEntry[]> {
       eta: null,
       downloadMode: null,
       version: String(deck.Version ?? 'unknown'),
+      totalCards,
       buildId: null,
       path: null,
       sha256: null,

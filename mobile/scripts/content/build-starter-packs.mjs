@@ -16,7 +16,8 @@
 // already_up_to_date and the full deck would never replace the pack.
 //
 // Also writes src/content/starter/index.ts (static requires, so the JSON is inlined into the JS bundle and
-// ships over OTA). Re-run it to refresh the packs after a content publish; it overwrites the files.
+// ships over OTA). Re-run it to refresh the packs after a content publish; it overwrites the files, all
+// of them or none (every pack is built and checked in memory before the first write).
 
 import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -83,7 +84,7 @@ function validateDeck(slug, entry, deck) {
   }
 }
 
-async function buildPack(manifest, slug) {
+async function buildPack(manifest, slug, get) {
   const entry = (manifest.decks ?? []).find((d) => d.slug === slug);
   if (!entry) throw new Error(`${slug}: not in the live manifest`);
   // A starter pack must open without an entitlement: only free, live, public decks qualify.
@@ -95,7 +96,7 @@ async function buildPack(manifest, slug) {
   }
   const prefix = typeof manifest.prefix === 'string' && manifest.prefix ? manifest.prefix : 'content';
   const url = `${CDN_BASE}/${prefix}/${entry.path}`;
-  const bytes = await fetchBytes(url);
+  const bytes = await get(url);
   if (typeof entry.sha256 === 'string' && entry.sha256) {
     const actual = createHash('sha256').update(bytes).digest('hex');
     if (actual !== entry.sha256) throw new Error(`${slug}: sha256 mismatch for ${url}`);
@@ -168,27 +169,35 @@ ${buildLines}
 `;
 }
 
-async function main() {
-  const manifest = JSON.parse((await fetchBytes(MANIFEST_URL)).toString('utf8'));
-  await mkdir(OUT_DIR, { recursive: true });
+/**
+ * Builds every pack in memory, checks the size limit, then writes the packs and index.ts. A failed
+ * fetch, validation or size check throws before any file is written, so the packs on disk always
+ * match the index.ts next to them.
+ */
+export async function buildStarterPacks({ fetchBytes: get = fetchBytes, outDir = OUT_DIR, log = console.log } = {}) {
+  const manifest = JSON.parse((await get(MANIFEST_URL)).toString('utf8'));
   const builds = {};
+  const outputs = [];
   let totalBytes = 0;
   for (const slug of STARTER_SLUGS) {
-    const { buildId, pack } = await buildPack(manifest, slug);
+    const { buildId, pack } = await buildPack(manifest, slug, get);
     const text = `${JSON.stringify(pack, null, 2)}\n`;
     totalBytes += Buffer.byteLength(text);
-    await writeFile(resolve(OUT_DIR, `${slug}.starter.json`), text);
+    outputs.push({ file: `${slug}.starter.json`, text });
     builds[slug] = buildId;
     const nonMcq = pack.cards.filter((c) => !hasMcq(c)).length;
-    console.log(`${slug}: ${pack.cards.length}/${pack.totalCards} cards (${nonMcq} non-MCQ), ${pack.version}`);
+    log(`${slug}: ${pack.cards.length}/${pack.totalCards} cards (${nonMcq} non-MCQ), ${pack.version}`);
   }
   if (totalBytes >= MAX_TOTAL_BYTES) throw new Error(`starter packs total ${totalBytes} bytes, limit ${MAX_TOTAL_BYTES}`);
-  await writeFile(resolve(OUT_DIR, 'index.ts'), renderIndex(builds));
-  console.log(`wrote ${STARTER_SLUGS.length} packs (${totalBytes} bytes) and index.ts to ${OUT_DIR}`);
+  outputs.push({ file: 'index.ts', text: renderIndex(builds) });
+
+  await mkdir(outDir, { recursive: true });
+  for (const { file, text } of outputs) await writeFile(resolve(outDir, file), text);
+  log(`wrote ${STARTER_SLUGS.length} packs (${totalBytes} bytes) and index.ts to ${outDir}`);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch((err) => {
+  buildStarterPacks().catch((err) => {
     console.error(err instanceof Error ? err.message : err);
     process.exit(1);
   });
