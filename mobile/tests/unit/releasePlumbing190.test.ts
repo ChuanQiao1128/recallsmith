@@ -200,7 +200,11 @@ function runIosBuild(opts: { org: string; project: string; profile?: string; nam
   return { res, log, diag };
 }
 
-describe('ios-build.sh Sentry placeholder guard', () => {
+// The ios-build.sh cases spawn bash plus fakes; on a loaded machine one case can pass vitest's 5 s default, so
+// these spawn suites get their own budget (same as otaReleaseScript.test.ts). No assertion changes.
+const SPAWN_SUITE = { timeout: 30_000 };
+
+describe('ios-build.sh Sentry placeholder guard', SPAWN_SUITE, () => {
   it('exits 5 with the fill message while production org/project are placeholders (DRY_RUN=1)', () => {
     const { res, log, diag } = runIosBuild({ org: 'REPLACE_ME_SENTRY_ORG', project: 'REPLACE_ME_SENTRY_PROJECT' });
     expect(res.status, diag).toBe(5);
@@ -231,7 +235,7 @@ describe('ios-build.sh Sentry placeholder guard', () => {
 // R19M-REL-3: a production build (DRY_RUN included) needs the EXPO_PUBLIC_SENTRY_DSN and SENTRY_AUTH_TOKEN
 // names in the EAS production environment; otherwise Sentry never initialises and SENTRY_ALLOW_FAILURE
 // turns the tokenless dSYM/source-map upload into a warning. The check reads names only.
-describe('ios-build.sh EAS production env names', () => {
+describe('ios-build.sh EAS production env names', SPAWN_SUITE, () => {
   it.each(SENTRY_NAMES)('exits 3 naming %s when it is missing from the production environment (DRY_RUN=1)', (name) => {
     const names = [...OTHER_NAMES, ...SENTRY_NAMES.filter((n) => n !== name)];
     const { res, log, diag } = runIosBuild({ org: 'example-org', project: 'example-project', names });
