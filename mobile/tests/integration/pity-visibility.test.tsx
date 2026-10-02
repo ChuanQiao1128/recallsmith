@@ -198,7 +198,7 @@ describe('pity guarantee visibility', () => {
     await flush();
 
     const badge = tree.root.findByProps({ testID: 'draw-result-guarantee-badge' });
-    expect(String(badge.props.children)).toContain('GUARANTEE');
+    expect(String(badge.props.children)).toBe('GUARANTEED RARE');
   });
 
   it('leaves the result screen unmarked when the guarantee did not fire', async () => {

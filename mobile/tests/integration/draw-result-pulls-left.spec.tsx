@@ -138,8 +138,8 @@ describe('DrawResultScreen pulls-left selector (MGACHA-21)', () => {
     await flush();
 
     const text = collectText(tree);
-    expect(text).toContain('60 pulls left');
-    expect(text).not.toContain('65 pulls left');
+    expect(text).toContain('Continue drawing  ·  60 draws left');
+    expect(text).not.toContain('65 draws left');
   });
 
   it('still offers the library path when no pulls are spendable', async () => {

@@ -357,12 +357,13 @@ describe('DrawScreen v9', () => {
 
     // The per-pack "no pulls" text is preserved (hidden) for any
     // accessibility / collectText harness that checks for it.
-    expect(collectText(tree)).toContain('No pulls for this pack yet. Learn its cards to earn more.');
+    expect(collectText(tree)).toContain('No draws for this pack yet. Learn its cards to earn more.');
 
     // New escape CTA — visible + actionable
     const earnCta = tree.root.findByProps({ testID: 'draw-earn-pulls-cta' });
     expect(earnCta).toBeTruthy();
-    expect(collectText(tree)).toContain('Earn pulls by studying');
+    expect(collectText(tree)).toContain('Earn draws by studying');
+    expect(earnCta.props.accessibilityLabel).toBe("Start today's session to earn draws");
 
     act(() => {
       earnCta.props.onPress();

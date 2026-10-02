@@ -43,7 +43,7 @@ export function pickRarity(roll: number, odds: PoolOdds): 'COM' | 'RAR' | 'LEG' 
 // the reading a player already had is the correct one.
 export function buildPityProgressLabel(count: number): string {
   const safe = Math.max(0, Math.min(9, Math.floor(count)));
-  return `${safe}/10 cards until guaranteed RAR+`;
+  return `${safe}/10 cards until a rare or better is guaranteed`;
 }
 
 export function buildMockDrawResult(params: {
