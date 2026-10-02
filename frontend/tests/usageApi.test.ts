@@ -197,3 +197,79 @@ describe('latestUsageDay', () => {
     expect(api.latestUsageDay([])).toBeNull();
   });
 });
+
+describe('fetchFunnel', () => {
+  it('reads GET /api/v1/admin/analytics/funnel?days=90 and coerces every count', async () => {
+    httpMock.get.mockResolvedValueOnce({
+      data: ok({
+        days: '90',
+        overall: { counts: { first_open: '40', goal_chosen: 30, starter_started: '20', signup_completed: null } },
+        weeks: [
+          { cohortWeek: '2026-09-21', counts: { first_open: 10, goal_chosen: '8' } },
+          { weekStart: '2026-09-28', first_open: '4', returned_day_1: 2 },
+          { counts: { first_open: 99 } },
+          'junk',
+        ],
+        decks: [
+          { deckSlug: 'aws-saa-c03', counts: { goal_chosen: '12', starter_started: 9, first_pack_opened: null } },
+          { deckSlug: 'csharp-basics', goal_chosen: 3, starter_completed: '1' },
+          { counts: { goal_chosen: 1 } },
+        ],
+      }),
+    });
+    const res = await api.fetchFunnel();
+    expect(httpMock.get).toHaveBeenCalledWith('/api/v1/admin/analytics/funnel', { params: { days: 90 } });
+    expect(res.success).toBe(true);
+    expect(res.data?.days).toBe(90);
+    expect(res.data?.overall).toEqual({
+      first_open: 40,
+      goal_chosen: 30,
+      starter_started: 20,
+      starter_completed: null,
+      first_pack_opened: null,
+      returned_day_1: null,
+      returned_day_7: null,
+      signup_started: null,
+      signup_completed: null,
+    });
+    expect(res.data?.weeks.map(w => [w.weekStart, w.counts.first_open, w.counts.goal_chosen, w.counts.returned_day_1])).toEqual([
+      ['2026-09-21', 10, 8, null],
+      ['2026-09-28', 4, null, 2],
+    ]);
+    expect(res.data?.decks).toEqual([
+      {
+        deckSlug: 'aws-saa-c03',
+        counts: { goal_chosen: 12, starter_started: 9, starter_completed: null, first_pack_opened: null },
+      },
+      {
+        deckSlug: 'csharp-basics',
+        counts: { goal_chosen: 3, starter_started: null, starter_completed: 1, first_pack_opened: null },
+      },
+    ]);
+  });
+
+  it('passes the window through and tolerates missing weeks and decks', async () => {
+    httpMock.get.mockResolvedValueOnce({ data: ok({ overall: { first_open: 0 } }) });
+    const res = await api.fetchFunnel(30);
+    expect(httpMock.get).toHaveBeenCalledWith('/api/v1/admin/analytics/funnel', { params: { days: 30 } });
+    expect(res.data?.days).toBe(30);
+    expect(res.data?.overall.first_open).toBe(0);
+    expect(res.data?.weeks).toEqual([]);
+    expect(res.data?.decks).toEqual([]);
+  });
+
+  it('keeps the server code of a 503 NOT_READY, refuses a shapeless payload and never throws', async () => {
+    httpMock.get.mockRejectedValueOnce(
+      httpError(503, { success: false, data: null, error: { code: 'NOT_READY', message: 'Run migration 043' }, traceId: 't' }),
+    );
+    const notReady = await api.fetchFunnel();
+    expect(notReady.success).toBe(false);
+    expect(notReady.error?.code).toBe('NOT_READY');
+
+    httpMock.get.mockResolvedValueOnce({ data: ok({ weeks: 'soon' }) });
+    expect((await api.fetchFunnel()).error?.code).toBe('BAD_RESPONSE');
+
+    httpMock.get.mockRejectedValueOnce(new Error('offline'));
+    expect((await api.fetchFunnel()).success).toBe(false);
+  });
+});
