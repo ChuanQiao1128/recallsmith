@@ -19,6 +19,7 @@ import type { RootStackParamList } from '../navigation/types';
 import { useAuthStore } from '../auth/authStore';
 import { friendlyAuthError } from '../auth/authErrors';
 import { leaveAuthFlow, type LeaveAuthNavigation } from '../auth/leaveAuthFlow';
+import { recordFunnelEvent } from '../telemetry/funnel';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ConfirmSignUp'>;
 
@@ -50,6 +51,8 @@ export default function ConfirmSignUpScreen({ navigation, route }: Props) {
 
     try {
       const outcome = await confirmSignUpCode(email, code);
+      // R24 M01: anonymous funnel step; both outcomes mean the account now exists.
+      recordFunnelEvent('signup_completed');
       if (outcome === 'signed_in') {
         // Auto sign-in completed within the window — leave the funnel.
         leaveAuthFlow(navigation as unknown as LeaveAuthNavigation);

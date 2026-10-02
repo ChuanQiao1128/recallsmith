@@ -16,6 +16,7 @@ import {
   invalidateProgressQueueCache,
 } from './progressQueueCache';
 import { clampStage, MAX_NEXT_REVIEW_HORIZON_MS } from '../review/model';
+import { isFsrsEnabled } from '../config/featureFlags';
 import type { CardProgress } from '../review/model';
 
 /**
@@ -132,6 +133,14 @@ export type ProgressEvent = {
  * ladder changes meaning, never bump it for a bugfix.
  */
 const SCHEDULER_VERSION = 'ladder-v1';
+
+/**
+ * The scheduler stamped on a review recorded now (R24 §4.3): 'fsrs-5' while
+ * features.fsrs.enabled is on (scheduleWithFsrs), the ladder's name otherwise.
+ */
+export function getSchedulerVersion(): string {
+  return isFsrsEnabled() ? 'fsrs-5' : SCHEDULER_VERSION;
+}
 
 /**
  * ----------------------------
@@ -952,7 +961,7 @@ export async function recordReviewEvent(...args: any[]): Promise<string | null> 
     // Stamped at record time, not at push time: an event that sat in the queue
     // across an app upgrade was still produced by the scheduler that was
     // running when the user rated the card.
-    schedulerVersion: SCHEDULER_VERSION,
+    schedulerVersion: getSchedulerVersion(),
   };
 
   await enqueueProgressEvent(queueSub, ev);

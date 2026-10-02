@@ -62,6 +62,20 @@ vi.mock('../../src/features/gacha/draw/drawStateStore', () => ({
   loadDrawState: vi.fn(async (slug: string) => ({ owned: drawStateFixture[slug] ?? [], pity: null })),
 }));
 
+let activeDeckFixture: string | null = 'aws-saa-c03';
+vi.mock('../../src/content/activeDeck', () => ({
+  loadActiveDeckSlug: vi.fn(async () => activeDeckFixture),
+}));
+
+// Decks whose content is on the device (F01: the domain row only opens an installed deck).
+let installedDecksFixture: string[] = ['aws-saa-c03', 'csharp'];
+vi.mock('../../src/content/deckCache', () => ({
+  getCachedDeck: vi.fn(async (slug: string) => (installedDecksFixture.includes(slug) ? { Slug: slug } : null)),
+}));
+vi.mock('../../src/content/starterOffline', () => ({
+  listInstalledDeckEntries: vi.fn(async () => [...installedDecksFixture].sort().map((slug) => ({ slug }))),
+}));
+
 vi.mock('../../src/features/gacha/audience/audiencePrefs', () => ({
   getAudiencePreference: vi.fn(async () => audienceFixture),
 }));
@@ -99,8 +113,7 @@ function exactTexts(tree: renderer.ReactTestRenderer): string[] {
 
 async function flush(): Promise<void> {
   await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
   });
 }
 
@@ -153,6 +166,8 @@ describe('Me tab · MoreScreen + Profile + Help real copy', () => {
       'aws-saa-c03': ['a-001', 'a-002'],
     };
     audienceFixture = 'both';
+    activeDeckFixture = 'aws-saa-c03';
+    installedDecksFixture = ['aws-saa-c03', 'csharp'];
     openUrlMock.mockClear();
   });
 
@@ -197,6 +212,50 @@ describe('Me tab · MoreScreen + Profile + Help real copy', () => {
       tree.root.findByProps({ testID: 'more-row-help' }).props.onPress();
     });
     expect(navigate).toHaveBeenCalledWith('HelpFAQ');
+  });
+
+  it('the Progress by domain row opens the active deck', async () => {
+    const navigate = vi.fn();
+    const tree = await renderMore(navigate);
+    const row = tree.root.findByProps({ testID: 'more-row-domains' });
+    expect(exactTexts(tree)).toContain('Progress by domain');
+    await act(async () => {
+      row.props.onPress();
+    });
+    await flush();
+    expect(navigate).toHaveBeenCalledWith('DomainProgress', { slug: 'aws-saa-c03' });
+  });
+
+  it('the Progress by domain row skips an active deck that is not installed for the first installed deck', async () => {
+    const navigate = vi.fn();
+    activeDeckFixture = 'gone-deck';
+    installedDecksFixture = ['csharp', 'claude-ccdv-f'];
+    const tree = await renderMore(navigate);
+    await act(async () => {
+      tree.root.findByProps({ testID: 'more-row-domains' }).props.onPress();
+    });
+    await flush();
+    expect(navigate).toHaveBeenCalledWith('DomainProgress', { slug: 'claude-ccdv-f' });
+    expect(navigate).not.toHaveBeenCalledWith('DomainProgress', { slug: 'gone-deck' });
+  });
+
+  it('the Progress by domain row uses the first installed deck when no active deck is stored', async () => {
+    const navigate = vi.fn();
+    activeDeckFixture = null;
+    const tree = await renderMore(navigate);
+    await act(async () => {
+      tree.root.findByProps({ testID: 'more-row-domains' }).props.onPress();
+    });
+    await flush();
+    expect(navigate).toHaveBeenCalledWith('DomainProgress', { slug: 'aws-saa-c03' });
+  });
+
+  it('hides the Progress by domain row when no deck is installed', async () => {
+    activeDeckFixture = 'aws-saa-c03';
+    installedDecksFixture = [];
+    const tree = await renderMore();
+    expect(tree.root.findAll((node) => node.props?.testID === 'more-row-domains')).toHaveLength(0);
+    expect(exactTexts(tree)).not.toContain('Progress by domain');
   });
 
   it('privacy and support rows open the policy pages', async () => {

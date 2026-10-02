@@ -113,6 +113,7 @@ public static class UsageAnalytics
     }
     try
     {
+      // R24X F05: the anonymous funnel's 400-day retention is its own tick step (anon_funnel_retention), not run here.
       return await ComputeAsync(conn, today);
     }
     catch (Exception ex)

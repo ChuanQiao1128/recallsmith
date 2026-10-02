@@ -1,4 +1,5 @@
-import { isDue, scheduleNextReview, type CardProgress, type ReviewRating } from '../../../review/model';
+import { isDue, type CardProgress, type ReviewRating } from '../../../review/model';
+import { scheduleWithFsrs } from '../../../review/fsrsScheduler';
 import type { CardExport, DeckExport } from '../../../types/deckExport';
 import type { OwnedGate } from '../contracts';
 import type { CurrentCardLike } from '../session/sessionReviewHelpers';
@@ -78,9 +79,20 @@ export function isFocusPractice(p: CardProgress, rating: ReviewRating, now: Date
  * due, so only a due card, or an Again, goes through the scheduler. A Hard, Good or Easy on a card
  * that is not due yet is practice: stage, nextReviewAt, lapses and hardStreak stay as they were,
  * and only lastReviewedAt moves, so the card is not dealt again as a related card the same day.
+ * The FSRS memory state stays too: when it was trusted (anchor = lastReviewedAt) the anchor moves
+ * with lastReviewedAt so the state stays trusted, and fsrsReviewedAt keeps the real review the
+ * next one is measured from. A state that was already stale stays stale.
  * The Mistake Book still records the rating either way.
  */
 export function scheduleFocusReview(p: CardProgress, rating: ReviewRating, now: Date): CardProgress {
-  if (!isFocusPractice(p, rating, now)) return scheduleNextReview(p, rating, now);
-  return { ...p, lastReviewedAt: now.getTime() };
+  if (!isFocusPractice(p, rating, now)) return scheduleWithFsrs(p, rating, now.getTime());
+  const nowMs = now.getTime();
+  if (typeof p.fsrsAnchorAt === 'number' && p.fsrsAnchorAt === p.lastReviewedAt) {
+    const reviewedAt =
+      typeof p.fsrsReviewedAt === 'number' && p.fsrsReviewedAt > 0 && p.fsrsReviewedAt <= p.fsrsAnchorAt
+        ? p.fsrsReviewedAt
+        : p.fsrsAnchorAt;
+    return { ...p, lastReviewedAt: nowMs, fsrsAnchorAt: nowMs, fsrsReviewedAt: reviewedAt };
+  }
+  return { ...p, lastReviewedAt: nowMs };
 }

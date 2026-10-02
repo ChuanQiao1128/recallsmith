@@ -132,6 +132,7 @@ vi.mock('../../src/review/storage', () => ({
 import { LibraryScreen } from '../../src/screens/LibraryScreen';
 import { installDeckFromUrl } from '../../src/content/deckRepository';
 import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStateCache';
+import { recordMistakeOutcome } from '../../src/features/gacha/mistakes/mistakeBook';
 
 const installDeckFromUrlMock = vi.mocked(installDeckFromUrl);
 
@@ -378,5 +379,86 @@ describe('LibraryScreen stale-while-revalidate (G02)', () => {
 
     expect(tree.root.findByProps({ testID: 'library-card-grid' })).toBeTruthy();
     expect(tree.root.findAllByProps({ testID: 'library-unavailable-state' })).toHaveLength(0);
+  });
+});
+
+describe('LibraryScreen Progress by domain entry point (D02)', () => {
+  const deck1 = makeDeck('csharp', 'C# Interview', [
+    { uid: '1', order: 1, difficulty: 1, question: 'Q1' },
+    { uid: '2', order: 2, difficulty: 2, question: 'Q2' },
+  ]);
+
+  beforeEach(() => {
+    (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+    asyncStorageMap.clear();
+    invalidateDrawStateCache();
+    mockActiveDeckSlug = 'csharp';
+    mockManifestDecks = [{ slug: 'csharp', title: 'C# Interview', availability: 'live' }];
+    resolveDeckFixture = () => deck1;
+    updatesFixture = {};
+    installDeckOkFixture = true;
+    vi.clearAllMocks();
+  });
+
+  it('the header link "By domain" opens Progress by domain for the selected deck', async () => {
+    const navigate = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <LibraryScreen navigation={{ navigate } as any} route={{ key: 'library', name: 'Library' } as any} />,
+      );
+    });
+    await flush();
+
+    const link = tree.root.findAll(
+      (node) => node.props?.testID === 'library-domains-link' && typeof node.type === 'string',
+    );
+    expect(link).toHaveLength(1);
+    expect(link[0].props.accessibilityRole).toBe('button');
+    const texts = link[0].findAll((node) => (node.type as any) === 'Text').map((node) => node.props.children);
+    expect(texts).toEqual(['By domain']);
+    act(() => {
+      link[0].props.onPress();
+    });
+    expect(navigate).toHaveBeenCalledWith('DomainProgress', { slug: 'csharp' });
+  });
+
+  it('shows the Mistakes pill and the By domain link in one row, each opening its own screen', async () => {
+    await recordMistakeOutcome({ deckSlug: 'csharp', stableUid: '1', topic: null, rating: 'again', at: Date.now() });
+    const navigate = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <LibraryScreen navigation={{ navigate } as any} route={{ key: 'library', name: 'Library' } as any} />,
+      );
+    });
+    await flush();
+    await flush();
+
+    const byId = (id: string) =>
+      tree.root.findAll((node) => node.props?.testID === id && typeof node.type === 'string');
+    const pill = byId('library-mistakes-pill');
+    const link = byId('library-domains-link');
+    expect(pill).toHaveLength(1);
+    expect(link).toHaveLength(1);
+    // Same row: the nearest host View above each pill is the one shared row.
+    const hostRow = (node: renderer.ReactTestInstance) => {
+      let current = node.parent;
+      while (current && (current.type as unknown) !== 'View') current = current.parent;
+      return current;
+    };
+    expect(hostRow(pill[0])).not.toBeNull();
+    expect(hostRow(pill[0])).toBe(hostRow(link[0]));
+
+    act(() => {
+      pill[0].props.onPress();
+    });
+    expect(navigate).toHaveBeenCalledTimes(1);
+    expect(navigate).toHaveBeenLastCalledWith('MistakeBook', { slug: 'csharp' });
+    act(() => {
+      link[0].props.onPress();
+    });
+    expect(navigate).toHaveBeenCalledTimes(2);
+    expect(navigate).toHaveBeenLastCalledWith('DomainProgress', { slug: 'csharp' });
   });
 });

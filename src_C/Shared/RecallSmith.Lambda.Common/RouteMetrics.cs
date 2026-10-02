@@ -226,6 +226,10 @@ public static class RouteMetrics
     "/api/v1/admin/automation/eval-gate/:gateId/revoke",
     "/api/v1/admin/card-reports/:reportId/resolve",
     "/api/v1/admin/decks/:deckId/semantic-duplicates",
+    "/api/v1/admin/analytics/funnel",
+
+    // R24 A01: the public anonymous funnel ingest, matched exactly by the dispatcher.
+    "/api/v1/public/events",
 
     // Internal machine-caller routes: the dispatcher matches these exactly (no suffix match, see
     // VpcFunction), so they are labelled by exact match too.
@@ -541,18 +545,22 @@ public static class RouteMetrics
     return JsonSerializer.Serialize(payload);
   }
 
+  /// <summary>The R24 anonymous funnel ingest: its metric line never carries the client's trace header.</summary>
+  private const string AnonymousIngestRoute = "/api/v1/public/events";
+
   private static void Emit(string service, LambdaRequest req, double latencyMs, int statusCode, bool isError)
   {
     try
     {
       if (IsDisabled(Environment.GetEnvironmentVariable(DisableEnvVar))) return;
 
+      var route = RouteFor(req.Path);
       var line = BuildLine(
         metricNamespace: Environment.GetEnvironmentVariable(NamespaceEnvVar) is { Length: > 0 } ns
           ? ns
           : DefaultNamespace,
         service: service,
-        route: RouteFor(req.Path),
+        route: route,
         method: MethodFor(req.Method),
         // Three decimals to match the ingest_timing line; sub-millisecond routes exist
         // (the OPTIONS preflight is one) and rounding them to 0 would make their p99 a
@@ -563,9 +571,13 @@ public static class RouteMetrics
         traceId: req.TraceId,
         timestampMs: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         xrayTraceId: TraceContext.CurrentRoot(),
-        // A producer's id (the Python callbacks send it); an invalid value is simply omitted.
-        upstreamTraceId: TraceContext.RootFromHeader(
-          req.Headers.TryGetValue(TraceContext.UpstreamHeader, out var upstream) ? upstream : null));
+        // A producer's id (the Python callbacks send it); an invalid value is simply omitted. Never for the anonymous
+        // funnel ingest (R24X F05): the app's header there is its Sentry trace id, which would join a batch to a
+        // Sentry event.
+        upstreamTraceId: route == AnonymousIngestRoute
+          ? null
+          : TraceContext.RootFromHeader(
+            req.Headers.TryGetValue(TraceContext.UpstreamHeader, out var upstream) ? upstream : null));
 
       // Console.Out directly, NOT Log.Info, and that is the difference between a metric and
       // a log line. Log.Info is gated on LOG_LEVEL, so the first person who turns logging

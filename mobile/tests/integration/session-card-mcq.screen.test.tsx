@@ -84,6 +84,8 @@ const featureFlagsMock = vi.hoisted(() => vi.fn());
 vi.mock('../../src/config/featureFlags', () => ({
   useFeatureFlags: () => featureFlagsMock(),
   getFeatureFlags: () => featureFlagsMock(),
+  // Same reading as the real isFsrsEnabled: FSRS unless the flags turn it off explicitly.
+  isFsrsEnabled: () => featureFlagsMock()?.fsrs?.enabled !== false,
 }));
 
 const store = new Map<string, string>();
@@ -901,7 +903,7 @@ describe('SessionCardScreen MCQ branch', () => {
   it('reads the study goal and previews and saves with the exam-capped day (R22 §7)', async () => {
     const pad = (n: number) => String(n).padStart(2, '0');
     const today = new Date(FIXED_NOW_MS);
-    const exam = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 5);
+    const exam = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 3);
     const examDate = `${exam.getFullYear()}-${pad(exam.getMonth() + 1)}-${pad(exam.getDate())}`;
     const capMs = new Date(exam.getFullYear(), exam.getMonth(), exam.getDate() - 1).getTime();
     store.set('recallsmith:study-goal:v1', JSON.stringify({ deckSlug: 'csharp', examDate }));
@@ -914,9 +916,9 @@ describe('SessionCardScreen MCQ branch', () => {
     vi.setSystemTime(FIXED_NOW_MS + 3_000);
     await press(tree, 'mcq-submit-sure');
 
-    // Uncapped, a Good from stage 2 is 8 days; the exam pulls it to the start of the day before.
+    // Uncapped, a Good on this row is 4 days (FSRS, R24 §4.3); the exam pulls it to the start of the day before.
     const days = Math.round((capMs - (FIXED_NOW_MS + 3_000)) / 86_400_000);
-    expect(days).toBeLessThan(8);
+    expect(days).toBeLessThan(4);
     expect(idText(tree, 'mcq-schedule-line')).toBe(`Scheduled as Good · back in ${days} day${days === 1 ? '' : 's'}`);
 
     await press(tree, 'mcq-next');
@@ -932,7 +934,8 @@ describe('SessionCardScreen MCQ branch', () => {
     await press(tree, 'mcq-option-b');
     vi.setSystemTime(FIXED_NOW_MS + 3_000);
     await press(tree, 'mcq-submit-sure');
-    expect(idText(tree, 'mcq-schedule-line')).toBe('Scheduled as Good · back in 8 days');
+    // FSRS (R24 §4.3): a one-day interval reviewed on its due day, rated Good, is 4 days out.
+    expect(idText(tree, 'mcq-schedule-line')).toBe('Scheduled as Good · back in 4 days');
 
     await press(tree, 'mcq-next');
     expect(buildRatedSessionState).toHaveBeenCalledWith(expect.objectContaining({ rating: 'good', examDate: null }));

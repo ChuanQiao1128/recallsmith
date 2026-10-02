@@ -90,6 +90,24 @@ vi.mock('../../src/content/activeDeck', () => ({
   setActiveDeckSlug: vi.fn(async (slug: string) => setActiveDeckSlugMock(slug)),
 }));
 
+// R24 §2.2: Home asks the starter module (lazily imported) to upgrade an installed starter pack and
+// listens for upgrades. Like the real module, a run that upgraded something tells every listener.
+const upgradeStarterDecksMock = vi.hoisted(() => vi.fn(async (): Promise<string[]> => []));
+const starterUpgradeListeners = vi.hoisted(() => new Set<(slugs: string[]) => void>());
+vi.mock('../../src/content/starterOffline', () => ({
+  upgradeStarterDecks: async () => {
+    const upgraded = await upgradeStarterDecksMock();
+    if (upgraded.length > 0) for (const listener of [...starterUpgradeListeners]) listener(upgraded);
+    return upgraded;
+  },
+  subscribeStarterUpgrades: (listener: (slugs: string[]) => void) => {
+    starterUpgradeListeners.add(listener);
+    return () => {
+      starterUpgradeListeners.delete(listener);
+    };
+  },
+}));
+
 vi.mock('../../src/features/gacha/home/deckActionResolver', () => ({
   loadHomeDeckSummaries: vi.fn(async () => {
     const now = Date.now();
@@ -146,6 +164,11 @@ vi.mock('../../src/features/gacha/streaks/streakTracker', () => ({
     lastQualifiedDateKey: '2026-01-01',
     currentWeekKey: '2026-W01',
   })),
+}));
+
+const recordFunnelEventMock = vi.fn();
+vi.mock('../../src/telemetry/funnel', () => ({
+  recordFunnelEvent: (...args: unknown[]) => recordFunnelEventMock(...args),
 }));
 
 vi.mock('../../src/sync/progressSync', () => ({
@@ -245,6 +268,12 @@ describe('HomeScreen starter lesson', () => {
     deckSummariesFixture = [deck('aws-saa-c03', { newToday: 5 }), deck('csharp-basics')];
     updatesFixture = {};
     navigateMock.mockReset();
+    recordFunnelEventMock.mockReset();
+    upgradeStarterDecksMock.mockReset();
+    upgradeStarterDecksMock.mockResolvedValue([]);
+    // Earlier tests leave their Home mounted; refocus() and the listeners reach this test's Home only.
+    focusCallbacks.clear();
+    starterUpgradeListeners.clear();
     vi.mocked(loadHomeDeckSummaries).mockReset();
     vi.mocked(loadHomeDeckSummaries).mockImplementation(async () => makeHomeSummary() as any);
   });
@@ -257,6 +286,8 @@ describe('HomeScreen starter lesson', () => {
 
     expect(sessionCalls()).toEqual([['SessionCard', { slug: 'aws-saa-c03', mode: 'learn-new' }]]);
     expect(navigateMock).not.toHaveBeenCalledWith('Draw', expect.anything());
+    // R24 M01: opening the lesson is the funnel's starter_started, with the lesson deck.
+    expect(recordFunnelEventMock.mock.calls).toEqual([['starter_started', 'aws-saa-c03']]);
 
     // Back on Home after a pause (a second focus of the same Home): no second automatic trip into
     // the lesson, so the learner can stay here.
@@ -280,6 +311,8 @@ describe('HomeScreen starter lesson', () => {
     });
     expect(sessionCalls()).toHaveLength(3);
     expect(navigateMock).not.toHaveBeenCalledWith('Draw', expect.anything());
+    // Every open passes the same step; the funnel module keeps it to once per install.
+    expect(recordFunnelEventMock.mock.calls).toEqual(Array(3).fill(['starter_started', 'aws-saa-c03']));
   });
 
   it('falls back to the active deck when no study goal is stored', async () => {
@@ -324,5 +357,43 @@ describe('HomeScreen starter lesson', () => {
     expect(tree.root.findAll((node) => node.props?.testID === 'home-starter-cta')).toHaveLength(0);
     expect(tree.root.findAll((node) => node.props?.testID === 'home-primary-cta' && (node.type as any) === 'Pressable')).toHaveLength(1);
     expect(textBlob(tree)).not.toContain('first lesson');
+    expect(recordFunnelEventMock).not.toHaveBeenCalled();
+  });
+
+  it('upgrades an installed starter pack on every Home focus and refreshes Home when the full deck went in', async () => {
+    store.set(STAGE_KEY, 'done');
+    await renderHome();
+    expect(upgradeStarterDecksMock).toHaveBeenCalledTimes(1);
+    const loadsBefore = vi.mocked(loadHomeDeckSummaries).mock.calls.length;
+
+    // Nothing upgraded: the focus refresh is the only reload.
+    await refocus();
+    expect(upgradeStarterDecksMock).toHaveBeenCalledTimes(2);
+    const loadsAfterQuietFocus = vi.mocked(loadHomeDeckSummaries).mock.calls.length;
+
+    // The full deck replaced the starter pack: Home reloads its shelf once more.
+    upgradeStarterDecksMock.mockResolvedValue(['aws-saa-c03']);
+    await refocus();
+    expect(upgradeStarterDecksMock).toHaveBeenCalledTimes(3);
+    const quietFocusLoads = loadsAfterQuietFocus - loadsBefore;
+    expect(vi.mocked(loadHomeDeckSummaries).mock.calls.length - loadsAfterQuietFocus).toBeGreaterThan(quietFocusLoads);
+  });
+
+  it('refreshes a Home that is already showing when an upgrade started elsewhere (App on foreground) went in', async () => {
+    store.set(STAGE_KEY, 'done');
+    const tree = await renderHome();
+    expect(starterUpgradeListeners.size).toBe(1);
+    const loadsBefore = vi.mocked(loadHomeDeckSummaries).mock.calls.length;
+
+    // No focus: the App-level foreground run replaced the starter pack.
+    await act(async () => {
+      for (const listener of [...starterUpgradeListeners]) listener(['aws-saa-c03']);
+    });
+    await flush();
+    await flush();
+    expect(vi.mocked(loadHomeDeckSummaries).mock.calls.length).toBeGreaterThan(loadsBefore);
+
+    act(() => tree.unmount());
+    expect(starterUpgradeListeners.size).toBe(0);
   });
 });

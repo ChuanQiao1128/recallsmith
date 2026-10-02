@@ -5,6 +5,7 @@ import type { RootStackParamList } from '../navigation/types';
 import AppInfoScreen from '../components/AppInfoScreen';
 import { loadStreakSnapshot, type StreakSnapshot } from '../features/gacha/streaks/streakTracker';
 import { listDrawStateSlugs, loadDrawState } from '../features/gacha/draw/drawStateStore';
+import { resolveDomainProgressSlug } from '../features/domains/domainProgressDeck';
 import appJson from '../../app.json';
 import { useFeatureFlags } from '../config/featureFlags';
 import { colors } from '../theme/colors';
@@ -27,6 +28,8 @@ export const MORE_BYLINE = 'Made by one developer in Auckland';
 export function MoreScreen({ navigation }: Props) {
   const [snapshot, setSnapshot] = useState<StreakSnapshot | null>(null);
   const [collected, setCollected] = useState<number | null>(null);
+  // The deck the Progress by domain row opens; null hides the row (no installed deck).
+  const [domainsSlug, setDomainsSlug] = useState<string | null>(null);
   // Read defensively: some suites mock the flags without the mistakeBook key.
   const flags = useFeatureFlags();
   const showMistakeBook = flags.mistakeBook?.enabled !== false;
@@ -38,7 +41,12 @@ export function MoreScreen({ navigation }: Props) {
   // the streak/collection numbers stale after a review or a draw.
   useEffect(() => {
     let cancelled = false;
+    const loadDomainsSlug = async () => {
+      const slug = await resolveDomainProgressSlug();
+      if (!cancelled) setDomainsSlug(slug);
+    };
     const load = async () => {
+      void loadDomainsSlug();
       const [loadedSnapshot, collectedCount] = await Promise.all([
         loadStreakSnapshot(),
         (async () => {
@@ -104,6 +112,17 @@ export function MoreScreen({ navigation }: Props) {
               >
                 <Text style={styles.rowTitle}>Mistake Book</Text>
                 <Text style={styles.rowSubtitle}>Cards you missed, plus related review</Text>
+              </Pressable>
+            ) : null}
+            {domainsSlug ? (
+              <Pressable
+                accessibilityRole="button"
+                testID="more-row-domains"
+                style={styles.row}
+                onPress={() => navigation.navigate('DomainProgress', { slug: domainsSlug })}
+              >
+                <Text style={styles.rowTitle}>Progress by domain</Text>
+                <Text style={styles.rowSubtitle}>Cards learned in each exam area</Text>
               </Pressable>
             ) : null}
             {showReports ? (

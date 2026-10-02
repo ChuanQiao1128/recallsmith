@@ -26,6 +26,7 @@ import {
   DEFAULT_FEATURE_FLAGS,
   applyRemoteFeatures,
   getFeatureFlags,
+  isFsrsEnabled,
   subscribeFeatureFlags,
   useFeatureFlags,
   type FeatureFlags,
@@ -85,6 +86,8 @@ describe('feature flags', () => {
       cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
       sentry: DEFAULT_FEATURE_FLAGS.sentry,
       cardReport: { enabled: false },
+      fsrs: { enabled: true },
+      anonFunnel: { enabled: false },
     });
     expect(Object.isFrozen(getFeatureFlags())).toBe(true);
     expect(Object.isFrozen(getFeatureFlags().mcq)).toBe(true);
@@ -118,6 +121,8 @@ describe('feature flags', () => {
       cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
       sentry: DEFAULT_FEATURE_FLAGS.sentry,
       cardReport: DEFAULT_FEATURE_FLAGS.cardReport,
+      fsrs: DEFAULT_FEATURE_FLAGS.fsrs,
+      anonFunnel: DEFAULT_FEATURE_FLAGS.anonFunnel,
     });
   });
 
@@ -130,6 +135,8 @@ describe('feature flags', () => {
       cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
       sentry: DEFAULT_FEATURE_FLAGS.sentry,
       cardReport: DEFAULT_FEATURE_FLAGS.cardReport,
+      fsrs: DEFAULT_FEATURE_FLAGS.fsrs,
+      anonFunnel: DEFAULT_FEATURE_FLAGS.anonFunnel,
     });
 
     expect(applyRemoteFeatures({ features: { mcq: { maxPerRun: 0 } } })).toEqual({
@@ -145,6 +152,8 @@ describe('feature flags', () => {
       cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
       sentry: DEFAULT_FEATURE_FLAGS.sentry,
       cardReport: DEFAULT_FEATURE_FLAGS.cardReport,
+      fsrs: DEFAULT_FEATURE_FLAGS.fsrs,
+      anonFunnel: DEFAULT_FEATURE_FLAGS.anonFunnel,
     });
   });
 
@@ -159,7 +168,7 @@ describe('feature flags', () => {
           },
         }),
       ),
-    ).toEqual({ mcq: DEFAULT_FEATURE_FLAGS.mcq, paywall: { hidden: true }, ceremony: DEFAULT_FEATURE_FLAGS.ceremony, mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook, cardSource: DEFAULT_FEATURE_FLAGS.cardSource, sentry: DEFAULT_FEATURE_FLAGS.sentry, cardReport: DEFAULT_FEATURE_FLAGS.cardReport });
+    ).toEqual({ mcq: DEFAULT_FEATURE_FLAGS.mcq, paywall: { hidden: true }, ceremony: DEFAULT_FEATURE_FLAGS.ceremony, mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook, cardSource: DEFAULT_FEATURE_FLAGS.cardSource, sentry: DEFAULT_FEATURE_FLAGS.sentry, cardReport: DEFAULT_FEATURE_FLAGS.cardReport, fsrs: DEFAULT_FEATURE_FLAGS.fsrs, anonFunnel: DEFAULT_FEATURE_FLAGS.anonFunnel });
     expect(
       applyRemoteFeatures(
         asRemoteConfig({
@@ -177,6 +186,8 @@ describe('feature flags', () => {
       cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
       sentry: DEFAULT_FEATURE_FLAGS.sentry,
       cardReport: DEFAULT_FEATURE_FLAGS.cardReport,
+      fsrs: DEFAULT_FEATURE_FLAGS.fsrs,
+      anonFunnel: DEFAULT_FEATURE_FLAGS.anonFunnel,
     });
 
     expect(
@@ -193,7 +204,7 @@ describe('feature flags', () => {
           },
         }),
       ),
-    ).toEqual({ mcq: DEFAULT_FEATURE_FLAGS.mcq, paywall: { hidden: true }, ceremony: DEFAULT_FEATURE_FLAGS.ceremony, mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook, cardSource: DEFAULT_FEATURE_FLAGS.cardSource, sentry: DEFAULT_FEATURE_FLAGS.sentry, cardReport: DEFAULT_FEATURE_FLAGS.cardReport });
+    ).toEqual({ mcq: DEFAULT_FEATURE_FLAGS.mcq, paywall: { hidden: true }, ceremony: DEFAULT_FEATURE_FLAGS.ceremony, mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook, cardSource: DEFAULT_FEATURE_FLAGS.cardSource, sentry: DEFAULT_FEATURE_FLAGS.sentry, cardReport: DEFAULT_FEATURE_FLAGS.cardReport, fsrs: DEFAULT_FEATURE_FLAGS.fsrs, anonFunnel: DEFAULT_FEATURE_FLAGS.anonFunnel });
 
     for (const maxPerRun of [null, 1.5, -1, Number.NaN]) {
       expect(
@@ -258,6 +269,8 @@ describe('feature flags', () => {
       cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
       sentry: DEFAULT_FEATURE_FLAGS.sentry,
       cardReport: DEFAULT_FEATURE_FLAGS.cardReport,
+      fsrs: DEFAULT_FEATURE_FLAGS.fsrs,
+      anonFunnel: DEFAULT_FEATURE_FLAGS.anonFunnel,
     });
 
     await unmount(tree);
@@ -291,6 +304,8 @@ describe('feature flags', () => {
       cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
       sentry: DEFAULT_FEATURE_FLAGS.sentry,
       cardReport: DEFAULT_FEATURE_FLAGS.cardReport,
+      fsrs: DEFAULT_FEATURE_FLAGS.fsrs,
+      anonFunnel: DEFAULT_FEATURE_FLAGS.anonFunnel,
     });
 
     await unmount(tree);
@@ -353,6 +368,65 @@ describe('feature flags', () => {
     applyRemoteFeatures(null);
     expect(listener).toHaveBeenCalledTimes(2);
 
+    unsubscribe();
+  });
+
+  it('fsrs: on by default, remote false turns it off, non-boolean keeps the default', () => {
+    expect(DEFAULT_FEATURE_FLAGS.fsrs).toEqual({ enabled: true });
+    expect(Object.isFrozen(DEFAULT_FEATURE_FLAGS.fsrs)).toBe(true);
+    expect(isFsrsEnabled()).toBe(true);
+
+    expect(applyRemoteFeatures(asRemoteConfig({ features: { fsrs: { enabled: false } } })).fsrs).toEqual({
+      enabled: false,
+    });
+    expect(isFsrsEnabled()).toBe(false);
+
+    expect(applyRemoteFeatures(asRemoteConfig({ features: { fsrs: { enabled: true } } })).fsrs).toEqual({
+      enabled: true,
+    });
+    expect(isFsrsEnabled()).toBe(true);
+
+    expect(applyRemoteFeatures(asRemoteConfig({ features: { fsrs: { enabled: 'off' } } })).fsrs).toEqual({
+      enabled: true,
+    });
+    expect(applyRemoteFeatures(asRemoteConfig({ features: { fsrs: [] } })).fsrs).toEqual({ enabled: true });
+  });
+
+  it('fsrs: notifies subscribers when only the fsrs flag changes', () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeFeatureFlags(listener);
+
+    applyRemoteFeatures(asRemoteConfig({ features: { fsrs: { enabled: false } } }));
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    applyRemoteFeatures(null);
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    unsubscribe();
+  });
+
+  it('anonFunnel defaults off and only a boolean true turns it on (R24 §3.4)', () => {
+    expect(DEFAULT_FEATURE_FLAGS.anonFunnel).toEqual({ enabled: false });
+    expect(Object.isFrozen(DEFAULT_FEATURE_FLAGS.anonFunnel)).toBe(true);
+    expect(getFeatureFlags().anonFunnel.enabled).toBe(false);
+
+    for (const enabled of ['true', 1, null, [], {}]) {
+      expect(applyRemoteFeatures(asRemoteConfig({ features: { anonFunnel: { enabled } } })).anonFunnel).toEqual({
+        enabled: false,
+      });
+    }
+    for (const anonFunnel of [true, 'on', [], null]) {
+      expect(applyRemoteFeatures(asRemoteConfig({ features: { anonFunnel } })).anonFunnel).toEqual({ enabled: false });
+    }
+
+    const listener = vi.fn();
+    const unsubscribe = subscribeFeatureFlags(listener);
+    const on = applyRemoteFeatures(asRemoteConfig({ features: { anonFunnel: { enabled: true } } }));
+    expect(on.anonFunnel).toEqual({ enabled: true });
+    expect(Object.isFrozen(on.anonFunnel)).toBe(true);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(applyRemoteFeatures(asRemoteConfig({ features: { anonFunnel: { enabled: true } } }))).toBe(on);
+    expect(listener).toHaveBeenCalledTimes(1);
     unsubscribe();
   });
 });

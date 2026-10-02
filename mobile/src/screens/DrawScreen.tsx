@@ -12,6 +12,7 @@ import { goHome } from '../navigation/tabNavigation';
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
 import { checkManifestForUpdates, listManifestDecks } from '../content/deckRepository';
 import { getCachedDeck, installDeckAndInvalidate } from '../content/deckCache';
+import { ensureStarterDeckInstalled } from '../content/starterOffline';
 import { deckShortTitle } from '../content/deckShortTitle';
 import { rarityOfCard } from '../features/gacha/draw/cardRarity';
 import { commitDraw } from '../features/gacha/draw/drawCommit';
@@ -36,6 +37,7 @@ import { PAGE_GRADIENT_LIGHT, packImageForSlug, packPaletteFromSlug, type PackPa
 import { prewarmCeremonyAudio } from '../components/ceremonyAudio';
 import { prewarmFoilShader } from '../components/ceremony/FoilLayer';
 import type { DeckExport } from '../types/deckExport';
+import { recordFunnelEvent } from '../telemetry/funnel';
 
 function readRN<T = any>(key: string, fallback: T): T {
   try {
@@ -442,15 +444,36 @@ export function DrawScreen({ navigation, route }: Props) {
       let cancelled = false;
 
       const resolveOrInstall = async (slug: string) => {
-        let deck = await getCachedDeck(slug);
+        const deck = await getCachedDeck(slug);
         if (deck) return deck;
-        const updates = await checkManifestForUpdates(false);
-        const update = updates[slug];
-        if (!update?.remoteUrl) return null;
-        if (!cancelled) setInstallingPack(true);
-        const installed = await installDeckAndInvalidate(slug, update.remoteUrl, update.remoteVersion, update.remoteSha256);
-        if (!installed) return null;
-        return getCachedDeck(slug);
+        // A thrown manifest check or download is held, not rethrown at once: offline, or with the
+        // download failed, a goal deck starts from the bundled starter pack (R24 §2.2).
+        let downloadError: unknown = null;
+        let updates: Awaited<ReturnType<typeof checkManifestForUpdates>> | null = null;
+        try {
+          updates = await checkManifestForUpdates(false);
+        } catch (err) {
+          downloadError = err;
+        }
+        const update = updates?.[slug];
+        let downloadFailed = !updates || Object.keys(updates).length === 0;
+        if (update?.remoteUrl) {
+          if (!cancelled) setInstallingPack(true);
+          let installed = false;
+          try {
+            installed = await installDeckAndInvalidate(slug, update.remoteUrl, update.remoteVersion, update.remoteSha256);
+          } catch (err) {
+            downloadError = err;
+          }
+          if (installed) return getCachedDeck(slug);
+          downloadFailed = true;
+        }
+        if (downloadFailed && (await ensureStarterDeckInstalled(slug)) !== 'unavailable') {
+          const starter = await getCachedDeck(slug);
+          if (starter) return starter;
+        }
+        if (downloadError) throw downloadError;
+        return null;
       };
 
       const load = async () => {
@@ -650,6 +673,8 @@ export function DrawScreen({ navigation, route }: Props) {
         // reason -- right after a draw is when a second device is most
         // worth reconciling.
         scheduleProgressSync({ delayMs: DRAW_COMMITTED_SYNC_DELAY_MS, reason: 'draw_committed' });
+        // R24 M01: anonymous funnel step; only the first committed pack of the install is recorded.
+        recordFunnelEvent('first_pack_opened', ready.slug);
 
         const latestPulls = spendablePullsNow(spent.wallet);
         setReady((prev) =>

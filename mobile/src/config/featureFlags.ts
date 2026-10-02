@@ -27,6 +27,12 @@ export type FeatureFlags = {
   // V11: default-off gate for the learner "Report a problem" entry points and My reports.
   // Read as `?.enabled === true` because older test mocks omit the key.
   cardReport: { enabled: boolean };
+  // F02: remote kill switch for FSRS scheduling; off falls back to the ladder (scheduleNextReview).
+  // Read as `?.enabled !== false` (isFsrsEnabled) because older test mocks omit the key.
+  fsrs: { enabled: boolean };
+  // R24 M01: default-off gate for sending the anonymous install funnel (telemetry/funnel.ts).
+  // Events are still recorded locally while off; only `enabled === true` lets them be sent.
+  anonFunnel: { enabled: boolean };
 };
 
 export const DEFAULT_FEATURE_FLAGS: FeatureFlags = Object.freeze({
@@ -44,6 +50,8 @@ export const DEFAULT_FEATURE_FLAGS: FeatureFlags = Object.freeze({
   cardSource: Object.freeze({ enabled: true }),
   sentry: Object.freeze({ enabled: true }),
   cardReport: Object.freeze({ enabled: false }),
+  fsrs: Object.freeze({ enabled: true }),
+  anonFunnel: Object.freeze({ enabled: false }),
 });
 
 let snapshot = DEFAULT_FEATURE_FLAGS;
@@ -67,11 +75,18 @@ function snapshotsEqual(left: FeatureFlags, right: FeatureFlags): boolean {
     && left.cardSource.enabled === right.cardSource.enabled
     && left.sentry.enabled === right.sentry.enabled
     && left.cardReport.enabled === right.cardReport.enabled
+    && left.fsrs.enabled === right.fsrs.enabled
+    && left.anonFunnel.enabled === right.anonFunnel.enabled
   );
 }
 
 export function getFeatureFlags(): FeatureFlags {
   return snapshot;
+}
+
+/** FSRS scheduling unless the remote config turned it off explicitly. */
+export function isFsrsEnabled(): boolean {
+  return getFeatureFlags().fsrs?.enabled !== false;
 }
 
 /**
@@ -97,6 +112,10 @@ export function applyRemoteFeatures(config: RemoteConfig | null | undefined): Fe
   const sentry = isRecord(remoteSentry) ? remoteSentry : undefined;
   const remoteCardReport = features?.cardReport;
   const cardReport = isRecord(remoteCardReport) ? remoteCardReport : undefined;
+  const remoteFsrs = features?.fsrs;
+  const fsrs = isRecord(remoteFsrs) ? remoteFsrs : undefined;
+  const remoteAnonFunnel = features?.anonFunnel;
+  const anonFunnel = isRecord(remoteAnonFunnel) ? remoteAnonFunnel : undefined;
 
   const maxPerRun = mcq?.maxPerRun;
   const relatedCount = mistakeBook?.relatedCount;
@@ -165,6 +184,18 @@ export function applyRemoteFeatures(config: RemoteConfig | null | undefined): Fe
         typeof cardReport?.enabled === 'boolean'
           ? cardReport.enabled
           : DEFAULT_FEATURE_FLAGS.cardReport.enabled,
+    }),
+    fsrs: Object.freeze({
+      enabled:
+        typeof fsrs?.enabled === 'boolean'
+          ? fsrs.enabled
+          : DEFAULT_FEATURE_FLAGS.fsrs.enabled,
+    }),
+    anonFunnel: Object.freeze({
+      enabled:
+        typeof anonFunnel?.enabled === 'boolean'
+          ? anonFunnel.enabled
+          : DEFAULT_FEATURE_FLAGS.anonFunnel.enabled,
     }),
   });
 

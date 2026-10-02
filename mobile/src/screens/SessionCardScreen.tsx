@@ -19,6 +19,7 @@ import type { CardExport, DeckExport } from '../types/deckExport';
 import { errorToMessage } from '../api/errorKind';
 import { checkManifestForUpdates, listManifestDecks } from '../content/deckRepository';
 import { getCachedDeck, installDeckAndInvalidate } from '../content/deckCache';
+import { ensureStarterDeckInstalled } from '../content/starterOffline';
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
 import { deckShortTitle } from '../content/deckShortTitle';
 import type { CardProgress, ReviewRating } from '../review/model';
@@ -228,6 +229,8 @@ export function SessionCardScreen({ navigation, route }: Props) {
   // on a fresh install), and whether the current load error belongs to the starter lesson.
   const [installing, setInstalling] = useState(false);
   const [starterLoadError, setStarterLoadError] = useState(false);
+  // R24 §2.2: the deck was missing offline and the bundled starter pack was loaded instead.
+  const [starterOfflineNotice, setStarterOfflineNotice] = useState(false);
   const [progress, setProgress] = useState<CardProgress[]>([]);
   // The gate for this deck, resolved once per load and then held. It is state
   // rather than a ref because the render path counts due cards with it, and it
@@ -454,6 +457,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
         setLoading(true);
         setLoadError(null);
         setStarterLoadError(false);
+        setStarterOfflineNotice(false);
         setInstalling(false);
         starterLessonRef.current = null;
         setSessionDone(0);
@@ -521,16 +525,20 @@ export function SessionCardScreen({ navigation, route }: Props) {
             await ensurePremiumOnce();
           }
           let resolved = await getCachedDeck(slugValue);
+          let usedStarterPack = false;
           if (!resolved) {
-            let updates: Awaited<ReturnType<typeof checkManifestForUpdates>>;
+            // A thrown manifest check or install is held here, not rethrown at once: a download
+            // failure on the starter lesson's deck first tries the bundled starter pack (R24 §2.2).
+            let downloadError: unknown = null;
+            let updates: Awaited<ReturnType<typeof checkManifestForUpdates>> | null = null;
             try {
               updates = await checkManifestForUpdates();
             } catch (err) {
               failure = 'download';
-              throw err;
+              downloadError = err;
             }
-            const info = (updates as any)[slugValue];
-            if (info?.remoteUrl && info?.remoteVersion) {
+            const info = updates ? (updates as any)[slugValue] : null;
+            if (updates && info?.remoteUrl && info?.remoteVersion) {
               if (!cancelled) setInstalling(true);
               let ok = false;
               try {
@@ -541,8 +549,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
                   info.remoteSha256 ?? null,
                 );
               } catch (err) {
-                failure = 'download';
-                throw err;
+                downloadError = err;
               } finally {
                 if (!cancelled) setInstalling(false);
               }
@@ -551,16 +558,29 @@ export function SessionCardScreen({ navigation, route }: Props) {
               } else {
                 failure = 'download';
               }
-            } else {
+            } else if (updates) {
               // A manifest that loaded with no download for this deck means the deck is not there to
               // fetch; no manifest at all (an offline first run) is a download failure.
-              failure = Object.keys(updates ?? {}).length > 0 ? 'unavailable' : 'download';
+              failure = Object.keys(updates).length > 0 ? 'unavailable' : 'download';
             }
+            if (!resolved && failure === 'download' && (await isStarterLessonDeck(slugValue))) {
+              // Offline, or the download failed: the starter lesson starts from the bundled pack.
+              const starter = await ensureStarterDeckInstalled(slugValue);
+              if (starter !== 'unavailable') {
+                resolved = await getCachedDeck(slugValue);
+                if (resolved) {
+                  failure = null;
+                  usedStarterPack = starter === 'installed-starter';
+                }
+              }
+            }
+            if (!resolved && downloadError) throw downloadError;
           }
           if (!resolved) {
             throw new Error('Deck not found');
           }
           if (cancelled) return;
+          setStarterOfflineNotice(usedStarterPack);
           const premiumByDeck = resolved.DeckType !== 1;
           const premiumDeck = premiumByManifest || premiumByDeck;
           if (premiumDeck && !premiumActive) {
@@ -851,6 +871,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
         focusRun: focusIndex !== null,
         excludeUids: studiedUidsRef.current,
         examDate: examDateRef.current,
+        learningCheck: isLearningCheck,
       });
       // Focus run: serve the next focus card in order instead of the planner's pick.
       if (focusIndex) focusRatedUidsRef.current.add(current.card.StableUid);
@@ -1280,6 +1301,11 @@ export function SessionCardScreen({ navigation, route }: Props) {
           {loadForecast ? (
             <Text testID="session-card-load-forecast" numberOfLines={2} style={styles.forecastLine}>
               {loadForecast}
+            </Text>
+          ) : null}
+          {starterOfflineNotice ? (
+            <Text testID="session-card-offline-starter" numberOfLines={2} style={styles.forecastLine}>
+              {STARTER_COPY.offlineStarterNotice}
             </Text>
           ) : null}
           <ScrollView

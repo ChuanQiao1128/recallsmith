@@ -18,6 +18,7 @@ import {
 } from '../features/gacha/audience/goalChoices';
 import { setActiveDeckSlug } from '../content/activeDeck';
 import { startStarterLesson } from '../features/gacha/onboarding/onboardingPrefs';
+import { recordFunnelEvent } from '../telemetry/funnel';
 import { colors } from '../theme/colors';
 import { CHROME_MAX_FONT_SCALE } from '../theme/dynamicType';
 
@@ -56,6 +57,8 @@ export function AudienceSurveyScreen({ navigation }: Props) {
       setSaving(false);
       return;
     }
+    // R24 M01: anonymous funnel step (once per install; the deck slug only).
+    recordFunnelEvent('goal_chosen', deckSlug);
     // No state update after this: replace unmounts the screen.
     navigation.replace('Home');
   }

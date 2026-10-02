@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import {
   resolveMcqVerdict,
@@ -14,6 +14,15 @@ import { MCQ_FAST_MS } from '../../src/features/gacha/mcq/mcqConstants';
 import { scheduleNextReview, type CardProgress, type ReviewRating } from '../../src/review/model';
 import type { McqExport } from '../../src/types/deckExport';
 import { scheduleFocusReview } from '../../src/features/gacha/mistakes/focusSession';
+import { applyRemoteFeatures } from '../../src/config/featureFlags';
+import type { RemoteConfig } from '../../src/config/remoteConfig';
+import { scheduleWithFsrs } from '../../src/review/fsrsScheduler';
+
+// The previews below that pin ladder steps run with features.fsrs off (R24 §4.3); the FSRS default has its own test.
+const ladderOnly = () => applyRemoteFeatures({ features: { fsrs: { enabled: false } } } as unknown as RemoteConfig);
+afterEach(() => {
+  applyRemoteFeatures(null);
+});
 
 function mcqOf(correct: readonly string[], keys: readonly string[] = ['a', 'b', 'c', 'd']): McqExport {
   return {
@@ -288,7 +297,8 @@ describe('mcqVerdict', () => {
     expect(MCQ_FAST_MS).toEqual({ upToFourOptions: 20_000, fiveOrSix: 30_000 });
   });
 
-  it('previews the ladder without touching the progress', () => {
+  it('previews the ladder without touching the progress (features.fsrs off)', () => {
+    ladderOnly();
     const NOW = new Date(1_700_000_000_000);
     const p = (stage: number, extra?: Partial<CardProgress>): CardProgress => ({
       stableUid: 'u',
@@ -343,6 +353,56 @@ describe('mcqVerdict', () => {
     );
   });
 
+  it('previews the FSRS schedule by default without touching the progress', () => {
+    const NOW = new Date(1_700_000_000_000);
+    const fresh = (extra?: Partial<CardProgress>): CardProgress => ({ stableUid: 'u', stage: 0, nextReviewAt: 0, ...extra });
+
+    // A first review: the FSRS-5 first intervals (again keeps the 10 minute relearn step).
+    expect(describeScheduledRating(fresh(), 'again', NOW).line).toBe('Scheduled as Again · back in 10 minutes');
+    expect(describeScheduledRating(fresh(), 'hard', NOW).line).toBe('Scheduled as Hard · back in 2 days');
+    const good = describeScheduledRating(fresh(), 'good', NOW);
+    expect(good.line).toBe('Scheduled as Good · back in 3 days');
+    expect(good.after.fsrsStability).toBeCloseTo(3.173, 4);
+    expect(describeScheduledRating(fresh(), 'easy', NOW).line).toBe('Scheduled as Easy · back in 16 days');
+
+    fc.assert(
+      fc.property(
+        fc.constantFrom<ReviewRating>(...FOUR),
+        dirtyStageArb,
+        hardStreakArb,
+        fc.integer({ min: 1, max: 60 }),
+        (rating, stage, hardStreak, daysAgo) => {
+          const before = fresh({
+            stage,
+            hardStreak,
+            lastReviewedAt: NOW.getTime() - daysAgo * 86_400_000,
+            nextReviewAt: NOW.getTime() - 1,
+          });
+          const snapshot = structuredClone(before);
+          const { after, line } = describeScheduledRating(before, rating, NOW);
+          expect(after).toEqual(scheduleWithFsrs(before, rating, NOW.getTime()));
+          expect(before).toEqual(snapshot);
+          expect(line.startsWith(`Scheduled as ${RATING_LABEL[rating]}`)).toBe(true);
+          expect(line).toContain(' · back in ');
+        },
+      ),
+    );
+  });
+
+  it('caps the FSRS preview at the exam exactly as the save does (R22 §7)', () => {
+    // Local times: exam on 7 Oct, so nothing is scheduled after the start of 6 Oct.
+    const NOW = new Date(2026, 9, 2, 9, 0, 0);
+    const CAP = new Date(2026, 9, 6, 0, 0, 0).getTime();
+    const fresh: CardProgress = { stableUid: 'u', stage: 0, nextReviewAt: 0 };
+    expect(describeScheduledRating(fresh, 'easy', NOW).line).toBe('Scheduled as Easy · back in 16 days');
+    const capped = describeScheduledRating(fresh, 'easy', NOW, undefined, '2026-10-07');
+    expect(capped.after.nextReviewAt).toBe(CAP);
+    expect(capped.after.fsrsStability).toBeCloseTo(15.6911, 4);
+    expect(capped.line).toBe('Scheduled as Easy · back in 4 days');
+    // A first Good lands before the cap and is left alone.
+    expect(describeScheduledRating(fresh, 'good', NOW, undefined, '2026-10-07').line).toBe('Scheduled as Good · back in 3 days');
+  });
+
   it('previews a focus-run rating with the scheduler that saves it (mobile-16)', () => {
     const NOW = new Date(1_700_000_000_000);
     const DAY = 86_400_000;
@@ -363,15 +423,16 @@ describe('mcqVerdict', () => {
     expect(describeScheduledRating(later, 'easy', NOW, scheduleFocusReview).line).toBe(
       'Practice · schedule unchanged · back in 5 hours',
     );
-    // Again, or a due card, still goes through the ladder and reads as a scheduled rating.
+    // Again, or a due card, still goes through the scheduler and reads as a scheduled rating.
     expect(describeScheduledRating(notDue, 'again', NOW, scheduleFocusReview).line).toBe('Scheduled as Again · back in 10 minutes');
     const due: CardProgress = { ...notDue, nextReviewAt: NOW.getTime() - 1 };
     const dueGood = describeScheduledRating(due, 'good', NOW, scheduleFocusReview);
-    expect(dueGood.after).toEqual(scheduleNextReview(due, 'good', NOW));
+    expect(dueGood.after).toEqual(scheduleWithFsrs(due, 'good', NOW.getTime()));
     expect(dueGood.line.startsWith('Scheduled as Good · back in ')).toBe(true);
   });
 
-  it('previews the exam-capped day when an exam date is set (R22 §7)', () => {
+  it('previews the exam-capped day when an exam date is set (R22 §7, ladder steps: features.fsrs off)', () => {
+    ladderOnly();
     // Local times: exam on 7 Oct, so nothing is scheduled after the start of 6 Oct.
     const NOW = new Date(2026, 9, 2, 9, 0, 0);
     const CAP = new Date(2026, 9, 6, 0, 0, 0).getTime();

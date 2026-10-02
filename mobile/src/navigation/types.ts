@@ -29,6 +29,8 @@ export type RootStackParamList = {
   CardDetail: { cardId: string };
   // K02: slug narrows the book to one deck; absent lists every deck.
   MistakeBook: { slug?: string } | undefined;
+  // D02 (R24 §1.3): per-domain counts of one deck, with a Practice focus session per domain.
+  DomainProgress: { slug: string };
   // V11: the learner's own card reports (flag features.cardReport.enabled).
   MyReports: undefined;
   More: undefined;
