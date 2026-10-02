@@ -74,8 +74,6 @@ public static class RouteMetrics
   /// <summary>The internal actions RouteFor labels; anything else under /internal/ is "unmatched" (same cost rule as the route table).</summary>
   public static readonly IReadOnlyList<string> InternalActions =
   [
-    "outbox/publish",
-    "content-intelligence/import",
     "publish/reap-orphans",
     "manifest/rebuild",
     "db/migrate",
@@ -116,7 +114,6 @@ public static class RouteMetrics
     "/api/v1/db/ping",
     "/api/v1/admin/db/migrate",
     "/api/v1/admin/db/bootstrap-roles",
-    "/api/v1/admin/db/content-intelligence-demo",
     "/api/v1/admin/db/migrations",
     "/api/v1/admin/db/create",
     "/api/v1/admin/db/databases",
@@ -124,8 +121,6 @@ public static class RouteMetrics
     "/api/v1/admin/db/netcheck",
     "/api/v1/admin/db/premium-state",
     "/api/v1/admin/db/rc-events",
-    "/api/v1/admin/analytics/outbox/publish",
-    "/api/v1/admin/analytics/content-intelligence/import",
     "/api/v1/authoring/decks",
     "/api/v1/authoring/cards/import",
     "/api/v1/authoring/cards/page",
@@ -135,7 +130,6 @@ public static class RouteMetrics
     "/api/v1/authoring/publish",
     "/api/v1/authoring/publish/status",
     "/api/v1/authoring/publish/jobs",
-    "/api/v1/authoring/content-intelligence",
     "/api/v1/admin/manifest/rebuild",
     "/api/v1/me",
     "/api/v1/user/client-errors",
@@ -489,7 +483,7 @@ public static class RouteMetrics
   // ------------------------------------------------------------------ the gauge
 
   /// <summary>
-  /// One EMF line carrying a single dimensionless gauge (e.g. OutboxPending) in the same
+  /// One EMF line carrying a single dimensionless gauge (e.g. WebhookEnqueueFailures) in the same
   /// namespace as the route metrics. Same kill switch, same namespace override, same
   /// never-throws rule as Emit; unit null → "None".
   /// </summary>

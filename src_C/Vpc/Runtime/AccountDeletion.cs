@@ -20,11 +20,20 @@ namespace RecallSmith.Lambda.Vpc.Runtime;
 /// The outbox is deleted FIRST, before the events it links to. analytics_event_outbox has no user
 /// column; its rows are found through the event_id they came from, so once user_progress_events is
 /// gone (via the users cascade) they can no longer be located. This is the ordering migration 016
-/// established.
+/// established. The ingest no longer writes the outbox (R26 S01) and migration 045 drops it; until
+/// 045 has run, old rows may still be there, so they are deleted while the table exists and the step
+/// counts zero once it is gone -- also when 045 drops it between the check and the delete (a 42P01 is
+/// rolled back to a savepoint, R26X F01).
 ///
-/// Out of reach on purpose: rows already exported to Snowflake carry only a pseudonymous
-/// user_id_hash, and the Cognito user itself is the phone's job -- the app deletes it after this
-/// call succeeds.
+/// Out of reach on purpose: the Cognito user itself is the phone's job -- the app deletes it after
+/// this call succeeds.
+///
+/// Also out of reach: outbox rows the retired OutboxPublisher had already exported to the core-vpc
+/// bucket under analytics/raw/ (each with an unsalted SHA-256 of the sub and the device id). This code
+/// cannot delete them. As of 2026-10-02 that prefix holds no object versions (the owner deleted the only
+/// test export that day), and nothing writes there any more. What is left under analytics/ is the
+/// content-intelligence demo snapshot (aggregate rows for the demo deck, no user identifiers) and empty
+/// folder keys, which the owner deletes.
 /// </summary>
 public static class AccountDeletion
 {
@@ -33,7 +42,7 @@ public static class AccountDeletion
 
   /// <summary>
   /// Deletes every row keyed by <paramref name="userSub"/> in one transaction, in a fixed order:
-  /// the outbox rows (through the caller's events) first, then user_premium_state and
+  /// the outbox rows (through the caller's events; skipped once migration 045 has dropped the table) first, then user_premium_state and
   /// rc_webhook_events by app_user_id, then the users row -- whose <c>on delete cascade</c> removes
   /// user_entitlements, user_subscriptions, user_progress_events, user_progress, user_draw_owned,
   /// user_draw_meta, user_wallet and user_deck_wallet. The learner's card reports (R20 V05, migration 037) go too;
@@ -45,9 +54,10 @@ public static class AccountDeletion
   {
     await using var tx = await conn.BeginTransactionAsync();
 
-    var outboxRows = await DbUtil.ExecuteAsync(conn, tx,
-      "delete from analytics_event_outbox o using user_progress_events e where o.event_id = e.event_id and e.user_sub = $1",
-      [userSub]);
+    // Checked first so the usual post-045 call never raises 42P01; the savepoint covers 045 committing in between.
+    var outboxRows = await DbUtil.ExecuteScalarAsync(conn, tx, "select to_regclass('analytics_event_outbox') is not null", []) is true
+      ? await DeleteOutboxRowsAsync(conn, tx, userSub)
+      : 0;
 
     var premiumStateRows = await DbUtil.ExecuteAsync(conn, tx,
       "delete from user_premium_state where app_user_id = $1",
@@ -71,6 +81,30 @@ public static class AccountDeletion
     await tx.CommitAsync();
 
     return new AccountDeletionResult(outboxRows, premiumStateRows, webhookEventRows, userRows, cardReportRows, revenueCatQueued);
+  }
+
+  /// <summary>
+  /// Deletes the caller's outbox rows inside a savepoint. Nothing locks the table between the to_regclass check and
+  /// this statement, so migration 045 can drop it in between; the 42P01 then rolls back to the savepoint and counts
+  /// zero instead of aborting the whole deletion (contract R26-00 §0).
+  /// </summary>
+  internal static async Task<int> DeleteOutboxRowsAsync(NpgsqlConnection conn, NpgsqlTransaction tx, string userSub)
+  {
+    const string savepoint = "account_delete_outbox";
+    await tx.SaveAsync(savepoint);
+    try
+    {
+      var rows = await DbUtil.ExecuteAsync(conn, tx,
+        "delete from analytics_event_outbox o using user_progress_events e where o.event_id = e.event_id and e.user_sub = $1",
+        [userSub]);
+      await tx.ReleaseAsync(savepoint);
+      return rows;
+    }
+    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+    {
+      await tx.RollbackAsync(savepoint);
+      return 0;
+    }
   }
 
   public static async Task<APIGatewayProxyResponse> HandleDeleteMe(LambdaRequest req, Res res, AuthContext auth)

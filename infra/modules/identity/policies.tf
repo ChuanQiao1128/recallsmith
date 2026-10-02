@@ -43,7 +43,7 @@ resource "aws_iam_role_policy" "core_vpc" {
         Sid      = "S3Content"
         Effect   = "Allow"
         Action   = ["s3:GetObject", "s3:PutObject"]
-        Resource = ["${local.content_bucket_arn}/content/*", "${local.content_bucket_arn}/analytics/*"]
+        Resource = ["${local.content_bucket_arn}/content/*"]
       },
       {
         Sid      = "S3Premium"

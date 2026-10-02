@@ -18,7 +18,7 @@
 // once for merely defining it.
 //
 // renderAt deliberately does NOT wrap anything in QueryClientProvider.
-// DeckEditPage, NewDeckPage and ContentIntelligencePage call the api module
+// DeckEditPage and NewDeckPage call the api module
 // directly with useEffect/useState; adding a provider they do not use would
 // suggest a caching layer that is not there.
 //

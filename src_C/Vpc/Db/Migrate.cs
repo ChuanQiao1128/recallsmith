@@ -7,7 +7,18 @@ namespace RecallSmith.Lambda.Vpc.Db;
 
 public static class Migrate
 {
-  private sealed record Migration(int Version, string Name, string File, string FullPath);
+  private sealed record Migration(int Version, string Name, string File, string FullPath, bool Destructive);
+
+  /// <summary>
+  /// A header line that marks a migration destructive (R26X F01): <see cref="HandleDbMigrate"/> stops before the
+  /// first pending one unless the caller passes <c>confirmDestructive=&lt;its version&gt;</c>. Only the leading comment
+  /// block is read, so a later comment cannot mark a file by accident.
+  /// </summary>
+  private static readonly System.Text.RegularExpressions.Regex DestructiveHeader = new(
+    "^--\\s*destructive:\\s*true\\s*$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+  /// <summary>Test seam: points <see cref="LoadMigrations"/> at another folder for the current async flow only.</summary>
+  internal static readonly AsyncLocal<string?> MigrationsDirOverride = new();
 
   /// <summary>The migration that creates <c>card_embeddings</c> when the vector extension exists (R20 V06).</summary>
   public const int VectorMigrationVersion = 38;
@@ -40,7 +51,7 @@ public static class Migrate
   private static string MigrationsDir()
   {
     // Copied to output via csproj <CopyToOutputDirectory>.
-    return Path.Combine(AppContext.BaseDirectory, "Db", "Migrations");
+    return MigrationsDirOverride.Value ?? Path.Combine(AppContext.BaseDirectory, "Db", "Migrations");
   }
 
   private static List<Migration> LoadMigrations()
@@ -65,7 +76,8 @@ public static class Migrate
         throw new InvalidOperationException($"Bad migration filename (no numeric prefix): {file}");
       }
 
-      migrations.Add(new Migration(version, baseName, file, Path.Combine(dir, file)));
+      var fullPath = Path.Combine(dir, file);
+      migrations.Add(new Migration(version, baseName, file, fullPath, IsDestructive(File.ReadLines(fullPath))));
     }
 
     var seen = new HashSet<int>();
@@ -75,6 +87,19 @@ public static class Migrate
     }
 
     return migrations;
+  }
+
+  /// <summary>True when the leading comment block (blank lines and <c>--</c> lines) holds <c>-- destructive: true</c>.</summary>
+  internal static bool IsDestructive(IEnumerable<string> lines)
+  {
+    foreach (var raw in lines)
+    {
+      var line = raw.Trim();
+      if (line.Length == 0) continue;
+      if (!line.StartsWith("--", StringComparison.Ordinal)) return false;
+      if (DestructiveHeader.IsMatch(line)) return true;
+    }
+    return false;
   }
 
   private static async Task EnsureMigrationsTable(NpgsqlConnection conn, NpgsqlTransaction? tx)
@@ -200,6 +225,8 @@ public static class Migrate
     }
 
     var dryRun = string.Equals(req.Query.TryGetValue("dryRun", out var d) ? d : null, "true", StringComparison.OrdinalIgnoreCase);
+    // Unlocks exactly one destructive migration: the value must equal its version as dryRun prints it (e.g. "45").
+    var confirmDestructive = req.Query.TryGetValue("confirmDestructive", out var c) ? c : null;
 
     var result = await WithMigrationLock<object>(conn, async () =>
     {
@@ -212,13 +239,22 @@ public static class Migrate
         {
           dryRun = true,
           available = migrations.Select(m => new { version = m.Version, name = m.Name, file = m.File }).ToList(),
-          pending = pending.Select(m => new { version = m.Version, name = m.Name, file = m.File }).ToList(),
+          pending = pending.Select(m => new { version = m.Version, name = m.Name, file = m.File, destructive = m.Destructive }).ToList(),
         };
       }
 
       var appliedNow = new List<object>();
+      Migration? blocked = null;
       foreach (var m in pending)
       {
+        // Stop before a destructive migration the caller did not name; nothing after it runs either, so the
+        // migrations stay in order and a later additive one never carries the destructive one along.
+        if (m.Destructive && !string.Equals(confirmDestructive, m.Version.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal))
+        {
+          blocked = m;
+          break;
+        }
+
         var audit = RecallSmith.Lambda.Vpc.Authoring.AdminAudit.Entry(
           auth, res, "db.migrate", $"migration:{m.Version}", null, new { version = m.Version, name = m.Name, file = m.File });
         var persisted = await ApplyOne(conn, m, audit);
@@ -241,6 +277,11 @@ public static class Migrate
         appliedCount = appliedNow.Count,
         latestAvailable = migrations[^1].Version,
         vectorReady,
+        blockedBy = blocked is null ? null : new { version = blocked.Version, name = blocked.Name, file = blocked.File },
+        message = blocked is null
+          ? null
+          : $"Stopped before destructive migration {blocked.File}; it and every later migration are still pending. " +
+            $"Re-run with confirmDestructive={blocked.Version.ToString(CultureInfo.InvariantCulture)} to apply it.",
       };
     });
 

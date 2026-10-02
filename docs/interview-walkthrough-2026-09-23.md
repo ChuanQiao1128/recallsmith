@@ -15,7 +15,7 @@
 | 我的角色 | 独立开发：产品、iOS、后端、控制台、数据、基础设施、发布全栈 |
 | 规模 | 手机端 ~40k 行 / 234 文件（TS），后端 ~31k 行 / 260 文件（C#），控制台 ~13.5k 行 / 71 文件（TS），2,300+ 自动化测试 |
 | 线上内容 | 3 个卡组、893 张卡（C# 81、AWS SAA-C03 371、Claude CCDV-F 441），其中 307 张是带解析的选择题 |
-| 技术栈 | React Native + Expo（TS）· React + Vite 控制台 · .NET 8 Lambda（API + Worker）· PostgreSQL RDS · S3 + CloudFront · SQS · Cognito · Snowflake（分析）· Terraform |
+| 技术栈 | React Native + Expo（TS）· React + Vite 控制台 · .NET 8 Lambda（API + Worker）· PostgreSQL RDS · S3 + CloudFront · SQS · Cognito · Terraform（Snowflake 已于 2026-10-02 退役，见 §2.4） |
 | 近一个发布周期 | 196 次提交 / 85 个合并 PR / 1 次二进制审核 + 4 次 OTA 热更新 |
 | 成本 | 生产环境 ≈ US$42/月（单人项目的显式成本取舍） |
 
@@ -56,13 +56,13 @@
    └──────────┬──────────────────────┘
               │ Bearer JWT（Lambda 内验签：JWKS/issuer/exp）
        API Gateway (HTTP API) ──► core-vpc Lambda (.NET 8, in VPC)
-              │                        ├─► RDS PostgreSQL（卡片、进度、发布任务、事件 outbox）
+              │                        ├─► RDS PostgreSQL（卡片、进度、发布任务、analytics_daily 日汇总）
               │                        ├─► SQS publish-jobs ──► worker Lambda
               │                        └─► S3 presign（付费卡组）
                                        worker：生成 deck.json / 分块 / delta 补丁 → S3
                                               → 重建 manifest.json → CloudFront
  手机安装：manifest → 分块下载 → sha256 校验 → 本地库
- 分析：事务内写 outbox → S3 JSONL → Snowpipe → Snowflake marts → 内容质量快照回写
+ 分析：Postgres 内的 analytics_daily 日汇总（Snowflake 链路已于 2026-10-02 退役）
 ```
 
 ### 2.1 客户端：离线优先 + 可证明的内容分发
@@ -79,7 +79,10 @@
 ### 2.3 内容作者链路（控制台）
 Markdown 导入器：**词法宽松、载荷严格**——`OPT: a *`、`WHY:`、`TOPIC:` 这类标记用宽松正则识别，但载荷用一整套错误码（选项数、键序、正确数、缺解释…）阻断。导入是**幂等 reconcile**：按 stableUid 比较，产出 create/update/unchanged 计划，先预览再执行。还有一道**服务端就绪守卫**：第一张选择题写完后回读，字段没回来就中止——防止部署顺序错误把选择题静默写成普通卡（这个守卫在 2026-09-21 真的救了一次，见 §3.1）。
 
-### 2.4 数据与分析（设计完成，尚未常态运行）
+### 2.4 数据与分析（Snowflake 已于 2026-10-02 退役）
+
+> **2026-10-02 更新**：Snowflake 已于 2026-10-02 退役（R26）：`snowflake/` 目录删除；同步接口不再写入 `analytics_event_outbox`，outbox 发布器、快照导入和 Content Intelligence 页随之移除（S01 / C01）。outbox 表本身由迁移 045 删除，045 会永久删数据，由我本人手动执行；执行之前表和已有的行仍在生产库里。原因：Snowflake 试用期结束、继续使用需要绑卡付费，而这条链路从未常态运行；Postgres 里的 `analytics_daily` 日汇总已经给出用量和逐卡数字；outbox 里带的是无盐 user hash + device id，却没有任何消费者，留着只有隐私成本。下面一段是当时的设计，作为历史保留，面试时按"做过、评估后退役"讲。
+
 评论事件和业务写在**同一个事务**里进 `analytics_event_outbox`；发布器把 outbox 排空成 S3 JSONL，Snowpipe 入 Snowflake，staging→marts 算每张卡的质量基线（按 `answer_mode` 区分问答/选择题，否则 dwell time 不可比）。**诚实说明**：这条链路跑通过一次，目前没有定时触发，属于"设计完成、待接定时器"。
 
 ### 2.5 基础设施（Wave E，进行中）
@@ -133,7 +136,7 @@ Markdown 导入器：**词法宽松、载荷严格**——`OPT: a *`、`WHY:`、
 2. **规模**：3 个卡组 893 张卡，2300+ 测试；一个发布周期 85 个 PR、1 次审核 + 4 次热更新。
 3. **一个有意思的架构点**：二进制和 OTA 拆分——原生依赖变了才发版本，纯 JS 走 Expo OTA，所以我能在审核期间继续给用户交付功能。
 4. **一个我会拿出来讲的问题**：任选 §3 里一个（推荐 3.1 或 3.5，因为它们体现"排查 + 系统性修复"）。
-5. **收尾**：我知道它离生产级还差什么——CD、staging、数据管道常态化，正在按一份评审文档逐条补。
+5. **收尾**：我知道它离生产级还差什么——CD、staging，正在按一份评审文档逐条补。
 
 ### 10 分钟版（白板）
 按这个顺序画，每画一块说一句"为什么"：
@@ -141,7 +144,7 @@ Markdown 导入器：**词法宽松、载荷严格**——`OPT: a *`、`WHY:`、
 2. API Gateway → Lambda 别名 → **为什么别名**（可回滚、可灰度；顺带讲 §3.1 事故）
 3. RDS + SQS + Worker → **为什么异步**（发布是分钟级的 CPU 活，不能占着 API 连接）
 4. S3 + CloudFront + manifest/分块/delta → **为什么不直接查 API 取卡**（离线、成本、CDN 缓存命中）
-5. 事务 outbox → S3 → Snowflake → **为什么 outbox**（业务写和分析写必须同生共死，又不能让分析拖慢请求）
+5. 分析 → **为什么退役 Snowflake**（2026-10-02：试用到期要付费、链路从未常态运行、outbox 有隐私成本无消费者；Postgres 日汇总够用）
 6. 最后画一条"发布一张卡"的完整数据流，从控制台点击到手机上出现——这条线能把上面所有组件串起来。
 
 ### 被问"这个项目有 AI 参与吗"
@@ -177,11 +180,11 @@ Markdown 导入器：**词法宽松、载荷严格**——`OPT: a *`、`WHY:`、
 15. 支付回调怎么防重放/丢失？→ RevenueCat webhook 用共享密钥 + 常量时间比较；DB 失败必须回 5xx 让对方重试（原来吞成 200，是个真实缺陷）。
 
 **数据与产品**
-16. 为什么要 outbox？→ 业务与分析同事务，异步排空，不阻塞请求，可重放。
+16. 为什么要 outbox？→ 业务与分析同事务，异步排空，不阻塞请求，可重放。（分析 outbox 已随 Snowflake 于 2026-10-02 退役：没有消费者的数据不该留着，这本身也是一个可以讲的取舍。）
 17. 选择题为什么不单独做调度？→ §3.4 的 7 行映射表 + 不变量测试。
 18. 内容怎么保证不重复/不侵权？→ 只取材公开官方文档，逐张记来源；卡组描述写明非官方、非模拟考。
-19. 怎么衡量一张卡是好是坏？→ Snowflake 里按 `answer_mode` 分组的基线（失败率、dwell time），标"有挑战性"vs"可能表述不清"；坦白目前数据量不足。
-20. 下一步最想做什么？→ CD + staging + 数据管道定时化；理由是它们直接降低我犯 §3.1/§3.5 那类错误的概率。
+19. 怎么衡量一张卡是好是坏？→ 当时设计的是 Snowflake 里按 `answer_mode` 分组的基线（失败率、dwell time）；Snowflake 已于 2026-10-02 退役，现在只有 Postgres 日汇总，坦白数据量不足、逐卡质量评分没有在跑。
+20. 下一步最想做什么？→ CD + staging；理由是它们直接降低我犯 §3.1/§3.5 那类错误的概率。（分析只保留 Postgres 的 `analytics_daily` 日汇总，不再有要定时化的数据管道。）
 
 ---
 
@@ -202,7 +205,7 @@ Markdown 导入器：**词法宽松、载荷严格**——`OPT: a *`、`WHY:`、
 | 真实用户数据 | 刚上架，没有 DAU/留存/p95 可引用；不编数字 |
 | CI/CD | CI 跑测试，部署仍是脚本手动触发；CD 在 Wave E 的计划里 |
 | Staging | 只有生产；迁移直接打生产（有快照和向前兼容规则兜底） |
-| Snowflake 常态运行 | 管道搭好、SQL 验证过，但没有定时触发器 |
+| Snowflake 常态运行 | 不再做：Snowflake 已于 2026-10-02 退役（试用到期、从未常态运行，见 §2.4） |
 | 崩溃上报 | Sentry 在 1.6.0 被移除（隐私标签 + 原生依赖），下一个二进制回归 |
 | Multi-AZ / WAF / 多区域 | 显式成本取舍，$42/月的单人项目 |
 | Android | 只有 iOS 构建通道 |
@@ -215,25 +218,25 @@ Markdown 导入器：**词法宽松、载荷严格**——`OPT: a *`、`WHY:`、
 
 ### 8.1 中文
 
-> **DeveloperCards** — 独立开发的 iOS 备考应用（App Store 在架）· React Native/Expo (TypeScript)、React、C#/.NET 8、PostgreSQL、AWS（Lambda / API Gateway / SQS / RDS / S3+CloudFront / Cognito / EventBridge）、Snowflake、Terraform、GitHub Actions · 产品、三端代码、数据平台与基础设施均由本人完成
+> **DeveloperCards** — 独立开发的 iOS 备考应用（App Store 在架）· React Native/Expo (TypeScript)、React、C#/.NET 8、PostgreSQL、AWS（Lambda / API Gateway / SQS / RDS / S3+CloudFront / Cognito / EventBridge）、Terraform、GitHub Actions · 产品、三端代码与基础设施均由本人完成
 
 1. **设计并实现离线优先的内容与进度链路**：卡组以不可变构建发布，支持分块下载、delta 补丁与逐块 sha256 校验；离线评分经事务型 outbox 以单条语句入库、跨设备 LWW 合并；新增字段保持**导出字节级向后兼容**（黄金测试钉住），老版本客户端无需升级即可接收新内容。线上内容从 235 张扩展到 **893 张（含 307 道带解析的选择题）**，新卡型通过一张判定映射表复用既有间隔重复模型，**未引入第二套排期算法或新的进度字段**。
 
 2. **构建并加固 .NET 8 serverless 后端**：发布流水线（API → SQS → Worker → S3/CloudFront）具备死信队列与重投、幂等任务接管、孤儿任务定时清理，以及**按指针回滚**的卡组版本；安全侧在 Lambda 内完成 Cognito JWT 验签（JWKS / issuer / 过期 / 令牌类型）并叠加网关授权器，密钥托管于 SSM 并在部署时注入，执行角色按桶、前缀与队列最小化（移除 4 个 `*FullAccess` 托管策略）；**12 条 CloudWatch 告警 + SNS 通知**覆盖 5xx、限流、队列积压、死信与数据库水位。
 
-3. **搭建行为数据平台并用于内容质量评估**：业务写与分析写在同一事务内落 outbox，**每 15 分钟**增量排空为 S3 JSONL，经 Snowpipe 进入 Snowflake，staging/marts 按作答形式分区计算每张卡的失败率与停留时长基线，将卡片标记为"有挑战性"或"可能表述不清"并回写作者控制台，形成内容迭代闭环。
+3. ~~搭建行为数据平台并用于内容质量评估~~ —— **已撤回（2026-10-02）**：Snowflake 已于 2026-10-02 退役，这条不再投递。原文的 outbox → S3 → Snowpipe → Snowflake 链路在 R26 停用：outbox 不再写入，outbox 表由迁移 045（本人手动执行）删除。
 
 4. **建立全自动交付链路**：用 Terraform 将原本手工创建的生产环境全量纳管（**一次性导入 93 个线上资源、AWS 侧零变更**），并搭建 GitHub Actions CI/CD——OIDC 免长期密钥、先部署 staging 跑冒烟、人工审批后发布生产（发布版本 + 切换别名，冒烟失败自动回滚），数据库迁移与 OTA 热更新纳入同一流水线；日常开发由自建的多 agent 流水线驱动（逐 issue 契约 + 验收脚本 + 三层门禁 + 对抗式审查），该机制在合并前拦下一个会重复发放游戏内货币的并发缺陷，并促成一处未验签 JWT 鉴权漏洞的修复。
 
 ### 8.2 English
 
-> **DeveloperCards** — Independent iOS exam-prep app, live on the App Store · React Native/Expo (TypeScript), React, C#/.NET 8, PostgreSQL, AWS (Lambda, API Gateway, SQS, RDS, S3+CloudFront, Cognito, EventBridge), Snowflake, Terraform, GitHub Actions · sole engineer across product, three clients, data platform and infrastructure
+> **DeveloperCards** — Independent iOS exam-prep app, live on the App Store · React Native/Expo (TypeScript), React, C#/.NET 8, PostgreSQL, AWS (Lambda, API Gateway, SQS, RDS, S3+CloudFront, Cognito, EventBridge), Terraform, GitHub Actions · sole engineer across product, three clients and infrastructure
 
 1. Designed and built the offline-first content and progress pipeline: decks ship as immutable builds with chunked download, delta patches and per-chunk SHA-256 verification; offline reviews reconcile through a transactional outbox with single-statement ingest and last-write-wins merge across devices; new fields keep exports byte-identical for older clients (pinned by golden tests). Grew live content from 235 to 893 cards, including 307 explained multiple-choice items, mapping the new card type onto the existing spaced-repetition model rather than adding a second scheduler or new progress state.
 
 2. Built and hardened the .NET 8 serverless backend: the publish pipeline (API → SQS → worker → S3/CloudFront) has a dead-letter queue with redrive, idempotent job take-over, a scheduled reaper for orphaned jobs and pointer-based deck rollback; Cognito JWTs are verified inside the Lambda (JWKS, issuer, expiry, token use) behind gateway authorizers, secrets live in SSM and are injected at deploy time, and execution roles are scoped per bucket, prefix and queue (four `*FullAccess` managed policies removed); 12 CloudWatch alarms with SNS notification cover 5xx, throttling, queue backlog, dead letters and database headroom.
 
-3. Built the behavioural-analytics platform that scores content quality: business and analytics writes share one transaction through an outbox, drained incrementally every 15 minutes to S3 JSONL, ingested by Snowpipe into Snowflake, where staging and mart models compute per-card failure-rate and dwell-time baselines partitioned by answer mode and flag cards as "productively challenging" or "possibly unclear" back in the authoring console, closing the content-iteration loop.
+3. ~~Built the behavioural-analytics platform that scores content quality~~ — **withdrawn (2026-10-02)**: Snowflake was retired on 2026-10-02 (trial ended, the pipeline never ran on a schedule), and the outbox → S3 → Snowpipe → Snowflake path was retired in R26: the outbox is no longer written, and migration 045, which the owner runs by hand, drops the outbox table. Do not send this bullet.
 
 4. Established fully automated delivery: adopted a hand-built production environment into Terraform (93 live resources imported in one pass with zero AWS-side change) and built a GitHub Actions CI/CD pipeline — keyless OIDC, deploy to staging, smoke test, manual approval, then production (publish version, move alias, automatic rollback on smoke failure), with database migrations and OTA updates in the same pipeline; day-to-day development runs through a self-built multi-agent pipeline (per-issue contracts, acceptance scripts, three gate layers, adversarial review) that caught a concurrency defect which would have double-granted in-app currency and drove the fix for an unverified-JWT auth path.
 
@@ -243,7 +246,7 @@ Markdown 导入器：**词法宽松、载荷严格**——`OPT: a *`、`WHY:`、
 |---|---|
 | 1 | 线上 manifest（3 个卡组 893 张）；`ContentSerializationContractTests` 黄金字节测试；`mcqVerdict` 的 fast-check 不变量；`chunkedInstall.ts` 的分块 + sha256 + 断点续传 |
 | 2 | SQS `RedrivePolicy` + DLQ；`decks.live_build_id` 回滚指针；`JwtVerifier.cs` + 66 个鉴权测试（生产实测伪造 super_admin → 401）；`aws cloudwatch describe-alarms` 12 条 |
-| 3 | `ProgressEvents.cs` 的单语句 outbox CTE；`snowflake/001_content_intelligence_setup.sql`；控制台 Content Intelligence 页 |
+| 3 | 已撤回：Snowflake 于 2026-10-02 退役；`snowflake/` SQL 和 Content Intelligence 页已删除，ProgressEvents 的单语句 CTE 去掉了写 outbox 的那一段（R26）；outbox 表由迁移 045（本人手动执行）删除 |
 | 4 | `infra/envs/prod/imports.tf`（93 个 import 块）+ apply 记录 `93 imported, 0 added, 0 destroyed`；`.github/workflows/`；`docs/delivery/r16-issues/`（每个 issue 的契约与验收脚本）；两个缺陷各有复现测试与提交 |
 
 ### 8.4 发出前的解锁条件（2026-09-23 状态）
@@ -252,10 +255,10 @@ Markdown 导入器：**词法宽松、载荷严格**——`OPT: a *`、`WHY:`、
 |---|---|---|---|
 | 1 | 全部 | — | — |
 | 2 | DLQ / 回滚指针 / JWT 验签 / IAM 最小化 / 12 条告警 | 密钥进 SSM（E06，代码已完成待合）；网关授权器（E08） | ≈ 0.5 天 |
-| 3 | outbox / S3 / Snowflake SQL / 控制台回写 | "每 15 分钟" 依赖 EventBridge 定时（E12） | ≈ 1 小时 |
+| 3 | — | 已撤回（Snowflake 于 2026-10-02 退役） | — |
 | 4 | Terraform 93 资源 / agent 流水线 / 两个缺陷 | GitHub Actions CD 与 staging（E10、E11） | ≈ 1.5 天 |
 
-优先级：E12（解锁第 3 条的频率）→ E06（第 2 条的密钥）→ E10/E11（第 4 条的 CD）→ E08（第 2 条的授权器）。在这些合并并 apply 之前，若要提前投递，把对应措辞降级为"设计并实现，待接入定时/流水线"。
+优先级（第 3 条已撤回）：E06（第 2 条的密钥）→ E10/E11（第 4 条的 CD）→ E08（第 2 条的授权器）。在这些合并并 apply 之前，若要提前投递，把对应措辞降级为"设计并实现，待接入定时/流水线"。
 
 ### 8.5 数字口径
 - 893 = 81（C#）+ 371（AWS SAA-C03）+ 441（Claude CCDV-F）；307 道选择题 = 165 + 142。

@@ -119,64 +119,6 @@ resource "aws_iam_role_policy_attachment" "edge_public_logs" {
   policy_arn = aws_iam_policy.edge_public_logs.arn
 }
 
-resource "aws_iam_role" "snowflake" {
-  assume_role_policy = jsonencode({
-    Statement = [{
-      Action = "sts:AssumeRole"
-      Condition = {
-        StringEquals = {
-          "sts:ExternalId" = var.snowflake_external_id
-        }
-      }
-      Effect = "Allow"
-      Principal = {
-        AWS = "arn:aws:iam::665557889528:user/qato1000-s"
-      }
-    }]
-    Version = "2012-10-17"
-  })
-  force_detach_policies = false
-  max_session_duration  = 3600
-  name                  = "snowflake-recallsmith-s3-role"
-  path                  = "/"
-
-  lifecycle {
-    ignore_changes = [assume_role_policy]
-  }
-}
-
-resource "aws_iam_policy" "snowflake_read" {
-  name = "snowflake-recallsmith-s3-read"
-  path = "/"
-  policy = jsonencode({
-    Statement = [{
-      Action = "s3:ListBucket"
-      Condition = {
-        StringLike = {
-          "s3:prefix" = ["analytics/raw/review_events", "analytics/raw/review_events/*"]
-        }
-      }
-      Effect   = "Allow"
-      Resource = "arn:aws:s3:::core-vpc"
-      Sid      = "ListAnalyticsPrefix"
-      }, {
-      Action   = "s3:GetObject"
-      Effect   = "Allow"
-      Resource = "arn:aws:s3:::core-vpc/analytics/raw/review_events/*"
-      Sid      = "ReadAnalyticsObjects"
-    }]
-    Version = "2012-10-17"
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "snowflake" {
-  for_each = {
-    read = aws_iam_policy.snowflake_read.arn
-  }
-  role       = aws_iam_role.snowflake.name
-  policy_arn = each.value
-}
-
 resource "aws_iam_role" "rds_monitoring" {
   assume_role_policy = jsonencode({
     Statement = [{

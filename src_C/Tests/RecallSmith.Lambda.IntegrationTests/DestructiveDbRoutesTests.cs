@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text.Json;
 using Amazon.Lambda.APIGatewayEvents;
 using RecallSmith.Lambda.Common;
@@ -7,13 +6,13 @@ using RecallSmith.Lambda.Vpc.Db;
 namespace RecallSmith.Lambda.IntegrationTests;
 
 /// <summary>
-/// F06 / CBE-08: the three destructive DB routes (create, recreate, content-intelligence-demo)
-/// answer 404 in production — before any role check — unless ALLOW_DESTRUCTIVE_DB=1, and every
+/// F06 / CBE-08: the destructive DB routes (create, recreate; R26 S01 removed the third,
+/// content-intelligence-demo) answer 404 in production — before any role check — unless ALLOW_DESTRUCTIVE_DB=1, and every
 /// x-migrate-secret gate runs through <see cref="DbSafety.CheckMigrateSecret"/>: a configured
 /// secret is compared in constant time, and a missing one is 503 CONFIG_ERROR in production.
 ///
 /// A live database is joined only so the "reopened" path can be driven to its real
-/// PGDATABASE-must-be-'postgres' guard and the demo-seed count can be observed; the assertions
+/// PGDATABASE-must-be-'postgres' guard; the assertions
 /// that matter are about which response the handler returns before it ever touches SQL. This class
 /// mutates process env (API_ENV, ALLOW_DESTRUCTIVE_DB, MIGRATE_SECRET), so it joins the one
 /// serially-run Postgres collection and restores every var in <see cref="EnvScope"/>.Dispose.
@@ -27,7 +26,6 @@ public sealed class DestructiveDbRoutesTests
   private const string CreatePath = "/api/v1/admin/db/create";
   private const string RecreatePath = "/api/v1/admin/db/recreate";
   private const string MigratePath = "/api/v1/admin/db/migrate";
-  private const string DemoPath = "/api/v1/admin/db/content-intelligence-demo";
 
   public DestructiveDbRoutesTests(PostgresFixture db) => _db = db;
 
@@ -113,12 +111,6 @@ public sealed class DestructiveDbRoutesTests
     return doc.RootElement.GetProperty("error").GetProperty("message").GetString();
   }
 
-  private async Task<long> DemoDeckCountAsync()
-  {
-    var scalar = await _db.ScalarAsync("select count(*) from decks where slug = 'content-intelligence-demo'");
-    return Convert.ToInt64(scalar, CultureInfo.InvariantCulture);
-  }
-
   // ---------------------------------------------------------------- tests
 
   [Theory]
@@ -155,21 +147,6 @@ public sealed class DestructiveDbRoutesTests
     var r = await Migrate.HandleDbCreateDatabase(req, res, auth);
     Assert.Equal(404, r.StatusCode);
     Assert.Equal("NOT_FOUND", ErrorCode(r));
-  }
-
-  [Fact]
-  public async Task ContentIntelligenceDemo_InProduction_Is404()
-  {
-    var before = await DemoDeckCountAsync();
-    using (var _ = new EnvScope(("API_ENV", "production"), ("ALLOW_DESTRUCTIVE_DB", null)))
-    {
-      var (req, res, auth) = await BuildAsync(DemoPath, new[] { "super_admin" });
-      var r = await ContentIntelligenceDemo.HandleContentIntelligenceDemo(req, res, auth);
-      Assert.Equal(404, r.StatusCode);
-      Assert.Equal("NOT_FOUND", ErrorCode(r));
-    }
-    var after = await DemoDeckCountAsync();
-    Assert.Equal(before, after);
   }
 
   [Fact]

@@ -150,19 +150,3 @@ resource "aws_cloudwatch_metric_alarm" "rds_connections" {
   alarm_actions       = [aws_sns_topic.alerts.arn]
   ok_actions          = [aws_sns_topic.alerts.arn]
 }
-
-resource "aws_cloudwatch_metric_alarm" "outbox_backlog" {
-  alarm_name          = "developercards-${var.env}-outbox-backlog"
-  alarm_description   = "The analytics outbox backlog is at or above fifty thousand pending rows."
-  namespace           = var.metrics_namespace
-  metric_name         = "OutboxPending"
-  statistic           = "Maximum"
-  comparison_operator = "GreaterThanOrEqualToThreshold"
-  threshold           = 50000
-  period              = 3600
-  evaluation_periods  = 1
-  datapoints_to_alarm = 1
-  treat_missing_data  = "notBreaching"
-  alarm_actions       = [aws_sns_topic.alerts.arn]
-  ok_actions          = [aws_sns_topic.alerts.arn]
-}

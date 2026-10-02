@@ -11,10 +11,6 @@ output "edge_public_role_arn" {
   value = aws_iam_role.edge_public.arn
 }
 
-output "snowflake_role_arn" {
-  value = var.snowflake_external_id == null ? null : aws_iam_role.snowflake.arn
-}
-
 output "rds_monitoring_role_arn" {
   value = aws_iam_role.rds_monitoring.arn
 }

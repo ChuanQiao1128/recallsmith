@@ -83,7 +83,6 @@ describe('the console sections on the landing page', () => {
     signInAsSuperAdmin();
     await mountHome();
     expect(navLinks()).toEqual({
-      'Content Intelligence': '/content-intelligence',
       Reports: '/reports',
       Usage: '/usage',
       Webhooks: '/admin/webhooks',
@@ -99,7 +98,6 @@ describe('the console sections on the landing page', () => {
     signInAsEditor();
     await mountHome();
     expect(navLinks()).toEqual({
-      'Content Intelligence': '/content-intelligence',
       Reports: '/reports',
       Usage: '/usage',
       'Automation ledger': '/ledger',
@@ -130,7 +128,6 @@ describe('the current section in the header (frontend-console-27)', () => {
       ['/automation', 'Automation'],
       ['/admin/webhooks', 'Webhooks'],
       ['/admin/users', 'Admin Management'],
-      ['/content-intelligence', 'Content Intelligence'],
       ['/reports', 'Reports'],
       ['/usage', 'Usage'],
       ['/decks/cards?deckId=7', 'Decks'],
@@ -149,6 +146,9 @@ describe('the current section in the header (frontend-console-27)', () => {
       cleanup();
     }
     expect(consoleSectionFor('/login')).toBeNull();
+    // R26 C01: the Content Intelligence page was retired with Snowflake; its path
+    // is no longer a console section.
+    expect(consoleSectionFor('/content-intelligence')).toBeNull();
   });
 
   it('orders the links authoring first, then the ledger and Automation, then the super_admin sections', () => {
@@ -159,7 +159,6 @@ describe('the current section in the header (frontend-console-27)', () => {
       'Decks',
       'Review queue',
       'AI QA',
-      'Content Intelligence',
       'Reports',
       'Usage',
       'Automation ledger',
@@ -177,7 +176,6 @@ describe('consoleNav', () => {
       [
         'adminUsersHref',
         'automationHref',
-        'contentIntelligenceHref',
         'decksHref',
         'ledgerHref',
         'qaHref',
@@ -203,7 +201,7 @@ describe('consoleNav', () => {
         shells += 1;
         expect(tag, `${file}: a ConsoleShell without consoleNav()`).toContain('{...consoleNav(');
         expect(tag, `${file}: a hard-coded destination next to consoleNav()`).not.toMatch(
-          /\s(decksHref|contentIntelligenceHref|reviewHref|qaHref|reportsHref|usageHref|ledgerHref|automationHref|webhooksHref|adminUsersHref)=/,
+          /\s(decksHref|reviewHref|qaHref|reportsHref|usageHref|ledgerHref|automationHref|webhooksHref|adminUsersHref)=/,
         );
       }
     }

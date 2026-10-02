@@ -181,6 +181,20 @@ describe('the console shell is everywhere and owns sign-out', () => {
     expect(userPill()).toBe(`${TEST_ADMIN_EMAIL} · editor`);
   });
 
+  // F02 (c-tests-1): moved here from the retired contentIntelligencePage.test.tsx,
+  // which was the only file that checked the shell's no-session fallback.
+  it('shows an em dash and no Admin Management link when there is no session at all', () => {
+    signOut();
+    render(
+      <MemoryRouter>
+        <ConsoleShell title="t">x</ConsoleShell>
+      </MemoryRouter>,
+    );
+
+    expect(userPill()).toBe('—');
+    expect(screen.queryByRole('link', { name: 'Admin Management' })).toBeNull();
+  });
+
   it('the new-card page offers Sign out and the console navigation', async () => {
     signInAsSuperAdmin();
 
