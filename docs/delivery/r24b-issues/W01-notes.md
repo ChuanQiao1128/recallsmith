@@ -30,6 +30,7 @@ This changes copy only. Behaviour, layout, navigation, identifiers, testIDs, sto
 | Draw result, primary | Continue draw  ·  {n} pull(s) left | Continue drawing  ·  {n} draw(s) left |
 | Draw result, primary (empty) | Go to Library  ·  earn pulls in study | Go to Library  ·  earn draws in study |
 | Draw result, primary VoiceOver (loading) | Checking remaining pulls | Checking remaining draws |
+| Draw result, summary chips (added in r24bx F01) | {n} COM / {n} RAR / {n} LEG | {n} Common / {n} Rare / {n} Legendary |
 | Draw result, empty state | Nothing pulled | No cards drawn |
 | Draw result, guarantee badge | GUARANTEE PAID OUT | GUARANTEED RARE |
 | Draw result, share button + label | Share this pull | Share these cards |
@@ -67,7 +68,7 @@ None. The change is OTA-safe and JS-only.
 ## Deferred / notes
 
 - `npm run test:smoke` (`tests/p2-smoke.ts`) already fails on the base branch: `/\+2 pull/i` vs `'Progress saved'`, which is reward copy in summaryMapper/rewardResolver. None of the W01 files are involved and it is outside this issue's strings, so it is left for its owner. Its `tsc` step also reports type conflicts from the symlinked `node_modules` in this worktree.
-- "Unable to load draw chamber right now." is not in the §1 list. Because "draw chamber" is jargon, it was replaced with "Unable to load Draw right now." No test pinned it.
+- "Unable to load draw chamber right now." is not in the §1 list. Because "draw chamber" is jargon, it was replaced with "Unable to load Draw right now." No test pinned it in W01; r24bx F01 added `tests/unit/drawScreenCopy.test.ts` (source pin, since no load path reaches the fallback) and a VoiceOver pin for "Checking remaining draws". W01 also missed the Draw result summary chips (COM/RAR/LEG), fixed in F01; see `docs/delivery/r24bx-issues/F01-fixes.md`.
 - Comments and identifiers that still say pull/pity/wallet are intentional (contract §0).
 - The plain-words guard test (`plainWordsGuard.test.ts`) belongs to W04. The `pity.ts`, `ceremonyCopy.ts` `_V9`/`_V10` strings it will scan now contain none of its words.
 - Verify retry (root-mobile gate): only `tests/unit/otaReleaseScript.test.ts` fails, every case on the 5000 ms
