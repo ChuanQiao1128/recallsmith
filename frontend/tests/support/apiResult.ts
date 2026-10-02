@@ -38,9 +38,9 @@ export function refused<T>(code: string, message: string): ApiResult<T> {
  *
  * This is a RESOLVED promise, not a rejected one, because that is what the
  * pages see. Making a mock reject would exercise a state the api layer cannot
- * produce; on ContentIntelligencePage, whose effect calls `void run()` with no
- * catch, it would additionally turn one bad mock into an unhandled rejection
- * that fails the whole file.
+ * produce; on a page whose effect calls `void run()` with no catch, it would
+ * additionally turn one bad mock into an unhandled rejection that fails the
+ * whole file.
  */
 export function networkFailure<T>(message: string): ApiResult<T> {
   return { success: false, data: null, error: { code: 'NETWORK_ERROR', message }, traceId: '' };

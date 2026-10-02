@@ -34,9 +34,8 @@
 //     zh-CN decks (NewDeckPage offers the locale, and the importer has to hold
 //     up under CJK questions and CJK fuzzing input). Scanning tests/ would
 //     pressure someone into deleting that coverage to make a lint pass.
-//   - tests/docsPaths.test.ts and tests/contentIntelligencePage.test.ts quote
-//     docs/*.md, which are Chinese planning documents. A quotation that has
-//     been translated no longer verifies the document it cites.
+//   - tests/docsPaths.test.ts quotes docs/*.md, which are Chinese planning
+//     documents. A quotation that has been translated no longer verifies the document it cites.
 //
 // The rule being enforced is about what the CONSOLE SAYS, so it is applied to
 // the code that says it.

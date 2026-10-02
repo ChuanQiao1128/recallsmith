@@ -9,7 +9,6 @@ import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import * as authoring from '../src/api/authoring';
 import { CONSOLE_NAME, documentTitleFor } from '../src/lib/brand';
 import { CONSOLE_NAV } from '../src/components/console/consoleNav';
 
@@ -34,7 +33,10 @@ describe('the retired Content Intelligence page', () => {
   });
 
   it('has no api client function', () => {
-    expect(Object.keys(authoring)).not.toContain('fetchContentIntelligence');
+    const api = readFileSync(`${SRC}api/authoring.ts`, 'utf8');
+    // Anti-vacuity: the file read is the authoring api module.
+    expect(api).toContain('export async function');
+    expect(api).not.toMatch(/fetchContentIntelligence|\/api\/v1\/authoring\/content-intelligence/);
   });
 
   it('is referenced nowhere under src/', () => {
