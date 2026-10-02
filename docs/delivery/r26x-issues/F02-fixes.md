@@ -37,3 +37,15 @@ the new case failed (`Tests 1 failed | 6 passed`), and passed again once the mut
 - Files changed: `frontend/tests/consoleShellEverywhere.test.tsx`, `docs/delivery/r26-issues/C01-notes.md`
   (the note that only the page's own tests were deleted overclaimed; it now names the moved case).
 - Test: `cd frontend && npx vitest run tests/consoleShellEverywhere.test.tsx`.
+
+## Gate status (not a finding)
+
+`F02.verify.sh` step 3 (`npx tsc --noEmit -p . && npx vitest run`) fails on one test that is
+outside this issue: `tests/docsPaths.test.ts` › "exist on disk, unless the document says they do
+not". It fails identically on the base `delivery/r26x-c` with F02's change absent (checked in a
+detached worktree: `Tests 1 failed | 10 passed`). Cause: S01 (`6664447`) deleted
+`src_C/Vpc/Analytics/ContentIntelligenceSnapshotImport.cs`, `src_C/Vpc/Analytics/OutboxPublisher.cs`
+and `src_C/Vpc/Authoring/ContentIntelligence.cs`, which `docs/backend-architecture-review-2026-09-22.md`
+and `docs/delivery-wave-1.6-plan-2026-09-19.md` still cite without a paths-not-on-disk entry. Those
+docs are outside F02's scope (and owned by the docs fix round, F04). Everything else passes:
+typecheck clean, 162/163 files, 1507/1508 tests.
