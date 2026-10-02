@@ -344,14 +344,15 @@ describe('UsagePage funnel section', () => {
     expect(screen.queryByRole('table', { name: 'Funnel steps' })).toBeNull();
   });
 
-  it('shows a neutral callout on a server without the funnel (NOT_READY or no route yet)', async () => {
+  it('shows a neutral callout only for 503 NOT_READY', async () => {
     api.fetchFunnel.mockResolvedValueOnce(refused('NOT_READY', 'Run migration 043'));
     renderAt(<UsagePage />, ['/usage']);
     expect((await screen.findByTestId('funnel-not-ready')).textContent).toContain('not set up');
     await screen.findByRole('table', { name: 'Usage by day' });
     expect(screen.queryByRole('alert')).toBeNull();
-    cleanup();
+  });
 
+  it('shows a 404 as an error with the server message, not as a pending setup step', async () => {
     api.fetchFunnel.mockResolvedValueOnce({
       success: false,
       data: null,
@@ -359,8 +360,23 @@ describe('UsagePage funnel section', () => {
       traceId: 't',
     });
     renderAt(<UsagePage />, ['/usage']);
-    expect(await screen.findByTestId('funnel-not-ready')).toBeTruthy();
-    expect(screen.queryByRole('alert')).toBeNull();
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('Could not load the funnel');
+    expect(alert.textContent).toContain('Route not found');
+    expect(screen.queryByTestId('funnel-not-ready')).toBeNull();
+  });
+
+  it('shows a mismatched response as an error, not as "no install counted yet"', async () => {
+    api.fetchFunnel.mockResolvedValueOnce({
+      success: false,
+      data: null,
+      error: { code: 'BAD_RESPONSE', message: 'The server returned an unexpected funnel response.' },
+      traceId: '',
+    });
+    renderAt(<UsagePage />, ['/usage']);
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('unexpected funnel response');
+    expect(screen.queryByText('No anonymous install has been counted yet.')).toBeNull();
   });
 
   it('shows the server message when the funnel fails to load, without hiding the rest', async () => {

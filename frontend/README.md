@@ -86,9 +86,12 @@ completed) with its count, the conversion from first open and a plain SVG bar;
 the last 12 cohort weeks (newest first, each step as "count (share of that
 week's first opens)"); and by deck the goal, starter and first-pack steps,
 converted from goal chosen. The conversions are computed in
-`src/lib/funnelView.ts`. A server without the funnel migration (`NOT_READY`) or
-without the route yet (404) gets a neutral callout; an empty window says no
-anonymous install has been counted yet.
+`src/lib/funnelView.ts`. The client reads exactly the shape the server sends
+(`overall.counts`, `weeks[].weekStart`/`counts`, `byDeck[].deckSlug`/`counts`,
+counts keyed by the snake_case event names); any other shape is an error, never
+an empty funnel. Only `503 NOT_READY` (no funnel migration) gets a neutral
+callout; every other error, a 404 included, shows the server message. An empty
+window says no anonymous install has been counted yet.
 
 Related, all optional and hidden when the server does not send them (except
 the Semantic duplicates panel, which always shows on the AI QA page):
