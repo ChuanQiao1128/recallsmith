@@ -528,7 +528,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
           let usedStarterPack = false;
           if (!resolved) {
             // A thrown manifest check or install is held here, not rethrown at once: a download
-            // failure first tries the bundled starter pack (R24 §2.2).
+            // failure on the starter lesson's deck first tries the bundled starter pack (R24 §2.2).
             let downloadError: unknown = null;
             let updates: Awaited<ReturnType<typeof checkManifestForUpdates>> | null = null;
             try {
@@ -538,9 +538,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
               downloadError = err;
             }
             const info = updates ? (updates as any)[slugValue] : null;
-            if (!updates) {
-              // The manifest check threw: handled above.
-            } else if (info?.remoteUrl && info?.remoteVersion) {
+            if (updates && info?.remoteUrl && info?.remoteVersion) {
               if (!cancelled) setInstalling(true);
               let ok = false;
               try {
@@ -560,13 +558,13 @@ export function SessionCardScreen({ navigation, route }: Props) {
               } else {
                 failure = 'download';
               }
-            } else {
+            } else if (updates) {
               // A manifest that loaded with no download for this deck means the deck is not there to
               // fetch; no manifest at all (an offline first run) is a download failure.
-              failure = Object.keys(updates ?? {}).length > 0 ? 'unavailable' : 'download';
+              failure = Object.keys(updates).length > 0 ? 'unavailable' : 'download';
             }
-            if (!resolved && failure === 'download') {
-              // Offline, or the download failed: a goal deck starts from the bundled starter pack.
+            if (!resolved && failure === 'download' && (await isStarterLessonDeck(slugValue))) {
+              // Offline, or the download failed: the starter lesson starts from the bundled pack.
               const starter = await ensureStarterDeckInstalled(slugValue);
               if (starter !== 'unavailable') {
                 resolved = await getCachedDeck(slugValue);
