@@ -6,8 +6,8 @@ import { colors } from '../../../theme/colors';
 // R22 §5: only the elite and boss cards carry a badge; the plain first and
 // normal cards read as cards, with no internal role word.
 function roleLabel(role: RoutePreviewNode['role']) {
-  if (role === 'elite') return 'Elite';
-  if (role === 'boss') return 'Boss';
+  if (role === 'elite') return 'Harder recall';
+  if (role === 'boss') return 'Final check';
   return null;
 }
 
@@ -17,10 +17,10 @@ export function RoutePreview(props: { nodes: RoutePreviewNode[] }) {
   return (
     <View style={styles.card}>
       <Text style={styles.title} numberOfLines={2}>
-        Route preview
+        Session preview
       </Text>
       <Text style={styles.subtitle} numberOfLines={1}>
-        Today should feel like one short run, not a long to-do list.
+        Today should feel like one short session, not a long to-do list.
       </Text>
 
       <View style={styles.nodes}>

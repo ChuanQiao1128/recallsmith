@@ -581,6 +581,41 @@ describe('SessionCardScreen', () => {
     expect(findTextByLabel(tree, 'Unlock Premium')).toHaveLength(0);
   });
 
+  // F03 x-tests-2: the pause alert is checked on the rendered screen, not only in the source text.
+  it('asks "Pause this session?" when the learner taps Pause', async () => {
+    const { Alert } = await import('react-native');
+    vi.mocked(Alert.alert).mockClear();
+    const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
+
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <SessionCardScreen
+          navigation={navigation}
+          route={{
+            key: 'session-card',
+            name: 'SessionCard',
+            params: { slug: 'csharp', mode: 'mixed', limit: 1 },
+          } as any}
+        />,
+      );
+    });
+    await flush();
+
+    const pause = tree.root.find(
+      (node) => (node.type as any) === 'Pressable' && node.props?.accessibilityLabel === 'Pause session',
+    );
+    act(() => {
+      pause.props.onPress();
+    });
+    expect(Alert.alert).toHaveBeenCalledTimes(1);
+    const [title, message, buttons] = vi.mocked(Alert.alert).mock.calls[0] as [string, string, { text: string }[]];
+    expect(title).toBe('Pause this session?');
+    expect(message).toBe('Your ratings are saved.');
+    expect(buttons.map((button) => button.text)).toEqual(['Keep reviewing', 'Pause']);
+    expect(`${title} ${message}`).not.toMatch(/\brun\b/i);
+  });
+
   it('keeps rating dock mounted while content scrolls', async () => {
     const navigation = { navigate: vi.fn(), goBack: vi.fn(), replace: vi.fn() } as any;
 
@@ -1221,6 +1256,14 @@ describe('SessionCardScreen', () => {
 
       expect(byTestID(tree, 'session-card-empty-deck')).toHaveLength(1);
       expect(findTextByLabel(tree, 'Open a pack to get your first cards')).toHaveLength(1);
+      // F03 x-tests-2: the empty-deck body is checked on the rendered tree.
+      const emptyBody = byTestID(tree, 'session-card-empty-deck')[0]
+        .findAll((node) => (node.type as any) === 'Text')
+        .map((node) => [].concat(node.props.children).join(''))
+        .join(' ')
+        .replace(/\s+/g, ' ');
+      expect(emptyBody).toContain('every card you draw joins today’s session.');
+      expect(emptyBody).not.toMatch(/\b(pull|run)\b/i);
       // No route, no run header, no rating dock, no route-complete card.
       expect(useSessionStore.getState().sessionId).toBeNull();
       expect(useSessionStore.getState().route).toEqual([]);

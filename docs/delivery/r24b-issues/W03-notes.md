@@ -1,7 +1,9 @@
 # W03 — Plain words: study session, multiple-choice dock, session summary, rewards, milestones
 
-Issue #671, round r24b, wave x. Copy-only change: learner-visible text (VoiceOver labels included) now uses
-the R24B-00 §1 vocabulary. Identifiers, storage keys, route names and event names keep their old words
+Issue #671, round r24b, wave x. Copy-only change: learner-visible text (VoiceOver labels included) in W03's
+scope now uses the R24B-00 §1 vocabulary. W03 did not cover the summary reward card ("pulls", "Wallet",
+"reserve") or the progress block fallback ("…for this run."), which live in `mobile/src/features/gacha/components/`
+outside its scope. F03 (#681, round r24bx) fixed both, see `docs/delivery/r24bx-issues/F03-fixes.md`. Identifiers, storage keys, route names and event names keep their old words
 (`pulls`, `wallet`, `reserve`, `finishRun`, `usePullsLabel`, testIDs such as `summary-reward-use-pulls-cta`).
 
 ## What changed (files)
@@ -91,6 +93,10 @@ Not rendered / legacy (facts-copy §10), changed with their tests:
 None. JS-only and OTA-safe; ships with the next OTA / 2.0.0 build.
 
 ## Deferred
+
+Update (F03 #681): the first two items below are fixed in round r24bx: "draws", "Saved draws",
+"extra {a} → {b}" and "Learning map updated for this session.". `RoutePreview.tsx` moved to session words in
+the same round.
 
 - `mobile/src/features/gacha/components/RewardSummaryCard.tsx` (outside W03 scope, which covers
   `mobile/src/components/summary/` but not `mobile/src/features/gacha/components/`) still renders the label
