@@ -25,6 +25,8 @@ resource "aws_iam_role" "notifier" {
 }
 
 # notify-recipient is created by A11; "-previous" exists only during a secret rotation and is created by hand.
+# R25X F05: revenuecat-secret-api-key (SecureString, created by the owner, contract R25-00 §4) is read lazily by the
+# notifier's RevenueCat deletion step; a missing parameter skips that step. Decrypt goes through aws/ssm as above.
 resource "aws_iam_role_policy" "notifier" {
   name = "developercards-notifier-scoped"
   role = aws_iam_role.notifier.id
@@ -47,7 +49,7 @@ resource "aws_iam_role_policy" "notifier" {
         Sid      = "SsmRead"
         Effect   = "Allow"
         Action   = ["ssm:GetParameter"]
-        Resource = ["${local.ssm_param_prefix}/notifier-secret", "${local.ssm_param_prefix}/notifier-secret-previous", "${local.ssm_param_prefix}/notify-recipient"]
+        Resource = ["${local.ssm_param_prefix}/notifier-secret", "${local.ssm_param_prefix}/notifier-secret-previous", "${local.ssm_param_prefix}/notify-recipient", "${local.ssm_param_prefix}/revenuecat-secret-api-key"]
       },
     ]
   })
