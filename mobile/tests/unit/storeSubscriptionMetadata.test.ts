@@ -23,6 +23,11 @@ function atLeast180(version: string): boolean {
   return major > 1 || (major === 1 && minor >= 8);
 }
 
+// 2.0.0 offers no subscription: there is no premium content yet, so the paywall is hidden by remote
+// config (features.paywall.hidden) and the store texts must not advertise a purchase. The Terms and
+// Privacy links stay in the description.
+const SELLS_SUBSCRIPTION = (version: string) => atLeast180(version) && Number(version.split('.')[0]) < 2;
+
 const descriptions = readdirSync(RELEASE_DIR)
   .map((f) => /^description-(\d+\.\d+\.\d+)\.txt$/.exec(f))
   .filter((m): m is RegExpExecArray => m !== null && atLeast180(m[1]))
@@ -33,7 +38,7 @@ describe('App Store subscription metadata (Guideline 3.1.2(c))', () => {
     expect(descriptions.map((d) => d.version)).toContain('1.8.0');
   });
 
-  it.each(descriptions)('description $version links the Terms of Use (EULA) and the Privacy Policy', ({ text }) => {
+  it.each(descriptions.filter((d) => SELLS_SUBSCRIPTION(d.version)))('description $version links the Terms of Use (EULA) and the Privacy Policy', ({ text }) => {
     expect(TERMS_URL).toBe('https://www.apple.com/legal/internet-services/itunes/dev/stdeula/');
     expect(text).toContain(`Terms of Use (EULA): ${TERMS_URL}`);
     expect(text).toContain(`Privacy Policy: ${PRIVACY_URL}`);
@@ -75,20 +80,21 @@ describe('App Store subscription metadata for 1.9.0 (Guideline 3.1.2(c))', () =>
   });
 });
 
-describe('App Store subscription metadata for 2.0.0 (Guideline 3.1.2(c))', () => {
-  it('covers the 2.0.0 description', () => {
+describe('App Store metadata for 2.0.0: no subscription offered', () => {
+  it('keeps the Terms and Privacy links but advertises no purchase', () => {
     expect(descriptions.map((d) => d.version)).toContain('2.0.0');
     const text = descriptions.find((d) => d.version === '2.0.0')?.text ?? '';
     expect(text).toContain(`Terms of Use (EULA): ${TERMS_URL}`);
     expect(text).toContain(`Privacy Policy: ${PRIVACY_URL}`);
-    expect(text).toMatch(/auto-renew/i);
+    expect(text).not.toMatch(/auto-renew|subscription|Premium/i);
     expect(text.length).toBeLessThanOrEqual(4000);
   });
 
-  it('keeps the 2.0.0 App Review notes within the limit and pointing at the paywall', () => {
+  it('tells App Review that Premium is not offered in 2.0.0', () => {
     const notes = readFileSync(resolve(RELEASE_DIR, 'review-notes-2.0.0.txt'), 'utf8').trim();
     expect(notes.length).toBeLessThanOrEqual(4000);
-    expect(notes).toContain('Open premium');
+    expect(notes).toContain('Premium subscription: not offered in 2.0.0');
+    expect(notes).not.toContain('Open premium');
     expect(notes).toContain('Terms of Use');
     expect(notes).toContain('Privacy Policy');
     expect(notes).toContain('Sentry');

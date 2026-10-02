@@ -170,15 +170,32 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     // compared in memory and never printed (the demo account fields may hold a password).
     const before = await version.getAppStoreReviewDetailAsync();
     if (!before) {
-      await version.createReviewDetailAsync({ notes: reviewNotes });
-      console.log('REVIEW_NOTES created');
+      // 2026-10-02 (2.0.0): Apple refuses to create a version's review detail without the contact
+      // fields, so a new version inherits contact + demo-account fields from the live version.
+      // Copied in memory only, never printed.
+      const live = await app.getLiveAppStoreVersionAsync({ platform: 'IOS' }).catch(() => null);
+      const liveDetail = live ? await live.getAppStoreReviewDetailAsync().catch(() => null) : null;
+      const inherit = {};
+      for (const k of ['contactFirstName', 'contactLastName', 'contactEmail', 'contactPhone', 'demoAccountName', 'demoAccountPassword', 'demoAccountRequired']) {
+        const v = liveDetail && liveDetail.attributes[k];
+        if (v !== null && v !== undefined && v !== '') inherit[k] = v;
+      }
+      await version.createReviewDetailAsync({ ...inherit, notes: reviewNotes });
+      console.log('REVIEW_NOTES created; inherited', Object.keys(inherit).length, 'review field(s) from the live version:', Object.keys(inherit).join(','));
     } else {
-      await before.updateAsync({ notes: reviewNotes });
+      // 2026-10-02 (2.0.0): a notes-only PATCH is now refused ("must provide a value for the
+      // attribute 'contactFirstName'"), so send every field already set, with the new notes.
+      const carry = {};
+      for (const [k, v] of Object.entries(before.attributes || {})) {
+        if (k === 'notes' || k === 'appStoreReviewAttachments' || v === null || v === undefined || v === '') continue;
+        carry[k] = v;
+      }
+      await before.updateAsync({ ...carry, notes: reviewNotes });
       const after = await version.getAppStoreReviewDetailAsync();
       const lost = {};
       for (const [k, v] of Object.entries(before.attributes || {})) {
-        if (k === 'notes' || v === null || v === undefined || v === '') continue;
-        if (!after || after.attributes[k] !== v) lost[k] = v;
+        if (k === 'notes' || k === 'appStoreReviewAttachments' || v === null || v === undefined || v === '') continue;
+        if (!after || JSON.stringify(after.attributes[k]) !== JSON.stringify(v)) lost[k] = v;
       }
       if (Object.keys(lost).length) {
         await after.updateAsync(lost);

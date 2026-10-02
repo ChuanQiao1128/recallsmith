@@ -74,8 +74,9 @@ describe('2.0.0 store texts', () => {
     expect(text).toContain(NOT_OFFICIAL);
     expect(text).toContain(TRADEMARKS);
     expect(withoutDisclaimer(text)).not.toMatch(NEVER);
-    // The body (everything before the Premium block) leaves room for Premium, links and disclaimers.
-    expect(text.indexOf('PREMIUM SUBSCRIPTION')).toBeLessThanOrEqual(3150);
+    // 2.0.0 offers no subscription (paywall hidden by remote config): no Premium block, links stay.
+    expect(text).not.toContain('PREMIUM SUBSCRIPTION');
+    expect(text).toContain('\nLINKS\n');
   });
 
   it('the description states the 2.0.0 facts', () => {
@@ -99,7 +100,7 @@ describe('2.0.0 store texts', () => {
       'Mistake Book',
       'Progress by domain',
       'first lesson works with no connection',
-      'Report a card',
+      'report a problem with a card',
       'If a card looks wrong, sign in and tap Report a problem under its answer.',
     ]) {
       expect(text, fact).toContain(fact);
@@ -118,12 +119,13 @@ describe('2.0.0 store texts', () => {
     expect(text.match(/3 draws/g)).toHaveLength(2);
   });
 
-  it('copies the Premium block and the Terms/Privacy lines verbatim from 1.9.0', () => {
+  it('copies the Terms/Privacy lines verbatim from 1.9.0 and drops the Premium offer', () => {
     const d9 = read('description-1.9.0.txt');
     const d2 = read('description-2.0.0.txt');
-    const block = d9.slice(d9.indexOf('PREMIUM SUBSCRIPTION'), d9.indexOf('\n\nAWS is a trademark'));
-    expect(block).toContain('Privacy Policy: ');
-    expect(d2).toContain(block);
+    for (const line of d9.split('\n').filter((l) => l.startsWith('Terms of Use (EULA): ') || l.startsWith('Privacy Policy: '))) {
+      expect(d2).toContain(line);
+    }
+    expect(d2).not.toMatch(/Premium|subscription/i);
   });
 
   it('keywords are comma-separated without spaces, carry fsrs and flashcards, and no gacha or trademark', () => {
@@ -167,7 +169,7 @@ describe('2.0.0 store texts', () => {
     // 2.0.0 adds card reports to what the demo account is for; 1.9.0 keeps its own sentence.
     expect(r9).toContain('The demo account above is needed only for cloud sync and to buy or restore Premium.');
     expect(r2).toContain(
-      'The demo account above is needed only for cloud sync, for reporting a problem with a card (and Me > My reports), and to buy or restore Premium.',
+      'The demo account above is needed only for cloud sync and for reporting a problem with a card (and Me > My reports).',
     );
     expect(r2).toContain('sign in with the demo account');
   });
