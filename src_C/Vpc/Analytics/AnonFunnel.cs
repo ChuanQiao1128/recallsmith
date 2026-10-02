@@ -17,10 +17,12 @@ namespace RecallSmith.Lambda.Vpc.Analytics;
 /// <list type="bullet">
 /// <item><c>POST /api/v1/public/events</c>: no auth (the dispatcher never resolves a bearer for it, so a signed-in caller
 /// is never linked), 8 KB body cap, <c>{ platform, appVersion, events: [≤ 20] }</c>; invalid events are skipped and
-/// counted in <c>rejected</c>; a per-container budget of 120 requests / 60 s answers 429. The body is never logged.</item>
+/// counted in <c>rejected</c>; a per-container budget of 120 requests / 60 s answers 429; past the global
+/// <see cref="DailyRowCap"/> nothing is stored (R24X F05). The body is never logged.</item>
 /// <item><c>GET /api/v1/admin/analytics/funnel?days=90</c> (RequireAdmin): per ISO cohort week (Monday) and overall, the
 /// count of each event and its conversion from <c>first_open</c>; per deck, the goal/starter/first-pack counts.</item>
-/// <item><see cref="DeleteExpiredAsync"/>: the 400-day retention delete the daily <c>analytics_daily</c> step runs.</item>
+/// <item><see cref="DeleteExpiredAsync"/>: the 400-day retention delete, the tick's own <c>anon_funnel_retention</c>
+/// step (R24X F05: independent of the <c>analytics_daily</c> rollup, capped and with its own statement_timeout).</item>
 /// </list>
 /// Days are the app's local dates (<c>YYYY-MM-DD</c>); the window is checked against the UTC date of <see cref="UtcNow"/>.
 /// </summary>
@@ -38,6 +40,22 @@ public static class AnonFunnel
 
   internal const int MaxRequestsPerWindow = 120;
   internal const long WindowMs = 60_000;
+
+  /// <summary>
+  /// The global ceiling (R24X F05): when more than this many rows were received in the last 24 hours (server clock),
+  /// a batch is answered 202 with every event rejected and nothing stored, so storage stays bounded whatever the
+  /// Lambda concurrency or the gateway throttle.
+  /// </summary>
+  internal const int DailyRowCap = 20_000;
+
+  /// <summary>The <c>anon_funnel_daily_cap</c> warn line is written at most once per container per this many ms.</summary>
+  internal const long DailyCapLineMs = 3_600_000;
+
+  /// <summary>The most rows one retention run deletes; the next tick takes the rest. Internal so a test can shrink it.</summary>
+  internal static int RetentionBatch = 10_000;
+
+  /// <summary>The <c>statement_timeout</c> of the retention delete (<c>set local</c>). Internal so a test can shorten it.</summary>
+  internal static TimeSpan RetentionStatementTimeout = TimeSpan.FromSeconds(2);
 
   /// <summary>The nine steps of §3.1, in funnel order (also the order of every answer's keys).</summary>
   public static readonly string[] Events =
@@ -64,6 +82,7 @@ public static class AnonFunnel
   private static long _windowStart;
   private static int _count;
   private static bool _budgetLineWritten;
+  private static long? _dailyCapLineAt;
 
   private static DateOnly Today() => DateOnly.FromDateTime(UtcNow().ToUniversalTime());
 
@@ -75,6 +94,7 @@ public static class AnonFunnel
       _windowStart = 0;
       _count = 0;
       _budgetLineWritten = false;
+      _dailyCapLineAt = null;
     }
   }
 
@@ -86,7 +106,8 @@ public static class AnonFunnel
 
   /// <summary>
   /// The ingest. Takes no <see cref="AuthContext"/> on purpose: a bearer sent with the call is never read. Logs only the
-  /// budget line, never the body.
+  /// budget and daily-cap lines, never the body. Every well-formed batch reaches the database (the daily-cap count), so
+  /// an empty or all-invalid batch still answers 503 before migration 043 or without PG env.
   /// </summary>
   public static async Task<APIGatewayProxyResponse> HandleEvents(LambdaRequest req, Res res)
   {
@@ -138,12 +159,18 @@ public static class AnonFunnel
       else rejected++;
     }
 
-    if (rows.Count > 0)
+    try
     {
-      try
+      await using var conn = await Pg.OpenConnectionOrNullAsync();
+      if (conn is null) return Helpers.ConfigError(res, "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
+      if (await OverDailyCapAsync(conn))
       {
-        await using var conn = await Pg.OpenConnectionOrNullAsync();
-        if (conn is null) return Helpers.ConfigError(res, "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
+        DailyCapLine();
+        rejected += rows.Count;
+        rows.Clear();
+      }
+      if (rows.Count > 0)
+      {
         await DbUtil.ExecuteAsync(conn, null,
           """
           insert into anon_funnel_events (event, cohort_day, event_day, deck_slug, platform, app_version)
@@ -159,10 +186,10 @@ public static class AnonFunnel
             appVersion,
           ]);
       }
-      catch (PostgresException ex) when (ex.SqlState is "42P01" or "42703")
-      {
-        return NotReady(res);
-      }
+    }
+    catch (PostgresException ex) when (ex.SqlState is "42P01" or "42703")
+    {
+      return NotReady(res);
     }
 
     return res.Raw(202, new
@@ -173,6 +200,33 @@ public static class AnonFunnel
       traceId = res.TraceId,
       version = "v1",
     });
+  }
+
+  /// <summary>
+  /// True when more than <see cref="DailyRowCap"/> rows were received in the last 24 hours. The scan stops at cap + 1
+  /// rows (the <c>received_at</c> index), so the check stays cheap however full the table is. Also the readiness probe.
+  /// </summary>
+  private static async Task<bool> OverDailyCapAsync(NpgsqlConnection conn)
+  {
+    var n = await DbUtil.ExecuteScalarAsync(conn, null,
+      """
+      select count(*) from (
+        select 1 from anon_funnel_events where received_at >= now() - interval '1 day' limit $1
+      ) t
+      """, [DailyRowCap + 1]);
+    return RunnerRoutes.Long(n) > DailyRowCap;
+  }
+
+  /// <summary>One <c>anon_funnel_daily_cap</c> warn line per container per hour at most.</summary>
+  private static void DailyCapLine()
+  {
+    lock (BudgetLock)
+    {
+      var now = new DateTimeOffset(UtcNow().ToUniversalTime()).ToUnixTimeMilliseconds();
+      if (_dailyCapLineAt is { } at && now - at < DailyCapLineMs) return;
+      _dailyCapLineAt = now;
+    }
+    Log.Event("warn", new { tag = "anon_funnel_daily_cap", dailyRowCap = DailyRowCap });
   }
 
   /// <summary>Counts one request against the per-container window; false once the window is spent.</summary>
@@ -245,23 +299,43 @@ public static class AnonFunnel
   // ---------------------------------------------------------------------------------------------
 
   /// <summary>
-  /// Deletes the rows received more than <see cref="RetentionDays"/> days before <see cref="UtcNow"/>; returns how many.
-  /// Before migration 043 it logs one line and returns 0. Run by the daily <c>analytics_daily</c> step.
+  /// Deletes up to <see cref="RetentionBatch"/> of the rows received more than <see cref="RetentionDays"/> days before
+  /// <see cref="UtcNow"/> (the funnel clock), oldest first, under its own <see cref="RetentionStatementTimeout"/>; returns
+  /// how many. Run by the tick's own <c>anon_funnel_retention</c> step on every tick, whatever the daily rollup did
+  /// (R24X F05). Before migration 043 it logs one line and returns 0. Any other failure is logged
+  /// (<c>anon_funnel_retention_failed</c>) and thrown, so the tick records the step as failed; the next tick retries.
   /// </summary>
   public static async Task<long> DeleteExpiredAsync(NpgsqlConnection conn)
   {
     try
     {
-      var deleted = await DbUtil.ExecuteAsync(conn, null,
-        "delete from anon_funnel_events where received_at < $1",
-        [UtcNow().ToUniversalTime().AddDays(-RetentionDays)]);
+      long deleted;
+      await using (var tx = await conn.BeginTransactionAsync())
+      {
+        var timeoutMs = Math.Max(1, (long)RetentionStatementTimeout.TotalMilliseconds).ToString(CultureInfo.InvariantCulture);
+        await DbUtil.ExecuteAsync(conn, tx, $"set local statement_timeout = {timeoutMs}", []);
+        deleted = await DbUtil.ExecuteAsync(conn, tx,
+          """
+          delete from anon_funnel_events where id in (
+            select id from anon_funnel_events where received_at < $1 order by received_at limit $2
+          )
+          """,
+          [UtcNow().ToUniversalTime().AddDays(-RetentionDays), RetentionBatch]);
+        await tx.CommitAsync();
+      }
       Log.Event("info", new { tag = "analytics", outcome = "anon_funnel_retention", deleted });
       return deleted;
     }
     catch (PostgresException ex) when (ex.SqlState is "42P01" or "42703")
     {
-      Log.Event("info", new { tag = "analytics", reason = "anon_funnel_not_migrated", step = "analytics_daily" });
+      Log.Event("info", new { tag = "analytics", reason = "anon_funnel_not_migrated", step = "anon_funnel_retention" });
       return 0;
+    }
+    catch (Exception ex)
+    {
+      Log.Event("warn", new { tag = "analytics", reason = "anon_funnel_retention_failed", step = "anon_funnel_retention",
+        sqlState = (ex as PostgresException)?.SqlState });
+      throw;
     }
   }
 
@@ -284,16 +358,18 @@ public static class AnonFunnel
       var today = Today();
       var from = today.AddDays(-days);
       var to = today.AddDays(1);
+      // Deck-scoped numbers follow the usage route (R20X F02): a caller who is not super_admin sees the decks they may
+      // read only (null = every deck). R24X F05: overall and weeks count the rows with no deck plus the readable decks'
+      // rows, so byDeck cannot be subtracted from them to learn an unreadable deck's counts.
+      var readable = await Helpers.ReadableDeckIdsAsync(conn, auth);
       var weekRows = await DbUtil.QueryAsync(conn, null,
         """
         select to_char(date_trunc('week', cohort_day)::date, 'YYYY-MM-DD') as week, event, count(*) as n
         from anon_funnel_events
         where cohort_day >= $1 and cohort_day <= $2
+          and ($3::bigint[] is null or deck_slug is null or deck_slug in (select d.slug from decks d where d.id = any($3::bigint[])))
         group by 1, 2
-        """, [from, to]);
-      // Deck-scoped numbers follow the usage route (R20X F02): a caller who is not super_admin sees the decks they may
-      // read only ($4 null = every deck).
-      var readable = await Helpers.ReadableDeckIdsAsync(conn, auth);
+        """, [from, to, readable?.ToArray()]);
       var deckRows = await DbUtil.QueryAsync(conn, null,
         """
         select deck_slug, event, count(*) as n

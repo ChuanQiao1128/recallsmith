@@ -13,7 +13,9 @@ included, for 30 days (§6).
 
 ## 1. Exactly what is sent
 
-One request is `POST /api/v1/public/events` with a JSON body of at most 8192 bytes:
+The app sends the funnel only when it flushes its queue, one `POST /api/v1/public/events` per batch of at most 20
+events (the queue holds at most 50, so a flush is one request, or at most three after a long offline spell), each
+with a JSON body of at most 8192 bytes:
 
 ```json
 { "platform": "ios", "appVersion": "1.9.0",
@@ -32,9 +34,15 @@ One request is `POST /api/v1/public/events` with a JSON body of at most 8192 byt
 
 Nothing else is in the body: no user id, account id, email, device id, install id, advertising id, vendor id,
 push token, locale, time zone, free text or card content. The request carries **no Authorization header** (§3.4:
-the app's API client sends no token for this call). If one is sent anyway, the server never reads it: the
+the app's API client sends no token for this call). The server also uses **no trace id and no Sentry header** from
+this request: it never reads `sentry-trace` or `baggage`, and for this one route its metric line drops the
+`x-dc-trace-id` value it records for every other route (`src_C/Shared/RecallSmith.Lambda.Common/RouteMetrics.cs`,
+R24X F05), so a stored or logged funnel batch cannot be joined to a Sentry event or a session trace. Note, for the
+mobile owner: today the app's `apiJson` still attaches `x-dc-trace-id` (its Sentry trace id) to this POST when Sentry
+is active, and Sentry's `tracePropagationTargets` cover the API origin, so `sentry-trace`/`baggage` can be on the
+wire too; the server discards them, and dropping them in the app is a mobile follow-up (out of this server round). If one is sent anyway, the server never reads it: the
 dispatcher does not resolve auth for this path (`src_C/Vpc/VpcFunction.cs:73-84`) and the handler takes no auth
-context (`src_C/Vpc/Analytics/AnonFunnel.cs:87-91`), so a signed-in caller is never linked to the events, and no
+context (`src_C/Vpc/Analytics/AnonFunnel.cs:107-112`), so a signed-in caller is never linked to the events, and no
 `users` row is created.
 
 What the transport itself carries (not in the body, not stored by the funnel): the source IP address and the
@@ -55,9 +63,11 @@ Table `anon_funnel_events` (`src_C/Vpc/Db/Migrations/043_anon_funnel_events.sql`
 | `app_version` | `appVersion` |
 | `received_at` | server time of the insert (`now()`), the clock of the retention delete |
 
-The insert (`src_C/Vpc/Analytics/AnonFunnel.cs:147-151`) writes only those columns. Invalid events are dropped
-and only counted (`rejected` in the response). The body is never logged; the handler's only log lines are the
-budget warning (no request data) and the retention outcome (a row count). The core-vpc dispatcher line for the
+The insert (`src_C/Vpc/Analytics/AnonFunnel.cs:174-179`) writes only those columns. Invalid events are dropped
+and only counted (`rejected` in the response). Past a global cap of 20000 rows received in 24 hours nothing is
+stored at all (`src_C/Vpc/Analytics/AnonFunnel.cs:49`), so a flood cannot grow the table without bound. The body
+is never logged; the handler's only log lines are the budget and daily-cap warnings (no request data) and the
+retention outcome (a row count). The core-vpc dispatcher line for the
 request holds the trace id, method, path and a null user (`src_C/Vpc/VpcFunction.cs:91-102`) — no IP, no body —
 and is kept 90 days like every other core-vpc line (`infra/modules/api/core_vpc.tf:1-4`).
 
@@ -103,9 +113,10 @@ What it **cannot** answer, by design:
 
 ## 5. Retention
 
-Rows are deleted 400 days after `received_at` (`src_C/Vpc/Analytics/AnonFunnel.cs:34`) by the daily
-`analytics_daily` automation step, which runs the delete after a computed daily rollup
-(`src_C/Vpc/Analytics/UsageAnalytics.cs:118`). 400 days keeps a full year of weekly cohorts plus their
+Rows are deleted 400 days after `received_at` (`src_C/Vpc/Analytics/AnonFunnel.cs:36`) by their own automation
+step, `anon_funnel_retention`, on every tick (`src_C/Vpc/Automation/AutomationTick.cs:195`). It does not depend on
+the daily usage rollup succeeding, runs under its own statement timeout and deletes in capped batches; a failure is
+logged and recorded as a failed step, and the next tick retries. 400 days keeps a full year of weekly cohorts plus their
 `returned_day_7` step for year-on-year comparison. The ingest also rejects days outside [today − 400, today + 1],
 so nothing older than the retention window can be written.
 
