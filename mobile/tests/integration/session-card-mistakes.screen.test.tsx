@@ -84,6 +84,8 @@ const featureFlagsMock = vi.hoisted(() => vi.fn());
 vi.mock('../../src/config/featureFlags', () => ({
   useFeatureFlags: () => featureFlagsMock(),
   getFeatureFlags: () => featureFlagsMock(),
+  // Same reading as the real isFsrsEnabled: FSRS unless the flags turn it off explicitly.
+  isFsrsEnabled: () => featureFlagsMock()?.fsrs?.enabled !== false,
 }));
 
 const store = new Map<string, string>();

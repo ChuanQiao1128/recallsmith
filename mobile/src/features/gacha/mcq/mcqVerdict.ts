@@ -1,10 +1,10 @@
 // mobile/src/features/gacha/mcq/mcqVerdict.ts
 // Pure verdict → rating mapping (plan §5.3) and a read-only ladder preview.
 // The scheduler is consumed, never re-implemented: describeScheduledRating formats the output of the
-// scheduler that saves the rating (scheduleNextReview, or scheduleFocusReview in a focus run) and nothing
+// scheduler that saves the rating (scheduleWithFsrs, or scheduleFocusReview in a focus run) and nothing
 // else (D00 §0, no ladder copy).
 import type { ReviewRating, CardProgress } from '../../../review/model';
-import { scheduleNextReview } from '../../../review/model';
+import { scheduleWithFsrs } from '../../../review/fsrsScheduler';
 import type { McqExport } from '../../../types/deckExport';
 import { capNextReviewToExam } from '../../goal/studyGoal';
 import { mcqRequiredCount } from './normalizeMcq';
@@ -76,8 +76,10 @@ export function mapMcqVerdictToRating(input: McqVerdictInput): ReviewRating {
 
 export const RATING_LABEL: Readonly<Record<ReviewRating, 'Again' | 'Hard' | 'Good' | 'Easy'>> = Object.freeze({ again: 'Again', hard: 'Hard', good: 'Good', easy: 'Easy' });
 
-/** The scheduler a preview runs: scheduleNextReview, or scheduleFocusReview in a focus run. */
+/** The scheduler a preview runs: scheduleWithFsrs (the ladder when features.fsrs is off), or scheduleFocusReview in a focus run. */
 export type RatingScheduler = (p: CardProgress, rating: ReviewRating, now: Date) => CardProgress;
+
+const scheduleWithFsrsAt: RatingScheduler = (p, rating, now) => scheduleWithFsrs(p, rating, now.getTime());
 
 function formatPracticeGap(delta: number): string {
   if (delta < 3_600_000) {
@@ -93,7 +95,7 @@ function formatPracticeGap(delta: number): string {
 }
 
 /** Pure preview of a rating: after = schedule(before, rating, now) (read-only import), where schedule is the
- *  function that will save the rating (scheduleNextReview by default, scheduleFocusReview in a focus run).
+ *  function that will save the rating (scheduleWithFsrs by default, scheduleFocusReview in a focus run).
  *  The line formats after.nextReviewAt's delta from now; before is never mutated (the scheduler spreads).
  *  When a non-Again rating leaves stage and nextReviewAt as they were (focus practice), the line says so and
  *  names the gap to the unchanged nextReviewAt instead of a ladder step that is never applied.
@@ -102,7 +104,7 @@ export function describeScheduledRating(
   before: CardProgress,
   rating: ReviewRating,
   now: Date,
-  schedule: RatingScheduler = scheduleNextReview,
+  schedule: RatingScheduler = scheduleWithFsrsAt,
   examDate: string | null = null,
 ): { after: CardProgress; line: string } {
   const after = capNextReviewToExam(schedule(before, rating, now), examDate, now.getTime());

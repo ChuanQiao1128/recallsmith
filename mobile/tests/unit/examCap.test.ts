@@ -1,10 +1,12 @@
 // R22 §1.5, §7: with an exam date set, no review is scheduled after the day before the exam.
 // The cap wraps the scheduler at its one call site (buildRatedSessionState); the frozen model.ts is untouched.
+// The scheduler is scheduleWithFsrs (R24 §4.3: FSRS while features.fsrs is on, the ladder otherwise).
 import { describe, expect, it } from 'vitest';
 
 import { buildRatedSessionState } from '../../src/features/gacha/session/sessionReviewHelpers';
 import { scheduleFocusReview } from '../../src/features/gacha/mistakes/focusSession';
-import { scheduleNextReview, type CardProgress, type ReviewRating } from '../../src/review/model';
+import { type CardProgress, type ReviewRating } from '../../src/review/model';
+import { scheduleWithFsrs } from '../../src/review/fsrsScheduler';
 import type { CardExport } from '../../src/types/deckExport';
 
 // Local times: the exam date is a local calendar day.
@@ -17,6 +19,11 @@ const CARD: CardExport = { StableUid: 'a', OrderInDeck: 1, Difficulty: 1, Questi
 
 function progressAt(stage: number, extra?: Partial<CardProgress>): CardProgress {
   return { stableUid: 'a', stage, lastReviewedAt: NOW.getTime() - 10 * DAY, nextReviewAt: NOW.getTime() - 1, ...extra };
+}
+
+/** What the session saves before the cap. */
+function schedule(before: CardProgress, rating: ReviewRating): CardProgress {
+  return scheduleWithFsrs(before, rating, NOW.getTime());
 }
 
 function rate(before: CardProgress, rating: ReviewRating, examDate?: string | null, focusRun = false) {
@@ -37,7 +44,7 @@ function rate(before: CardProgress, rating: ReviewRating, examDate?: string | nu
 describe('exam cap on the session scheduler', () => {
   it('pulls a good rating that would land after the exam back to the start of the day before', () => {
     const before = progressAt(3);
-    const uncapped = scheduleNextReview(before, 'good', NOW);
+    const uncapped = schedule(before, 'good');
     expect(uncapped.nextReviewAt).toBeGreaterThan(CAP_MS);
 
     const { updatedOne, updatedProgress } = rate(before, 'good', EXAM);
@@ -49,16 +56,18 @@ describe('exam cap on the session scheduler', () => {
   });
 
   it('leaves a review that already lands before the cap unchanged', () => {
-    const before = progressAt(0);
+    // A first Good is 3 days out, before the cap 3.6 days away.
+    const before: CardProgress = { stableUid: 'a', stage: 0, nextReviewAt: 0 };
     const { updatedOne } = rate(before, 'good', EXAM);
-    expect(updatedOne.nextReviewAt).toBe(scheduleNextReview(before, 'good', NOW).nextReviewAt);
+    expect(updatedOne.nextReviewAt).toBe(schedule(before, 'good').nextReviewAt);
+    expect(updatedOne.nextReviewAt).toBe(NOW.getTime() + 3 * DAY);
     expect(updatedOne.nextReviewAt).toBeLessThan(CAP_MS);
     expect(rate(before, 'again', EXAM).updatedOne.nextReviewAt).toBe(NOW.getTime() + 10 * 60_000);
   });
 
   it('leaves every rating unchanged with no goal or no exam date', () => {
     for (const rating of ['again', 'hard', 'good', 'easy'] as const) {
-      const expected = scheduleNextReview(progressAt(4), rating, NOW).nextReviewAt;
+      const expected = schedule(progressAt(4), rating).nextReviewAt;
       expect(rate(progressAt(4), rating).updatedOne.nextReviewAt).toBe(expected);
       expect(rate(progressAt(4), rating, null).updatedOne.nextReviewAt).toBe(expected);
     }
@@ -66,7 +75,7 @@ describe('exam cap on the session scheduler', () => {
 
   it('does not cap when the exam is tomorrow (the day before is not in the future)', () => {
     const before = progressAt(3);
-    const expected = scheduleNextReview(before, 'good', NOW).nextReviewAt;
+    const expected = schedule(before, 'good').nextReviewAt;
     expect(rate(before, 'good', '2026-10-03').updatedOne.nextReviewAt).toBe(expected);
     // An exam today or already past does not cap either.
     expect(rate(before, 'good', '2026-10-02').updatedOne.nextReviewAt).toBe(expected);

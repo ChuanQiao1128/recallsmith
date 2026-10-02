@@ -8,7 +8,8 @@ import {
   scheduleFocusReview,
 } from '../../src/features/gacha/mistakes/focusSession';
 import { buildRatedSessionState } from '../../src/features/gacha/session/sessionReviewHelpers';
-import { scheduleNextReview, type CardProgress } from '../../src/review/model';
+import { type CardProgress } from '../../src/review/model';
+import { scheduleWithFsrs } from '../../src/review/fsrsScheduler';
 import type { CardExport, DeckExport } from '../../src/types/deckExport';
 
 const T = Date.UTC(2026, 8, 27, 9, 0, 0);
@@ -101,11 +102,12 @@ describe('focus session helpers', () => {
       expect(twice.nextReviewAt).toBe(notDue.nextReviewAt);
     });
 
+    // A normal review is scheduleWithFsrs (the ladder when features.fsrs is off, R24 §4.3).
     it('schedules a due card, and an Again on any card, exactly like a normal review', () => {
       for (const rating of ['again', 'hard', 'good', 'easy'] as const) {
-        expect(scheduleFocusReview(due, rating, now)).toEqual(scheduleNextReview(due, rating, now));
+        expect(scheduleFocusReview(due, rating, now)).toEqual(scheduleWithFsrs(due, rating, T));
       }
-      expect(scheduleFocusReview(notDue, 'again', now)).toEqual(scheduleNextReview(notDue, 'again', now));
+      expect(scheduleFocusReview(notDue, 'again', now)).toEqual(scheduleWithFsrs(notDue, 'again', T));
     });
 
     it('is what buildRatedSessionState applies in a focus run, and only there', () => {
@@ -124,7 +126,7 @@ describe('focus session helpers', () => {
         nextReviewAt: T + DAY_MS,
         lastReviewedAt: T,
       });
-      expect(buildRatedSessionState(base).updatedOne).toMatchObject(scheduleNextReview(notDue, 'good', now));
+      expect(buildRatedSessionState(base).updatedOne).toMatchObject(scheduleWithFsrs(notDue, 'good', T));
     });
   });
 });
