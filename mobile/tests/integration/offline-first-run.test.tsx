@@ -109,7 +109,8 @@ vi.mock('../../src/config/featureFlags', () => {
     mistakeBook: { enabled: true, relatedCount: 3 },
     cardSource: { enabled: true },
   };
-  return { useFeatureFlags: () => flags, getFeatureFlags: () => flags };
+  // R24 F03: the scheduler and the progress push read isFsrsEnabled (FSRS unless the flags turn it off).
+  return { useFeatureFlags: () => flags, getFeatureFlags: () => flags, isFsrsEnabled: () => true };
 });
 
 // In-memory AsyncStorage.
