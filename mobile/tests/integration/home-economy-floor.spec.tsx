@@ -190,9 +190,12 @@ async function renderHome() {
       />,
     );
   });
-  for (let i = 0; i < 4; i++) {
+  // Wait for the first load to finish (the draw badge appears), not a fixed number of microtasks: Home's
+  // refreshes coalesce (focus, auth effect, starter-upgrade subscription), so the load can take an extra run.
+  for (let i = 0; i < 50; i++) {
+    if (tree.root.findAll((n) => n.props?.testID === 'home-draw-status-badge').length > 0) break;
     await act(async () => {
-      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
     });
   }
   return tree;
