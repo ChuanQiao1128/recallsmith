@@ -1,5 +1,6 @@
-// G03 (R25 §3): the Debug menu and its 7-tap door exist only in __DEV__ builds and on
-// update channels other than "production" — the same channel rule Sentry uses.
+// G03 (R25 §3): the Debug menu and its 7-tap door exist only in __DEV__ builds and on a
+// named update channel other than "production" (Sentry's channel rule). F03: a missing or
+// unreadable channel outside __DEV__ keeps the menu off.
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import React from 'react';
@@ -44,13 +45,35 @@ describe('isDebugMenuAvailable', () => {
     expect(isDebugMenuAvailable()).toBe(true);
   });
 
-  it('shares the channel rule with the Sentry gate', () => {
-    for (const channel of ['production', 'PRODUCTION', 'preview', 'development', '', undefined, null]) {
+  it('shares the channel rule with the Sentry gate for a named channel', () => {
+    for (const channel of ['production', 'PRODUCTION', 'preview', 'development']) {
       const gate = decideSentry({ isDev: false, channel, dsn: undefined, killed: false });
       const sentryChannelOk = gate.enabled || gate.reason !== 'channel';
       expect(isProductionChannel(channel)).toBe(sentryChannelOk);
       expect(isDebugMenuAvailable({ isDev: false, channel })).toBe(!sentryChannelOk);
     }
+  });
+
+  // F03 (q-correctness-1, q-security-1, q-tests-1): a missing or unreadable channel keeps
+  // Sentry off AND the Debug menu off — both gates fail closed outside __DEV__.
+  it('is false outside __DEV__ when the channel is missing, blank or not a string', () => {
+    for (const channel of [undefined, null, '', '   ', 0, {}]) {
+      expect(isProductionChannel(channel)).toBe(false);
+      expect(isDebugMenuAvailable({ isDev: false, channel })).toBe(false);
+      expect(isDebugMenuAvailable({ isDev: true, channel })).toBe(true);
+    }
+  });
+
+  it('is false outside __DEV__ when expo-updates is unreadable or reports no channel', () => {
+    (globalThis as Record<string, unknown>).__DEV__ = false;
+    for (const module of [null, {}, { channel: undefined }, { channel: null }, { channel: '' }]) {
+      updates.module = module;
+      expect(isDebugMenuAvailable()).toBe(false);
+      expect(debugMenuRoute(() => <React.Fragment key="debug">DebugMenu</React.Fragment>)).toBeNull();
+    }
+    (globalThis as Record<string, unknown>).__DEV__ = true;
+    updates.module = null;
+    expect(isDebugMenuAvailable()).toBe(true);
   });
 });
 
