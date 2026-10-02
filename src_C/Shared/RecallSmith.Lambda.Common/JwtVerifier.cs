@@ -93,12 +93,29 @@ public sealed record JwtVerifyResult(bool Ok, string Reason, IReadOnlyDictionary
 /// </summary>
 /// <remarks>
 /// <para>
-/// This exists because the HTTP API in front of core-vpc has <c>AuthorizationType NONE</c> on
-/// every route, so nothing between the internet and <see cref="Auth"/> checks a signature.
-/// Until the gateway authorizers land this class IS the authentication of the API, and it is
-/// written to stay correct after they land too: a token the gateway already verified never
-/// reaches it (see <see cref="Auth.GetAuthContextAsync"/>), so the cost of keeping it is one
-/// code path that only runs for requests the gateway did not vouch for.
+/// Where it sits. Every user route of the HTTP API in front of core-vpc and edge-public goes
+/// through one of three Cognito JWT authorizers (<c>local.routes</c> in
+/// infra/modules/api/gateway.tf is the list): <c>console</c> (console pool, SPA client only) on
+/// the console and edge-public prefixes and on the <c>$default</c> and <c>ANY /{proxy+}</c>
+/// catch-alls; <c>agent</c> (the same pool plus the agent app clients) on the exact keys the MCP
+/// server and the author runner call; <c>mobile</c> (mobile pool) on the app's routes.
+/// <c>AuthorizationType NONE</c> is left only where a Cognito token cannot serve: <c>GET /health</c>,
+/// the CORS preflights, the RevenueCat webhooks, the HMAC-signed internal callbacks
+/// (<c>/api/internal/*</c>, <c>/api/v1/internal/*</c>) and the anonymous
+/// <c>POST /api/v1/public/events</c>. Each of those authenticates in its own handler or
+/// deliberately does not, and the route guard in the same file keeps every one of them except the
+/// preflights an exact key.
+/// </para>
+/// <para>
+/// Why it still exists. Claims a gateway authorizer produced arrive on the event, and
+/// <see cref="Auth.GetAuthContextAsync"/> takes those without consulting this class. It runs only
+/// for a bearer on a request no authorizer vouched for, which in production means a NONE route
+/// (a RevenueCat secret sent as a bearer is not JWT-shaped and comes back "malformed"; the funnel
+/// ingest never resolves a bearer at all). It is kept as the lock behind the gateway's: a route
+/// switched to <c>auth = "none"</c> by mistake, or a new NONE handler that reads the caller's
+/// identity, still cannot be entered with a forged or unsigned token, and admin roles there still
+/// need a real signature. The cost is one code path that only runs for requests the gateway did
+/// not vouch for.
 /// </para>
 /// <para>
 /// Key handling. The JWKS for each issuer is read from the bundled copy (<see cref="BundledJwks"/>)
