@@ -203,6 +203,114 @@ describe('SessionSummaryScreen', () => {
     expect(navigation.navigate).toHaveBeenCalledWith('Draw', { slug: 'csharp', rewardPending: true });
   });
 
+  // F03 x-tests-1 / x-correctness-1 / x-correctness-2: the rendered summary (text and VoiceOver
+  // labels) carries none of the old game words, including the reward card and the progress block.
+  const OLD_WORDS = /\b(pulls?|wallet|reserve|run)\b/i;
+
+  async function renderSummary(params: Record<string, unknown>) {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <SessionSummaryScreen
+          navigation={{ navigate: vi.fn() } as any}
+          route={{ key: 'summary', name: 'SessionSummary', params } as any}
+        />,
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    return tree;
+  }
+
+  function visibleWords(tree: renderer.ReactTestRenderer): string {
+    const texts = tree.root.findAll((node) => (node.type as any) === 'Text').map(getTextContent);
+    const labels = tree.root
+      .findAll((node) => typeof node.type === 'string')
+      .flatMap((node) => [node.props?.accessibilityLabel, node.props?.accessibilityHint])
+      .filter((value): value is string => typeof value === 'string');
+    return [...texts, ...labels].join('\n');
+  }
+
+  it('shows no old game word on the rendered summary, reward card and progress block included', async () => {
+    const baseParams = {
+      sessionId: 'sess-words',
+      slug: 'csharp',
+      deckTitle: 'C# Interview',
+      sessionDone: 4,
+      sessionLimit: 4,
+      minimumGoal: 1,
+      dueCount: 0,
+      streakEarned: true,
+    };
+
+    const earned = await renderSummary({ ...baseParams, reward: ONE_NEW_CARD_REWARD });
+    const earnedWords = visibleWords(earned);
+    const card = earned.root.find(
+      (node) => typeof node.type === 'string' && node.props?.testID === 'summary-reward-block',
+    );
+    const cardTexts = card.findAll((node) => (node.type as any) === 'Text').map(getTextContent);
+    expect(cardTexts).toContain('draws');
+    expect(cardTexts).toContain('Saved draws');
+    expect(cardTexts).toContain('extra 0 → 0');
+    expect(earnedWords).toContain('Learning map updated for this session.');
+    expect(earnedWords).not.toMatch(OLD_WORDS);
+
+    // Overflow: the extra draws are waiting, so the reward card shows the extra line with a change.
+    const overflow = await renderSummary({
+      ...baseParams,
+      sessionId: 'sess-words-overflow',
+      reward: {
+        newCardPulls: 3,
+        newCardUids: ['u1', 'u2', 'u3'],
+        dueClearPulls: 0 as const,
+        rewardPulls: 3,
+        applied: 3,
+        dropped: 0,
+        walletBefore: { availablePulls: 59, reservePulls: 0 },
+        walletAfter: { availablePulls: 60, reservePulls: 2 },
+      },
+    });
+    const overflowWords = visibleWords(overflow);
+    expect(overflowWords).toContain('extra 0 → 2');
+    expect(overflowWords).not.toMatch(OLD_WORDS);
+
+    // No reward and nothing done: the empty branch.
+    const empty = await renderSummary({ ...baseParams, sessionId: undefined, sessionDone: 0, streakEarned: false });
+    expect(visibleWords(empty)).not.toMatch(OLD_WORDS);
+  });
+
+  // F03 x-tests-2: the gold button's visible text and its VoiceOver label are read from the rendered tree.
+  it('labels the gold button "Use 2 new draws now" for sight and for VoiceOver', async () => {
+    const tree = await renderSummary({
+      sessionId: 'sess-gold',
+      slug: 'csharp',
+      deckTitle: 'C# Interview',
+      sessionDone: 4,
+      sessionLimit: 4,
+      minimumGoal: 1,
+      dueCount: 0,
+      streakEarned: true,
+      reward: {
+        newCardPulls: 2,
+        newCardUids: ['u1', 'u2'],
+        dueClearPulls: 0 as const,
+        rewardPulls: 2,
+        applied: 2,
+        dropped: 0,
+        walletBefore: { availablePulls: 0, reservePulls: 0 },
+        walletAfter: { availablePulls: 2, reservePulls: 0 },
+      },
+    });
+
+    const gold = findPressableByTestID(tree, 'summary-reward-use-pulls-cta');
+    expect(gold.props.accessibilityLabel).toBe('Use 2 new draws now');
+    const goldTexts = gold.findAll((node) => (node.type as any) === 'Text').map(getTextContent);
+    expect(goldTexts).toContain('Use 2 new draws now');
+    expect(goldTexts).toContain('+2');
+  });
+
   it('names each destination once: the pulls chip, the Home button and the library link', async () => {
     const navigation = { navigate: vi.fn() } as any;
     const FIVE_NEW_CARDS_REWARD = {
