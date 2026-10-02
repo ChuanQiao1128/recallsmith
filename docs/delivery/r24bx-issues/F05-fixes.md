@@ -93,3 +93,11 @@ All applied word for word. Each one is pinned in `whatsNew200.test.ts`; those te
 ## Gates
 
 From `mobile/`: `npx tsc --noEmit`, `npm run test:typecheck`, `npx vitest run`. The F05 verify script was also run (results in the run report).
+
+## Base gate repair (not a reviewer finding)
+
+On the base `delivery/r24bx-r`, `tests/unit/plainWordsGuard.test.ts` › "keeps PENDING honest" failed every time:
+`features/gacha/draw/ceremonyCopy.ts: expected [] to not deeply equal []`. W01–W03 (#669–#671) have merged and
+cleaned all five PENDING modules, and the test asks for them to leave the list once clean. PENDING is now empty,
+so the guard covers all five modules with their own "uses plain words" case (15 cases, all green). This only adds
+coverage: no allow-list entry or regex was widened. Without it the mobile root gate cannot pass.
