@@ -191,6 +191,7 @@ public static class AutomationTick
     await Step("resend", async () => a.NotificationsResent = await Notifications.ResendAsync(conn, StepBatch));
     // R20 V08: once per UTC day, the usage rollups of the last 8 complete days (skips with a log line before 040).
     // R20X F02 (§10.8): deferred to the next tick when less than half the budget remains; statement_timeout inside.
+    // R24 A01: the same daily run deletes anonymous funnel rows received more than 400 days ago.
     await Step("analytics_daily", () => Analytics.UsageAnalytics.RunIfDueAsync(conn, Budget - clock.Elapsed, Budget));
   }
 
