@@ -10,6 +10,7 @@ import { loadDeckProgress, saveDeckProgress, setActiveUserSubForStorage } from '
 import { syncDrawStateNow } from './drawStateSync';
 import { invalidateDrawStateCache } from '../features/gacha/draw/drawStateCache';
 import { getClientCapabilities } from './clientCapabilities';
+import { isSyncBlocked } from './syncGuard';
 import {
   getCachedQueue,
   setCachedQueue,
@@ -1691,6 +1692,14 @@ async function runSyncNow(reason: string): Promise<void> {
  * - app_foreground/draw_committed/manual/token_set/user_changed 默认立即 sync
  */
 export function scheduleProgressSync(arg?: any): void {
+  // Account deletion in progress or done (syncGuard.ts): schedule nothing and
+  // drop a timer armed earlier, so no sync can reach the server after the DELETE.
+  if (isSyncBlocked()) {
+    if (_timer) clearTimeout(_timer);
+    _timer = null;
+    return;
+  }
+
   // ✅ No token -> skip scheduling
   if (!_accessTokenMem || !_accessTokenMem.trim()) {
     return;
