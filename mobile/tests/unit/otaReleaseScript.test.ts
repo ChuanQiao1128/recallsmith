@@ -6,6 +6,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PROBE, waitUntilExecutable } from '../setup/execProbe';
 
+// Each case spawns the real release script plus its node/fake-binary children (about ten
+// processes). With the load average above 30 (parallel delivery workers) they took 3-8 s each,
+// so vitest's 5 s default timed out cases whose assertions were green.
+// The budget is explicit per spawn-heavy suite; every assertion is unchanged.
+const SPAWN_TIMEOUT_MS = 30_000;
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const OTA = path.resolve(HERE, '../../scripts/release/ota.sh');
 const ALL_NAMES = [
@@ -109,7 +115,7 @@ function runOta(opts: { names: string[]; dryRun?: boolean }) {
   return { res, log, npx, security, diag };
 }
 
-describe('ota.sh', () => {
+describe('ota.sh', { timeout: SPAWN_TIMEOUT_MS }, () => {
   it('refuses to publish when a required EXPO_PUBLIC name is missing from the production environment', () => {
     const names = ALL_NAMES.filter((n) => n !== 'EXPO_PUBLIC_RC_IOS_API_KEY');
     const { res, log, diag } = runOta({ names });
@@ -277,7 +283,7 @@ function runOtaTree(opts: TreeOpts) {
 
 const NAMES_180 = ALL_NAMES.filter((n) => n !== 'EXPO_PUBLIC_SENTRY_DSN');
 
-describe('ota.sh 1.9.0 release plumbing', () => {
+describe('ota.sh 1.9.0 release plumbing', { timeout: SPAWN_TIMEOUT_MS }, () => {
   it('runtime 1.9.0 without EXPO_PUBLIC_SENTRY_DSN refuses to publish (exit 3)', () => {
     const r = runOtaTree({ version: '1.9.0', sentryDependency: true, names: NAMES_180 });
     expect(r.res.status, r.diag).toBe(3);

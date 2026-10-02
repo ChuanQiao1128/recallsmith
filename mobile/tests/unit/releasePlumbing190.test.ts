@@ -6,6 +6,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PROBE, waitUntilExecutable } from '../setup/execProbe';
 
+// Each case spawns the real release script plus its node/fake-binary children (about ten
+// processes). With the load average above 30 (parallel delivery workers) they took 3-8 s each,
+// so vitest's 5 s default timed out cases whose assertions were green.
+// The budget is explicit per spawn-heavy suite; every assertion is unchanged.
+const SPAWN_TIMEOUT_MS = 30_000;
+
 // 1.9.0 release plumbing (M04): eas.json Sentry env per profile, version 1.9.0 (23), the CI
 // expo export step and the ios-build.sh placeholder guard. ios-build.sh only ever runs from a temp
 // copy with fixture files, a fake eas first on PATH and DRY_RUN=1.
@@ -191,7 +197,7 @@ function runIosBuild(opts: { org: string; project: string; profile?: string; nam
   return { res, log, diag };
 }
 
-describe('ios-build.sh Sentry placeholder guard', () => {
+describe('ios-build.sh Sentry placeholder guard', { timeout: SPAWN_TIMEOUT_MS }, () => {
   it('exits 5 with the fill message while production org/project are placeholders (DRY_RUN=1)', () => {
     const { res, log, diag } = runIosBuild({ org: 'REPLACE_ME_SENTRY_ORG', project: 'REPLACE_ME_SENTRY_PROJECT' });
     expect(res.status, diag).toBe(5);
@@ -222,7 +228,7 @@ describe('ios-build.sh Sentry placeholder guard', () => {
 // R19M-REL-3: a production build (DRY_RUN included) needs the EXPO_PUBLIC_SENTRY_DSN and SENTRY_AUTH_TOKEN
 // names in the EAS production environment; otherwise Sentry never initialises and SENTRY_ALLOW_FAILURE
 // turns the tokenless dSYM/source-map upload into a warning. The check reads names only.
-describe('ios-build.sh EAS production env names', () => {
+describe('ios-build.sh EAS production env names', { timeout: SPAWN_TIMEOUT_MS }, () => {
   it.each(SENTRY_NAMES)('exits 3 naming %s when it is missing from the production environment (DRY_RUN=1)', (name) => {
     const names = [...OTHER_NAMES, ...SENTRY_NAMES.filter((n) => n !== name)];
     const { res, log, diag } = runIosBuild({ org: 'example-org', project: 'example-project', names });
