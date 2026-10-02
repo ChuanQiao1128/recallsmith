@@ -68,3 +68,25 @@ Fix (test-only, no product change): the suite spies on `renderer.create` to trac
 all of them in `afterEach`, so the screen's own cleanup clears each timer before the next test.
 
 File changed: `mobile/tests/integration/draw-result.screen.test.tsx`. Test: `cd mobile && npx vitest run tests/integration/draw-result.screen.test.tsx` (27 passed).
+
+## Gate repair: brief-verify run failed in home-auto-update.spec.tsx (fixed-count flush and leaked Homes)
+
+The driver's brief-verify run failed once in `mobile/tests/integration/home-auto-update.spec.tsx` > "applies the newer
+build from the load path…": `installDeckFromUrl` had 0 calls when the test looked. It passes when the file runs alone.
+
+Cause, two parts:
+1. The test waited a fixed 6 macrotask turns. Home's load path awaits dynamic imports (`deckCache`, `deckWallet`) and
+   storage reads. On a loaded machine the cold first import takes real time, so the install had not started yet.
+2. `renderHome` never unmounted. A Home left mounted keeps refreshing into the next test. After `beforeEach` resets
+   the one-attempt-per-session guard, that old Home's in-flight load uses up the next test's attempt.
+
+Reproduced by adding 5 ms of real latency to the AsyncStorage mock's `getItem`: 5 of 5 tests failed. With only the
+`waitFor` change, "treats a tap on an updating pack…" still failed ('Update · +2 cards' instead of 'Updating…'),
+which exposed part 2. With both changes, all 5 passed under the same latency (given a longer test timeout for the
+added delay). The repro was removed afterwards.
+
+Fix (test-only, no product change): a bounded `waitFor` (retries the assertion block across real macrotask turns, up
+to 4 s) at each point where a test waits for Home to settle, plus `afterEach` unmounting every Home that `renderHome`
+mounted. Every assertion is kept.
+
+File changed: `mobile/tests/integration/home-auto-update.spec.tsx`. Test: `cd mobile && npx vitest run tests/integration/home-auto-update.spec.tsx` (5 passed).
