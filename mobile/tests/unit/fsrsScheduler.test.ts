@@ -38,8 +38,8 @@ function reviewedGoodAtT0(): CardProgress {
     lastSeenRevision: 1,
     lapses: 0,
     hardStreak: 0,
-    fsrsStability: 3.173,
-    fsrsDifficulty: 5.2824,
+    fsrsStability: initState(3).stability,
+    fsrsDifficulty: initState(3).difficulty,
     fsrsAnchorAt: T0,
   };
 }
@@ -93,7 +93,7 @@ describe('scheduleWithFsrs: a reviewed card with its own anchored state', () => 
     const late = scheduleWithFsrs(reviewedGoodAtT0(), 'good', T0 + 10 * DAY_MS);
     const early = scheduleWithFsrs(reviewedGoodAtT0(), 'good', T0 + 1 * DAY_MS);
 
-    const state = { stability: 3.173, difficulty: 5.2824 };
+    const state = { stability: initState(3).stability, difficulty: initState(3).difficulty };
     expect(late.fsrsStability).toBeCloseTo(nextState(state, 3, 10).stability, 10);
     expect(early.fsrsStability).toBeCloseTo(nextState(state, 3, 1).stability, 10);
     expect(late.fsrsStability!).toBeGreaterThan(onTime.fsrsStability!);
@@ -110,7 +110,7 @@ describe('scheduleWithFsrs: a reviewed card with its own anchored state', () => 
     expect(next.stage).toBe(3);
     expect(next.lapses).toBe(2);
     expect(next.hardStreak).toBe(0);
-    const expected = nextState({ stability: 3.173, difficulty: 5.2824 }, 1, 3);
+    const expected = nextState({ stability: initState(3).stability, difficulty: initState(3).difficulty }, 1, 3);
     expect(next.fsrsStability).toBeCloseTo(expected.stability, 10);
     expect(next.fsrsDifficulty).toBeCloseTo(expected.difficulty, 10);
   });
