@@ -23,7 +23,7 @@ export function SummaryProgressBlock(props: SummaryProgressBlockProps) {
   const fallbackTransitions =
     transitions.newToLearning > 0 || transitions.learningToMastered > 0
       ? `${transitions.newToLearning} cards entered Learning · ${transitions.learningToMastered} cards mastered`
-      : 'Learning map updated for this run.';
+      : 'Learning map updated for this session.';
 
   return (
     <View testID={testID} style={styles.card}>

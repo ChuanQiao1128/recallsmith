@@ -142,4 +142,26 @@ describe('RoutePreview', () => {
     expect(texts).toContain('Final check');
     expect(texts.join(' ')).not.toMatch(/node/i);
   });
+
+  // F03 supervisor item: the card still renders in tests, so its heading, subtitle and role badges use
+  // session words (R24B-00 §1), not the game words.
+  it('uses session words for its heading, subtitle and role badges', () => {
+    const nodes: RoutePreviewNode[] = [
+      { id: 'warmup-0', role: 'warmup', title: '', subtitle: 'An easy first card.' },
+      { id: 'elite-1', role: 'elite', title: 'Harder recall', subtitle: 'A sharper check.' },
+      { id: 'boss-2', role: 'boss', title: 'Final check', subtitle: 'A closing test.' },
+    ];
+    let tree!: renderer.ReactTestRenderer;
+    act(() => {
+      tree = renderer.create(<RoutePreview nodes={nodes} />);
+    });
+    const texts = tree.root
+      .findAll((node) => (node.type as any) === 'Text')
+      .map((node) => [].concat(node.props.children).join(''));
+    expect(texts).toContain('Session preview');
+    expect(texts).toContain('Today should feel like one short session, not a long to-do list.');
+    expect(texts.filter((text) => text === 'Harder recall')).toHaveLength(2);
+    expect(texts.filter((text) => text === 'Final check')).toHaveLength(2);
+    expect(texts.join(' ')).not.toMatch(/\b(elite|boss|route|run)\b/i);
+  });
 });

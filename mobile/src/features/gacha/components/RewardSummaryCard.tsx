@@ -28,7 +28,7 @@ export function RewardSummaryCard(props: RewardSummaryCardProps) {
 
   return (
     <View testID={testID} style={styles.card}>
-      {/* Section label only. The "+N pulls" badge used to sit here too, a
+      {/* Section label only. The "+N draws" badge used to sit here too, a
           third copy of the count the hero chip and the anchor circle below
           already carry; the anchor is this card's statement of it. */}
       <View style={styles.topRow}>
@@ -43,7 +43,7 @@ export function RewardSummaryCard(props: RewardSummaryCardProps) {
             +{reward.pulls}
           </Text>
           <Text numberOfLines={1} style={styles.anchorLabel}>
-            pulls
+            draws
           </Text>
         </View>
         <View style={styles.anchorContent}>
@@ -58,7 +58,7 @@ export function RewardSummaryCard(props: RewardSummaryCardProps) {
 
       <View style={styles.walletRow}>
         <Text numberOfLines={1} style={styles.walletCaption}>
-          Wallet
+          Saved draws
         </Text>
         <Text numberOfLines={1} style={styles.walletValue}>
           {reward.walletBefore.available}
@@ -70,7 +70,7 @@ export function RewardSummaryCard(props: RewardSummaryCardProps) {
           {reward.walletAfter.available}
         </Text>
         <Text numberOfLines={1} style={styles.reserveLabel}>
-          reserve {reward.walletBefore.reserve} → {reward.walletAfter.reserve}
+          extra {reward.walletBefore.reserve} → {reward.walletAfter.reserve}
         </Text>
       </View>
 
