@@ -311,4 +311,6 @@ flowchart LR
 任务描述里点名但仓库里没有的文件（本文以根 README.md 为索引）：
 - docs/README.md
 - src_C/Worker/Manifest/ManifestService.cs
+Snowflake 已于 2026-10-02 退役（R26），snowflake/ 目录整体删除：
+- snowflake/001_content_intelligence_setup.sql
 -->
