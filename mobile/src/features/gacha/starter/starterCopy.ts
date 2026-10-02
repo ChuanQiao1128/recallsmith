@@ -9,4 +9,6 @@ export const STARTER_COPY = Object.freeze({
   /** SessionCard error state when the lesson's deck cannot be downloaded (offline first run). */
   offlineTitle: "Can't download your first lesson",
   offlineBody: 'Your first lesson needs a connection to download. Connect to the internet, then tap Retry.',
+  /** R24 §2.2: SessionCard notice when the deck was missing and the bundled starter pack was loaded instead. */
+  offlineStarterNotice: "You're offline. We've loaded the first cards so you can start now.",
 });

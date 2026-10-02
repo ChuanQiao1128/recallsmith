@@ -72,6 +72,19 @@ const RNEasing: any = readRN('Easing', null);
 const A: any = readRN('Animated', {});
 const AnimatedView: any = A.View ?? View;
 const hasAnimated = typeof A.Value === 'function';
+
+// R24 §2.2: swap an installed starter pack for the full deck when the manifest is reachable. Lazy and
+// guarded: the starter module reaches deckRepository (expo-file-system, amplify), which Home itself
+// only reaches through deckActionResolver. Never throws.
+async function upgradeStarterDecksOnFocus(): Promise<string[]> {
+  try {
+    const mod = await import('../content/starterOffline');
+    return await mod.upgradeStarterDecks();
+  } catch {
+    return [];
+  }
+}
+
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
 type HomeState = {
   loading: boolean;
@@ -450,6 +463,19 @@ export function HomeScreen({ navigation, route }: Props) {
         cancelled = true;
       };
     }, [refreshHome]),
+  );
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      (async () => {
+        const upgraded = await upgradeStarterDecksOnFocus();
+        if (cancelled || !isMountedRef.current || upgraded.length === 0) return;
+        void refreshHomeRef.current();
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, []),
   );
   useEffect(() => {
     let cancelled = false;
