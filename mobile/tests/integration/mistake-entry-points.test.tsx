@@ -143,7 +143,13 @@ describe('Mistake Book entry points', () => {
     const rowIds = tree.root
       .findAll((node) => typeof node.type === 'string' && /^more-row-/.test(node.props?.testID ?? ''))
       .map((node) => node.props.testID);
-    expect(rowIds.slice(0, 3)).toEqual(['more-row-profile', 'more-row-mistakes', 'more-row-settings']);
+    // D02: Progress by domain sits between the Mistake Book and Settings.
+    expect(rowIds.slice(0, 4)).toEqual([
+      'more-row-profile',
+      'more-row-mistakes',
+      'more-row-domains',
+      'more-row-settings',
+    ]);
 
     await act(async () => {
       row[0].props.onPress();
