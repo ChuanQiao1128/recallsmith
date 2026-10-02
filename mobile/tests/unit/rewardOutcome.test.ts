@@ -59,15 +59,15 @@ describe('rewardOutcome', () => {
   });
 
   it('renders the four reward lines verbatim', () => {
-    expect(rewardLine(outcome({ newCardPulls: 1, dueClearPulls: 0 }))).toBe('+1 pull · 1 new card learned');
-    expect(rewardLine(outcome({ newCardPulls: 3, dueClearPulls: 0 }))).toBe('+3 pulls · 3 new cards learned');
+    expect(rewardLine(outcome({ newCardPulls: 1, dueClearPulls: 0 }))).toBe('+1 draw · 1 new card learned');
+    expect(rewardLine(outcome({ newCardPulls: 3, dueClearPulls: 0 }))).toBe('+3 draws · 3 new cards learned');
     expect(rewardLine(outcome({ newCardPulls: 0, dueClearPulls: 1 }))).toBe("+1 · cleared today's due");
     expect(rewardLine(outcome({ newCardPulls: 3, dueClearPulls: 1 }))).toBe(
-      "+4 pulls · 3 new cards learned · cleared today's due",
+      "+4 draws · 3 new cards learned · cleared today's due",
     );
-    expect(rewardLine(EMPTY_REWARD_OUTCOME)).toBe('No free pulls this run');
+    expect(rewardLine(EMPTY_REWARD_OUTCOME)).toBe('No free draws this session');
 
-    expect(rewardBadge(outcome({ rewardPulls: 2 }))).toBe('+2 pulls');
+    expect(rewardBadge(outcome({ rewardPulls: 2 }))).toBe('+2 draws');
     expect(rewardBadge(EMPTY_REWARD_OUTCOME)).toBe('Progress saved');
   });
 
@@ -94,7 +94,7 @@ describe('rewardOutcome', () => {
       },
     });
     expect(resolved.walletAfter.availablePulls).toBe(60);
-    expect(resolved.rewardMessage).toBe('+1 pull · 1 new card learned · 60 ready to use');
+    expect(resolved.rewardMessage).toBe('+1 draw · 1 new card learned · 60 ready to use');
     expect(resolved.completedFullRun).toBe(true);
 
     const partial = resolveSessionReward({

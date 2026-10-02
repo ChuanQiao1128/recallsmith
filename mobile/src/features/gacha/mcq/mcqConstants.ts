@@ -29,7 +29,7 @@ export const MCQ_COPY = Object.freeze({
   sectionUsage: 'REAL USAGE',
   sectionCode: 'CODING SAMPLE',
   next: 'Next',
-  finishRun: 'Finish run',
+  finishRun: 'Finish session',
   redeal: "Back again — let's see if it stuck",
   coach: "New card type. Decide first, then reveal the options. Sure / Not sure tells the scheduler how confident you were; I don't know skips the guess and shows the explanations.",
   coachDismiss: 'Got it',

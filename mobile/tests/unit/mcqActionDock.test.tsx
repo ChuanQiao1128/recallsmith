@@ -146,12 +146,12 @@ describe('McqActionDock', () => {
     expect(verdict.props.onNext).toHaveBeenCalledTimes(1);
   });
 
-  it('says Finish run on the last node', () => {
+  it('says Finish session on the last node', () => {
     const last = renderDock({ stage: 'verdict', isLastNode: true });
     expect(
       pressable(last.tree, 'mcq-next')
         .findAll((node) => (node.type as any) === 'Text')
-        .some((node) => node.props.children === 'Finish run'),
+        .some((node) => node.props.children === 'Finish session'),
     ).toBe(true);
 
     const notLast = renderDock({ stage: 'verdict', isLastNode: false });

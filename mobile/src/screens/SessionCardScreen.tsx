@@ -1234,7 +1234,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
               </Text>
               <Text style={styles.doneBody} numberOfLines={3}>
                 You don’t hold any card of this deck yet. Open a pack to get your first cards — every
-                card you pull joins today’s run.
+                card you draw joins today’s session.
               </Text>
               <Pressable
                 testID="session-card-empty-deck-cta"
@@ -1253,7 +1253,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
     );
   }
   function requestPause() {
-    Alert.alert('Pause this run?', 'Your ratings are saved.', [
+    Alert.alert('Pause this session?', 'Your ratings are saved.', [
       { text: 'Keep reviewing', style: 'cancel' },
       { text: 'Pause', onPress: () => navigation.goBack() },
     ]);
@@ -1321,7 +1321,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
             {trialInfo.isTrial && trialInfo.previewCount > 0 ? (
               <View style={styles.trialPreview} testID="session-card-trial-preview">
                 <Text style={styles.trialPreviewLabel} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
-                  Preview run
+                  Preview session
                 </Text>
                 <Text style={styles.trialPreviewBody} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   {previewRemaining} of {trialInfo.previewCount} preview cards remaining
@@ -1331,10 +1331,10 @@ export function SessionCardScreen({ navigation, route }: Props) {
             {!current ? (
               <View style={styles.doneCard}>
                 <Text style={styles.doneTitle} numberOfLines={1}>
-                  Route complete
+                  Session complete
                 </Text>
                 <Text style={styles.doneBody} numberOfLines={2}>
-                  This run is complete. Continue to the summary for rewards and next steps.
+                  This session is complete. Continue to the summary for rewards and next steps.
                 </Text>
                 <Pressable
                   style={({ pressed }) => [styles.doneButton, pressed && styles.pressed]}

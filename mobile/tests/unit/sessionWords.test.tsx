@@ -128,7 +128,7 @@ describe('RoutePreview', () => {
   it('renders no empty title line and no Warm-up label', () => {
     const nodes: RoutePreviewNode[] = [
       { id: 'warmup-0', role: 'warmup', title: '', subtitle: 'An easy first card.' },
-      { id: 'boss-1', role: 'boss', title: 'Boss check', subtitle: 'A closing test.' },
+      { id: 'boss-1', role: 'boss', title: 'Final check', subtitle: 'A closing test.' },
     ];
     let tree!: renderer.ReactTestRenderer;
     act(() => {
@@ -139,7 +139,7 @@ describe('RoutePreview', () => {
       .map((node) => node.props.children);
     expect(texts).not.toContain('');
     expect(texts).not.toContain('Warm-up');
-    expect(texts).toContain('Boss check');
+    expect(texts).toContain('Final check');
     expect(texts.join(' ')).not.toMatch(/node/i);
   });
 });
