@@ -143,10 +143,6 @@ public sealed class VpcFunction
       {
         return await Vpc.Db.AppRole.HandleBootstrapRoles(req, res, auth);
       }
-      if (p.EndsWith("/api/v1/admin/db/content-intelligence-demo", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("POST", StringComparison.OrdinalIgnoreCase))
-      {
-        return await Vpc.Db.ContentIntelligenceDemo.HandleContentIntelligenceDemo(req, res, auth);
-      }
       if (p.EndsWith("/api/v1/admin/db/migrations", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))
       {
         return await Vpc.Db.Migrate.HandleDbMigrationsList(req, res, auth);
@@ -174,14 +170,6 @@ public sealed class VpcFunction
       if (p.EndsWith("/api/v1/admin/db/rc-events", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))
       {
         return await Vpc.Db.QueryRcEvents.HandleDbRcEvents(req, res, auth);
-      }
-      if (p.EndsWith("/api/v1/admin/analytics/outbox/publish", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("POST", StringComparison.OrdinalIgnoreCase))
-      {
-        return await Vpc.Analytics.OutboxPublisher.HandlePublishOutbox(req, res, auth);
-      }
-      if (p.EndsWith("/api/v1/admin/analytics/content-intelligence/import", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("POST", StringComparison.OrdinalIgnoreCase))
-      {
-        return await Vpc.Analytics.ContentIntelligenceSnapshotImport.HandleImportSnapshot(req, res, auth);
       }
 
       // Authoring
@@ -222,10 +210,6 @@ public sealed class VpcFunction
       if (p.EndsWith("/api/v1/authoring/publish/jobs", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))
       {
         return await Vpc.Authoring.PublishJobs.HandleFetchPublishJobs(req, res, auth);
-      }
-      if (p.EndsWith("/api/v1/authoring/content-intelligence", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("GET", StringComparison.OrdinalIgnoreCase))
-      {
-        return await Vpc.Authoring.ContentIntelligence.HandleContentIntelligence(req, res, auth);
       }
       if (p.EndsWith("/api/v1/admin/manifest/rebuild", StringComparison.OrdinalIgnoreCase) && req.Method.Equals("POST", StringComparison.OrdinalIgnoreCase))
       {

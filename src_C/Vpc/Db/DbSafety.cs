@@ -5,7 +5,7 @@ namespace RecallSmith.Lambda.Vpc.Db;
 
 /// <summary>
 /// The single production gate for the destructive DB routes (CBE-08). Reads env per call (no
-/// caching) so tests can toggle it. create / recreate / content-intelligence-demo are 404 in
+/// caching) so tests can toggle it. create / recreate are 404 in
 /// production unless ALLOW_DESTRUCTIVE_DB=1, and every x-migrate-secret check runs through one
 /// constant-time comparer (E06's <see cref="Secrets.FixedTimeEquals"/>), missing-in-prod being 503.
 /// </summary>
@@ -19,7 +19,7 @@ public static class DbSafety
     string.Equals(apiEnv?.Trim(), "production", StringComparison.OrdinalIgnoreCase);
 
   /// <summary>
-  /// Pure. create / recreate / content-intelligence-demo exist outside production, and in
+  /// Pure. create / recreate exist outside production, and in
   /// production only while ALLOW_DESTRUCTIVE_DB is exactly "1".
   /// </summary>
   public static bool DestructiveRoutesEnabled(string? apiEnv, string? allowDestructive) =>
