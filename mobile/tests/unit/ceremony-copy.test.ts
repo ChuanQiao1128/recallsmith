@@ -16,6 +16,17 @@ describe('ceremonyCopy', () => {
     expect(textBlob).not.toMatch(/Glyph field|recall\.draw|Tap to reveal/i);
   });
 
+  it('speaks plain words: no pull, pity, wallet, reserve, run or ceremony in learner copy', () => {
+    const v10Strings = Object.values(CEREMONY_COPY_V10).flatMap((v) =>
+      typeof v === 'string' ? [v] : typeof v === 'function' ? [String((v as (...a: any[]) => string)(3, 10, 'Rare'))] : [],
+    );
+    const textBlob = [...collectStrings(CEREMONY_COPY), ...collectStrings(CEREMONY_COPY_V9), ...v10Strings].join('\n');
+
+    expect(textBlob).not.toMatch(/\b(pulls?|pity|wallet|reserve|runs?|ceremony)\b/i);
+    expect(CEREMONY_COPY_V10.leaveCeremony).toBe('Leave pack opening');
+    expect(CEREMONY_COPY_V10.shareCta).toBe('Share these cards');
+  });
+
   it('keeps the swipe affordance on the phase copy and carries no table-state chip', () => {
     // The visible SwipeHint reuses the phase title so the a11y announcement and what a
     // sighted player reads are the same words.

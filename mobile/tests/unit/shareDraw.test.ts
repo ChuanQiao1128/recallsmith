@@ -30,7 +30,7 @@ describe('shareDrawImage', () => {
     expect(captureRef).toHaveBeenCalledWith(ref, expect.objectContaining({ format: 'png', result: 'tmpfile' }));
     expect(Sharing.shareAsync).toHaveBeenCalledWith(
       'file:///tmp/draw.png',
-      expect.objectContaining({ mimeType: 'image/png', dialogTitle: 'C# Interview pull' }),
+      expect.objectContaining({ mimeType: 'image/png', dialogTitle: 'C# Interview cards' }),
     );
 
     vi.mocked(Sharing.shareAsync).mockClear();
@@ -38,7 +38,7 @@ describe('shareDrawImage', () => {
     expect(noTitle).toEqual({ status: 'shared' });
     expect(Sharing.shareAsync).toHaveBeenCalledWith(
       'file:///tmp/draw.png',
-      expect.objectContaining({ dialogTitle: 'csharp pull' }),
+      expect.objectContaining({ dialogTitle: 'csharp cards' }),
     );
   });
 
