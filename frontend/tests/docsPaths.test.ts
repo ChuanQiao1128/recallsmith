@@ -152,10 +152,9 @@ const onDisk = (repoRelative: string): boolean => existsSync(`${REPO_ROOT}${repo
 // (2026-10-02) retired the Content Intelligence page with Snowflake, and that
 // change may only touch frontend/, so it cannot edit docs/ itself. Each entry is
 // held to the same two-way rule as a block entry (cited, and really gone), and
-// must leave this list once the document registers it.
-const RETIRED_CITATIONS: ReadonlyArray<readonly [doc: string, path: string]> = [
-  ['delivery-wave-1.6-plan-2026-09-19.md', 'frontend/src/pages/ContentIntelligencePage.tsx'],
-];
+// must leave this list once the document registers it. Empty since R26 F04,
+// which registered ContentIntelligencePage.tsx in delivery-wave-1.6-plan's block.
+const RETIRED_CITATIONS: ReadonlyArray<readonly [doc: string, path: string]> = [];
 const retiredFor = (name: string): string[] =>
   RETIRED_CITATIONS.filter(([doc]) => doc === name).map(([, path]) => path);
 
@@ -249,10 +248,50 @@ describe('the Snowflake retirement (R26 D01)', () => {
     expect(unregistered).toEqual([]);
   });
 
-  it('is explained in the interview walkthrough with its date', () => {
-    const markdown = readFileSync(`${DOCS}/interview-walkthrough-2026-09-23.md`, 'utf8');
+  // The walkthrough is interview prep, so what it states as fact gets repeated
+  // to other people. These pin the facts the R26 review (F04) found it getting
+  // wrong or able to lose silently.
+  const WALKTHROUGH = `${DOCS}/interview-walkthrough-2026-09-23.md`;
+
+  it('is explained in the interview walkthrough with its date and its reasons', () => {
+    const markdown = readFileSync(WALKTHROUGH, 'utf8');
+
+    // The date alone is not the explanation: the tech-stack row carries the
+    // date too, so this reads the §2.4 section and asks for the reasons there
+    // (trial ended, Postgres rollups are enough, unsalted hash with no consumer).
+    const section = /^### 2\.4 [^\n]*\n([\s\S]*?)(?=^#{1,3} )/m.exec(markdown)?.[0] ?? '';
 
     expect(markdown).toMatch(/Snowflake[^\n]*2026-10-02/);
+    for (const reason of ['2026-10-02', '试用', 'analytics_daily', '无盐']) {
+      expect(section, reason).toContain(reason);
+    }
+  });
+
+  it('says migration 045, run by the owner, drops the outbox table — not that it is gone', () => {
+    const markdown = readFileSync(WALKTHROUGH, 'utf8');
+
+    // Until the owner runs 045 the table and its rows are still in production,
+    // so any line that talks about removing the outbox table has to name 045.
+    const removalWithout045 = markdown
+      .split('\n')
+      .filter(line => /analytics_event_outbox|outbox 表|outbox table/.test(line))
+      .filter(line => /删除|removed|dropped|deleted/.test(line))
+      .filter(line => !line.includes('045'));
+
+    expect(removalWithout045).toEqual([]);
+    // S01 removed the outbox insert from the ProgressEvents CTE, not the CTE.
+    expect(markdown).not.toMatch(/outbox CTE[^\n]*删除/);
+  });
+
+  it('claims no data platform or pipeline schedule the retirement withdrew', () => {
+    const markdown = readFileSync(WALKTHROUGH, 'utf8');
+    const resumeHeaders = markdown.split('\n').filter(line => line.startsWith('> **DeveloperCards**'));
+
+    expect(resumeHeaders).toHaveLength(2);
+    for (const header of resumeHeaders) {
+      expect(header).not.toMatch(/数据平台|data platform/i);
+    }
+    expect(markdown).not.toMatch(/数据管道(定时化|常态化)/);
   });
 });
 
