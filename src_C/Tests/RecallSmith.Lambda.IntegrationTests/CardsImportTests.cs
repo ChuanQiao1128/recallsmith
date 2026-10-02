@@ -174,6 +174,76 @@ public class CardsImportTests
   }
 
   [Fact]
+  public async Task Import_RotateThreeLiveOrders_Succeeds()
+  {
+    var deckId = await NewDeckAsync();
+    await ImportAsync(deckId, [Card("a", 5), Card("b", 10), Card("c", 20)]);
+
+    var resp = await ImportAsync(deckId, [Card("c", 5), Card("a", 10), Card("b", 20)]);
+    Assert.Equal(200, resp.StatusCode);
+    Assert.Equal(3, Data(resp).GetProperty("updated").GetInt32());
+
+    var orders = await Orders(deckId);
+    Assert.Equal(new Dictionary<string, int>(StringComparer.Ordinal) { ["c"] = 5, ["a"] = 10, ["b"] = 20 }, orders);
+  }
+
+  /// <summary>
+  /// Prod drift (2026-10-02): a legacy non-deferrable partial unique index on (deck_id, order_in_deck) that no
+  /// migration declares made every permutation of live orders fail with an anonymous 409. Recreate the drift on a
+  /// scratch database, show the failure (now naming the index), then show that migration 042 removes it.
+  /// </summary>
+  [Fact]
+  public async Task Migration042_DropsLegacyOrderIndex_SoPermutedImportsWork()
+  {
+    var scratchCs = await _db.CreateScratchDatabaseAsync("f01_drift042");
+    await using var conn = new NpgsqlConnection(scratchCs);
+    await conn.OpenAsync();
+    await PostgresFixture.ApplyMigrationsAsync(conn, maxVersion: 41);
+    await DbUtil.ExecuteAsync(conn, null,
+      "create unique index uq_cards_deck_order_in_deck on cards (deck_id, order_in_deck) where is_deleted = 0", []);
+    await DbUtil.ExecuteAsync(conn, null,
+      "create unique index uq_cards_deck_stable_uid on cards (deck_id, stable_uid) where is_deleted = 0", []);
+
+    var deckRows = await DbUtil.QueryAsync(
+      conn, null, "insert into decks (slug, title, author) values ($1, $2, $3) returning id",
+      [$"it-f01-drift-{Guid.NewGuid():N}", "deck drift", "tests"]);
+    var deckId = Convert.ToInt64(deckRows[0]["id"], CultureInfo.InvariantCulture);
+
+    var prevDb = Environment.GetEnvironmentVariable("PGDATABASE");
+    Environment.SetEnvironmentVariable("PGDATABASE", "f01_drift042");
+    Pg.Reset();
+    try
+    {
+      Assert.Equal(200, (await ImportAsync(deckId, [Card("a", 5), Card("b", 10)])).StatusCode);
+
+      var before = await ImportAsync(deckId, [Card("a", 10), Card("b", 5)]);
+      Assert.Equal(409, before.StatusCode);
+      Assert.Contains("Order in deck", ErrorMessage(before));
+
+      var path = Path.Combine(AppContext.BaseDirectory, "Db", "Migrations", "042_drop_legacy_card_indexes.sql");
+      var sql = await File.ReadAllTextAsync(path);
+      await DbUtil.ExecuteAsync(conn, null, sql, []);
+      await DbUtil.ExecuteAsync(conn, null, sql, []); // idempotent
+
+      var after = await ImportAsync(deckId, [Card("a", 10), Card("b", 5)]);
+      Assert.Equal(200, after.StatusCode);
+
+      var left = await DbUtil.QueryAsync(conn, null,
+        "select indexname from pg_indexes where tablename = 'cards' and indexname in ('uq_cards_deck_order_in_deck', 'uq_cards_deck_stable_uid')",
+        []);
+      Assert.Empty(left);
+      var kept = await DbUtil.QueryAsync(conn, null,
+        "select conname from pg_constraint where conname in ('uq_cards_deck_order', 'uq_cards_deck_uid')", []);
+      Assert.Equal(2, kept.Count);
+    }
+    finally
+    {
+      Environment.SetEnvironmentVariable("PGDATABASE", prevDb);
+      Pg.Reset();
+    }
+  }
+
+  [Fact]
   public async Task Import_OrderHeldByLiveCardOutsidePayload_Is409AndWritesNothing()
   {
     var deckId = await NewDeckAsync();

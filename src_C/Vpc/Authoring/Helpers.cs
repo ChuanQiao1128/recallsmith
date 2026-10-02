@@ -25,9 +25,11 @@ public static class Helpers
         switch (constraint)
         {
           case "uq_cards_deck_uid":
+          case "uq_cards_deck_stable_uid": // legacy drift index, dropped by migration 042
             message = "Another card in this deck already uses this Stable UID.";
             break;
           case "uq_cards_deck_order":
+          case "uq_cards_deck_order_in_deck": // legacy drift index, dropped by migration 042
             message = "Order in deck must be unique within this deck.";
             break;
           case "decks_slug_key":
@@ -37,7 +39,9 @@ public static class Helpers
             message = "Duplicate permission entry for this admin and deck.";
             break;
           default:
+            // Name the constraint: an unknown one (schema drift) must never surface as an anonymous 409 again.
             if (detail.Contains("(slug)", StringComparison.Ordinal)) message = "Slug is already used by another deck.";
+            else if (constraint.Length > 0) message = $"Duplicate value violates unique constraint {constraint}.";
             break;
         }
 
