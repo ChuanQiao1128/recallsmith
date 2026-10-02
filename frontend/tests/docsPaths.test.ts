@@ -152,10 +152,9 @@ const onDisk = (repoRelative: string): boolean => existsSync(`${REPO_ROOT}${repo
 // (2026-10-02) retired the Content Intelligence page with Snowflake, and that
 // change may only touch frontend/, so it cannot edit docs/ itself. Each entry is
 // held to the same two-way rule as a block entry (cited, and really gone), and
-// must leave this list once the document registers it.
-const RETIRED_CITATIONS: ReadonlyArray<readonly [doc: string, path: string]> = [
-  ['delivery-wave-1.6-plan-2026-09-19.md', 'frontend/src/pages/ContentIntelligencePage.tsx'],
-];
+// must leave this list once the document registers it. Empty since R26 F04,
+// which registered ContentIntelligencePage.tsx in delivery-wave-1.6-plan's block.
+const RETIRED_CITATIONS: ReadonlyArray<readonly [doc: string, path: string]> = [];
 const retiredFor = (name: string): string[] =>
   RETIRED_CITATIONS.filter(([doc]) => doc === name).map(([, path]) => path);
 

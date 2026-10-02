@@ -313,4 +313,8 @@ flowchart LR
 - src_C/Worker/Manifest/ManifestService.cs
 Snowflake 已于 2026-10-02 退役（R26），snowflake/ 目录整体删除：
 - snowflake/001_content_intelligence_setup.sql
+outbox 发布器、快照导入和 Content Intelligence 接口随之删除（R26 S01）：
+- src_C/Vpc/Analytics/OutboxPublisher.cs
+- src_C/Vpc/Analytics/ContentIntelligenceSnapshotImport.cs
+- src_C/Vpc/Authoring/ContentIntelligence.cs
 -->
