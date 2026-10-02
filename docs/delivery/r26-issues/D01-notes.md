@@ -47,3 +47,13 @@ owned by S01 / P03 and the owner.)
 - `docs/delivery/**` historical briefs and verify scripts still name `snowflake/` paths; they are
   records of past rounds and outside the docs-path guard, so they were left untouched.
 - Other dated plan docs mention Snowflake in prose (no path citations); left as history.
+
+## R26x correction (F04, issue #723)
+
+- The README and walkthrough said the outbox table had been deleted or removed in R26. That was an overclaim: R26
+  stops writing it, and migration 045 drops the table only when the owner runs it. The docs now say this.
+- Both resume headers still claimed a "data platform", and Q20 and the pitch closer still listed data-pipeline
+  scheduling. These lines are removed. Evidence row 3 now says only the outbox write left the ProgressEvents CTE.
+- After S01 merged, `docs/backend-architecture-review-2026-09-22.md` and `docs/delivery-wave-1.6-plan-2026-09-19.md`
+  cited deleted src_C files (and the C01 page). These paths are now registered in their `paths-not-on-disk` blocks.
+  See `docs/delivery/r26x-issues/F04-fixes.md`.
