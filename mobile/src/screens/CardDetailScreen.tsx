@@ -570,12 +570,12 @@ export function CardDetailScreen({ navigation, route }: Props) {
             // not promise this card: a pull grants what the pool grants.
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Open reward draw"
+              accessibilityLabel="Open reward pack"
               testID="card-detail-locked-cta"
               style={({ pressed }) => [styles.primaryAction, pressed && styles.pressed]}
               onPress={() => navigation.navigate('Draw', { slug: deck?.Slug ?? undefined })}
             >
-              <Text style={styles.primaryActionText}>Open reward draw</Text>
+              <Text style={styles.primaryActionText}>Open reward pack</Text>
             </Pressable>
           ) : (
             <Pressable

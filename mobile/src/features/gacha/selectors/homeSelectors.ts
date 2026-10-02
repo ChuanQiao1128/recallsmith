@@ -161,8 +161,8 @@ function buildRoutePreview(selectedDeck: DeckSummary | null): RoutePreviewNode[]
       {
         id: 'empty',
         role: 'warmup',
-        title: 'No active route yet',
-        subtitle: 'Install or unlock a deck first, then today’s route will appear here.',
+        title: 'No session yet',
+        subtitle: 'Install or unlock a deck first, then today’s session will appear here.',
       },
     ];
   }
@@ -195,15 +195,15 @@ function buildRoutePreview(selectedDeck: DeckSummary | null): RoutePreviewNode[]
           : 'normal';
 
     // R22 §5: no learner-visible "node" — the plain first and normal cards carry no title.
-    const title = role === 'boss' ? 'Boss check' : role === 'elite' ? 'Elite review' : '';
+    const title = role === 'boss' ? 'Final check' : role === 'elite' ? 'Harder recall' : '';
 
     const subtitle =
       role === 'warmup'
-        ? 'Low-friction first win to keep momentum.'
+        ? 'An easy first card to get you going.'
         : role === 'boss'
-          ? 'A tougher recall check to close the run.'
+          ? 'A tougher recall check to close the session.'
           : role === 'elite'
-            ? 'One higher-pressure card in the middle.'
+            ? 'One harder card in the middle.'
             : 'Standard recall / learning step.';
 
     nodes.push({ id: `${role}-${i}`, role, title, subtitle });
@@ -257,21 +257,21 @@ function buildDrawVM(wallet?: RewardWalletState | null, selectedDeck?: DeckSumma
   ) {
     return {
       state: 'wallet-full',
-      label: `Pack wallet full (${FREE_PULL_CAP} + ${FREE_PULL_OVERFLOW_CAP})`,
+      label: `Saved draws full (${FREE_PULL_CAP} + ${FREE_PULL_OVERFLOW_CAP} waiting)`,
     };
   }
 
   if (safeWallet.reservePulls > 0) {
     return {
       state: 'reserve',
-      label: `${safeWallet.availablePulls} pull${safeWallet.availablePulls === 1 ? '' : 's'} ready for this pack · ${safeWallet.reservePulls} more waiting`,
+      label: `${safeWallet.availablePulls} draw${safeWallet.availablePulls === 1 ? '' : 's'} ready for this pack · ${safeWallet.reservePulls} more waiting`,
     };
   }
 
   if (safeWallet.availablePulls > 0) {
     return {
       state: 'available',
-      label: `${safeWallet.availablePulls} pull${safeWallet.availablePulls === 1 ? '' : 's'} ready for this pack`,
+      label: `${safeWallet.availablePulls} draw${safeWallet.availablePulls === 1 ? '' : 's'} ready for this pack`,
     };
   }
 
@@ -285,12 +285,12 @@ function buildDrawVM(wallet?: RewardWalletState | null, selectedDeck?: DeckSumma
   return {
     state: 'locked',
     label: empty
-      ? 'No cards yet · a free pull returns tomorrow'
+      ? 'No cards yet · a free draw returns tomorrow'
       : caughtUp
-        ? 'No cards due · a free pull returns tomorrow'
+        ? 'No cards due · a free draw returns tomorrow'
         : dueOnly
-          ? 'Clear today’s due cards to earn a pull'
-          : 'Learn a new card to earn a pull',
+          ? 'Clear today’s due cards to earn a draw'
+          : 'Learn a new card to earn a draw',
   };
 }
 
@@ -353,7 +353,7 @@ function inferStatusKind(input: {
 }
 
 // Only these two kinds mean "today's learning is settled". They are the only
-// ones allowed to hand the primary button to the reward draw: ready pulls are
+// ones allowed to hand the primary button to the reward pack: ready draws are
 // a reward for study, and a reward that can outrank study makes the main
 // button answer a question the user did not ask. The whitelist is over the
 // kind alone because the kind already encodes the answer, so no extra flag has
@@ -368,7 +368,7 @@ const DRAW_PRIMARY_KINDS: ReadonlySet<HomeCtaKind> = new Set<HomeCtaKind>([
 // sentence Home says to a user every day misdescribed its own destination.
 // Wording follows drawState.ts, which calls this surface a draw and never
 // borrows a deck title for it.
-const DRAW_CTA_LABEL = 'Open reward draw';
+const DRAW_CTA_LABEL = 'Open reward pack';
 
 function mapStatusToCta(params: { kind: HomeCtaKind; draw: HomeDrawVM }): HomeCtaVM {
   const { kind, draw } = params;
@@ -397,7 +397,7 @@ function mapStatusToCta(params: { kind: HomeCtaKind; draw: HomeDrawVM }): HomeCt
     case 'today_pending':
       return {
         kind,
-        label: 'Start today’s challenge',
+        label: 'Start today’s session',
         nav: 'challenge',
         testID: 'home-primary-cta',
         disabled: false,
@@ -405,7 +405,7 @@ function mapStatusToCta(params: { kind: HomeCtaKind; draw: HomeDrawVM }): HomeCt
     case 'today_partial':
       return {
         kind,
-        label: 'Continue today’s challenge',
+        label: 'Continue today’s session',
         nav: 'challenge',
         testID: 'home-primary-cta',
         disabled: false,
@@ -413,7 +413,7 @@ function mapStatusToCta(params: { kind: HomeCtaKind; draw: HomeDrawVM }): HomeCt
     case 'today_done':
       return {
         kind,
-        label: 'Continue today’s challenge',
+        label: 'Continue today’s session',
         nav: 'challenge',
         testID: 'home-primary-cta',
         disabled: false,
@@ -466,7 +466,7 @@ function mapStatusToCta(params: { kind: HomeCtaKind; draw: HomeDrawVM }): HomeCt
       // nudge instead of taking the button.
       return {
         kind,
-        label: 'Start today’s challenge',
+        label: 'Start today’s session',
         nav: 'challenge',
         testID: 'home-primary-cta',
         disabled: false,
@@ -541,7 +541,7 @@ function buildHeroCopy(params: {
     return {
       eyebrow: 'Today',
       title: 'Get your first deck ready',
-      subtitle: 'Install one deck to unlock today’s challenge.',
+      subtitle: 'Install one deck to unlock today’s session.',
       helper: 'Once a deck is ready, Home will show the exact start button for today.',
     };
   }
@@ -549,7 +549,7 @@ function buildHeroCopy(params: {
   if (!selectedDeck.canStudy) {
     return {
       eyebrow: selectedDeck.title,
-      title: 'Finish setup, then start today’s run',
+      title: 'Finish setup, then start today’s session',
       subtitle: 'This deck is not ready for study yet.',
       helper: 'Open the deck to install or unlock it first.',
     };
@@ -560,8 +560,8 @@ function buildHeroCopy(params: {
       return {
         eyebrow: 'Today',
         title: 'No cards in this deck yet',
-        subtitle: 'Open a pack to get your first cards — today’s route appears once you hold some.',
-        helper: 'Every card you pull joins today’s run; learning it earns the next pull.',
+        subtitle: 'Open a pack to get your first cards — today’s session appears once you hold some.',
+        helper: 'Every card you draw joins today’s session; learning it earns the next draw.',
       };
     case 'today_partial':
       return {
@@ -577,20 +577,20 @@ function buildHeroCopy(params: {
         title: 'Minimum goal already done',
         subtitle:
           draw.state === 'locked'
-            ? 'Minimum goal done. Each new card you learn earns a pull.'
-            : 'You can stop here or spend pulls and keep momentum.',
-        helper: `${remaining} card${remaining === 1 ? '' : 's'} still available for full clear.`,
+            ? 'Minimum goal done. Each new card you learn earns a draw.'
+            : 'You can stop here or open your draws and keep going.',
+        helper: `${remaining} card${remaining === 1 ? '' : 's'} still available today.`,
       };
     }
     case 'today_full_clear':
       return {
         eyebrow: 'Today',
-        title: 'Full clear completed',
+        title: 'All due cards done',
         subtitle:
           draw.state === 'locked'
-            ? 'Route done. Learn a new card to earn your next pull.'
-            : 'Great close. Pulls are ready when you want them.',
-        helper: 'No remaining route pressure in this deck.',
+            ? 'Session done. Learn a new card to earn your next draw.'
+            : 'Great close. Draws are ready when you want them.',
+        helper: 'Nothing left to study in this deck today.',
       };
     case 'due_only':
       return {
@@ -611,12 +611,12 @@ function buildHeroCopy(params: {
     case 'wallet_full':
       return {
         eyebrow: 'Today',
-        title: 'Reward wallet is full',
+        title: 'Saved draws are full',
         // The primary button now sends this state into study, so the nudge
         // has to agree with it. Telling the user to spend pulls first while
         // the button starts a session is the same label deception in copy.
-        subtitle: 'Pulls are full. Today’s review still comes first; spend a pull afterwards.',
-        helper: `${FREE_PULL_CAP} ready and ${FREE_PULL_OVERFLOW_CAP} reserve are currently occupied.`,
+        subtitle: 'Saved draws are full. Today’s review still comes first; open a pack afterwards.',
+        helper: `${FREE_PULL_CAP} saved and ${FREE_PULL_OVERFLOW_CAP} extra draws waiting.`,
       };
     default: {
       const hasTodayWork = selectedDeck.dueToday > 0 || selectedDeck.newToday > 0;
@@ -630,11 +630,11 @@ function buildHeroCopy(params: {
         eyebrow: 'Today',
         title,
         subtitle: hasTodayWork
-          ? `Each new card you learn earns a pull · up to ${SESSION_MAIN_ROUTE_DEFAULT} cards a run.`
+          ? `Each new card you learn earns a draw · up to ${SESSION_MAIN_ROUTE_DEFAULT} cards a session.`
           : 'Nothing due today; review later or browse your decks.',
         // R22 §5: no planner word "node" in learner copy (F02 s-correctness-4).
         helper: hasTodayWork
-          ? `Clear ${SESSION_MIN_GOAL} card${SESSION_MIN_GOAL === 1 ? '' : 's'} to keep momentum. Full run stays capped at ${SESSION_MAIN_ROUTE_DEFAULT} cards.`
+          ? `Clear ${SESSION_MIN_GOAL} card${SESSION_MIN_GOAL === 1 ? '' : 's'} to keep making progress. A full session stays capped at ${SESSION_MAIN_ROUTE_DEFAULT} cards.`
           : hasSignedInUser
             ? 'You can review again later or open another deck while today is light.'
             : 'Sign in later for backup and extended planning, but today you are clear.',
@@ -881,7 +881,7 @@ export function buildHomeVM(params: {
     drawStatusLabel: !selectedDeck
       ? 'No active deck yet'
       : selectedDeck.dueToday > 0 || selectedDeck.newToday > 0
-        ? 'New pulls unlock after you clear today’s work.'
+        ? 'New draws unlock after you clear today’s work.'
         : draw.label,
 
     statusKind,

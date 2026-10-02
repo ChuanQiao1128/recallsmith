@@ -172,10 +172,10 @@ export function LibraryHeader({
   const showEmptyCollectionBanner = ownedCount === 0 && totalCount > 0 && !!onOpenFirstPack;
   const bannerTitle = openFirstPackHasPulls
     ? 'Open your first pack to start collecting'
-    : 'Earn pulls in a session, then open your first pack';
+    : 'Earn draws in a session, then open your first pack';
   const bannerA11y = openFirstPackHasPulls
     ? 'Open your first pack to start collecting'
-    : 'Earn pulls in a session to open your first pack';
+    : 'Earn draws in a session to open your first pack';
 
   return (
     <View>

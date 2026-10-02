@@ -353,7 +353,7 @@ describe('HomeScreen v9', () => {
       (node) =>
         (node.type as any) === 'Pressable' && node.props?.testID === 'home-featured-pack',
     );
-    expect(featuredPack.props.accessibilityLabel).toBe('Start today’s challenge');
+    expect(featuredPack.props.accessibilityLabel).toBe('Start today’s session');
 
     await act(async () => {
       featuredPack.props.onPress();
@@ -380,7 +380,7 @@ describe('HomeScreen v9', () => {
       (node) =>
         (node.type as any) === 'Pressable' && node.props?.testID === 'home-featured-pack',
     );
-    expect(featuredPack.props.accessibilityLabel).toBe('Open reward draw');
+    expect(featuredPack.props.accessibilityLabel).toBe('Open reward pack');
 
     await act(async () => {
       featuredPack.props.onPress();
@@ -639,7 +639,7 @@ describe('HomeScreen v9', () => {
     const badgeChildren = Array.isArray(badge.props.children)
       ? badge.props.children.join('')
       : String(badge.props.children ?? '');
-    expect(badgeChildren).toBe('No cards due · a free pull returns tomorrow');
+    expect(badgeChildren).toBe('No cards due · a free draw returns tomorrow');
 
     walletFixture = { availablePulls: 1, reservePulls: 0 };
     let tree2!: renderer.ReactTestRenderer;
@@ -650,7 +650,7 @@ describe('HomeScreen v9', () => {
     });
     await flush();
 
-    expect(textBlob(tree2)).toContain('A reward draw is ready');
+    expect(textBlob(tree2)).toContain('A reward pack is ready');
     expect(
       tree2.root.findAll((node) => (node.type as any) === 'Text' && node.props.children === 'Caught up'),
     ).toHaveLength(0);

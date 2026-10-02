@@ -138,23 +138,23 @@ describe('C03 Home F9 / F10 / F11', () => {
     setActiveUserSubForStorage(null);
   });
 
-  it('says a free pull returns tomorrow when the selected deck is caught up', () => {
+  it('says a free draw returns tomorrow when the selected deck is caught up', () => {
     const vm = homeVM({ deck: makeDeck({ dueToday: 0, newToday: 0 }), wallet: EMPTY });
     expect(vm.draw.state).toBe('locked');
-    expect(vm.draw.label).toBe('No cards due · a free pull returns tomorrow');
+    expect(vm.draw.label).toBe('No cards due · a free draw returns tomorrow');
 
     const withHint = homeVM({
       deck: makeDeck({ dueToday: 0, newToday: 0 }),
       wallet: EMPTY,
       statusHint: 'today_full_clear',
     });
-    expect(withHint.draw.label).toBe('No cards due · a free pull returns tomorrow');
+    expect(withHint.draw.label).toBe('No cards due · a free draw returns tomorrow');
   });
 
   it('asks for the due cards when only due work remains', () => {
     const vm = homeVM({ deck: makeDeck({ dueToday: 2, newToday: 0 }), wallet: EMPTY });
     expect(vm.draw.state).toBe('locked');
-    expect(vm.draw.label).toBe('Clear today’s due cards to earn a pull');
+    expect(vm.draw.label).toBe('Clear today’s due cards to earn a draw');
   });
 
   it('asks for a new card in every other locked case', () => {
@@ -166,12 +166,12 @@ describe('C03 Home F9 / F10 / F11', () => {
     for (const deck of decks) {
       const vm = homeVM({ deck, wallet: EMPTY });
       expect(vm.draw.state).toBe('locked');
-      expect(vm.draw.label).toBe('Learn a new card to earn a pull');
+      expect(vm.draw.label).toBe('Learn a new card to earn a draw');
       expect(vm.draw.label).not.toBe('Review today’s cards to earn a pull');
     }
     const noDeck = homeVM({ deckSummaries: [], wallet: EMPTY });
     expect(noDeck.draw.state).toBe('locked');
-    expect(noDeck.draw.label).toBe('Learn a new card to earn a pull');
+    expect(noDeck.draw.label).toBe('Learn a new card to earn a draw');
     expect(noDeck.draw.label).not.toBe('Review today’s cards to earn a pull');
   });
 
@@ -181,21 +181,21 @@ describe('C03 Home F9 / F10 / F11', () => {
       wallet: { availablePulls: 1, reservePulls: 0 },
     });
     expect(available.draw.state).toBe('available');
-    expect(available.draw.label).toBe('1 pull ready for this pack');
+    expect(available.draw.label).toBe('1 draw ready for this pack');
 
     const reserve = homeVM({
       deck: makeDeck({ dueToday: 0, newToday: 0 }),
       wallet: { availablePulls: 1, reservePulls: 2 },
     });
     expect(reserve.draw.state).toBe('reserve');
-    expect(reserve.draw.label).toBe('1 pull ready for this pack · 2 more waiting');
+    expect(reserve.draw.label).toBe('1 draw ready for this pack · 2 more waiting');
 
     const full = homeVM({
       deck: makeDeck({ dueToday: 0, newToday: 0 }),
       wallet: { availablePulls: FREE_PULL_CAP, reservePulls: FREE_PULL_OVERFLOW_CAP },
     });
     expect(full.draw.state).toBe('wallet-full');
-    expect(full.draw.label).toBe(`Pack wallet full (${FREE_PULL_CAP} + ${FREE_PULL_OVERFLOW_CAP})`);
+    expect(full.draw.label).toBe(`Saved draws full (${FREE_PULL_CAP} + ${FREE_PULL_OVERFLOW_CAP} waiting)`);
   });
 
   it('tells a done-for-today user that each new card earns a pull while locked', () => {
@@ -204,7 +204,7 @@ describe('C03 Home F9 / F10 / F11', () => {
       wallet: EMPTY,
       statusHint: 'today_done',
     });
-    expect(locked.hero.subline).toBe('Minimum goal done. Each new card you learn earns a pull.');
+    expect(locked.hero.subline).toBe('Minimum goal done. Each new card you learn earns a draw.');
     expect(locked.hero.headline).toBe('Minimum goal already done');
 
     const withPulls = homeVM({
@@ -212,7 +212,7 @@ describe('C03 Home F9 / F10 / F11', () => {
       wallet: { availablePulls: 2, reservePulls: 0 },
       statusHint: 'today_done',
     });
-    expect(withPulls.hero.subline).toBe('You can stop here or spend pulls and keep momentum.');
+    expect(withPulls.hero.subline).toBe('You can stop here or open your draws and keep going.');
     expect(withPulls.hero.headline).toBe('Minimum goal already done');
   });
 
@@ -222,14 +222,14 @@ describe('C03 Home F9 / F10 / F11', () => {
       wallet: EMPTY,
       statusHint: 'today_full_clear',
     });
-    expect(locked.hero.subline).toBe('Route done. Learn a new card to earn your next pull.');
+    expect(locked.hero.subline).toBe('Session done. Learn a new card to earn your next draw.');
 
     const withPulls = homeVM({
       deck: makeDeck({ dueToday: 0, newToday: 0 }),
       wallet: { availablePulls: 2, reservePulls: 0 },
       statusHint: 'today_full_clear',
     });
-    expect(withPulls.hero.subline).toBe('Great close. Pulls are ready when you want them.');
+    expect(withPulls.hero.subline).toBe('Great close. Draws are ready when you want them.');
   });
 
   it('leaves the wallet-full subline alone', () => {
@@ -239,7 +239,7 @@ describe('C03 Home F9 / F10 / F11', () => {
     });
     expect(vm.cta.kind).toBe('wallet_full');
     expect(vm.hero.subline).toBe(
-      'Pulls are full. Today’s review still comes first; spend a pull afterwards.',
+      'Saved draws are full. Today’s review still comes first; open a pack afterwards.',
     );
     expect(vm.drawStatusLabel).toMatch(/unlock after you clear today’s work/i);
   });
