@@ -42,7 +42,7 @@ export const REVIEW_DONE_LABEL = 'No mistakes due today';
 /** Spoken hint of the review button in that done state. */
 export const REVIEW_DONE_HINT = "Every mistake here already has today's correct answer. Come back tomorrow to keep clearing them.";
 /** Spoken hint of the review button while a mistake is still open today. */
-export const REVIEW_HINT = 'Starts a focus run with these mistakes';
+export const REVIEW_HINT = 'Starts a focus session with these mistakes';
 
 /** openToday: the deck's mistakes that can still earn a correct answer today. */
 type DeckGroup = { deck: DeckExport; rows: MistakeRow[]; openToday: number };

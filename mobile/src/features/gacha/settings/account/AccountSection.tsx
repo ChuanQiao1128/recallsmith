@@ -17,7 +17,7 @@ export const ACCOUNT_COPY = {
   resetSchedule: 'Make all learned cards due today',
   deleteTitle: 'Delete account',
   deleteBody:
-    'Permanently deletes your account and the progress, cards and wallet saved for it on our servers and on this device. This cannot be undone.',
+    'Permanently deletes your account and the progress, cards and saved draws stored for it on our servers and on this device. This cannot be undone.',
   subscriptionNotice:
     'Deleting your account does not cancel an App Store subscription. Cancel it first in iOS Settings > Apple Account > Subscriptions.',
   deleteOpen: 'Delete account',

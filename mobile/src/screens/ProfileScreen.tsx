@@ -49,7 +49,7 @@ export function ProfileScreen({ navigation }: Props) {
       eyebrow="Profile"
       title="Your study profile"
       body="Your streak, your week and the preferences that shape what you study."
-      chips={['Momentum', 'Progress']}
+      chips={['Streak', 'Progress']}
       stats={[
         { label: 'Daily streak', value: dailyStreak },
         { label: 'Days this week', value: daysThisWeek },
@@ -62,10 +62,10 @@ export function ProfileScreen({ navigation }: Props) {
           ],
         },
         {
-          title: 'Momentum this week',
+          title: 'Progress this week',
           items: [
             {
-              title: 'Qualified runs',
+              title: 'Sessions that counted',
               subtitle: pending
                 ? 'Reading your session history'
                 : `${snapshot.totalQualifiedSessions} sessions have counted toward a streak`,
@@ -74,7 +74,7 @@ export function ProfileScreen({ navigation }: Props) {
               title: 'Week posture',
               subtitle: pending
                 ? 'Reading this week'
-                : `${snapshot.weekCompletedDays} of 7 days completed this week · best run ${snapshot.longestDailyStreak}`,
+                : `${snapshot.weekCompletedDays} of 7 days completed this week · best streak ${snapshot.longestDailyStreak}`,
             },
           ],
         },
