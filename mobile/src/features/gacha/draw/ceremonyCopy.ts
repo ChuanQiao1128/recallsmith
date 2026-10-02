@@ -6,23 +6,23 @@ export const CEREMONY_COPY = {
   motionHint: 'Reduced motion on',
   cardBackLabel: 'Reward card',
   primaryCta: 'Show result',
-  pityBonus: 'Pity bonus rare or better',
+  pityBonus: 'Guaranteed rare or better',
   handoffCue: {
     single: 'Your card is ready',
     multi: 'Draws are ready',
   },
   single: {
-    meta: 'Single pull ceremony',
+    meta: 'Single card opening',
     revealHint: 'Reveal coming up',
-    cardHint: 'One card only. Ready for the next study run',
-    featuredPrefix: 'Single-pull spotlight',
+    cardHint: 'One card only. Ready for the next study session',
+    featuredPrefix: 'Single-card spotlight',
     title: {
       warmup: 'Drawing one card...',
       focus: 'Almost there...',
       reveal: 'Your card',
     },
     body: {
-      warmup: 'One reward card is getting ready for your next study run.',
+      warmup: 'One reward card is getting ready for your next study session.',
       focus: 'The reveal finishes in a moment.',
       reveal: 'This reward is ready for review when you are.',
     },
@@ -33,7 +33,7 @@ export const CEREMONY_COPY = {
     },
   },
   multi: {
-    meta: 'Reward draw ceremony',
+    meta: 'Reward pack opening',
     finalHint: 'The highlight is ready. The spread follows.',
     featuredPrefix: 'Featured reward',
     title: {
@@ -135,7 +135,7 @@ export const CEREMONY_COPY_V10 = {
   packA11yLabel: 'Reward pack',
   packA11yHint: 'Swipe right or double-tap to open',
   activateAction: 'Open pack',
-  leaveCeremony: 'Leave ceremony',
+  leaveCeremony: 'Leave pack opening',
   speedUp: 'Speed up',
   showResult: 'Show result',
   continueCta: 'Continue',
@@ -145,5 +145,5 @@ export const CEREMONY_COPY_V10 = {
   dealing: (percent: number) => `Dealing cards, ${percent} percent`,
   // No `unrevealedChip` any more: the result screen shows every card face up, so a
   // "Not flipped" stamp per skipped card was table state leaking into copy.
-  shareCta: 'Share this pull',
+  shareCta: 'Share these cards',
 } as const;

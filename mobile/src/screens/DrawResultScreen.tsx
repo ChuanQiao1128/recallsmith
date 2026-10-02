@@ -221,13 +221,13 @@ export function DrawResultScreen({ navigation, route }: Props) {
   }, []);
 
   const isWalletLoading = remainingPulls === null;
-  // Substring "Continue draw" / "Go to Library" preserved (test contract);
+  // Labels start with "Continue drawing" / "Go to Library" (test contract);
   // we just append context so the user knows what'll happen.
   const primaryLabel = isWalletLoading
-    ? 'Checking pulls...'
+    ? 'Checking draws...'
     : remainingPulls > 0
-      ? `Continue draw  ·  ${remainingPulls} pull${remainingPulls === 1 ? '' : 's'} left`
-      : 'Go to Library  ·  earn pulls in study';
+      ? `Continue drawing  ·  ${remainingPulls} draw${remainingPulls === 1 ? '' : 's'} left`
+      : 'Go to Library  ·  earn draws in study';
 
   const handlePrimary = () => {
     if (isWalletLoading) {
@@ -328,7 +328,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
         <LinearGradient colors={PAGE_GRADIENT_LIGHT} style={styles.gradient}>
           <View style={styles.stateWrap}>
             <Text style={styles.stateTitle} numberOfLines={2}>
-              Nothing pulled
+              No cards drawn
             </Text>
             <Text style={styles.stateBody} numberOfLines={2}>
               The draw did not return any cards. Try again.
@@ -413,7 +413,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
                   testID="draw-result-guarantee-badge"
                   numberOfLines={1}
                 >
-                  GUARANTEE PAID OUT
+                  GUARANTEED RARE
                 </Text>
               ) : null}
             </View>
@@ -592,7 +592,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
               accessibilityRole="button"
               accessibilityLabel={
                 isWalletLoading
-                  ? 'Checking remaining pulls'
+                  ? 'Checking remaining draws'
                   : remainingPulls > 0
                   ? `Continue drawing from ${deckLabel(params)}`
                   : 'Go to library, scroll to new cards'
@@ -636,14 +636,14 @@ export function DrawResultScreen({ navigation, route }: Props) {
               <Pressable
                 testID="draw-result-earn-pulls-link"
                 accessibilityRole="button"
-                accessibilityLabel="Earn more pulls by studying"
+                accessibilityLabel="Earn more draws by studying"
                 style={({ pressed }) => [styles.earnPullsPill, pressed && styles.pressed]}
                 onPress={() =>
                   navigation.navigate('SessionCard', { slug: params.slug })
                 }
               >
                 <Text style={styles.earnPullsText} numberOfLines={1}>
-                  Earn more pulls →
+                  Earn more draws →
                 </Text>
               </Pressable>
             ) : null}

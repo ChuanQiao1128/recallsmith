@@ -42,7 +42,7 @@ export function buildDrawState(params: {
     return {
       state: 'locked',
       title: 'Draw locked for now',
-      helper: 'No active draw pool is ready yet. Open Library to choose or install a pool first.',
+      helper: 'No active pack is ready yet. Open Library to choose or install a pack first.',
       ctaLabel: 'View library',
       canOpen: false,
     };
@@ -51,8 +51,8 @@ export function buildDrawState(params: {
   if (rewardPending && wallet.availablePulls > 0) {
     return {
       state: 'reward-pending',
-      title: 'Reward pulls ready',
-      helper: `You just earned ${wallet.availablePulls} ready pull${wallet.availablePulls === 1 ? '' : 's'}. Open them after the run while the result is still fresh.`,
+      title: 'Reward draws ready',
+      helper: `You just earned ${wallet.availablePulls} ready draw${wallet.availablePulls === 1 ? '' : 's'}. Open them after the session while the result is still fresh.`,
       ctaLabel: 'Open draw',
       canOpen: true,
     };
@@ -61,8 +61,8 @@ export function buildDrawState(params: {
   if (wallet.availablePulls >= FREE_PULL_CAP && wallet.reservePulls > 0) {
     return {
       state: 'wallet-full-with-reserve',
-      title: 'Wallet full, reserve waiting',
-      helper: `${wallet.availablePulls} pulls are ready and ${wallet.reservePulls} more are queued in reserve. Spend one to let reserve flow forward.`,
+      title: 'Saved draws full, extra draws waiting',
+      helper: `${wallet.availablePulls} draws are saved and ${wallet.reservePulls} more are waiting. Spend one to let a waiting draw move up.`,
       ctaLabel: 'Open draw',
       canOpen: true,
     };
@@ -72,7 +72,7 @@ export function buildDrawState(params: {
     return {
       state: 'available',
       title: 'Draw available',
-      helper: `${wallet.availablePulls} pull${wallet.availablePulls === 1 ? '' : 's'} ready. This is a follow-up reward, not today’s main task.`,
+      helper: `${wallet.availablePulls} draw${wallet.availablePulls === 1 ? '' : 's'} ready. This is a follow-up reward, not today’s main task.`,
       ctaLabel: 'Open draw',
       canOpen: true,
     };
@@ -82,8 +82,8 @@ export function buildDrawState(params: {
     state: 'locked',
     title: 'Draw locked for now',
     helper: hasTodayWork
-      ? 'Learn a new card or clear today’s due cards, then come back for new pulls.'
-      : 'No reward pulls are waiting yet. Learn a new card to earn one.',
+      ? 'Learn a new card or clear today’s due cards, then come back for new draws.'
+      : 'No reward draws are waiting yet. Learn a new card to earn one.',
     ctaLabel: 'View library',
     canOpen: false,
   };
