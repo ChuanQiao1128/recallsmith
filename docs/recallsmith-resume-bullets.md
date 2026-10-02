@@ -21,7 +21,7 @@
 
 5. Ran GitHub Actions on every push (type checks, lint, npm audit, Expo export, 6,700+ tests, 2,400+ on real PostgreSQL via Testcontainers); shipped with AI coding agents in parallel worktrees under independent review, which caught a migrate call that would have dropped tables before prod smoke-testing.
 
-Role-tailored variants (full-stack, AI agent, AI automation) and their checks are in the owner's evaluation report of 2026-10-03; the console lesson `docs/system-design-zh-console.md` holds the verified console facts.
+Role-tailored variants (full-stack, AI agent, AI automation) and their checks are in the owner's evaluation report of 2026-10-03; the console lesson (PR #730, system-design-zh-console.md) holds the verified console facts.
 
 ### Evidence and accuracy boundaries (2026-10-03)
 
@@ -37,7 +37,7 @@ Role-tailored variants (full-stack, AI agent, AI automation) and their checks ar
 | First-load budget 377,000 bytes (553,688 before) | `frontend/tests/bundleFirstLoad.test.ts` | Raw bytes of the first-load static-import closure; the data router later added 55.6 kB, still under the cap |
 | 409 conflict recovery, duplicate-safe publish | `src_C/Vpc/Authoring/Cards.cs`, `src_C/Vpc/Authoring/Publish.cs` | Bulk import does not check versions and can overwrite a concurrent single-card edit; publish relies on polling plus a reaper for stuck jobs |
 | Agent tokens scoped to 6 routes | `infra/modules/api/gateway.tf`, `src_C/Vpc/AgentClientPolicy.cs` | Two allow-lists kept in sync by a CI checker, not one source; agent tokens carry the owner's groups and are stored on disk |
-| SLO, heartbeat and synthetic alarms | `infra/modules/observability/` | Heartbeat alarms misfired three times at creation (alarm deployed before its data source, actions disabled, no notification); see `docs/ops/` |
+| SLO, heartbeat and synthetic alarms | `infra/modules/observability/` | Heartbeat alarms misfired three times at creation (alarm deployed before its data source, actions disabled, no notification); see the ops postmortems (PR #732) |
 | CI on every push | `.github/workflows/ci.yml` | main has no branch protection, so say "ran", not "gated"; lint covers the console only |
 | 6,700+ tests | Local runs 2026-10-02: backend 2,887, console 1,512, mobile 2,333 | ~2,465 backend tests use the shared Postgres container; ~387 are pure unit tests |
 | Migration guard | `src_C/Vpc/Db/Migrate.cs`, migration 045 | 045 dropped three tables that were being retired; the hazard was running it before the smoke test and breaking rollback, not user-data loss |
