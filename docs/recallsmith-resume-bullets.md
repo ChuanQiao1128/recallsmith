@@ -7,17 +7,21 @@
 | Current variant | 2026-10-03 technical variant (no product description; Content Intelligence retired in R26) |
 | Claim rule | Use past tense only for behaviour that is deployed and supported by retained evidence |
 
-## Current resume version (2026-10-03)
+## Current resume version (2026-10-03, five bullets)
 
 **RecallSmith / DeveloperCards** — Independent product · React Native/TypeScript, React, C#/.NET 8, PostgreSQL, AWS, Terraform · iOS App Store
 
-1. Designed offline-first sync across React Native, .NET 8 and PostgreSQL: reviews are queued in a durable on-device outbox, ingested idempotently and merged last-writer-wins in one atomic CTE statement, collapsing 4 database round trips into 1 and cutting ingest-handler p50 49% (37.1 → 18.8 ms).
+1. Designed offline-first review sync across React Native, .NET 8 and PostgreSQL: an on-device outbox replays events to an idempotent ingest endpoint that merges last-writer-wins in one atomic CTE statement, collapsing 4 database round trips into 1 and cutting ingest-handler p50 49% (37.1 → 18.8 ms).
 
-2. Architected a serverless AWS backend (API Gateway with Cognito JWT, arm64 Lambda, RDS PostgreSQL, SQS with DLQs, CloudFront-served immutable content builds); imported 91 hand-built resources into Terraform behind allow-list-gated plans, and kept the VPC NAT-free with VPC endpoints and HMAC-authenticated out-of-VPC Lambdas.
+2. Built a React 19/TypeScript admin console on S3/CloudFront with route-level code splitting, a test-enforced first-load budget (377,000 bytes, from 553,688), optimistic-concurrency card edits with 409 conflict recovery, and duplicate-safe async deck publishing through SQS.
 
-3. Built a cross-vendor AI authoring pipeline: a Claude agent drafts cards through a scoped MCP toolset (source reading, duplicate search, linting), and a GPT-5.5 reviewer may auto-accept only after a measured eval gate (seeded-defect recall ≥ 0.90, precision ≥ 0.97 on ≥ 120 cards); it runs in dry-run until then.
+3. Architected a serverless AWS backend codified in Terraform (API Gateway + Cognito JWT, arm64 Lambda, RDS PostgreSQL, SQS + DLQs, CloudFront), importing 91 hand-built resources behind allow-list-gated plans; added multi-window SLO burn-rate alarms, heartbeat alarms and synthetic probes.
 
-4. Shipped solo through a multi-agent delivery pipeline (parallel git-worktree waves, independent multi-lens review, fix rounds, gated deploys) backed by 6,700+ automated tests (2,400+ against real PostgreSQL via Testcontainers); cross-review caught a routine migrate call that would have prematurely run a table-dropping migration, now gated behind explicit confirmation.
+4. Built a cross-vendor AI authoring pipeline: a Claude agent drafts via a 4-tool MCP server with tokens scoped to 6 API routes (draft, never publish); a GPT-5.5 reviewer may auto-accept only after an eval gate (recall ≥ 0.90, precision ≥ 0.97), running dry-run until then.
+
+5. Ran GitHub Actions on every push (type checks, lint, npm audit, Expo export, 6,700+ tests, 2,400+ on real PostgreSQL via Testcontainers); shipped with AI coding agents in parallel worktrees under independent review, which caught a migrate call that would have dropped tables before prod smoke-testing.
+
+Role-tailored variants (full-stack, AI agent, AI automation) and their checks are in the owner's evaluation report of 2026-10-03; the console lesson `docs/system-design-zh-console.md` holds the verified console facts.
 
 ### Evidence and accuracy boundaries (2026-10-03)
 
@@ -30,6 +34,11 @@
 | NAT-free VPC | `infra/modules/worker/ai_qa.tf`, `docs/backend-architecture-review-2026-09-22.md` | S3 gateway + SQS interface endpoints; egress work runs in out-of-VPC Lambdas whose callbacks are HMAC-signed. No private subnets: RDS and Lambdas sit in IGW-routed subnets |
 | Eval gate | `src_C/Vpc/Automation/EvalGate.cs` | Also requires CI lower bounds (recall 0.85, precision 0.93) and ≥ 2 runs; prod `AUTOMATION_MODE=dry_run` (checked 2026-10-03); the Claude drafter runs hourly on the owner's Mac under launchd, not in AWS |
 | Duplicate search | `tools/mcp-server/src/server.ts`, `src_C/Vpc/Authoring/CardSimilarity.cs` | The agent's tool uses trigram search; pgvector is used only by the offline eval near-duplicate path |
+| First-load budget 377,000 bytes (553,688 before) | `frontend/tests/bundleFirstLoad.test.ts` | Raw bytes of the first-load static-import closure; the data router later added 55.6 kB, still under the cap |
+| 409 conflict recovery, duplicate-safe publish | `src_C/Vpc/Authoring/Cards.cs`, `src_C/Vpc/Authoring/Publish.cs` | Bulk import does not check versions and can overwrite a concurrent single-card edit; publish relies on polling plus a reaper for stuck jobs |
+| Agent tokens scoped to 6 routes | `infra/modules/api/gateway.tf`, `src_C/Vpc/AgentClientPolicy.cs` | Two allow-lists kept in sync by a CI checker, not one source; agent tokens carry the owner's groups and are stored on disk |
+| SLO, heartbeat and synthetic alarms | `infra/modules/observability/` | Heartbeat alarms misfired three times at creation (alarm deployed before its data source, actions disabled, no notification); see `docs/ops/` |
+| CI on every push | `.github/workflows/ci.yml` | main has no branch protection, so say "ran", not "gated"; lint covers the console only |
 | 6,700+ tests | Local runs 2026-10-02: backend 2,887, console 1,512, mobile 2,333 | ~2,465 backend tests use the shared Postgres container; ~387 are pure unit tests |
 | Migration guard | `src_C/Vpc/Db/Migrate.cs`, migration 045 | 045 dropped three tables that were being retired; the hazard was running it before the smoke test and breaking rollback, not user-data loss |
 
