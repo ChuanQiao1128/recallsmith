@@ -14,10 +14,8 @@ import { checkManifestForUpdates, listManifestDecks } from '../content/deckRepos
 import { getCachedDeck, installDeckAndInvalidate } from '../content/deckCache';
 import { ensureStarterDeckInstalled } from '../content/starterOffline';
 import { deckShortTitle } from '../content/deckShortTitle';
-import { rarityOfCard } from '../features/gacha/draw/cardRarity';
 import { commitDraw } from '../features/gacha/draw/drawCommit';
-import { loadDrawState } from '../features/gacha/draw/drawStateStore';
-import { buildPityProgressLabelV9, DEFAULT_PITY_STATE, normalizePityState } from '../features/gacha/draw/pity';
+import { loadDrawStatus } from '../features/gacha/draw/drawPool';
 import { DRAW_COMMITTED_SYNC_DELAY_MS } from '../features/gacha/draw/ceremonyTimings';
 import {
   consumeDeckPulls,
@@ -102,45 +100,6 @@ function mergeSelectedDeck(options: DeckOption[], slug: string, deckTitle: strin
   return options.some((item) => item.slug === slug)
     ? options.map((item) => (item.slug === slug ? { ...item, title: deckTitle } : item))
     : [{ slug, title: deckTitle }, ...options];
-}
-
-// The guarantee's whole product value is that a player can see it coming.
-// buildPityProgressLabelV9 shipped with the counter persisted, capped and
-// tested, and zero callers, so the cost was paid and none of the benefit
-// collected. This is the caller.
-//
-// Reads the owned set once and answers both questions that depend on it.
-// They used to be one read for the pity label and no read at all for "is
-// there anything left to draw", which is why the screen went on offering a
-// pull it could not fill.
-async function loadDrawStatus(
-  slug: string,
-  deckCards: any[],
-): Promise<{ pityLabel: string; collectionComplete: boolean; pityThreshold: number }> {
-  try {
-    const state = await loadDrawState(slug);
-    const owned = new Set(state.owned);
-    // Counts the legendary gap only, which is what the label's own contract
-    // says. An unowned RAR also keeps the guarantee live, so a deck missing
-    // rares but no legendaries stays silent rather than over-promising.
-    const missingLegCount = deckCards.filter(
-      (card) => rarityOfCard(card) === 'LEG' && !owned.has(card?.StableUid),
-    ).length;
-    // An empty deck is not a completed collection. Treating it as one would
-    // put the "you own everything" copy in front of a user who owns nothing.
-    const collectionComplete =
-      deckCards.length > 0 && deckCards.every((card) => owned.has(card?.StableUid));
-    return {
-      pityLabel: buildPityProgressLabelV9(normalizePityState(state.pity), missingLegCount),
-      collectionComplete,
-      pityThreshold: normalizePityState(state.pity).threshold,
-    };
-  } catch {
-    // A storage failure must not cost the user the pack. A missing progress
-    // line is a smaller loss than an unopenable draw screen, and claiming
-    // "complete" on a failed read would lock the pack for no reason.
-    return { pityLabel: '', collectionComplete: false, pityThreshold: DEFAULT_PITY_STATE.threshold };
-  }
 }
 
 function findNeighbors(options: DeckOption[], currentSlug: string): { left: DeckOption | null; right: DeckOption | null } {
