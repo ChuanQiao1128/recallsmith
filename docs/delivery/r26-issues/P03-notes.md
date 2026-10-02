@@ -44,21 +44,30 @@ Tests were committed first and failed on the base (5 failures + 1 error in the u
 - `python3 -m unittest discover -s infra/scripts/tests -v` (CI `python` job): no `snowflake` in any `infra/**/*.tf`
   or the tfvars example; no `TF_VAR_snowflake_external_id` in the RUNBOOK; no `OutboxPending`/`outbox_backlog` in any
   `.tf`; the core_vpc policy has no `analytics/` resource and keeps `content/*`; `analytics-raw-400d` still exists;
-  the allow-list equals the six entries above exactly.
+  the allow-list equals the six entries above exactly and declares no `outputs`; `check-plan.py` run on a synthetic
+  plan with exactly those changes passes (`PLAN OK 6`), and an extra key on core_vpc or the dashboard, an extra
+  delete, a tags-only update, a missing delete, a replace or an output change each exit 1 (R26X F03); the RUNBOOK §9
+  and its core-vpc rollback section state the deploy order, roll-forward-only and `confirmDestructive`; every path
+  these notes name exists.
 - `terraform -chdir=infra/modules/observability test` (CI `infra` job): the dashboard body has no widget mentioning
   `OutboxPending`, and the p95-by-route widget spans row y 24.
 - `terraform fmt -check -recursive infra`, `terraform -chdir=infra/envs/prod validate` (offline init),
-  `python3 infra/scripts/check-agent-routes.py`, and `P03.verify.sh`.
+  `python3 infra/scripts/check-agent-routes.py`, and `docs/delivery/r26-issues/P03.verify.sh` (committed in R26X F03;
+  it sources the delivery skill's `verify-lib.sh` and needs `BASE` exported, so it runs on the supervisor's host, not
+  in CI; its targeted tests are the line above).
 
 ## Owner / supervisor steps
 
-1. Deploy R26 S01 (core-vpc without OutboxPublisher and the content-intelligence import) first. If this apply ran first,
-   the old publish route would get AccessDenied on `analytics/*`; nothing else uses that prefix.
+1. Deploy the core-vpc R26 build (S01: no OutboxPublisher, no content-intelligence import) first, and confirm it is the
+   prod alias target with the read-only check in `infra/RUNBOOK.md` §9 step 1. If this apply ran first, the old
+   publish and import routes would get AccessDenied on `analytics/*`; nothing else uses that prefix. This order is a
+   documented gate, not a machine check: the plan is identical either way.
 2. `terraform plan -lock=false` against the real backend (RUNBOOK §2), then
    `terraform show -json <tag>.tfplan | python3 infra/scripts/check-plan.py --plan - --allow docs/delivery/r26-issues/P03.plan-allow.json`.
    No `TF_VAR_snowflake_external_id` is needed any more.
 3. Apply, then a second plan that must print `PLAN EMPTY`.
-4. Optional: unset any `TF_VAR_snowflake_external_id` in local shells and drop it from a local `prod.auto.tfvars`
+4. Once migration 045 has run, roll forward only (RUNBOOK §9, "Rollback of core-vpc (R26)").
+5. Optional: unset any `TF_VAR_snowflake_external_id` in local shells and drop it from a local `prod.auto.tfvars`
    (an undeclared variable in a tfvars file only warns).
 
 ## Deferred
