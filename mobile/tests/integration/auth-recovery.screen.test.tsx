@@ -16,6 +16,11 @@ const { store } = vi.hoisted(() => ({
   },
 }));
 
+const recordFunnelEventMock = vi.fn();
+vi.mock('../../src/telemetry/funnel', () => ({
+  recordFunnelEvent: (...args: unknown[]) => recordFunnelEventMock(...args),
+}));
+
 vi.mock('react-native', () => {
   const React = require('react');
   return {
@@ -285,5 +290,93 @@ describe('auth recovery screens', () => {
     expect(codeInput.props.autoComplete).toBe('one-time-code');
 
     expect(mockAlert).not.toHaveBeenCalled();
+  });
+});
+
+describe('auth screens record the anonymous funnel steps (R24 M01)', () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+    store.loading = false;
+    store.status = 'anonymous';
+    vi.clearAllMocks();
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  async function renderSignUp(email: string, password: string) {
+    const navigation = makeNav();
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(<SignUpScreen navigation={navigation as any} route={{ key: 'signup', name: 'SignUp' } as any} />);
+    });
+    await act(async () => {
+      byPlaceholder(tree, 'you@example.com').props.onChangeText(email);
+    });
+    await act(async () => {
+      byPlaceholder(tree, 'Create a password').props.onChangeText(password);
+    });
+    await act(async () => {
+      byPlaceholder(tree, 'Create a password').props.onSubmitEditing();
+    });
+    await flush();
+    return navigation;
+  }
+
+  async function confirmWith(code: string) {
+    const navigation = makeNav();
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <ConfirmSignUpScreen
+          navigation={navigation as any}
+          route={{ key: 'confirm', name: 'ConfirmSignUp', params: { email: 'user@example.com' } } as any}
+        />,
+      );
+    });
+    await act(async () => {
+      byPlaceholder(tree, '123456').props.onChangeText(code);
+    });
+    await act(async () => {
+      byPlaceholder(tree, '123456').props.onSubmitEditing();
+    });
+    await flush();
+    return navigation;
+  }
+
+  it('a valid sign-up submit records signup_started once, with no email or account data', async () => {
+    store.signUpWithEmail.mockResolvedValue(undefined);
+    const navigation = await renderSignUp('user@example.com', 'Abcdef1!');
+    expect(navigation.replace).toHaveBeenCalledWith('ConfirmSignUp', { email: 'user@example.com' });
+    expect(recordFunnelEventMock).toHaveBeenCalledTimes(1);
+    expect(recordFunnelEventMock).toHaveBeenCalledWith('signup_started');
+  });
+
+  it('a sign-up form that cannot submit records nothing', async () => {
+    await renderSignUp('user@example.com', 'short');
+    expect(store.signUpWithEmail).not.toHaveBeenCalled();
+    expect(recordFunnelEventMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['signed_in', 'needs_sign_in'])('a confirmed code (%s) records signup_completed once', async (outcome) => {
+    store.confirmSignUpCode.mockResolvedValue(outcome);
+    await confirmWith('123456');
+    expect(store.confirmSignUpCode).toHaveBeenCalledWith('user@example.com', '123456');
+    expect(recordFunnelEventMock).toHaveBeenCalledTimes(1);
+    expect(recordFunnelEventMock).toHaveBeenCalledWith('signup_completed');
+  });
+
+  it('a wrong confirmation code records nothing', async () => {
+    store.confirmSignUpCode.mockRejectedValue(new AuthFlowError('FAILED', 'wrong code'));
+    await confirmWith('000000');
+    expect(mockAlert).toHaveBeenCalled();
+    expect(recordFunnelEventMock).not.toHaveBeenCalled();
   });
 });
