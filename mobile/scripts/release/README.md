@@ -13,7 +13,7 @@ has a dry-run mode and prints the evidence the runbook asks for (build id, submi
 | `description-<v>.txt`, `review-notes-<v>.txt` | the en-US description (`--description`) and the App Review Information notes (`--review-notes`) | — |
 | `keywords-<v>.txt`, `promo-<v>.txt`, `subtitle-<v>.txt` | keywords (≤ 100, comma-separated), promotional text (≤ 170) and subtitle (≤ 30); `tests/unit/whatsNew200.test.ts` checks the 2.0.0 set (limits, plain words, disclaimers) | — |
 | `ota.sh "<message>"` | `eas update --channel production --environment production`; first verifies every required `EXPO_PUBLIC_*` name exists in the EAS production environment (names only, never values), then publishes. `DRY_RUN=1` checks the names and prints the command without publishing | EAS login (`eas whoami`) |
-| `ota.sh` runtime guard | exits 6 before any `eas` call when the runtime (`app.json` version) is below 1.9.0 but `package.json` depends on `@sentry/react-native` (that runtime has no RNSentry native module): publish runtime-1.8.0 OTAs from `release/1.8.x`, runtime-1.9.0 OTAs from `main` | — |
+| `ota.sh` runtime guard | exits 6 before any `eas` call when the runtime (`app.json` version) is below 1.9.0 but `package.json` depends on `@sentry/react-native` (that runtime has no RNSentry native module): publish runtime-1.8.0 OTAs from `release/1.8.x`, runtime-1.9.0 OTAs from `release/1.9.x`, runtime-2.0.0 OTAs from `main` | — |
 | `ota.sh` DSN name rule | for runtime ≥ 1.9.0 `EXPO_PUBLIC_SENTRY_DSN` joins the required names (missing ⇒ exit 3); a runtime-1.8.0 OTA does not need it | — |
 | `ota.sh` source maps | after a successful publish prints one line `SENTRY_UPLOAD=<value>`: `ok` (`npx sentry-expo-upload-sourcemaps dist` succeeded), `failed` (stderr shows the re-run command; still exit 0, the update is live), `skipped-runtime` (runtime < 1.9.0), `skipped-no-project` (`SENTRY_ORG`/`SENTRY_PROJECT` empty or `REPLACE_ME_*`, checked before any token lookup), `skipped-no-token`. `DRY_RUN=1` prints `DRY: SENTRY_UPLOAD=ok-planned` or the skipped reason | `SENTRY_AUTH_TOKEN` from the environment, else the macOS Keychain item `developercards-sentry-auth-token` (only on a terminal or with `OTA_KEYCHAIN=1`; `OTA_KEYCHAIN=0` disables it); `SENTRY_TOKEN_SOURCE=env\|keychain` is printed, never the value |
 
@@ -47,6 +47,9 @@ approved version by hand.
 
 2.0.0 is a new OTA runtime (`runtimeVersion.policy: "appVersion"`): once it is built, OTAs from `main` reach only
 2.0.0 binaries, and a runtime-1.9.0 hotfix goes out through `ota.sh` from a `release/1.9.x` checkout (the dual-runtime
-pattern above).
+pattern above). That branch does not exist yet: before the 2.0.0 version bump merges into `main`, the owner must
+cut `release/1.9.x` from the last 1.9.0 commit (the parent of the 2.0.0 version-bump commit, where `app.json` still
+says 1.9.0) and push it. `ota.sh` reads the runtime from `app.json`, so running it from `main` after the merge
+publishes for runtime 2.0.0 only.
 
 Add `DRY_RUN=1` (shell scripts) or omit `--apply` (node script) to see the plan without touching anything.

@@ -38,13 +38,7 @@ const MODULES: readonly GuardedModule[] = [
 // them, this issue may not touch them). The release merge empties this list once
 // those branches land; the guard then covers them too. Never add a module here
 // to hide new jargon, and never widen BANNED's escape hatches instead.
-const PENDING: readonly string[] = [
-  'features/gacha/draw/ceremonyCopy.ts', // W01 #669 (Draw, pack opening, Draw result)
-  'features/gacha/selectors/homeSelectors.ts', // W02 #670 (Home, Library, Card detail)
-  'features/gacha/session/summaryMapper.ts', // W03 #671 (study session, summary, rewards)
-  'features/gacha/rewards/rewardResolver.ts', // W03 #671
-  'features/gacha/mcq/mcqConstants.ts', // W03 #671
-];
+const PENDING: readonly string[] = [];
 
 // Literals that are code tokens, not copy: a storage key, a union member or an
 // event name that keeps its old word on purpose (contract §0). Exact matches only.
