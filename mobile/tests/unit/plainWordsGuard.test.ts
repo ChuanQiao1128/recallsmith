@@ -17,11 +17,19 @@ type GuardedModule = {
   path: string;
   // Only scan these top-level declarations (default: the whole file).
   only?: readonly string[];
+  // Literals in this module that are code tokens, not copy: a union member or a
+  // role value that keeps its old word on purpose (contract §0). Exact matches
+  // only, and only in this module.
+  allow?: readonly string[];
 };
 
 const MODULES: readonly GuardedModule[] = [
   { path: 'features/gacha/session/summaryMapper.ts' },
-  { path: 'features/gacha/selectors/homeSelectors.ts' },
+  {
+    path: 'features/gacha/selectors/homeSelectors.ts',
+    // HomeDrawState members and route-preview role values.
+    allow: ['reserve', 'wallet-full', 'boss', 'elite'],
+  },
   { path: 'features/gacha/rewards/rewardResolver.ts' },
   { path: 'features/gacha/draw/pity.ts' },
   { path: 'features/gacha/draw/ceremonyCopy.ts', only: ['CEREMONY_COPY_V9', 'CEREMONY_COPY_V10'] },
@@ -34,22 +42,11 @@ const MODULES: readonly GuardedModule[] = [
   { path: 'features/gacha/copy/collectionCopy.ts' },
 ];
 
-// PENDING: modules another R24B issue rewrites in the same wave (W01-W03 own
-// them, this issue may not touch them). The release merge empties this list once
-// those branches land; the guard then covers them too. Never add a module here
-// to hide new jargon, and never widen BANNED's escape hatches instead.
-// W01 #669, W02 #670 and W03 #671 have landed on release/r24b, so nothing is pending.
+// PENDING: modules another R24B issue rewrites in the same wave and this issue
+// may not touch. W01-W03 have landed, so the list is empty and the guard covers
+// every module. Never add a module here to hide new jargon, and never widen
+// BANNED's escape hatches instead.
 const PENDING: readonly string[] = [];
-
-// Literals that are code tokens, not copy: a storage key, a union member or an
-// event name that keeps its old word on purpose (contract §0). Exact matches only.
-const ALLOWED_LITERALS: ReadonlySet<string> = new Set<string>([
-  // homeSelectors.ts: HomeDrawState members and route-preview role values.
-  'reserve',
-  'wallet-full',
-  'boss',
-  'elite',
-]);
 
 function isCodeToken(node: ts.Node): boolean {
   const parent = node.parent;
@@ -64,11 +61,15 @@ function isCodeToken(node: ts.Node): boolean {
   return false;
 }
 
-function collectCopy(source: ts.SourceFile, only?: readonly string[]): string[] {
+function collectCopy(
+  source: ts.SourceFile,
+  only?: readonly string[],
+  allow: readonly string[] = [],
+): string[] {
   const out: string[] = [];
   const visit = (node: ts.Node) => {
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
-      if (!isCodeToken(node) && !ALLOWED_LITERALS.has(node.text)) out.push(node.text);
+      if (!isCodeToken(node) && !allow.includes(node.text)) out.push(node.text);
       return;
     }
     if (ts.isTemplateExpression(node)) {
@@ -105,7 +106,7 @@ function offenders(mod: GuardedModule): string[] {
   const file = resolve(SRC, mod.path);
   const text = readFileSync(file, 'utf8');
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  return collectCopy(source, mod.only).filter((copy) => BANNED.test(copy));
+  return collectCopy(source, mod.only, mod.allow).filter((copy) => BANNED.test(copy));
 }
 
 describe('plain words guard (R24B §3)', () => {
@@ -122,17 +123,37 @@ describe('plain words guard (R24B §3)', () => {
     }
   });
 
-  it('reads string and template literals, skipping `${…}` identifiers', () => {
+  it('reads string and template literals, skipping `${…}` identifiers and code tokens', () => {
     const source = ts.createSourceFile(
       'sample.ts',
-      "import x from './wallet';\ntype K = 'pull';\nconst a = `You have ${pullsLeft} cards`;\nconst b = 'Finish run';",
+      [
+        "import x from './wallet';",
+        "type K = 'pull';",
+        'const a = `You have ${pullsLeft} cards`;',
+        "const b = 'Finish run';",
+        "const c = obj['pity'];",
+        "const d = { 'node': 1 };",
+      ].join('\n'),
       ts.ScriptTarget.Latest,
       true,
       ts.ScriptKind.TS,
     );
-    const copy = collectCopy(source);
-    expect(copy).toContain('Finish run');
-    expect(copy.join('|')).not.toMatch(/pullsLeft|wallet|'pull'/);
+    expect(collectCopy(source)).toEqual(['You have ', ' cards', 'Finish run']);
+  });
+
+  it('applies an allow-list only to the module that declares it', () => {
+    const source = ts.createSourceFile(
+      'sample.ts',
+      "const label = 'boss';\nconst state = 'reserve';",
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TS,
+    );
+    expect(collectCopy(source)).toEqual(['boss', 'reserve']);
+    expect(collectCopy(source, undefined, ['boss'])).toEqual(['reserve']);
+    for (const mod of MODULES) {
+      if (mod.path !== 'features/gacha/selectors/homeSelectors.ts') expect(mod.allow, mod.path).toBeUndefined();
+    }
   });
 
   it('keeps PENDING honest: only listed modules, each still holding jargon', () => {

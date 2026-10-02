@@ -3,9 +3,10 @@
 // Server-side account deletion. deleteAccountNow calls this BEFORE the Cognito
 // deleteUser so the user's rows (email, progress events, draw state, wallet) are
 // removed from RDS first — App Store Guideline 5.1.1(v). Wave F's F15 builds the
-// authenticated `DELETE /api/v1/user/me` endpoint; until it ships the core-vpc
-// router answers unknown routes with 404, which we treat as "not deployed yet"
-// and let deletion continue exactly as today.
+// authenticated `DELETE /api/v1/user/me` endpoint. In a dev build a 404/405/501
+// or an empty API base means "not deployed yet" and deletion continues. In a
+// production build the endpoint is live, so the same answers are failures: the
+// Cognito account is never deleted while the server rows may remain (2.0).
 //
 // Pure TS: never imports react-native, amplify, or revenuecat — AccountSection
 // imports this module under settings-copy.spec.ts's minimal RN mock. Uses the
@@ -42,22 +43,28 @@ export class AccountDeletionError extends Error {
  * Delete the signed-in user's server-side data via `DELETE /api/v1/user/me`.
  *
  * - 2xx                    → 'deleted'
- * - 404 / 405 / 501        → 'endpoint_unavailable' (F15 not deployed; caller continues)
+ * - 404 / 405 / 501        → dev build: 'endpoint_unavailable' (caller continues);
+ *                             production build: throws AccountDeletionError('server')
  * - 401 / 403              → throws AccountDeletionError('auth')  — keep the session
  * - any other status       → throws AccountDeletionError('server')
  * - fetch throw / timeout  → throws AccountDeletionError('network')
  *
- * An empty API base (a dev build with no server) resolves to 'endpoint_unavailable'
- * so deletion can still proceed; a blank access token is an 'auth' failure.
+ * An empty API base resolves to 'endpoint_unavailable' in a dev build (no server)
+ * and throws AccountDeletionError('server') in a production build; a blank access
+ * token is an 'auth' failure.
  */
 export async function deleteServerAccountData(
   accessToken: string | null,
-  opts?: { apiBase?: string; fetchImpl?: typeof fetch; timeoutMs?: number },
+  opts?: { apiBase?: string; fetchImpl?: typeof fetch; timeoutMs?: number; isDev?: boolean },
 ): Promise<ServerDeleteOutcome> {
+  const isDev = opts?.isDev ?? __DEV__;
   // Literal member access so Expo inlines EXPO_PUBLIC_API_BASE at build time.
   const base =
     opts?.apiBase ?? (process.env.EXPO_PUBLIC_API_BASE || '').trim().replace(/\/+$/, '');
-  if (!base) return 'endpoint_unavailable';
+  if (!base) {
+    if (isDev) return 'endpoint_unavailable';
+    throw new AccountDeletionError('server');
+  }
 
   const token = (accessToken ?? '').trim();
   if (!token) throw new AccountDeletionError('auth');
@@ -87,8 +94,11 @@ export async function deleteServerAccountData(
 
   const status = resp.status;
   if (status >= 200 && status < 300) return 'deleted';
-  // F15 not deployed yet (core-vpc 404), or the method/route is not wired: not fatal.
-  if (status === 404 || status === 405 || status === 501) return 'endpoint_unavailable';
+  // Route not deployed or not wired: not fatal in a dev build, a failure in production.
+  if (status === 404 || status === 405 || status === 501) {
+    if (isDev) return 'endpoint_unavailable';
+    throw new AccountDeletionError('server', status);
+  }
   if (status === 401 || status === 403) throw new AccountDeletionError('auth', status);
   throw new AccountDeletionError('server', status);
 }

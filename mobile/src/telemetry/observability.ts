@@ -20,6 +20,7 @@ import {
   SENTRY_KILL_SWITCH_TIMEOUT_MS,
   SENTRY_MAX_BREADCRUMBS,
   SENTRY_MAX_EVENTS_PER_SESSION,
+  SENTRY_NATIVE_NETWORK_OPTIONS,
   SENTRY_SAMPLE_RATE,
   SENTRY_TRACES_SAMPLE_RATE,
   apiErrorTags,
@@ -150,6 +151,8 @@ async function run(deps: ObservabilityDeps): Promise<ObservabilityStatus> {
       maxBreadcrumbs: SENTRY_MAX_BREADCRUMBS,
       enableAutoSessionTracking: true,
       enableUserInteractionTracing: false,
+      // Native-only keys (not in the JS option types), forwarded to the Cocoa SDK.
+      ...SENTRY_NATIVE_NETWORK_OPTIONS,
       tracePropagationTargets: buildTracePropagationTargets(resolveApiBase(), resolveApiFallback()),
       integrations: [integration],
       initialScope: { tags: otaTags },

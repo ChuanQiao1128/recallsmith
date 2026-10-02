@@ -44,12 +44,41 @@ export function isSentryKilled(config: unknown): boolean {
   return sentry.enabled === false;
 }
 
-export function scrubString(s: string): string {
+// The native iOS SDK records every NSURLSession request as a breadcrumb and an
+// http.client span by default. RevenueCat's requests carry the Cognito sub in
+// the path (/v1/subscribers/<sub>/…), so both are switched off; the Cocoa SDK
+// reads these keys from the options the JS SDK forwards to it.
+export const SENTRY_NATIVE_NETWORK_OPTIONS = Object.freeze({
+  enableNetworkBreadcrumbs: false,
+  enableNetworkTracking: false,
+});
+
+// A UUID-shaped token (the Cognito sub, device and request ids).
+const UUID_SHAPE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+const REVENUECAT_HOST = 'api.revenuecat.com';
+
+/** Tokens, emails and query strings only (tag values keep their ids). */
+function scrubSecrets(s: string): string {
   return s
     .replace(/\bBearer\s+[A-Za-z0-9._~+\/=-]+/gi, 'Bearer [redacted]')
     .replace(/\beyJ[A-Za-z0-9_-]{5,}(?:\.[A-Za-z0-9_-]*){1,4}/g, '[jwt]')
     .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[email]')
     .replace(/(\bhttps?:\/\/[^\s?#"'<>]+)[?#][^\s"'<>]*/gi, '$1?[redacted]');
+}
+
+/** Tokens, emails, query strings and UUID-shaped ids (→ `<id>`). */
+export function scrubString(s: string): string {
+  return scrubSecrets(s).replace(UUID_SHAPE, '<id>');
+}
+
+/** True when a breadcrumb or span names a RevenueCat request in its url, description or message. */
+export function mentionsRevenueCat(item: unknown): boolean {
+  if (!isRecord(item)) return false;
+  const data = isRecord(item.data) ? item.data : {};
+  for (const value of [item.description, item.message, data.url, data['http.url']]) {
+    if (typeof value === 'string' && value.toLowerCase().includes(REVENUECAT_HOST)) return true;
+  }
+  return false;
 }
 
 /** Cuts everything from the first `?` or `#` (relative URLs too). */
@@ -139,11 +168,20 @@ export function scrubEvent<T>(event: T): T {
   for (const [key, value] of Object.entries(event)) {
     if (key === 'user') continue;
     let next: Walked;
-    if (key === 'request') {
+    if (key === 'tags' && isRecord(value)) {
+      // Our own tags (ota.update_id is a UUID); secrets are still scrubbed.
+      const tags: Record<string, unknown> = {};
+      for (const [tag, tagValue] of Object.entries(value)) {
+        if (SENSITIVE_KEY.test(tag)) tags[tag] = '[redacted]';
+        else tags[tag] = typeof tagValue === 'string' ? scrubSecrets(tagValue) : tagValue;
+      }
+      next = tags;
+    } else if (key === 'request') {
       next = walkRequest(value, 1);
     } else if ((key === 'breadcrumbs' || key === 'spans') && Array.isArray(value)) {
       const items: unknown[] = [];
       for (const item of value) {
+        if (mentionsRevenueCat(item)) continue;
         const walked = walkDataHolder(item, 2);
         if (walked !== DROP) items.push(walked);
       }
@@ -160,6 +198,7 @@ export function scrubEvent<T>(event: T): T {
 
 export function scrubBreadcrumb<T extends { category?: string; message?: string; data?: Record<string, unknown> }>(b: T): T | null {
   if (b.category === 'console') return null;
+  if (mentionsRevenueCat(b)) return null;
   const copy: Record<string, unknown> = { ...b };
   if (typeof b.message === 'string') copy.message = scrubString(b.message);
   if (b.data !== undefined) {
