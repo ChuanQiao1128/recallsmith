@@ -26,6 +26,11 @@ function reviewNotesAfter200(files: string[]): { file: string; version: string }
     .map((m) => ({ file: m[0], version: m[1] }));
 }
 
+/** True when a review-notes text names the full Delete account path (contract §2). */
+function namesDeletePath(text: string): boolean {
+  return text.includes(DELETE_PATH);
+}
+
 describe('review-notes checklist: Delete account path', () => {
   it('selects only review-notes files for versions after 2.0.0', () => {
     const fixture = [
@@ -46,12 +51,22 @@ describe('review-notes checklist: Delete account path', () => {
     ]);
   });
 
-  it('every review-notes file after 2.0.0 contains "Delete account"', () => {
+  it('a review-notes text passes only when it names the full Delete account path', () => {
+    expect(namesDeletePath(`To delete the demo account: ${DELETE_PATH}.`)).toBe(true);
+    expect(namesDeletePath('Delete account is under Settings.')).toBe(false);
+    expect(namesDeletePath('Settings > Account > Delete account')).toBe(false);
+  });
+
+  it('every review-notes file after 2.0.0 names the full Delete account path', () => {
     const files = reviewNotesAfter200(readdirSync(RELEASE_DIR));
     for (const { file } of files) {
       const text = readFileSync(resolve(RELEASE_DIR, file), 'utf8');
-      expect(text, file).toContain('Delete account');
+      expect(namesDeletePath(text), file).toBe(true);
     }
+  });
+
+  it('the README says the test checks for the full path, not just "Delete account"', () => {
+    expect(README).toContain(`does not contain the full path "${DELETE_PATH}"`);
   });
 
   it('the release README checklist names the Delete account path and the demo-account rebuild', () => {
