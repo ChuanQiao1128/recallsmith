@@ -1,6 +1,7 @@
 import { completeOnboarding } from '../onboarding/onboardingPrefs';
 import { ensureDeckBootstrap } from '../rewards/deckWallet';
 import type { RewardWalletState } from '../rewards/rewardWallet';
+import { recordFunnelEvent } from '../../../telemetry/funnel';
 import { markPermissionPromptPending } from './permissionPromptGate';
 import { clearStarterLesson, isStarterLessonOpen } from './starterGate';
 
@@ -31,6 +32,8 @@ export async function completeStarterLesson(slug: string): Promise<StarterLesson
     return { completed: false, granted: 0, wallet: null };
   }
   await clearStarterLesson();
+  // R24 M01: anonymous funnel step, at the moment the stage closes (both completion paths).
+  recordFunnelEvent('starter_completed', slug);
   const { granted, wallet } = await ensureDeckBootstrap(slug);
   await markPermissionPromptPending();
   return { completed: true, granted, wallet };

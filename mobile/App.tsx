@@ -2,12 +2,13 @@ import 'react-native-gesture-handler';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-url-polyfill/auto';
 import React, { useEffect, useMemo } from 'react';
-import { AppState, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { AppState, Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import * as Notifications from 'expo-notifications';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import type { RootStackParamList } from './src/navigation/types';
 import { linking } from './src/navigation/linking';
@@ -48,14 +49,19 @@ import { installAccessTokenRefresher, refreshAuthOnForeground } from './src/auth
 import { scheduleProgressSync } from './src/sync/progressSync';
 import { createAppStateSyncHandler } from './src/sync/appStateSync';
 import { useForceUpdateGate, type ForceUpdateGate } from './src/config/forceUpdateGate';
-import { DEFAULT_APP_STORE_URL } from './src/config/remoteConfig';
+import { DEFAULT_APP_STORE_URL, getCurrentAppVersion } from './src/config/remoteConfig';
+import { getFeatureFlags, subscribeFeatureFlags } from './src/config/featureFlags';
+import { apiJson } from './src/api/apiClient';
 import { loadFeedbackPrefs } from './src/features/gacha/settings/feedbackPrefs';
+import { getPrivacyPrefsSync, loadPrivacyPrefs } from './src/features/gacha/settings/privacyPrefs';
+import { getOnboardingStage } from './src/features/gacha/onboarding/onboardingPrefs';
 import { createOtaUpdateChecker, getExpoUpdatesModule } from './src/updates/otaUpdateCheck';
 import { collectDeviceInfo } from './src/features/gacha/draw/ceremonyPerf';
 import {
   configureClientErrorReporting,
   installGlobalErrorHandlers,
 } from './src/telemetry/clientErrorReporter';
+import { configureFunnel, flushFunnel, funnelOnForeground, startFunnel } from './src/telemetry/funnel';
 import {
   captureException,
   registerNavigationContainer,
@@ -113,6 +119,28 @@ configureClientErrorReporting({
 });
 void startObservability({ installInterimHandlers: () => installGlobalErrorHandlers() });
 
+// Anonymous install funnel (R24 M01, contract §3.4). The module imports nothing at runtime;
+// everything is injected here. It sends only on the production channel (the Sentry rule), with
+// features.anonFunnel.enabled === true, and while Settings › Privacy "Share anonymous usage
+// counts" is on. The POST carries no access token, so a batch is never linked to an account.
+const privacyPrefsLoaded = loadPrivacyPrefs();
+configureFunnel({
+  storage: AsyncStorage,
+  post: (path, body) => apiJson(path, { method: 'POST', body }),
+  isProductionChannel: () => {
+    if (__DEV__) return false;
+    const channel = (getExpoUpdatesModule() as { channel?: unknown } | null)?.channel;
+    return String(channel ?? '').trim().toLowerCase() === 'production';
+  },
+  isRemoteEnabled: () => getFeatureFlags().anonFunnel?.enabled === true,
+  isShareEnabled: async () => {
+    await privacyPrefsLoaded;
+    return getPrivacyPrefsSync().shareUsageCounts;
+  },
+  getEnv: () => ({ platform: Platform.OS, appVersion: getCurrentAppVersion() }),
+  now: () => Date.now(),
+});
+
 // Recovery target for a per-screen error boundary's "Back to Home".
 function goHomeAfterScreenError() {
   if (navigationRef.isReady()) navigationRef.reset({ index: 0, routes: [{ name: 'Home' }] });
@@ -165,6 +193,11 @@ function App() {
     // Load the device-global sound/haptics choice early so the ceremony audio,
     // ceremony haptics and study haptics see the stored value on first use.
     void loadFeedbackPrefs();
+    // first_open (once per install), then the day-1/day-7 return check. An install that finished
+    // onboarding before the funnel shipped is not a new install and records nothing.
+    void getOnboardingStage().then((stage) => startFunnel({ existingInstall: stage === 'done' }));
+    // The remote flag lands after the config fetch; a flip to on sends what is already queued.
+    return subscribeFeatureFlags(() => flushFunnel());
   }, []);
 
   useEffect(() => {
@@ -173,6 +206,7 @@ function App() {
       syncOnAppState(state);
       if (state === 'active') {
         void refreshAuthOnForeground();
+        funnelOnForeground();
         void otaUpdateChecker.onForeground(() => (navigationRef.isReady() ? navigationRef.getCurrentRoute()?.name : undefined));
       }
     });

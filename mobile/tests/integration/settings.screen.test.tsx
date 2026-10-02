@@ -144,6 +144,11 @@ vi.mock('../../src/features/gacha/streaks/streakTracker', () => ({
   loadStreakSnapshot: () => loadStreakSnapshotMock(),
 }));
 
+const clearFunnelQueueMock = vi.fn();
+vi.mock('../../src/telemetry/funnel', () => ({
+  clearFunnelQueue: () => clearFunnelQueueMock(),
+}));
+
 import { SettingsScreen } from '../../src/screens/SettingsScreen';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -292,6 +297,44 @@ describe('SettingsScreen', () => {
     });
     expect(toggle().props.accessibilityState).toEqual({ checked: false });
     expect(vi.mocked(AsyncStorage.setItem)).toHaveBeenLastCalledWith('recallsmith:study-prefs:v1', JSON.stringify({ fourButtons: false }));
+  });
+
+  it('shows Privacy > Share anonymous usage counts on by default and saves turning it off', async () => {
+    clearFunnelQueueMock.mockClear();
+    const { tree } = await renderSettings();
+    const blob = tree.root
+      .findAll((node) => (node.type as any) === 'Text')
+      .map((node) => nodeText(node))
+      .join('\n');
+    expect(blob).toContain('Privacy');
+
+    const toggle = () => findPressableByTestID(tree, 'settings-share-usage-counts-toggle');
+    expect(toggle().props.accessibilityRole).toBe('switch');
+    expect(toggle().props.accessibilityLabel).toBe('Share anonymous usage counts');
+    expect(toggle().props.accessibilityState).toEqual({ checked: true });
+
+    await act(async () => {
+      toggle().props.onPress();
+      await Promise.resolve();
+    });
+    expect(toggle().props.accessibilityState).toEqual({ checked: false });
+    expect(vi.mocked(AsyncStorage.setItem)).toHaveBeenCalledWith(
+      'recallsmith:privacy-prefs:v1',
+      JSON.stringify({ shareUsageCounts: false }),
+    );
+    // Turning sharing off drops whatever the funnel had queued.
+    expect(clearFunnelQueueMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      toggle().props.onPress();
+      await Promise.resolve();
+    });
+    expect(toggle().props.accessibilityState).toEqual({ checked: true });
+    expect(vi.mocked(AsyncStorage.setItem)).toHaveBeenLastCalledWith(
+      'recallsmith:privacy-prefs:v1',
+      JSON.stringify({ shareUsageCounts: true }),
+    );
+    expect(clearFunnelQueueMock).toHaveBeenCalledTimes(1);
   });
 
   it('confirms and runs Fresh Start reset flow', async () => {

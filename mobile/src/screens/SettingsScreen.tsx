@@ -57,6 +57,14 @@ import {
   setStudyPrefs,
   type StudyPrefs,
 } from '../features/gacha/study/studyPrefs';
+import { PrivacySection } from '../features/gacha/settings/privacy/PrivacySection';
+import {
+  getPrivacyPrefsSync,
+  loadPrivacyPrefs,
+  setPrivacyPref,
+  type PrivacyPrefs,
+} from '../features/gacha/settings/privacyPrefs';
+import { clearFunnelQueue } from '../telemetry/funnel';
 import AboutSection from '../features/gacha/settings/about/AboutSection';
 import DebugSection from '../features/gacha/settings/debug/DebugSection';
 import { createDebugTapCounter } from '../features/gacha/settings/debug/debugTapCounter';
@@ -121,6 +129,8 @@ export function SettingsScreen({ navigation }: Props) {
   const [feedbackPrefs, setFeedbackPrefs] = useState<FeedbackPrefs>(() => getFeedbackPrefsSync());
   // Device-global study prefs (two vs four rating buttons), same seeding as above.
   const [studyPrefs, setStudyPrefsState] = useState<StudyPrefs>(() => getStudyPrefsSync());
+  // Device-global "Share anonymous usage counts" (R24 M01), same seeding as above.
+  const [privacyPrefs, setPrivacyPrefsState] = useState<PrivacyPrefs>(() => getPrivacyPrefsSync());
 
   // True once the first load has succeeded. After that, refocus/auth reloads
   // refresh the data silently instead of swapping the whole screen for a spinner
@@ -136,15 +146,17 @@ export function SettingsScreen({ navigation }: Props) {
       setLoadError(null);
     }
     try {
-      const [nextAudience, nextPrefs, nextStreak, nextFeedback, nextStudy] = await Promise.all([
+      const [nextAudience, nextPrefs, nextStreak, nextFeedback, nextStudy, nextPrivacy] = await Promise.all([
         loadAudiencePreference(),
         getReminderPrefs(),
         loadStreakSnapshot(),
         loadFeedbackPrefs(),
         loadStudyPrefs(),
+        loadPrivacyPrefs(),
       ]);
 
       setFeedbackPrefs(nextFeedback);
+      setPrivacyPrefsState(nextPrivacy);
       setStudyPrefsState(nextStudy);
       setAudience(nextAudience);
       setReminderPrefsState(nextPrefs ?? DEFAULT_REMINDER_PREFS);
@@ -275,6 +287,14 @@ export function SettingsScreen({ navigation }: Props) {
     // Optimistic, like the feedback toggles above.
     setStudyPrefsState({ fourButtons: value });
     void setStudyPrefs({ fourButtons: value }).then((saved) => setStudyPrefsState(saved));
+  }, []);
+
+  const onToggleShareUsageCounts = useCallback((value: boolean) => {
+    // Optimistic, like the feedback toggles. Turning it off also drops anything the anonymous
+    // funnel had queued but not yet sent.
+    setPrivacyPrefsState({ shareUsageCounts: value });
+    void setPrivacyPref('shareUsageCounts', value).then((saved) => setPrivacyPrefsState(saved));
+    if (!value) clearFunnelQueue();
   }, []);
 
   const onSignIn = useCallback(() => {
@@ -416,6 +436,8 @@ export function SettingsScreen({ navigation }: Props) {
           <FeedbackSection prefs={feedbackPrefs} onToggle={onToggleFeedback} />
 
           <StudySection prefs={studyPrefs} onToggleFourButtons={onToggleFourButtons} />
+
+          <PrivacySection prefs={privacyPrefs} onToggleShare={onToggleShareUsageCounts} />
 
           {paywallHidden ? null : (
             <View style={styles.sectionCard}>
