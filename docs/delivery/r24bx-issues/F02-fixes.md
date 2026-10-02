@@ -50,3 +50,21 @@ says the release merge empties the list. PENDING is now empty, so the five modul
 full per-module "uses plain words" guard. That adds coverage and removes none.
 
 File changed: `mobile/tests/unit/plainWordsGuard.test.ts`. Test: `cd mobile && npx vitest run tests/unit/plainWordsGuard.test.ts` (15 passed).
+
+## Gate repair: root-mobile run failed in draw-result.screen.test.tsx (timer leak between tests)
+
+The driver's root-mobile gate failed once in `mobile/tests/integration/draw-result.screen.test.tsx` > "requests a store
+review once for a Legendary pull after the delay": `maybeRequestRating` had 8 'first-legendary' calls before the
+fake-timer delay. It passes when the file runs alone. That file has nothing to do with this issue's copy change.
+
+Cause: the file mounts DrawResultScreen 23 times but unmounts only 6. Each mount starts a real 1.5 s
+`RATING_PROMPT_DELAY_MS` timer (`DrawResultScreen.tsx`, cleared only on unmount). On a loaded machine those leaked real
+timers fire inside the later rating test, after its `mockClear()`.
+
+Reproduced deterministically by blocking the thread for 1.6 s right after that test's `mockClear()`: 23 calls, FAIL.
+With the fix and the same block, PASS. The block was removed afterwards.
+
+Fix (test-only, no product change): the suite spies on `renderer.create` to track every tree it mounts and unmounts
+all of them in `afterEach`, so the screen's own cleanup clears each timer before the next test.
+
+File changed: `mobile/tests/integration/draw-result.screen.test.tsx`. Test: `cd mobile && npx vitest run tests/integration/draw-result.screen.test.tsx` (27 passed).
