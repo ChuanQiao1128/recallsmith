@@ -1,0 +1,11 @@
+{
+  "tags_only_updates": false,
+  "changes": {
+    "module.data.aws_s3_bucket_lifecycle_configuration.content": { "action": "update", "keys": ["rule"] },
+    "module.identity.aws_iam_role_policy.notifier": { "action": "update", "keys": ["policy"] },
+    "module.api.aws_apigatewayv2_route.this[\"internal_revenuecat_deletions\"]": "create",
+    "module.api.aws_apigatewayv2_route.this[\"internal_revenuecat_deletions_report\"]": "create",
+    "module.api.aws_apigatewayv2_stage.default": { "action": "update", "keys": ["route_settings"] },
+    "module.api.aws_apigatewayv2_stage.dev": { "action": "update", "keys": ["route_settings"] }
+  }
+}
