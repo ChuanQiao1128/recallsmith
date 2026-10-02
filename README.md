@@ -38,9 +38,11 @@ setup SQL, marts and sample exports was deleted with it. The trial ended and
 continuing meant paying for a pipeline that had run by hand once and never on a
 schedule; the PostgreSQL `analytics_daily` rollups already give usage and
 per-card numbers; and the analytics outbox that fed it carried an unsalted user
-hash and a device id with no consumer reading them. The outbox table, its
-publisher and the console's Content Intelligence page were retired in the same
-round (R26).
+hash and a device id with no consumer reading them. In the same round (R26) the
+sync ingest stopped writing to the outbox, and its publisher and the console's
+Content Intelligence page were removed. The outbox table itself, with the rows
+already in it, is dropped by migration 045, which deletes data permanently and
+which the owner runs by hand; until then it is still in the production database.
 
 File counts are `git ls-files <dir> | wc -l` as of this commit, and
 `frontend/tests/rootReadmePaths.test.ts` fails if they drift.

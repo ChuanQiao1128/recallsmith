@@ -228,4 +228,7 @@ FRONTEND_PATHS='mobile frontend'       # 适配 #2/#3 按根分派
      - docs/design/v10-ceremony-seam-of-light.md
 Snowflake 已于 2026-10-02 退役（R26），snowflake/ 目录整体删除：
      - snowflake/001_content_intelligence_setup.sql
+Content Intelligence 接口和控制台页随之删除（R26 S01 / C01）：
+     - src_C/Vpc/Authoring/ContentIntelligence.cs
+     - frontend/src/pages/ContentIntelligencePage.tsx
 -->

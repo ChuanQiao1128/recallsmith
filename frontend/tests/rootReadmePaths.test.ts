@@ -55,6 +55,40 @@ describe('the root README', () => {
     expect(markdown).toMatch(/Snowflake[^\n]*retired[^\n]*2026-10-02|2026-10-02[^\n]*retired[^\n]*Snowflake/);
   });
 
+  it('explains the retirement in §1, and leaves the outbox table to migration 045', () => {
+    // The intro sentence carries the date as well, so the date alone does not
+    // prove the explanation is still there. This finds the §1 paragraph and
+    // asks for its reasons.
+    const markdown = readFileSync(README, 'utf8');
+    const paragraph = markdown.split(/\n\s*\n/).find(p => p.startsWith('Snowflake was retired on 2026-10-02')) ?? '';
+
+    for (const reason of ['trial', 'analytics_daily', 'unsalted']) {
+      expect(paragraph, reason).toContain(reason);
+    }
+
+    // The table and its rows stay in production until the owner runs 045, so
+    // the sentence about the outbox table has to say that, not that it is gone.
+    const outboxSentences = paragraph.replace(/\s+/g, ' ').split(/(?<=\.) /).filter(s => s.includes('outbox table'));
+    expect(outboxSentences.length).toBeGreaterThanOrEqual(1);
+    for (const sentence of outboxSentences) {
+      expect(sentence).toContain('migration 045');
+    }
+  });
+
+  it('only calls code retired that is really gone', () => {
+    // §1 says the outbox publisher, the snapshot import and the console's
+    // Content Intelligence page were retired in R26; bring one back and the
+    // README is wrong again.
+    for (const path of [
+      'src_C/Vpc/Analytics/OutboxPublisher.cs',
+      'src_C/Vpc/Analytics/ContentIntelligenceSnapshotImport.cs',
+      'src_C/Vpc/Authoring/ContentIntelligence.cs',
+      'frontend/src/pages/ContentIntelligencePage.tsx',
+    ]) {
+      expect(existsSync(`${REPO_ROOT}${path}`), path).toBe(false);
+    }
+  });
+
   it('ships a LICENSE with no unfilled template fields', () => {
     const license = fileURLToPath(new URL('../../LICENSE', import.meta.url));
     expect(existsSync(license)).toBe(true);
