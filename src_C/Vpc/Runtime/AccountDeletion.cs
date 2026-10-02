@@ -98,6 +98,9 @@ public static class AccountDeletion
       cardReportRows = r.CardReportRows,
     });
 
+    // R25 G04: only after the commit, and never able to change this response (it logs and swallows).
+    await RevenueCatCustomerDeletion.DeleteCustomerAsync(auth.UserSub!);
+
     return res.Raw(204, string.Empty);
   }
 
