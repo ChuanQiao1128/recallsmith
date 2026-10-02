@@ -16,8 +16,6 @@ import { isDebugMenuAvailable } from '../../src/config/debugMenu';
 import { debugMenuRoute } from '../../src/navigation/debugMenuRoute';
 import { decideSentry, isProductionChannel } from '../../src/telemetry/sentryPolicy';
 
-const DSN = 'https://abc@o1.ingest.sentry.io/123';
-
 describe('isDebugMenuAvailable', () => {
   afterEach(() => {
     (globalThis as Record<string, unknown>).__DEV__ = true;
@@ -48,7 +46,8 @@ describe('isDebugMenuAvailable', () => {
 
   it('shares the channel rule with the Sentry gate', () => {
     for (const channel of ['production', 'PRODUCTION', 'preview', 'development', '', undefined, null]) {
-      const sentryChannelOk = decideSentry({ isDev: false, channel, dsn: DSN, killed: false }).enabled;
+      const gate = decideSentry({ isDev: false, channel, dsn: undefined, killed: false });
+      const sentryChannelOk = gate.enabled || gate.reason !== 'channel';
       expect(isProductionChannel(channel)).toBe(sentryChannelOk);
       expect(isDebugMenuAvailable({ isDev: false, channel })).toBe(!sentryChannelOk);
     }
