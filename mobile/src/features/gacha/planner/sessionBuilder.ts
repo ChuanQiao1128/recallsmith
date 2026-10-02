@@ -8,27 +8,27 @@ function describeNode(role: RoutePreviewNode['role']) {
   if (role === 'warmup') {
     return {
       title: '',
-      subtitle: 'Open with one low-friction recall win and settle into the run.',
+      subtitle: 'Open with one low-friction recall win and settle into the session.',
     };
   }
 
   if (role === 'elite') {
     return {
-      title: 'Elite recall',
-      subtitle: 'A sharper mid-run check that asks for more deliberate recall.',
+      title: 'Harder recall',
+      subtitle: 'A sharper mid-session check that asks for more deliberate recall.',
     };
   }
 
   if (role === 'boss') {
     return {
-      title: 'Boss check',
+      title: 'Final check',
       subtitle: 'Use the final card as a clean closing test, not a punishment wall.',
     };
   }
 
   return {
     title: '',
-    subtitle: 'A standard learning / recall step that keeps the route moving.',
+    subtitle: 'A standard learning / recall step that keeps the session moving.',
   };
 }
 
@@ -78,8 +78,8 @@ export function buildChallengeRoute(params: {
   const summary = !hasPlayableCards
     ? `${deckTitle} has no cards yet — open a pack to get your first cards.`
     : hasTodayWork
-      ? `${deckTitle} · ${dueCount} due · ${newCount} fresh · clear ${SESSION_MIN_GOAL} card${SESSION_MIN_GOAL === 1 ? '' : 's'} to keep momentum`
-      : `${deckTitle} is light today — treat this as a short maintenance run, not a backlog day.`;
+      ? `${deckTitle} · ${dueCount} due · ${newCount} fresh · clear ${SESSION_MIN_GOAL} card${SESSION_MIN_GOAL === 1 ? '' : 's'} to keep your streak`
+      : `${deckTitle} is light today — treat this as a short maintenance session, not a backlog day.`;
 
   return {
     slug,

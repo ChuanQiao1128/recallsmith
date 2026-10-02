@@ -10,27 +10,27 @@ const MILESTONES: Record<Milestone['id'], Milestone> = {
   'sessions-1': {
     id: 'sessions-1',
     title: 'First day complete',
-    body: 'You closed your first qualified run. Keep the loop small and repeatable.',
+    body: 'You closed your first session that counted. Keep the loop small and repeatable.',
   },
   'sessions-3': {
     id: 'sessions-3',
-    title: 'Three clean runs',
+    title: 'Three clean sessions',
     body: 'You now have enough history to build a reliable daily rhythm.',
   },
   'streak-3': {
     id: 'streak-3',
     title: '3-day streak',
-    body: 'Momentum is visible now. Protect the next day, not the whole month.',
+    body: 'Progress is visible now. Protect the next day, not the whole month.',
   },
   'week-5': {
     id: 'week-5',
     title: '5 days this week',
-    body: 'Your week is doing the work, even without a big ceremony.',
+    body: 'Your week is doing the work, even without a big fuss.',
   },
   'streak-7': {
     id: 'streak-7',
     title: '7-day streak',
-    body: 'One full week of recall is locked in. Keep the route boring and consistent.',
+    body: 'One full week of recall is locked in. Keep your sessions boring and consistent.',
   },
 };
 

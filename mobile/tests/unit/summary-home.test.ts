@@ -23,8 +23,8 @@ describe('buildSessionSummaryVM', () => {
       },
     });
 
-    expect(summary.vm.completionLabel).toBe('Full run cleared');
-    expect(summary.vm.rewardBadge).toMatch(/\+1 pull/i);
+    expect(summary.vm.completionLabel).toBe('All due cards done');
+    expect(summary.vm.rewardBadge).toMatch(/\+1 draw/i);
     expect(summary.vm.rewardBody).toMatch(/ready to use/i);
   });
 
@@ -40,7 +40,7 @@ describe('buildSessionSummaryVM', () => {
     });
 
     // No reward outcome → progress saved, no pull badge
-    expect(summary.vm.nextActionLabel).toBe('Keep momentum');
+    expect(summary.vm.nextActionLabel).toBe('Keep going');
   });
 
   it('uses neutral progress copy when no reward is earned', () => {
@@ -55,7 +55,7 @@ describe('buildSessionSummaryVM', () => {
     });
 
     expect(summary.vm.rewardBadge).toBe('Progress saved');
-    expect(summary.vm.rewardBody).toMatch(/no free pulls this run/i);
+    expect(summary.vm.rewardBody).toMatch(/no free draws this session/i);
   });
 });
 

@@ -577,7 +577,7 @@ describe('SessionCardScreen', () => {
       (node) => (node.type as any) === 'View' && node.props?.testID === 'session-card-trial-preview',
     );
     expect(preview).toHaveLength(1);
-    expect(findTextByLabel(tree, 'Preview run')).toHaveLength(1);
+    expect(findTextByLabel(tree, 'Preview session')).toHaveLength(1);
     expect(findTextByLabel(tree, 'Unlock Premium')).toHaveLength(0);
   });
 
@@ -1224,7 +1224,7 @@ describe('SessionCardScreen', () => {
       // No route, no run header, no rating dock, no route-complete card.
       expect(useSessionStore.getState().sessionId).toBeNull();
       expect(useSessionStore.getState().route).toEqual([]);
-      expect(findTextByLabel(tree, 'Route complete')).toHaveLength(0);
+      expect(findTextByLabel(tree, 'Session complete')).toHaveLength(0);
       expect(findTextByLabel(tree, 'Continue')).toHaveLength(0);
       expect(byTestID(tree, 'review-rating-dock')).toHaveLength(0);
       expect(JSON.stringify(tree.toJSON())).not.toContain('0/1');
@@ -1258,7 +1258,7 @@ describe('SessionCardScreen', () => {
       vi.mocked(pickNextCard).mockReturnValue(null);
       const { tree } = await mount();
       expect(byTestID(tree, 'session-card-empty-deck')).toHaveLength(0);
-      expect(findTextByLabel(tree, 'Route complete')).toHaveLength(1);
+      expect(findTextByLabel(tree, 'Session complete')).toHaveLength(1);
       expect(useSessionStore.getState().sessionId).toBeTruthy();
     });
 

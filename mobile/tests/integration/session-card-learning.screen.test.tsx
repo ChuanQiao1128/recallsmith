@@ -626,13 +626,13 @@ describe('SessionCardScreen learning step (R22 §6: teach before testing)', () =
       3,
       [
         { id: 'warmup-0', role: 'warmup', title: '', subtitle: '' },
-        { id: 'elite-1', role: 'elite', title: 'Elite recall', subtitle: '' },
-        { id: 'boss-2', role: 'boss', title: 'Boss check', subtitle: '' },
+        { id: 'elite-1', role: 'elite', title: 'Harder recall', subtitle: '' },
+        { id: 'boss-2', role: 'boss', title: 'Final check', subtitle: '' },
       ],
     );
     const { tree } = await mount('mixed');
     const steps: string[] = [];
-    const badge = () => texts(tree).find((t) => t === 'Elite recall' || t === 'Boss check') ?? '-';
+    const badge = () => texts(tree).find((t) => t === 'Harder recall' || t === 'Final check') ?? '-';
     for (let step = 0; step < 4; step += 1) {
       const study = byTestID(tree, 'learning-study-view').length > 0;
       steps.push(`${study ? 'study' : 'rate'}:${questionShown(tree)}:${badge()}`);
@@ -646,7 +646,7 @@ describe('SessionCardScreen learning step (R22 §6: teach before testing)', () =
 
     expect(steps).toEqual([
       'rate:What is a stream?:-',
-      'rate:What is a shard?:Elite recall',
+      'rate:What is a shard?:Harder recall',
       'study:What is a queue?:-',
       'rate:What is a queue?:-',
     ]);

@@ -228,7 +228,7 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
               // single-handle test contract remains intact.
               testID="summary-reward-use-pulls-cta"
               accessibilityRole="button"
-              accessibilityLabel={`Use ${earnedPulls} new ${earnedPulls === 1 ? 'pull' : 'pulls'} now`}
+              accessibilityLabel={`Use ${earnedPulls} new ${earnedPulls === 1 ? 'draw' : 'draws'} now`}
               style={({ pressed }) => [styles.usePullsButton, pressed && styles.buttonPressed]}
               onPress={() =>
                 navigation.navigate('Draw', {
@@ -243,7 +243,7 @@ export function SessionSummaryScreen({ navigation, route }: Props) {
                 </Text>
               </View>
               <Text style={styles.usePullsLabel} numberOfLines={1}>
-                {`Use ${earnedPulls} new ${earnedPulls === 1 ? 'pull' : 'pulls'} now`}
+                {`Use ${earnedPulls} new ${earnedPulls === 1 ? 'draw' : 'draws'} now`}
               </Text>
               <Text style={styles.usePullsArrow} numberOfLines={1}>
                 →
