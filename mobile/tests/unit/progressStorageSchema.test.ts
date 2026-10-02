@@ -79,6 +79,46 @@ describe('CardProgress storage schema', () => {
     expect(loaded.revisionDemotedAt).toBe(NOW - 60_000);
   });
 
+  it('round-trips the FSRS memory state fields', async () => {
+    const saved: CardProgress = {
+      stableUid: 'uid-a',
+      stage: 3,
+      lastReviewedAt: NOW - DAY_MS,
+      nextReviewAt: NOW + 10 * DAY_MS,
+      lastSeenRevision: 1,
+      fsrsStability: 10.7389,
+      fsrsDifficulty: 5.273,
+      fsrsAnchorAt: NOW - DAY_MS,
+    };
+
+    await saveDeckProgress(deck, [saved]);
+    const [loaded] = await loadDeckProgress(deck);
+
+    expect(loaded.fsrsStability).toBe(10.7389);
+    expect(loaded.fsrsDifficulty).toBe(5.273);
+    expect(loaded.fsrsAnchorAt).toBe(NOW - DAY_MS);
+  });
+
+  it('drops FSRS fields that are not finite numbers', async () => {
+    const saved: any = {
+      stableUid: 'uid-a',
+      stage: 1,
+      lastReviewedAt: NOW - DAY_MS,
+      nextReviewAt: NOW + DAY_MS,
+      lastSeenRevision: 1,
+      fsrsStability: '3.2',
+      fsrsDifficulty: null,
+      fsrsAnchorAt: { at: NOW },
+    };
+
+    await saveDeckProgress(deck, [saved]);
+    const [loaded] = await loadDeckProgress(deck);
+
+    expect(loaded.fsrsStability).toBeUndefined();
+    expect(loaded.fsrsDifficulty).toBeUndefined();
+    expect(loaded.fsrsAnchorAt).toBeUndefined();
+  });
+
   it('drops fields that are not in the whitelist, and keeps absent counters absent', async () => {
     // The negative half of the contract: this is what happens to any field
     // someone adds to CardProgress without adding it here.
@@ -100,5 +140,8 @@ describe('CardProgress storage schema', () => {
     expect(loaded.lapses).toBeUndefined();
     expect(loaded.hardStreak).toBeUndefined();
     expect(loaded.revisionDemotedAt).toBeUndefined();
+    expect(loaded.fsrsStability).toBeUndefined();
+    expect(loaded.fsrsDifficulty).toBeUndefined();
+    expect(loaded.fsrsAnchorAt).toBeUndefined();
   });
 });

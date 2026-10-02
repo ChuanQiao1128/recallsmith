@@ -26,6 +26,7 @@ import {
   DEFAULT_FEATURE_FLAGS,
   applyRemoteFeatures,
   getFeatureFlags,
+  isFsrsEnabled,
   subscribeFeatureFlags,
   useFeatureFlags,
   type FeatureFlags,
@@ -85,6 +86,7 @@ describe('feature flags', () => {
       cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
       sentry: DEFAULT_FEATURE_FLAGS.sentry,
       cardReport: { enabled: false },
+      fsrs: { enabled: true },
     });
     expect(Object.isFrozen(getFeatureFlags())).toBe(true);
     expect(Object.isFrozen(getFeatureFlags().mcq)).toBe(true);
@@ -118,6 +120,7 @@ describe('feature flags', () => {
       cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
       sentry: DEFAULT_FEATURE_FLAGS.sentry,
       cardReport: DEFAULT_FEATURE_FLAGS.cardReport,
+      fsrs: DEFAULT_FEATURE_FLAGS.fsrs,
     });
   });
 
@@ -130,6 +133,7 @@ describe('feature flags', () => {
       cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
       sentry: DEFAULT_FEATURE_FLAGS.sentry,
       cardReport: DEFAULT_FEATURE_FLAGS.cardReport,
+      fsrs: DEFAULT_FEATURE_FLAGS.fsrs,
     });
 
     expect(applyRemoteFeatures({ features: { mcq: { maxPerRun: 0 } } })).toEqual({
@@ -145,6 +149,7 @@ describe('feature flags', () => {
       cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
       sentry: DEFAULT_FEATURE_FLAGS.sentry,
       cardReport: DEFAULT_FEATURE_FLAGS.cardReport,
+      fsrs: DEFAULT_FEATURE_FLAGS.fsrs,
     });
   });
 
@@ -159,7 +164,7 @@ describe('feature flags', () => {
           },
         }),
       ),
-    ).toEqual({ mcq: DEFAULT_FEATURE_FLAGS.mcq, paywall: { hidden: true }, ceremony: DEFAULT_FEATURE_FLAGS.ceremony, mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook, cardSource: DEFAULT_FEATURE_FLAGS.cardSource, sentry: DEFAULT_FEATURE_FLAGS.sentry, cardReport: DEFAULT_FEATURE_FLAGS.cardReport });
+    ).toEqual({ mcq: DEFAULT_FEATURE_FLAGS.mcq, paywall: { hidden: true }, ceremony: DEFAULT_FEATURE_FLAGS.ceremony, mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook, cardSource: DEFAULT_FEATURE_FLAGS.cardSource, sentry: DEFAULT_FEATURE_FLAGS.sentry, cardReport: DEFAULT_FEATURE_FLAGS.cardReport, fsrs: DEFAULT_FEATURE_FLAGS.fsrs });
     expect(
       applyRemoteFeatures(
         asRemoteConfig({
@@ -177,6 +182,7 @@ describe('feature flags', () => {
       cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
       sentry: DEFAULT_FEATURE_FLAGS.sentry,
       cardReport: DEFAULT_FEATURE_FLAGS.cardReport,
+      fsrs: DEFAULT_FEATURE_FLAGS.fsrs,
     });
 
     expect(
@@ -193,7 +199,7 @@ describe('feature flags', () => {
           },
         }),
       ),
-    ).toEqual({ mcq: DEFAULT_FEATURE_FLAGS.mcq, paywall: { hidden: true }, ceremony: DEFAULT_FEATURE_FLAGS.ceremony, mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook, cardSource: DEFAULT_FEATURE_FLAGS.cardSource, sentry: DEFAULT_FEATURE_FLAGS.sentry, cardReport: DEFAULT_FEATURE_FLAGS.cardReport });
+    ).toEqual({ mcq: DEFAULT_FEATURE_FLAGS.mcq, paywall: { hidden: true }, ceremony: DEFAULT_FEATURE_FLAGS.ceremony, mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook, cardSource: DEFAULT_FEATURE_FLAGS.cardSource, sentry: DEFAULT_FEATURE_FLAGS.sentry, cardReport: DEFAULT_FEATURE_FLAGS.cardReport, fsrs: DEFAULT_FEATURE_FLAGS.fsrs });
 
     for (const maxPerRun of [null, 1.5, -1, Number.NaN]) {
       expect(
@@ -258,6 +264,7 @@ describe('feature flags', () => {
       cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
       sentry: DEFAULT_FEATURE_FLAGS.sentry,
       cardReport: DEFAULT_FEATURE_FLAGS.cardReport,
+      fsrs: DEFAULT_FEATURE_FLAGS.fsrs,
     });
 
     await unmount(tree);
@@ -291,6 +298,7 @@ describe('feature flags', () => {
       cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
       sentry: DEFAULT_FEATURE_FLAGS.sentry,
       cardReport: DEFAULT_FEATURE_FLAGS.cardReport,
+      fsrs: DEFAULT_FEATURE_FLAGS.fsrs,
     });
 
     await unmount(tree);
@@ -348,6 +356,40 @@ describe('feature flags', () => {
 
     const changed = getFeatureFlags();
     expect(applyRemoteFeatures(asRemoteConfig({ features: { ceremony: { seamOfLight: false } } }))).toBe(changed);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    applyRemoteFeatures(null);
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    unsubscribe();
+  });
+
+  it('fsrs: on by default, remote false turns it off, non-boolean keeps the default', () => {
+    expect(DEFAULT_FEATURE_FLAGS.fsrs).toEqual({ enabled: true });
+    expect(Object.isFrozen(DEFAULT_FEATURE_FLAGS.fsrs)).toBe(true);
+    expect(isFsrsEnabled()).toBe(true);
+
+    expect(applyRemoteFeatures(asRemoteConfig({ features: { fsrs: { enabled: false } } })).fsrs).toEqual({
+      enabled: false,
+    });
+    expect(isFsrsEnabled()).toBe(false);
+
+    expect(applyRemoteFeatures(asRemoteConfig({ features: { fsrs: { enabled: true } } })).fsrs).toEqual({
+      enabled: true,
+    });
+    expect(isFsrsEnabled()).toBe(true);
+
+    expect(applyRemoteFeatures(asRemoteConfig({ features: { fsrs: { enabled: 'off' } } })).fsrs).toEqual({
+      enabled: true,
+    });
+    expect(applyRemoteFeatures(asRemoteConfig({ features: { fsrs: [] } })).fsrs).toEqual({ enabled: true });
+  });
+
+  it('fsrs: notifies subscribers when only the fsrs flag changes', () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeFeatureFlags(listener);
+
+    applyRemoteFeatures(asRemoteConfig({ features: { fsrs: { enabled: false } } }));
     expect(listener).toHaveBeenCalledTimes(1);
 
     applyRemoteFeatures(null);
