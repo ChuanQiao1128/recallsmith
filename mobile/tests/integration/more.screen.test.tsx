@@ -62,6 +62,11 @@ vi.mock('../../src/features/gacha/draw/drawStateStore', () => ({
   loadDrawState: vi.fn(async (slug: string) => ({ owned: drawStateFixture[slug] ?? [], pity: null })),
 }));
 
+let activeDeckFixture: string | null = 'aws-saa-c03';
+vi.mock('../../src/content/activeDeck', () => ({
+  loadActiveDeckSlug: vi.fn(async () => activeDeckFixture),
+}));
+
 vi.mock('../../src/features/gacha/audience/audiencePrefs', () => ({
   getAudiencePreference: vi.fn(async () => audienceFixture),
 }));
@@ -197,6 +202,42 @@ describe('Me tab · MoreScreen + Profile + Help real copy', () => {
       tree.root.findByProps({ testID: 'more-row-help' }).props.onPress();
     });
     expect(navigate).toHaveBeenCalledWith('HelpFAQ');
+  });
+
+  it('the Progress by domain row opens the active deck', async () => {
+    const navigate = vi.fn();
+    const tree = await renderMore(navigate);
+    const row = tree.root.findByProps({ testID: 'more-row-domains' });
+    expect(exactTexts(tree)).toContain('Progress by domain');
+    await act(async () => {
+      row.props.onPress();
+    });
+    await flush();
+    expect(navigate).toHaveBeenCalledWith('DomainProgress', { slug: 'aws-saa-c03' });
+  });
+
+  it('the Progress by domain row falls back to a drawn deck, then the Library', async () => {
+    const navigate = vi.fn();
+    activeDeckFixture = null;
+    try {
+      const tree = await renderMore(navigate);
+      await act(async () => {
+        tree.root.findByProps({ testID: 'more-row-domains' }).props.onPress();
+      });
+      await flush();
+      expect(navigate).toHaveBeenCalledWith('DomainProgress', { slug: 'csharp' });
+
+      drawStateFixture = {};
+      navigate.mockClear();
+      const empty = await renderMore(navigate);
+      await act(async () => {
+        empty.root.findByProps({ testID: 'more-row-domains' }).props.onPress();
+      });
+      await flush();
+      expect(navigate).toHaveBeenCalledWith('Library');
+    } finally {
+      activeDeckFixture = 'aws-saa-c03';
+    }
   });
 
   it('privacy and support rows open the policy pages', async () => {
