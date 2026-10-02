@@ -1472,6 +1472,18 @@ async function syncProgressOnce(
   accessToken: string,
   reason: string,
 ): Promise<{ pushed: number; pulled: number; applied: number; remaining: number }> {
+  // Account deletion may start while this run is going (syncGuard.ts). A run
+  // that began before the block stops before its next request: no bootstrap,
+  // no further push round, no pull. Only a request already on the wire is left,
+  // and stopSyncForDeletion waits for it before the DELETE.
+  const stopped = async (pushed: number) => ({
+    pushed,
+    pulled: 0,
+    applied: 0,
+    remaining: await progressQueueSize(userSub),
+  });
+  if (isSyncBlocked()) return stopped(0);
+
   // best-effort bootstrap（也可以顺便用它来拿 userSub）
   try {
     const boot = await apiJson<ApiOk<BootstrapResp>>('/api/v1/user/bootstrap', {
@@ -1497,6 +1509,7 @@ async function syncProgressOnce(
   const caps = await getClientCapabilities();
 
   for (let round = 0; round < 20; round++) {
+    if (isSyncBlocked()) return stopped(pushed);
     const batch = await peekProgressEvents(userSub, BATCH);
     if (batch.length === 0) break;
 
@@ -1597,6 +1610,8 @@ async function syncProgressOnce(
     reason === 'token_set' ||
     reason === 'user_changed' ||
     pushed === 0;
+
+  if (isSyncBlocked()) return stopped(pushed);
 
   if (wantPull && pullAllowed) {
     try {
@@ -1749,6 +1764,11 @@ export function scheduleProgressSync(arg?: any): void {
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/** True while a progress sync run is on its way (stopSyncForDeletion waits on it). */
+export function isProgressSyncInFlight(): boolean {
+  return _inFlight;
 }
 
 export async function forceProgressSync(reason: string = 'manual'): Promise<void> {
