@@ -70,3 +70,9 @@ None. The change is OTA-safe and JS-only.
 - "Unable to load draw chamber right now." is not in the §1 list. Because "draw chamber" is jargon, it was replaced with "Unable to load Draw right now." No test pinned it.
 - Comments and identifiers that still say pull/pity/wallet are intentional (contract §0).
 - The plain-words guard test (`plainWordsGuard.test.ts`) belongs to W04. The `pity.ts`, `ceremonyCopy.ts` `_V9`/`_V10` strings it will scan now contain none of its words.
+- Verify retry (root-mobile gate): only `tests/unit/otaReleaseScript.test.ts` fails, every case on the 5000 ms
+  timeout. The test writes three fake executables per case, and on this machine the first exec of a new script
+  currently takes ~1.8 s (load average 14–24, six orphaned `yes` processes at 100 % CPU for 25 h). The same file
+  fails identically on the untouched base `delivery/r24b-w` (12/19), and it passed in the first W01 run
+  (16:42, 2192/2192). W01 does not touch it or `scripts/release/ota.sh`; it was left unchanged (no timeout
+  loosening). It needs a re-run once the host is idle.
