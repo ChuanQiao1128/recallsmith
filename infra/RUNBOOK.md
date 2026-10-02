@@ -592,6 +592,10 @@ looks the same whatever build is live, so `check-plan.py` cannot catch a wrong o
    inserts into `analytics_event_outbox`, which 045 dropped, so signed-in sync pushes fail. Fix forward with a new
    deploy instead.
 
+Status 2026-10-02: the core-vpc R26 build is live (version 74, commit c0f3ac7), P03 is applied, and the owner ran
+045 (`confirmDestructive=45`). From here core-vpc rolls forward only: never move `prod` to version 73 or earlier.
+From this date `src_C/deploy.sh` prints a `ROLLBACK:` line (the alias version it replaced) after each alias move.
+
 ### Rollback of core-vpc (R26)
 
 - Before 045 has run: the `ROLLBACK` line from the deploy (alias back to the previous version) is safe only while
