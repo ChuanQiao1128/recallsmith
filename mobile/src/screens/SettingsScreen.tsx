@@ -17,6 +17,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { getCurrentAppVersion } from '../config/remoteConfig';
 import { useFeatureFlags } from '../config/featureFlags';
+import { isDebugMenuAvailable } from '../config/debugMenu';
 import { useAuthStore } from '../auth/authStore';
 import {
   DEFAULT_REMINDER_PREFS,
@@ -301,8 +302,11 @@ export function SettingsScreen({ navigation }: Props) {
     navigation.navigate('SignIn');
   }, [navigation]);
 
-  // Production door to the Debug menu: 7 taps on the version label within 3 s
-  // (the __DEV__ Debug section below stays as it is).
+  // Release-build door to the Debug menu: 7 taps on the version label within 3 s, only
+  // where the menu exists (__DEV__ or a non-production update channel; R25 G03). On the
+  // production channel the label has no press handler. The __DEV__ Debug section below
+  // stays as it is.
+  const debugMenuAvailable = useMemo(() => isDebugMenuAvailable(), []);
   const debugTaps = useRef(createDebugTapCounter());
   const onVersionPress = useCallback(() => {
     if (debugTaps.current.tap()) navigation.navigate('DebugMenu');
@@ -462,7 +466,7 @@ export function SettingsScreen({ navigation }: Props) {
             appVersion={appVersion}
             onSupport={() => void openExternalLink(SUPPORT_URL)}
             onPrivacy={() => void openExternalLink(PRIVACY_URL)}
-            onVersionPress={onVersionPress}
+            onVersionPress={debugMenuAvailable ? onVersionPress : undefined}
           />
 
           {__DEV__ ? <DebugSection onOpenDebug={() => navigation.navigate('DebugMenu')} /> : null}
