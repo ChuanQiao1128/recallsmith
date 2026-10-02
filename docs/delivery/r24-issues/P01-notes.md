@@ -39,7 +39,15 @@ Nothing else; `tags_only_updates` false.
   plan JSON holding exactly the three changes above — `PLAN OK 3` (confirms the allow file parses and
   admits exactly that shape).
 - The `api` module has no `terraform test` suite and the brief's scope allows no new test file, so there
-  is no failing-first unit test for this change; the verify script's checks above are the gate.
+  is no failing-first unit test for this change.
+- Correction (R24X F06, p-tests-1): the checks above did not test this route. On the base commit fmt,
+  validate and check-agent-routes.py already pass, the gate's grep also matched the `route_throttles` key,
+  and check-agent-routes.py reads only `auth = "agent"` routes; deleting the route, changing its auth,
+  integration or throttle, or making its key greedy all kept the gate green. F06 adds a route guard local
+  in `gateway.tf` that `terraform validate` evaluates (exact key, `auth = "none"` on `core_vpc`, burst 10 /
+  rate 5, no orphan `route_throttles` key, exact keys for every non-OPTIONS `auth = "none"` route) and a
+  mutation test, `docs/delivery/r24x-issues/F06-route-guard-test.sh`. See
+  `docs/delivery/r24x-issues/F06-fixes.md`.
 
 ## Owner / supervisor steps
 
