@@ -1,6 +1,6 @@
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { invalidateDeckCache } from '../../src/content/deckCache';
 
@@ -239,6 +239,29 @@ async function flush(times = 6) {
   }
 }
 
+// Retry an assertion block across real macrotask turns until it passes or the real-time bound
+// runs out. A fixed number of turns is not enough: Home's load path awaits dynamic imports
+// (deckCache, deckWallet) and storage reads, and on a loaded machine the first, cold import takes
+// wall-clock time that no fixed turn count covers, so the install had not started yet when the
+// test looked (r24bx F02).
+async function waitFor(check: () => void, timeoutMs = 4000) {
+  const start = Date.now();
+  for (;;) {
+    try {
+      check();
+      return;
+    } catch (error) {
+      if (Date.now() - start > timeoutMs) throw error;
+    }
+    await flush(1);
+  }
+}
+
+// Every Home a test mounts, so afterEach can unmount it. A Home left mounted keeps refreshing
+// into the next test: after beforeEach resets the one-attempt-per-session guard, its in-flight
+// load starts the next test's install itself and that test's Home only sees the chip.
+const mountedHomes: renderer.ReactTestRenderer[] = [];
+
 async function renderHome(navigate = vi.fn()) {
   let tree!: renderer.ReactTestRenderer;
   await act(async () => {
@@ -246,6 +269,7 @@ async function renderHome(navigate = vi.fn()) {
       <HomeScreen navigation={{ navigate } as any} route={{ key: 'home', name: 'Home' } as any} />,
     );
   });
+  mountedHomes.push(tree);
   await flush();
   return tree;
 }
@@ -276,6 +300,12 @@ function packTile(tree: renderer.ReactTestRenderer) {
 }
 
 describe('HomeScreen — free-deck auto-update', () => {
+  afterEach(async () => {
+    await act(async () => {
+      for (const tree of mountedHomes.splice(0)) tree.unmount();
+    });
+  });
+
   beforeEach(async () => {
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
     resetSessionStore();
@@ -297,14 +327,15 @@ describe('HomeScreen — free-deck auto-update', () => {
 
     // Started unasked, with the manifest's url + build, and without moving the
     // active deck the way the tap-to-install flow would.
-    expect(installDeckFromUrlMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(installDeckFromUrlMock).toHaveBeenCalledTimes(1);
+      // Non-blocking: Home is fully rendered around the in-flight state.
+      expect(chipText(tree)).toBe('Updating…');
+      expect(noticeText(tree)).toBe('Updating C# Interview · +2 cards…');
+      expect(packTile(tree).props.accessibilityLabel).toBe('C# Interview pack — Updating');
+    });
     expect(installDeckFromUrlMock).toHaveBeenCalledWith('csharp', REMOTE_URL, 'build-2', null);
     expect(setActiveDeckSlugMock).not.toHaveBeenCalled();
-
-    // Non-blocking: Home is fully rendered around the in-flight state.
-    expect(chipText(tree)).toBe('Updating…');
-    expect(noticeText(tree)).toBe('Updating C# Interview · +2 cards…');
-    expect(packTile(tree).props.accessibilityLabel).toBe('C# Interview pack — Updating');
     expect(tree.root.findByProps({ testID: 'home-primary-cta' })).toBeTruthy();
 
     // The installer lands: the manifest and the installed build now agree.
@@ -316,9 +347,11 @@ describe('HomeScreen — free-deck auto-update', () => {
     });
     await flush();
 
-    expect(chipText(tree)).toBeNull();
-    expect(noticeText(tree)).toBeNull();
-    expect(packTile(tree).props.accessibilityLabel).toBe('C# Interview pack — Ready');
+    await waitFor(() => {
+      expect(chipText(tree)).toBeNull();
+      expect(noticeText(tree)).toBeNull();
+      expect(packTile(tree).props.accessibilityLabel).toBe('C# Interview pack — Ready');
+    });
     expect(installDeckFromUrlMock).toHaveBeenCalledTimes(1);
 
     // What the user holds survives the update untouched, and the two new
@@ -336,16 +369,18 @@ describe('HomeScreen — free-deck auto-update', () => {
 
     const tree = await renderHome();
 
-    expect(installDeckFromUrlMock).toHaveBeenCalledTimes(1);
-    expect(chipText(tree)).toBe('Update · +2 cards');
-    expect(noticeText(tree)).toBe('C# Interview update ready · +2 cards — tap the pack to install.');
-    expect(packTile(tree).props.accessibilityLabel).toBe('C# Interview pack — Update');
+    await waitFor(() => {
+      expect(installDeckFromUrlMock).toHaveBeenCalledTimes(1);
+      expect(chipText(tree)).toBe('Update · +2 cards');
+      expect(noticeText(tree)).toBe('C# Interview update ready · +2 cards — tap the pack to install.');
+      expect(packTile(tree).props.accessibilityLabel).toBe('C# Interview pack — Update');
+    });
 
     // A second Home in the same session sees the same stale deck and leaves
     // it to the chip: one attempt per slug per session.
     const again = await renderHome();
+    await waitFor(() => expect(chipText(again)).toBe('Update · +2 cards'));
     expect(installDeckFromUrlMock).toHaveBeenCalledTimes(1);
-    expect(chipText(again)).toBe('Update · +2 cards');
 
     expect((await loadDrawState('csharp')).owned).toEqual(['c1', 'c2']);
   });
@@ -354,7 +389,7 @@ describe('HomeScreen — free-deck auto-update', () => {
     installImpl = async () => false;
     const navigate = vi.fn();
     const tree = await renderHome(navigate);
-    expect(chipText(tree)).toBe('Update · +2 cards');
+    await waitFor(() => expect(chipText(tree)).toBe('Update · +2 cards'));
 
     // The retry succeeds.
     installImpl = async () => {
@@ -368,12 +403,14 @@ describe('HomeScreen — free-deck auto-update', () => {
     });
     await flush();
 
-    expect(installDeckFromUrlMock).toHaveBeenCalledTimes(2);
+    await waitFor(() => {
+      expect(installDeckFromUrlMock).toHaveBeenCalledTimes(2);
+      expect(chipText(tree)).toBeNull();
+      expect(noticeText(tree)).toBeNull();
+    });
     expect(installDeckFromUrlMock).toHaveBeenLastCalledWith('csharp', REMOTE_URL, 'build-2', null);
     expect(setActiveDeckSlugMock).toHaveBeenCalledWith('csharp');
     expect(navigate).not.toHaveBeenCalledWith('Library');
-    expect(chipText(tree)).toBeNull();
-    expect(noticeText(tree)).toBeNull();
   });
 
   it('treats a tap on an updating pack as a selection, not a second install', async () => {
@@ -381,7 +418,7 @@ describe('HomeScreen — free-deck auto-update', () => {
     installImpl = () => install.promise;
     const navigate = vi.fn();
     const tree = await renderHome(navigate);
-    expect(chipText(tree)).toBe('Updating…');
+    await waitFor(() => expect(chipText(tree)).toBe('Updating…'));
 
     await act(async () => {
       packTile(tree).props.onPress();
@@ -389,8 +426,8 @@ describe('HomeScreen — free-deck auto-update', () => {
     });
     await flush();
 
+    await waitFor(() => expect(setActiveDeckSlugMock).toHaveBeenCalledWith('csharp'));
     expect(installDeckFromUrlMock).toHaveBeenCalledTimes(1);
-    expect(setActiveDeckSlugMock).toHaveBeenCalledWith('csharp');
     expect(navigate).not.toHaveBeenCalled();
 
     deckFixture = UPDATED_DECK;
@@ -400,7 +437,7 @@ describe('HomeScreen — free-deck auto-update', () => {
       await install.promise;
     });
     await flush();
-    expect(chipText(tree)).toBeNull();
+    await waitFor(() => expect(chipText(tree)).toBeNull());
   });
 
   it('leaves a premium deck alone even when its manifest build is newer', async () => {
@@ -420,7 +457,9 @@ describe('HomeScreen — free-deck auto-update', () => {
       } as any,
     ]);
 
-    await renderHome();
+    const tree = await renderHome();
+    await waitFor(() => expect(packTile(tree)).toBeTruthy());
+    await flush();
 
     expect(installDeckFromUrlMock).not.toHaveBeenCalled();
   });

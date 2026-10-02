@@ -1,0 +1,92 @@
+# F02 — r24bx fix round: home and library copy (issue #680)
+
+Fixes ledger for the review findings on W02 (R24B plain words: Home, Library, Card detail).
+
+### h-tests-1
+
+Status: fixed
+
+Finding: the Library no-draws banner (LibraryHeader) and the Card detail locked-card button (CardDetailScreen) were
+only checked as source text in `mobile/tests/unit/homePlainWords.spec.ts`, never rendered.
+
+Confirmed: searching `mobile/tests` for `Earn draws`, `card-detail-locked-cta` and the `library-open-first-pack-cta`
+banner found only the readFileSync + toContain checks in homePlainWords.spec. No test rendered either surface.
+
+Fix (test-only; the shipped copy was already correct, so no source file changes):
+- Added `mobile/tests/integration/plain-words-rendered.screen.test.tsx`, a react-test-renderer test that:
+  - renders LibraryHeader with ownedCount=0, totalCount=10, onOpenFirstPack set and openFirstPackHasPulls=false, and
+    checks the banner title "Earn draws in a session, then open your first pack" and the accessibilityLabel
+    "Earn draws in a session to open your first pack" (with no "pull" wording);
+  - renders the openFirstPackHasPulls=true branch and checks "Open your first pack to start collecting" in both the
+    title and the label, and that no "Earn draws" line shows;
+  - checks the banner is hidden once a card is owned;
+  - renders CardDetailScreen on a locked card and checks that testID `card-detail-locked-cta` has the
+    accessibilityLabel "Open reward pack" and exactly the Text "Open reward pack", and that an owned card shows no
+    such button.
+- The source search in homePlainWords.spec stays as a backstop.
+- `docs/delivery/r24b-issues/W02-notes.md` "How it is tested" no longer presents the source search as coverage of the
+  shipped wording, and points to the new rendered test.
+
+Proof that the new test catches the reviewer's scenarios (mutations applied locally, run, then reverted):
+- Swapped the two LibraryHeader ternary branches: the 2 banner-branch tests failed; homePlainWords.spec still passed.
+- Moved "Open reward pack" into a JSX comment in CardDetailScreen and rendered a different label: the locked-button
+  test failed; homePlainWords.spec still passed.
+On the current code the new test passes, since the finding is a coverage gap and not a copy defect.
+
+Files changed:
+- `mobile/tests/integration/plain-words-rendered.screen.test.tsx` (new)
+- `docs/delivery/r24b-issues/W02-notes.md`
+- `docs/delivery/r24bx-issues/F02-fixes.md` (this ledger)
+
+Test: `cd mobile && npx vitest run tests/integration/plain-words-rendered.screen.test.tsx`
+
+## Gate repair outside the findings: plainWordsGuard PENDING list
+
+`F02.verify.sh` step 3 (`npx vitest run`) failed on the unchanged base (`delivery/r24bx-h`) in
+`mobile/tests/unit/plainWordsGuard.test.ts` > "keeps PENDING honest". That check fails once a PENDING module holds no
+jargon, and W01 #669, W02 #670 and W03 #671 are all merged into release/r24b, so `ceremonyCopy.ts`,
+`homeSelectors.ts`, `summaryMapper.ts`, `rewardResolver.ts` and `mcqConstants.ts` are all clean. The test's own comment
+says the release merge empties the list. PENDING is now empty, so the five modules go from "still holds jargon" to the
+full per-module "uses plain words" guard. That adds coverage and removes none.
+
+File changed: `mobile/tests/unit/plainWordsGuard.test.ts`. Test: `cd mobile && npx vitest run tests/unit/plainWordsGuard.test.ts` (15 passed).
+
+## Gate repair: root-mobile run failed in draw-result.screen.test.tsx (timer leak between tests)
+
+The driver's root-mobile gate failed once in `mobile/tests/integration/draw-result.screen.test.tsx` > "requests a store
+review once for a Legendary pull after the delay": `maybeRequestRating` had 8 'first-legendary' calls before the
+fake-timer delay. It passes when the file runs alone. That file has nothing to do with this issue's copy change.
+
+Cause: the file mounts DrawResultScreen 23 times but unmounts only 6. Each mount starts a real 1.5 s
+`RATING_PROMPT_DELAY_MS` timer (`DrawResultScreen.tsx`, cleared only on unmount). On a loaded machine those leaked real
+timers fire inside the later rating test, after its `mockClear()`.
+
+Reproduced deterministically by blocking the thread for 1.6 s right after that test's `mockClear()`: 23 calls, FAIL.
+With the fix and the same block, PASS. The block was removed afterwards.
+
+Fix (test-only, no product change): the suite spies on `renderer.create` to track every tree it mounts and unmounts
+all of them in `afterEach`, so the screen's own cleanup clears each timer before the next test.
+
+File changed: `mobile/tests/integration/draw-result.screen.test.tsx`. Test: `cd mobile && npx vitest run tests/integration/draw-result.screen.test.tsx` (27 passed).
+
+## Gate repair: brief-verify run failed in home-auto-update.spec.tsx (fixed-count flush and leaked Homes)
+
+The driver's brief-verify run failed once in `mobile/tests/integration/home-auto-update.spec.tsx` > "applies the newer
+build from the load path…": `installDeckFromUrl` had 0 calls when the test looked. It passes when the file runs alone.
+
+Cause, two parts:
+1. The test waited a fixed 6 macrotask turns. Home's load path awaits dynamic imports (`deckCache`, `deckWallet`) and
+   storage reads. On a loaded machine the cold first import takes real time, so the install had not started yet.
+2. `renderHome` never unmounted. A Home left mounted keeps refreshing into the next test. After `beforeEach` resets
+   the one-attempt-per-session guard, that old Home's in-flight load uses up the next test's attempt.
+
+Reproduced by adding 5 ms of real latency to the AsyncStorage mock's `getItem`: 5 of 5 tests failed. With only the
+`waitFor` change, "treats a tap on an updating pack…" still failed ('Update · +2 cards' instead of 'Updating…'),
+which exposed part 2. With both changes, all 5 passed under the same latency (given a longer test timeout for the
+added delay). The repro was removed afterwards.
+
+Fix (test-only, no product change): a bounded `waitFor` (retries the assertion block across real macrotask turns, up
+to 4 s) at each point where a test waits for Home to settle, plus `afterEach` unmounting every Home that `renderHome`
+mounted. Every assertion is kept.
+
+File changed: `mobile/tests/integration/home-auto-update.spec.tsx`. Test: `cd mobile && npx vitest run tests/integration/home-auto-update.spec.tsx` (5 passed).
