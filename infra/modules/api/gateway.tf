@@ -70,6 +70,11 @@ locals {
     agent_runner_claim     = { route_key = "POST /api/v1/authoring/automation/runner/claim", integration = "core_vpc", auth = "agent" }
     agent_runner_complete  = { route_key = "POST /api/v1/authoring/automation/runner/complete", integration = "core_vpc", auth = "agent" }
 
+    # R25X F05 (contract R25-00 §4 as moved out of the VPC by F04): the notifier's signed calls for the RevenueCat
+    # customer deletions (no JWT, no OPTIONS). Exact keys (X08); a query string (?limit=50) does not affect matching.
+    internal_revenuecat_deletions        = { route_key = "GET /api/v1/internal/revenuecat-deletions", integration = "core_vpc", auth = "none" }
+    internal_revenuecat_deletions_report = { route_key = "POST /api/v1/internal/revenuecat-deletions/report", integration = "core_vpc", auth = "none" }
+
     # R24 P01: anonymous install funnel events from the app (no JWT, no OPTIONS). Exact key (X08); tight throttle below.
     public_events = { route_key = "POST /api/v1/public/events", integration = "core_vpc", auth = "none" }
   }
@@ -101,6 +106,8 @@ locals {
     "POST /api/v1/authoring/automation/runner/claim"     = { burst = 10, rate = 5 }
     "POST /api/v1/authoring/automation/runner/complete"  = { burst = 10, rate = 5 }
     "POST /api/v1/public/events"                         = { burst = 10, rate = 5 }
+    "GET /api/v1/internal/revenuecat-deletions"          = { burst = 20, rate = 10 }
+    "POST /api/v1/internal/revenuecat-deletions/report"  = { burst = 20, rate = 10 }
   }
 
   # R24X F06 (p-tests-1): route guard. `terraform validate` evaluates this local, so a broken rule fails the
