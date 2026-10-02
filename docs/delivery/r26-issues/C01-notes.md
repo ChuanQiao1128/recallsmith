@@ -11,6 +11,9 @@ Removed:
 - `frontend/src/pages/ContentIntelligencePage.tsx` — the page.
 - `frontend/tests/contentIntelligencePage.test.tsx`, `contentIntelligenceRace.test.tsx`,
   `contentIntelligenceMcqBanner.test.tsx` — the tests of that page, deleted together with it.
+  One case in `contentIntelligencePage.test.tsx` ("shows an em dash when there is no session at all")
+  was in fact the only test of a shared ConsoleShell behaviour, not of the page; F02 (r26x, c-tests-1)
+  moved it to `frontend/tests/consoleShellEverywhere.test.tsx`.
 
 Edited (source):
 - `frontend/src/App.tsx` — the lazy `ContentIntelligencePage` import and the `/content-intelligence` route.
