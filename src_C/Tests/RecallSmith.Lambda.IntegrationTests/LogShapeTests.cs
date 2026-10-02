@@ -202,7 +202,7 @@ public class LogShapeTests
   {
     var (outText, _) = await CaptureAsync(() =>
     {
-      RouteMetrics.EmitGauge("OutboxPending", 12);
+      RouteMetrics.EmitGauge("WebhookEnqueueFailures", 12);
       return Task.CompletedTask;
     });
 
@@ -217,10 +217,10 @@ public class LogShapeTests
     Assert.Equal(0, dims[0].GetArrayLength());
 
     var metric = cwm.GetProperty("Metrics")[0];
-    Assert.Equal("OutboxPending", metric.GetProperty("Name").GetString());
+    Assert.Equal("WebhookEnqueueFailures", metric.GetProperty("Name").GetString());
     Assert.Equal("Count", metric.GetProperty("Unit").GetString());
 
-    Assert.Equal(12, line.GetProperty("OutboxPending").GetDouble());
+    Assert.Equal(12, line.GetProperty("WebhookEnqueueFailures").GetDouble());
     Assert.True(aws.GetProperty("Timestamp").GetInt64() > 0);
   }
 
@@ -235,7 +235,7 @@ public class LogShapeTests
       Environment.SetEnvironmentVariable(RouteMetrics.NamespaceEnvVar, "DeveloperCards/Staging");
       var (overridden, _) = await CaptureAsync(() =>
       {
-        RouteMetrics.EmitGauge("OutboxPending", 5);
+        RouteMetrics.EmitGauge("WebhookEnqueueFailures", 5);
         return Task.CompletedTask;
       });
       Assert.Equal(
@@ -245,7 +245,7 @@ public class LogShapeTests
       Environment.SetEnvironmentVariable(RouteMetrics.DisableEnvVar, "1");
       var (killed, _) = await CaptureAsync(() =>
       {
-        RouteMetrics.EmitGauge("OutboxPending", 5);
+        RouteMetrics.EmitGauge("WebhookEnqueueFailures", 5);
         return Task.CompletedTask;
       });
       Assert.Empty(Lines(killed));
@@ -268,13 +268,11 @@ public class LogShapeTests
   // ---------------------------------------------------------------- internal routes
 
   [Theory]
-  [InlineData("/internal/outbox/publish", "internal:outbox/publish")]
-  [InlineData("/internal/content-intelligence/import", "internal:content-intelligence/import")]
   [InlineData("/internal/publish/reap-orphans", "internal:publish/reap-orphans")]
   [InlineData("/internal/manifest/rebuild", "internal:manifest/rebuild")]
   [InlineData("/internal/db/migrate", "internal:db/migrate")]
   [InlineData("/internal/health/deep", "internal:health/deep")]
-  [InlineData("/internal/outbox/publish/", "internal:outbox/publish")]
+  [InlineData("/internal/db/migrate/", "internal:db/migrate")]
   public void RouteFor_InternalAction_IsLabelledInternalColonAction(string path, string expected)
   {
     Assert.Equal(expected, RouteMetrics.RouteFor(path));
@@ -300,7 +298,8 @@ public class LogShapeTests
     Assert.DoesNotContain(
       RouteMetrics.KnownRoutes,
       r => r.StartsWith("/internal/", StringComparison.Ordinal) || r.StartsWith("internal:", StringComparison.Ordinal));
-    Assert.Equal(6, RouteMetrics.InternalActions.Count);
+    // R26 S01 removed outbox/publish and content-intelligence/import with the Snowflake export.
+    Assert.Equal(4, RouteMetrics.InternalActions.Count);
   }
 
   [Fact]

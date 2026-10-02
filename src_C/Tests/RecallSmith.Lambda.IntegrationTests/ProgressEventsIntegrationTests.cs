@@ -140,21 +140,6 @@ public class ProgressEventsIntegrationTests
       await _db.ScalarAsync("select coalesce(sum(review_count), 0) from user_progress where user_sub = $1", user),
       CultureInfo.InvariantCulture);
     Assert.Equal(200, reviewTotal);
-
-    // The outbox has no user_sub of its own, so it is counted through the
-    // events it was written from. Ten posts, one outbox row per event: the
-    // downstream analytics pipeline must not see the replays either.
-    var outboxRows = Convert.ToInt32(
-      await _db.ScalarAsync(
-        """
-        select count(*)
-        from analytics_event_outbox o
-        join user_progress_events e on e.event_id = o.event_id
-        where e.user_sub = $1
-        """,
-        user),
-      CultureInfo.InvariantCulture);
-    Assert.Equal(200, outboxRows);
   }
 
   // ------------------------------------------------------------------ T2

@@ -21,8 +21,9 @@ public class AccountDeletionTests
 
   private static string NewSub() => $"it-f15-{Guid.NewGuid():N}";
 
-  // The eleven (table, column) pairs of every row keyed by a single app user. analytics_event_outbox
-  // has no user column and is counted separately, through the event id.
+  // The twelve (table, column) pairs of every row keyed by a single app user. analytics_event_outbox
+  // is gone after migration 045 (R26 S01); deleting its rows before 045 is covered by
+  // AnalyticsOutboxRetiredTests on a database frozen at 044.
   private static readonly (string Table, string Column)[] UserTables =
   [
     ("users", "user_sub"),
@@ -82,8 +83,8 @@ public class AccountDeletionTests
     return await AccountDeletion.HandleDeleteMe(req, res, auth);
   }
 
-  /// <summary>Inserts one row per user-keyed table plus one outbox row, and returns the event id.</summary>
-  private async Task<Guid> SeedAllAsync(string sub)
+  /// <summary>Inserts one row per user-keyed table.</summary>
+  private async Task SeedAllAsync(string sub)
   {
     var eventId = Guid.NewGuid();
     await using var conn = await _db.OpenAsync();
@@ -99,8 +100,6 @@ public class AccountDeletionTests
     await DbUtil.ExecuteAsync(conn, null,
       "insert into user_progress (user_sub, deck_slug, stable_uid) values ($1, 'd', 'u')", [sub]);
     await DbUtil.ExecuteAsync(conn, null,
-      "insert into analytics_event_outbox (event_id, event_type, aggregate_type, aggregate_id, payload) values ($1, 'card_reviewed', 'card', 'd:u', '{}'::jsonb)", [eventId]);
-    await DbUtil.ExecuteAsync(conn, null,
       "insert into user_draw_owned (user_sub, deck_slug, stable_uid) values ($1, 'd', 'u')", [sub]);
     await DbUtil.ExecuteAsync(conn, null,
       "insert into user_draw_meta (user_sub, deck_slug) values ($1, 'd')", [sub]);
@@ -114,12 +113,10 @@ public class AccountDeletionTests
       "insert into rc_webhook_events (event_id, mode, app_user_id, raw) values ('rc-' || $1, 'development', $1, '{}'::jsonb)", [sub]);
     await DbUtil.ExecuteAsync(conn, null,
       "insert into card_reports (user_sub, deck_slug, stable_uid, reason, note) values ($1, 'd', 'u', 'typo', 'synthetic note')", [sub]);
-
-    return eventId;
   }
 
-  /// <summary>Sum of count(*) over UserTables keyed by sub, plus outbox rows with that event id.</summary>
-  private async Task<long> CountsAsync(string sub, Guid eventId)
+  /// <summary>Sum of count(*) over UserTables keyed by sub.</summary>
+  private async Task<long> CountsAsync(string sub)
   {
     await using var conn = await _db.OpenAsync();
 
@@ -131,10 +128,6 @@ public class AccountDeletionTests
       total += Convert.ToInt64(n);
     }
 
-    var outbox = await DbUtil.ExecuteScalarAsync(conn, null,
-      "select count(*) from analytics_event_outbox where event_id = $1", [eventId]);
-    total += Convert.ToInt64(outbox);
-
     return total;
   }
 
@@ -142,14 +135,14 @@ public class AccountDeletionTests
   public async Task DeleteMe_RemovesEveryRowKeyedByTheCaller()
   {
     var sub = NewSub();
-    var eventId = await SeedAllAsync(sub);
-    Assert.True(await CountsAsync(sub, eventId) > 0);
+    await SeedAllAsync(sub);
+    Assert.True(await CountsAsync(sub) > 0);
 
     var resp = await InvokeAsync("DELETE", "/api/v1/me", sub);
 
     Assert.Equal(204, resp.StatusCode);
     Assert.True(string.IsNullOrEmpty(resp.Body));
-    Assert.Equal(0, await CountsAsync(sub, eventId));
+    Assert.Equal(0, await CountsAsync(sub));
   }
 
   [Fact]
@@ -157,22 +150,22 @@ public class AccountDeletionTests
   {
     var subA = NewSub();
     var subB = NewSub();
-    var eventA = await SeedAllAsync(subA);
-    var eventB = await SeedAllAsync(subB);
+    await SeedAllAsync(subA);
+    await SeedAllAsync(subB);
 
     var resp = await InvokeAsync("DELETE", "/api/v1/me", subA);
 
     Assert.Equal(204, resp.StatusCode);
-    Assert.Equal(0, await CountsAsync(subA, eventA));
-    // All thirteen of B's rows remain: twelve user-keyed tables plus the outbox row.
-    Assert.Equal(13, await CountsAsync(subB, eventB));
+    Assert.Equal(0, await CountsAsync(subA));
+    // All twelve of B's rows remain, one per user-keyed table.
+    Assert.Equal(12, await CountsAsync(subB));
   }
 
   [Fact]
   public async Task DeleteMe_IsIdempotent()
   {
     var sub = NewSub();
-    var eventId = await SeedAllAsync(sub);
+    await SeedAllAsync(sub);
 
     var first = await InvokeAsync("DELETE", "/api/v1/me", sub);
     Assert.Equal(204, first.StatusCode);
@@ -180,7 +173,7 @@ public class AccountDeletionTests
     var second = await InvokeAsync("DELETE", "/api/v1/me", sub);
     Assert.Equal(204, second.StatusCode);
 
-    Assert.Equal(0, await CountsAsync(sub, eventId));
+    Assert.Equal(0, await CountsAsync(sub));
   }
 
   [Fact]
@@ -213,16 +206,16 @@ public class AccountDeletionTests
   public async Task DeleteMe_IsRoutedOnBothPaths()
   {
     var subMe = NewSub();
-    var eventMe = await SeedAllAsync(subMe);
+    await SeedAllAsync(subMe);
     var meResp = await new VpcFunction().Handler(Event("DELETE", "/api/v1/me", subMe));
     Assert.Equal(204, meResp.StatusCode);
-    Assert.Equal(0, await CountsAsync(subMe, eventMe));
+    Assert.Equal(0, await CountsAsync(subMe));
 
     var subUser = NewSub();
-    var eventUser = await SeedAllAsync(subUser);
+    await SeedAllAsync(subUser);
     var userResp = await new VpcFunction().Handler(Event("DELETE", "/api/v1/user/me", subUser));
     Assert.Equal(204, userResp.StatusCode);
-    Assert.Equal(0, await CountsAsync(subUser, eventUser));
+    Assert.Equal(0, await CountsAsync(subUser));
   }
 
   [Fact]

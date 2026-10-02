@@ -20,11 +20,12 @@ namespace RecallSmith.Lambda.Vpc.Runtime;
 /// The outbox is deleted FIRST, before the events it links to. analytics_event_outbox has no user
 /// column; its rows are found through the event_id they came from, so once user_progress_events is
 /// gone (via the users cascade) they can no longer be located. This is the ordering migration 016
-/// established.
+/// established. The ingest no longer writes the outbox (R26 S01) and migration 045 drops it; until
+/// 045 has run, old rows may still be there, so they are deleted while the table exists and the step
+/// counts zero once it is gone.
 ///
-/// Out of reach on purpose: rows already exported to Snowflake carry only a pseudonymous
-/// user_id_hash, and the Cognito user itself is the phone's job -- the app deletes it after this
-/// call succeeds.
+/// Out of reach on purpose: the Cognito user itself is the phone's job -- the app deletes it after
+/// this call succeeds.
 /// </summary>
 public static class AccountDeletion
 {
@@ -33,7 +34,7 @@ public static class AccountDeletion
 
   /// <summary>
   /// Deletes every row keyed by <paramref name="userSub"/> in one transaction, in a fixed order:
-  /// the outbox rows (through the caller's events) first, then user_premium_state and
+  /// the outbox rows (through the caller's events; skipped once migration 045 has dropped the table) first, then user_premium_state and
   /// rc_webhook_events by app_user_id, then the users row -- whose <c>on delete cascade</c> removes
   /// user_entitlements, user_subscriptions, user_progress_events, user_progress, user_draw_owned,
   /// user_draw_meta, user_wallet and user_deck_wallet. The learner's card reports (R20 V05, migration 037) go too;
@@ -45,9 +46,12 @@ public static class AccountDeletion
   {
     await using var tx = await conn.BeginTransactionAsync();
 
-    var outboxRows = await DbUtil.ExecuteAsync(conn, tx,
-      "delete from analytics_event_outbox o using user_progress_events e where o.event_id = e.event_id and e.user_sub = $1",
-      [userSub]);
+    // Checked first so the missing table (after migration 045) is never a 42P01 that aborts the transaction.
+    var outboxRows = await DbUtil.ExecuteScalarAsync(conn, tx, "select to_regclass('analytics_event_outbox') is not null", []) is true
+      ? await DbUtil.ExecuteAsync(conn, tx,
+        "delete from analytics_event_outbox o using user_progress_events e where o.event_id = e.event_id and e.user_sub = $1",
+        [userSub])
+      : 0;
 
     var premiumStateRows = await DbUtil.ExecuteAsync(conn, tx,
       "delete from user_premium_state where app_user_id = $1",
