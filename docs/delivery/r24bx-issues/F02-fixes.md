@@ -39,3 +39,14 @@ Files changed:
 - `docs/delivery/r24bx-issues/F02-fixes.md` (this ledger)
 
 Test: `cd mobile && npx vitest run tests/integration/plain-words-rendered.screen.test.tsx`
+
+## Gate repair outside the findings: plainWordsGuard PENDING list
+
+`F02.verify.sh` step 3 (`npx vitest run`) failed on the unchanged base (`delivery/r24bx-h`) in
+`mobile/tests/unit/plainWordsGuard.test.ts` > "keeps PENDING honest". That check fails once a PENDING module holds no
+jargon, and W01 #669, W02 #670 and W03 #671 are all merged into release/r24b, so `ceremonyCopy.ts`,
+`homeSelectors.ts`, `summaryMapper.ts`, `rewardResolver.ts` and `mcqConstants.ts` are all clean. The test's own comment
+says the release merge empties the list. PENDING is now empty, so the five modules go from "still holds jargon" to the
+full per-module "uses plain words" guard. That adds coverage and removes none.
+
+File changed: `mobile/tests/unit/plainWordsGuard.test.ts`. Test: `cd mobile && npx vitest run tests/unit/plainWordsGuard.test.ts` (15 passed).
