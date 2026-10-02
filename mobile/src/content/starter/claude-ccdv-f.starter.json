@@ -1,0 +1,406 @@
+{
+  "slug": "claude-ccdv-f",
+  "title": "Claude Developer Foundations (CCDV-F)",
+  "locale": "en-US",
+  "deckType": 1,
+  "version": "20261001T043814Z-5364099a-starter",
+  "totalCards": 441,
+  "cards": [
+    {
+      "stableUid": "ccdvf-workflow-vs-agent-definition",
+      "orderInDeck": 5,
+      "difficulty": 1,
+      "question": "In Anthropic's agent-architecture vocabulary, what separates a \"workflow\" from an \"agent\", and why does the label matter when you estimate how a system will behave in production?",
+      "explanation": "A workflow is a system where LLMs and tools are orchestrated through predefined code paths: your code decides which call happens next. An agent is a system where the LLM dynamically directs its own process and tool usage, keeping control over how it accomplishes the task. The label matters because workflows give predictability and consistency for well-defined tasks, while agents trade that for flexibility on open-ended problems where the number of steps cannot be predicted. Do not call a fixed pipeline an \"agent\" just because it makes several model calls; that mislabels its cost and risk profile.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "When a stakeholder asks for \"an agent\", first ask whether the steps are already known; if they are, they are asking for a workflow.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows"
+    },
+    {
+      "stableUid": "ccdvf-agent-architecture-principles",
+      "orderInDeck": 10,
+      "difficulty": 1,
+      "question": "Anthropic's guidance for implementing agents ends with three core principles. What are they, and how does each one show up as a concrete design decision?",
+      "explanation": "Simplicity: keep the agent's design as simple as the task allows and add complexity only when it measurably improves outcomes. Transparency: explicitly show the agent's planning steps so operators and users can see why it acted. A carefully crafted agent-computer interface (ACI): invest in thorough tool documentation and testing, because tool descriptions are the API the model actually programs against. In practice this means starting from a single augmented LLM call (model plus retrieval, tools, and memory), surfacing plans in the output, and iterating on tool descriptions before adding orchestration layers.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Before adding an orchestrator, ask whether a clearer tool description would fix the failure you are seeing.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows"
+    },
+    {
+      "stableUid": "ccdvf-orchestrator-workers-hierarchy",
+      "orderInDeck": 20,
+      "difficulty": 1,
+      "question": "How is a manager/supervisor hierarchy structured in Anthropic's orchestrator-workers pattern, and what does the manager do that the workers do not?",
+      "explanation": "A central orchestrator LLM dynamically breaks the task into subtasks, delegates each to a worker LLM, and synthesizes the workers' results. Workers execute bounded pieces; only the orchestrator sees the whole problem and decides what work exists, unlike parallelization where the subtasks are fixed in code. Anthropic recommends it for tasks where you cannot predict the subtasks up front, such as coding changes that touch an unknown set of files, or research that gathers and analyzes several sources. Keep the manager to decomposition and synthesis so each worker's context stays small and focused.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "A supervisor that also does the workers' jobs inherits all their context and loses the point of the hierarchy.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows",
+      "source": {
+        "url": "https://www.anthropic.com/engineering/building-effective-agents",
+        "quote": "In the orchestrator-workers workflow, a central LLM dynamically breaks down tasks, delegates them to worker LLMs, and synthesizes their results."
+      }
+    },
+    {
+      "stableUid": "ccdvf-subagent-role-task-execution",
+      "orderInDeck": 30,
+      "difficulty": 1,
+      "question": "Why do subagents improve task execution in an agent system rather than only adding cost, according to the Agent SDK documentation?",
+      "explanation": "Four reasons. Context isolation: each subagent runs its own conversation, so intermediate tool calls and results stay inside it and only the final message returns to the parent. Parallelization: independent subtasks run concurrently and finish in the time of the slowest one instead of the sum. Specialized instructions: each subagent carries a tailored system prompt with expertise that would be noise in the main prompt. Tool restrictions: a subagent can be limited to specific tools, such as a doc reviewer with only Read and Grep, which reduces the risk of unintended actions. They add cost without benefit when the subtask is tiny or needs the parent's full history.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Delegate the noisy exploration; keep the decision in the parent.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows"
+    },
+    {
+      "stableUid": "ccdvf-agent-sdk-what-it-is",
+      "orderInDeck": 40,
+      "difficulty": 1,
+      "question": "What exactly does the Claude Agent SDK provide that a plain Messages API client does not, and which languages can use it directly?",
+      "explanation": "The Agent SDK is Claude Code packaged as a library: it runs the agent loop for you, ships the built-in tools (Read, Edit, Write, Glob, Grep, Bash, WebSearch, WebFetch, Agent, and more), manages the context window with automatic compaction, and exposes hooks, subagents, MCP, permissions, and sessions. It also loads CLAUDE.md, skills, and settings from .claude/ like the CLI does. As of 2026-09 it ships only as Python and TypeScript packages; from another language you drive the same loop by running the CLI as a subprocess with -p and --output-format json. It is not the Client SDK, which gives raw API access and leaves the tool loop to you.",
+      "codeLanguage": "python",
+      "codeSnippet": "from claude_agent_sdk import query, ClaudeAgentOptions\nasync for message in query(\n    prompt=\"Fix the failing tests in auth.ts\",\n    options=ClaudeAgentOptions(allowed_tools=[\"Read\", \"Edit\", \"Bash\"]),\n):\n    ...  # SystemMessage(init) -> AssistantMessage/UserMessage turns -> ResultMessage",
+      "realWorldUsage": "Reach for the Agent SDK when you want a filesystem-capable coding agent on your own infrastructure without writing the loop.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows"
+    },
+    {
+      "stableUid": "ccdvf-agent-harness-components",
+      "orderInDeck": 50,
+      "difficulty": 2,
+      "question": "A team says it will \"write its own harness\" instead of using the Agent SDK or Managed Agents. What are they signing up to build, and what is the smallest correct core of it?",
+      "explanation": "A harness is everything around the model that turns single API calls into an agent: the tool-use loop that re-sends the conversation while stop_reason is \"tool_use\", dispatch from tool_use blocks to real code, tool_result formatting including is_error, stopping conditions such as an iteration cap and a budget, context management (clearing old tool results, compaction, or notes), and guardrails such as approval gates and logging. The minimal core is the loop plus correct tool_result plumbing; the SDK Tool Runner supplies exactly that core, while the Agent SDK and Managed Agents supply the rest. Owning the harness means owning every one of its failure modes.",
+      "codeLanguage": "python",
+      "codeSnippet": "while response.stop_reason == \"tool_use\":\n    results = [run_tool(b) for b in response.content if b.type == \"tool_use\"]\n    messages += [{\"role\": \"assistant\", \"content\": response.content},\n                 {\"role\": \"user\", \"content\": results}]   # all tool_result blocks, one message\n    response = client.messages.create(model=MODEL, max_tokens=4096, tools=tools, messages=messages)",
+      "realWorldUsage": "Write the loop yourself only when you need control that the runner's per-turn interception cannot give you.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows"
+    },
+    {
+      "stableUid": "ccdvf-managed-agents-hosting-models",
+      "orderInDeck": 60,
+      "difficulty": 2,
+      "question": "Claude Managed Agents offers two deployment models for where a session runs. What differs between the Anthropic-hosted cloud sandbox and a self-hosted sandbox, and what stays on Anthropic's side in both?",
+      "explanation": "In both models Anthropic runs the agent harness: the loop, prompt caching, compaction, the event stream, and session state live on Anthropic's control plane. What moves is tool execution. In a cloud environment, bash, file operations, and code run in an Anthropic-managed sandbox with Anthropic's egress controls. In a self-hosted environment (config type \"self_hosted\"), an environment worker you run polls a work queue, executes the tool calls on your infrastructure, and posts results back, so the agent's code, filesystem, and network egress never leave your environment. Tool inputs and outputs still flow to the control plane where Claude runs.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Self-hosting is a placement decision for tool execution, not a way to run the model or the loop on-prem.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows"
+    },
+    {
+      "stableUid": "ccdvf-hooks-deterministic-actions",
+      "orderInDeck": 70,
+      "difficulty": 1,
+      "question": "A project requires that every file edit is followed by the formatter and that any shell command touching .env is refused. Why does Claude Code guidance put these in hooks rather than in CLAUDE.md or the system prompt?",
+      "explanation": "Hooks are user-defined shell commands (or HTTP endpoints, MCP tool calls, prompts, or subagents) that Claude Code runs automatically at lifecycle points such as PreToolUse, PostToolUse, UserPromptSubmit, and Stop. They give deterministic control: the action happens every time the event fires, rather than relying on the model to choose to run it. A prompt instruction is advice the model can forget under context pressure or override under injection; a PostToolUse hook runs the formatter unconditionally, and a PreToolUse hook that exits with code 2 blocks the call before it executes. Use prompts for judgment and hooks for rules.",
+      "codeLanguage": "json",
+      "codeSnippet": "{\n  \"hooks\": {\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [{ \"type\": \"command\", \"command\": \".claude/hooks/guard-env.sh\" }]\n      }\n    ]\n  }\n}",
+      "realWorldUsage": "If the requirement starts with \"always\" or \"never\", it is a hook, not a prompt line.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows",
+      "source": {
+        "url": "https://code.claude.com/docs/en/hooks-guide",
+        "quote": "Hooks are user-defined shell commands. Claude Code runs them at specific points in its lifecycle, which gives you deterministic control: certain actions always happen rather than relying on the LLM to choose to run them. Use hooks to enforce project rules, automate repetitive tasks, and integrate Claude Code with your existing tools."
+      }
+    },
+    {
+      "stableUid": "ccdvf-five-workflow-patterns",
+      "orderInDeck": 80,
+      "difficulty": 1,
+      "question": "Name the five workflow patterns from Anthropic's \"Building effective agents\" and state in one line the situation each one fits.",
+      "explanation": "Prompt chaining: fixed sequential steps where each call processes the previous output, for tasks that decompose cleanly into subtasks (outline, check it, then draft). Routing: classify the input and send it to a specialized follow-up path, for distinct categories handled differently (query types; cheap versus capable model). Parallelization: sectioning splits independent subtasks to run at once, voting runs the same task several times for higher confidence. Orchestrator-workers: a central LLM decomposes work it cannot predict in advance, delegates to workers, and synthesizes. Evaluator-optimizer: one call generates and another critiques in a loop, when clear evaluation criteria exist and refinement measurably helps.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Pick the pattern from the shape of the task, then add an agent only if no pattern fits.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows"
+    },
+    {
+      "stableUid": "ccdvf-tool-use-loop-anatomy",
+      "orderInDeck": 90,
+      "difficulty": 1,
+      "question": "Walk through one iteration of the client-tool agentic loop on the Messages API: which fields tell your code what to do, and what condition ends the loop?",
+      "explanation": "You send tools and messages. If Claude wants a tool, the response has stop_reason \"tool_use\" and one or more tool_use content blocks, each with an id, a name, and an input that matches the tool's input_schema. Your code runs each tool and appends two messages: the assistant response verbatim, then a user message whose content starts with tool_result blocks whose tool_use_id matches each id (is_error true for failures). You call the API again and repeat while stop_reason is \"tool_use\". The loop exits on any other stop reason: \"end_turn\" (final answer), \"max_tokens\", \"stop_sequence\", or \"refusal\", each of which your code must handle rather than ignore.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Log stop_reason on every iteration; it is the loop's only reliable state signal.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows",
+      "source": {
+        "url": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/how-tool-use-works",
+        "quote": "In practice this reads as: while stop_reason == \"tool_use\", execute the tools and continue the conversation. The loop exits on any other stop reason (\"end_turn\", \"max_tokens\", \"stop_sequence\", or \"refusal\"), which means Claude has either produced a final answer or stopped for another reason that your application should handle."
+      }
+    },
+    {
+      "stableUid": "ccdvf-agent-memory-patterns",
+      "orderInDeck": 100,
+      "difficulty": 1,
+      "question": "What does \"memory\" mean as an agent design pattern, and what are the two concrete mechanisms Anthropic documents for giving a Claude agent memory that survives a context reset?",
+      "explanation": "Memory is structured note-taking persisted outside the context window: the agent writes progress, decisions, and learned facts to durable storage and reads them back just in time, so long tasks do not depend on everything staying in context. Mechanism one is the Messages API memory tool (type memory_20250818): Claude requests view, create, str_replace, insert, delete, and rename operations under a /memories prefix, and your application executes them against storage you control. Mechanism two is Claude Code subagent memory, a per-agent directory scoped to user, project, or local. In both, the model is instructed to assume interruption and record progress as it works.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "An agent that plays a multi-hour game keeps its tallies in notes, not in its context.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows"
+    },
+    {
+      "stableUid": "ccdvf-context-window-management-in-loop",
+      "orderInDeck": 110,
+      "difficulty": 2,
+      "question": "An agent loop accumulates every tool output it has ever read. What does context-window management mean inside the loop, and which three levers does Anthropic's context-engineering guidance name for long-horizon work?",
+      "explanation": "Context in a session never resets between turns: system prompt, tool definitions, history, and tool outputs all accumulate, and recall degrades as tokens grow (\"context rot\"). Management means keeping the smallest set of high-signal tokens. The three levers are compaction (summarize a conversation nearing the limit and restart with the summary; the lightest form is clearing tool results whose purpose is served), structured note-taking (persist notes outside the window and reload them), and sub-agent architectures (specialists explore in clean windows and return condensed summaries of roughly 1,000 to 2,000 tokens after consuming tens of thousands). The Agent SDK compacts automatically and emits a compact_boundary system message when it does.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Pruning a 50k-token tool result beats paying for a bigger context window.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows"
+    },
+    {
+      "stableUid": "ccdvf-agentic-frameworks-tradeoff",
+      "orderInDeck": 120,
+      "difficulty": 1,
+      "question": "The exam blueprint names Strands, LangGraph, and PydanticAI as agentic abstraction frameworks. What does Anthropic's guidance say such frameworks cost you, and what should a developer do before adopting one?",
+      "explanation": "Frameworks make it easy to start by handling low-level tasks such as calling models, defining and parsing tools, and chaining calls. The cost is extra layers of abstraction that obscure the underlying prompts and responses, which makes agents harder to debug, and they tempt teams to add complexity when a simpler setup would do. Anthropic suggests starting with the LLM API directly, because many patterns take a few lines of code, and if you do use a framework, making sure you understand the code underneath it; wrong assumptions about what is under the hood are a common source of customer error. The framework is not the pattern; the prompts and tool contracts are.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "If you cannot print the exact request your framework sent, you cannot debug the agent.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows",
+      "source": {
+        "url": "https://www.anthropic.com/engineering/building-effective-agents",
+        "quote": "These frameworks make it easy to get started by simplifying standard low-level tasks like calling LLMs, defining and parsing tools, and chaining calls together. However, they often create extra layers of abstraction that can obscure the underlying prompts ​​and responses, making them harder to debug. They can also make it tempting to add complexity when a simpler setup would suffice."
+      }
+    },
+    {
+      "stableUid": "ccdvf-subagent-fresh-context",
+      "orderInDeck": 130,
+      "difficulty": 1,
+      "question": "In the Agent SDK, what does a non-fork subagent see when it starts, what does it not see, and what comes back to the parent when it finishes?",
+      "explanation": "A subagent's context window starts fresh but not empty: it gets its own system prompt from AgentDefinition.prompt, the Agent tool's prompt string, project CLAUDE.md (via settingSources, unless omitClaudeMd is set), and its tool definitions. It does not receive the parent's conversation history, the parent's tool results, or the parent's system prompt. The only content you pass from parent to subagent is the Agent tool's prompt, so put file paths, error messages, and decisions there. When it finishes, only its final message returns to the parent as the Agent tool result; the parent's context grows by that summary, not by the subtask transcript. A fork is the exception and inherits the parent's history.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Write the delegation prompt as if briefing a contractor who has never seen the thread.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows",
+      "source": {
+        "url": "https://code.claude.com/docs/en/agent-sdk/subagents",
+        "quote": "Unless the subagent is a fork, its context window starts fresh, with no parent conversation, but isn’t empty. The only content you pass from parent to subagent is the Agent tool’s prompt string, so include any file paths, error messages, or decisions the subagent needs directly in that prompt."
+      }
+    },
+    {
+      "stableUid": "ccdvf-managed-agents-four-concepts",
+      "orderInDeck": 140,
+      "difficulty": 2,
+      "question": "Claude Managed Agents is built around four concepts. What is each one, and in what order do you create them to run a task?",
+      "explanation": "Agent: the model, system prompt, tools, MCP servers, and skills; created once and referenced by ID. Environment: configuration for where sessions run, either an Anthropic-managed cloud sandbox or a self-hosted sandbox on your infrastructure. Session: a running agent instance inside an environment performing a specific task, with event history and sandbox state persisted server-side. Events: the messages exchanged between your application and the agent (user turns, tool results, status updates), streamed back over server-sent events. Flow: create the agent, create the environment, start a session referencing both, then send events and stream responses, steering or interrupting mid-run. Every endpoint needs the managed-agents-2026-04-01 beta header (the SDKs set it), and as of 2026-09 the product is beta and not ZDR-eligible.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Model and system prompt live on the versioned agent: updating them creates a new agent version, while one session can override them with agent_with_overrides without versioning.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows"
+    },
+    {
+      "stableUid": "ccdvf-agent-sdk-max-turns-budget",
+      "orderInDeck": 150,
+      "difficulty": 2,
+      "question": "How do you cap an Agent SDK run so an open-ended prompt cannot run forever, and how does your code learn that a cap was hit?",
+      "explanation": "Two fields on ClaudeAgentOptions (Options in TypeScript): max_turns / maxTurns, which counts tool-use round trips only, and max_budget_usd / maxBudgetUsd, which is compared against total_cost_usd and includes subagent spend. Both default to no limit. When a cap is hit the loop ends with a ResultMessage whose subtype is error_max_turns or error_max_budget_usd instead of success; the result text field exists only on success, so check subtype first. Every subtype still carries total_cost_usd, usage, num_turns, and session_id, so you can resume the session with a higher limit. A single-shot query() also raises after yielding an error result, so wrap the loop in a try block.",
+      "codeLanguage": "python",
+      "codeSnippet": "async for m in query(prompt=task, options=ClaudeAgentOptions(max_turns=30, max_budget_usd=5.0)):\n    if isinstance(m, ResultMessage):\n        if m.subtype == \"success\":\n            print(m.result)\n        elif m.subtype in (\"error_max_turns\", \"error_max_budget_usd\"):\n            print(\"capped; resume later with\", m.session_id)",
+      "realWorldUsage": "Set a budget on every production agent; a well-scoped task never notices it.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows"
+    },
+    {
+      "stableUid": "ccdvf-agent-sdk-sessions-resume-fork",
+      "orderInDeck": 160,
+      "difficulty": 2,
+      "question": "An Agent SDK application needs to (a) ask a follow-up in the most recent conversation after a process restart, (b) return to one specific user's earlier run, and (c) try an alternative approach without disturbing the original. Which session option does each case need?",
+      "explanation": "A session is the conversation history the SDK writes to disk automatically; returning to one restores prior tool results and decisions. (a) continue_conversation=True (TypeScript continue: true) resumes the most recent session in the current directory with no ID tracking. (b) resume=<session_id> returns to a specific session; capture session_id from ResultMessage, which is present on every result including errors. (c) resume plus fork_session=True (forkSession) creates a new session that starts with a copy of the original's history and diverges from there; the original stays unchanged. Sessions persist the conversation, not the filesystem, so a fork's file edits are still real edits.",
+      "codeLanguage": "python",
+      "codeSnippet": "opts = ClaudeAgentOptions(resume=session_id, fork_session=True, max_turns=5)\nasync for m in query(prompt=\"Outline OAuth2 instead of JWT\", options=opts):\n    if isinstance(m, ResultMessage):\n        forked_id = m.session_id   # distinct from session_id; original untouched",
+      "realWorldUsage": "Multi-user services must use resume with stored IDs; continue picks whichever session was most recent on that host.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows"
+    },
+    {
+      "stableUid": "ccdvf-agent-sdk-pretooluse-hook-shape",
+      "orderInDeck": 170,
+      "difficulty": 2,
+      "question": "Show the exact shape for registering a PreToolUse hook in the Agent SDK that blocks writes to .env files, and explain what each part of the returned object does.",
+      "explanation": "Hooks go in options.hooks as a map from event name to a list of matchers; each HookMatcher has an optional matcher pattern tested against the tool name (exact name, pipe-separated list, or regex such as \"Write|Edit\" or \"^mcp__\") and a list of callbacks. A callback receives (input_data, tool_use_id, context) and returns a dict: hookSpecificOutput.permissionDecision of \"allow\", \"deny\", \"ask\", or \"defer\", permissionDecisionReason (shown to the model on deny), and optionally updatedInput. Return {} to allow unchanged. When several hooks match they run in parallel and the most restrictive result wins: deny over defer over ask over allow. Hooks run in your process and consume no context tokens.",
+      "codeLanguage": "python",
+      "codeSnippet": "async def protect_env(input_data, tool_use_id, context):\n    if input_data[\"tool_input\"].get(\"file_path\", \"\").endswith(\"/.env\"):\n        return {\"hookSpecificOutput\": {\n            \"hookEventName\": \"PreToolUse\",\n            \"permissionDecision\": \"deny\",\n            \"permissionDecisionReason\": \"Cannot modify .env files\"}}\n    return {}\noptions = ClaudeAgentOptions(\n    hooks={\"PreToolUse\": [HookMatcher(matcher=\"Write|Edit\", hooks=[protect_env])]})",
+      "realWorldUsage": "Put updatedInput inside hookSpecificOutput; at the top level it is silently ignored.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows"
+    },
+    {
+      "stableUid": "ccdvf-tool-runner-sdk-loop",
+      "orderInDeck": 180,
+      "difficulty": 1,
+      "question": "What does the Anthropic SDK's Tool Runner do for you, how do you bound it, and when does the documentation tell you to write the loop by hand instead?",
+      "explanation": "The Tool Runner (beta as of 2026-09, in all seven SDKs) runs the agentic loop: it calls the API, executes your tools when Claude returns tool_use blocks, formats tool_result blocks, manages conversation state, and turns thrown exceptions into tool results with is_error true. In Python you decorate functions with @beta_tool (type hints plus docstring become the schema) and call client.beta.messages.tool_runner(...); runner.until_done() returns the final message. It loops until Claude returns a message without a tool use or until max_iterations. The docs direct you to the manual loop when you need human-in-the-loop approval, custom logging, or conditional execution.",
+      "codeLanguage": "python",
+      "codeSnippet": "from anthropic import Anthropic, beta_tool\n@beta_tool\ndef get_weather(location: str) -> str:\n    \"\"\"Get the current weather for a location.\"\"\"\n    return \"15 C, cloudy\"\nrunner = Anthropic().beta.messages.tool_runner(\n    model=\"claude-opus-5\", max_tokens=1024, tools=[get_weather],\n    messages=[{\"role\": \"user\", \"content\": \"Weather in Paris?\"}], max_iterations=10)\nfinal = runner.until_done()",
+      "realWorldUsage": "Prototype with the runner; graduate to a manual loop only when interception cannot express your control flow.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows"
+    },
+    {
+      "stableUid": "ccdvf-managed-agents-coordinator-roster",
+      "orderInDeck": 190,
+      "difficulty": 2,
+      "question": "How do you declare that a Managed Agents coordinator may delegate to other agents, and what structural limits apply to that roster?",
+      "explanation": "Set multiagent on the coordinator's agent definition with type \"coordinator\" and an agents roster. Entries are {\"type\":\"agent\",\"id\":...} (optionally pinned by version, otherwise pinned to the latest version at coordinator creation), {\"type\":\"self\"} so the coordinator can spawn copies of itself, and at most one {\"type\":\"advisor\",\"model\":...}. Each delegated agent runs in its own session thread with isolated context and its own model, prompt, tools, and MCP servers, while all threads share the sandbox filesystem and vault credentials. Limits as of 2026-09: delegation is one level deep, so a roster agent with its own roster fails validation; at most 20 unique agents per roster; threads persist, and archiving one frees a slot against the 25-concurrent-thread limit.",
+      "codeLanguage": "json",
+      "codeSnippet": "{\n  \"name\": \"coordinator\",\n  \"multiagent\": {\n    \"type\": \"coordinator\",\n    \"agents\": [\n      { \"type\": \"self\" },\n      { \"type\": \"agent\", \"id\": \"agent_researcher_id\" }\n    ]\n  }\n}",
+      "realWorldUsage": "Start the roster with self alone, then move reading-heavy work to a cheaper referenced agent.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows"
+    },
+    {
+      "stableUid": "ccdvf-workflow-vs-agent-decision",
+      "orderInDeck": 200,
+      "difficulty": 2,
+      "question": "Given a new task, what decision criteria tell you to build a workflow rather than an agent, and what signals justify the agent's extra cost?",
+      "explanation": "Choose a workflow when the steps can be written down in advance: the task decomposes into fixed subtasks, inputs fall into known categories, or the same procedure applies every time. Workflows give predictability, consistency, and cheap debugging. Choose an agent only when the problem is open-ended and it is difficult or impossible to predict the required number of steps, so no fixed path can be hardcoded. Agents cost more, run longer, and can compound errors, so they need sandboxed testing, guardrails, and stopping conditions. Anthropic's rule is to find the simplest solution possible and increase complexity only when needed, which may mean not building an agentic system at all.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "If you can draw the flowchart before running it, ship the flowchart.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows",
+      "source": {
+        "url": "https://www.anthropic.com/engineering/building-effective-agents",
+        "quote": "When to use agents: Agents can be used for open-ended problems where it’s difficult or impossible to predict the required number of steps, and where you can’t hardcode a fixed path."
+      }
+    },
+    {
+      "stableUid": "ccdvf-agent-sdk-vs-client-sdk-vs-managed",
+      "orderInDeck": 210,
+      "difficulty": 2,
+      "question": "A team is choosing between the Claude Agent SDK, the Client SDK (Messages API), and Claude Managed Agents. What does each one make you own, and which situation selects each?",
+      "explanation": "Client SDK: direct access to the Messages API; you implement the tool loop, tool execution, context management, and hosting. Pick it for custom agent loops and fine-grained control, or when the harness must be yours. Agent SDK: a Python or TypeScript library that runs Claude Code's loop, built-in tools, permissions, hooks, and subagents for you, but you still host and deploy the process. Pick it for a coding or filesystem agent on your own infrastructure without writing the loop. Managed Agents: a hosted REST API where Anthropic runs both the loop and the per-session sandbox. Pick it for long-running or asynchronous agents when you do not want to manage sandbox or session infrastructure.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Ask two questions: who runs the loop, and who hosts the container.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows"
+    },
+    {
+      "stableUid": "ccdvf-tool-runner-vs-manual-loop",
+      "orderInDeck": 220,
+      "difficulty": 2,
+      "question": "When should an application use the SDK Tool Runner for its agent loop, and when does the documentation say to drop to a hand-written loop?",
+      "explanation": "Use the Tool Runner when the loop is standard: define tools with the SDK helpers, let it execute calls, format results, wrap exceptions as is_error tool results, and stop at max_iterations or when Claude answers without a tool call. It removes the most common bugs, such as misordered tool_result blocks. Write the manual loop when you need human-in-the-loop approval before a call executes, custom logging of each round trip, or conditional execution where some calls must be skipped, transformed, or checked against policy. The Python and TypeScript runners let you intercept results with generate_tool_call_response; any runner lets you take over message history, but then you must append the assistant message and tool results yourself, pass max_iterations, and keep the conversation valid.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "If a reviewer must click \"approve\" before a write, the loop belongs to you.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows",
+      "source": {
+        "url": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-runner",
+        "quote": "The tool runner handles the agentic loop, error wrapping, and type safety so you don't have to. When you need human-in-the-loop approval, custom logging, or conditional execution, use the manual loop instead."
+      }
+    },
+    {
+      "stableUid": "ccdvf-prompt-chaining-vs-routing",
+      "orderInDeck": 230,
+      "difficulty": 2,
+      "question": "Both prompt chaining and routing split work across multiple LLM calls. What distinguishes them, and how do you decide which one a task needs?",
+      "explanation": "Prompt chaining is sequential: every input goes through the same fixed steps, each call consuming the previous output, optionally with programmatic gates between steps. Use it when the task decomposes cleanly into ordered subtasks and you accept more latency for higher accuracy, such as writing an outline, checking it meets criteria, then drafting. Routing is a branch: a classification step sends each input to one of several specialized paths, so the paths never all run. Use it when inputs fall into distinct categories that need different prompts, tools, or models, such as refunds versus technical support, or easy questions to a smaller model. Chaining fixes the order; routing fixes the category.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "A chain runs every step for every input; if most inputs need only one path, you wanted a router.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows"
+    },
+    {
+      "stableUid": "ccdvf-parallel-sectioning-vs-voting",
+      "orderInDeck": 240,
+      "difficulty": 2,
+      "question": "Parallelization has two variants in Anthropic's workflow taxonomy. What are they, and which problem does each one solve?",
+      "explanation": "Sectioning breaks a task into independent subtasks run in parallel and aggregates the outputs; it buys speed and lets each call focus, such as one model instance answering the user while another screens the request for inappropriate content. Voting runs the same task several times to get diverse outputs and aggregates them for a more confident answer, such as several different prompts reviewing code for vulnerabilities and flagging it if any finds a problem. Choose sectioning when subtasks are separable; choose voting when a single judgment is uncertain and multiple perspectives raise confidence. Both are workflows: the fan-out is decided by your code, not by the model.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Sectioning splits the work; voting repeats it.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows"
+    },
+    {
+      "stableUid": "ccdvf-orchestrator-vs-parallelization",
+      "orderInDeck": 250,
+      "difficulty": 2,
+      "question": "Orchestrator-workers and parallelization both fan work out to multiple LLM calls. What is the deciding difference, and when is the orchestrator's extra cost justified?",
+      "explanation": "In parallelization the subtasks are predefined in code before any model runs; in orchestrator-workers a central LLM decides at runtime which subtasks exist, delegates each to a worker, and synthesizes the results. Use parallelization when you already know the pieces, for example one check per file in a fixed list. Use orchestrator-workers when the decomposition itself depends on the input, such as a change that may touch an unknown number of files or research that needs sources you cannot enumerate in advance. The orchestrator adds a model call and its own context, so if the subtask list is static the extra flexibility buys nothing.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "If your code can write the task list, it should; the orchestrator earns its keep only when it cannot.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows",
+      "source": {
+        "url": "https://www.anthropic.com/engineering/building-effective-agents",
+        "quote": "When to use this workflow: This workflow is well-suited for complex tasks where you can’t predict the subtasks needed (in coding, for example, the number of files that need to be changed and the nature of the change in each file likely depend on the task). Whereas it’s topographically similar, the key difference from parallelization is its flexibility—subtasks aren't pre-defined, but determined by the orchestrator based on the specific input."
+      }
+    },
+    {
+      "stableUid": "ccdvf-evaluator-optimizer-when",
+      "orderInDeck": 260,
+      "difficulty": 2,
+      "question": "What conditions make the evaluator-optimizer workflow worth its extra calls, and what goes wrong when those conditions are missing?",
+      "explanation": "One LLM call generates a response and a second call evaluates it and returns feedback, looping until the evaluator is satisfied or a cap is reached. Anthropic says it is effective when two things hold: there are clear evaluation criteria, and iterative refinement provides measurable value, meaning a human's feedback would demonstrably improve the output and an LLM can supply that same feedback. Literary translation with nuances a first pass misses, or multi-round search where the evaluator decides whether more searching is warranted, fit. Without clear criteria the evaluator produces vague approval or endless nitpicks, so you pay for loops that never converge; then a single well-specified call or a rubric-based test is the better design.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Write the rubric first; if you cannot, the evaluator cannot either.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows"
+    },
+    {
+      "stableUid": "ccdvf-self-hosted-vs-cloud-sandbox",
+      "orderInDeck": 270,
+      "difficulty": 2,
+      "question": "When should a Managed Agents environment be self-hosted instead of using the Anthropic-managed cloud sandbox, and what do you give up?",
+      "explanation": "Self-host when the agent must operate on data that cannot leave your network boundary, must reach internal services that are not publicly routable, or must run under your organization's own compliance and audit controls. You create an environment with config type \"self_hosted\" and run an environment worker (the ant CLI, or the Python, TypeScript, or Go SDK worker) that claims tool calls from a queue and executes them locally; sessions, events, and memory stores are created and attached the same way as on a cloud environment. Costs: you operate the worker host, file and github_repository resources are rejected with a 400 (pass references such as an S3 path through session metadata instead), memory stores require an SDK worker, and workers must shut down gracefully so changed memory files upload.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Choose cloud until a data-residency or network-reach requirement forces the worker onto your side.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows",
+      "source": {
+        "url": "https://platform.claude.com/docs/en/managed-agents/self-hosted-sandboxes",
+        "quote": "Self-hosting is a good fit when the agent needs to operate on data that cannot leave your network boundary, reach internal services that are not publicly routable, or run under your organization's own compliance and audit controls."
+      }
+    },
+    {
+      "stableUid": "ccdvf-guardrail-hook-vs-prompt-vs-rule",
+      "orderInDeck": 280,
+      "difficulty": 3,
+      "question": "An Agent SDK application must guarantee a policy check on every tool call, including calls that are auto-approved. Compare enforcing it with a prompt instruction, an allow/deny rule, the canUseTool callback, and a PreToolUse hook.",
+      "explanation": "A prompt instruction is advisory: the model may not follow it under pressure or injection. Allow and deny rules are declarative and cheap: a deny rule such as Bash(rm *) blocks in every permission mode, but rules match patterns, not runtime state. The canUseTool callback is consulted only for calls no earlier step resolved; tools auto-approved by allow rules or a permissive mode never reach it, so checks placed there are silently skipped. A PreToolUse hook runs first in the evaluation order on every matching call, can deny even in the most permissive mode, and can rewrite input. So: prompts for judgment, rules for static policy, canUseTool for human approval, hooks for checks that must run every time.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "If the check must be unconditional, it is a hook; everything else can be skipped by configuration.",
+      "revision": 1,
+      "topic": "D1 Agents & workflows"
+    },
+    {
+      "stableUid": "ccdvf-messages-api-stateless",
+      "orderInDeck": 290,
+      "difficulty": 1,
+      "question": "A chat backend stores only the latest user message and sends that single message to the Messages API on each turn, yet Claude \"forgets\" what the user said two turns ago. Which part of the API contract is the backend missing, and where does the system prompt go?",
+      "explanation": "The Messages API is stateless: nothing is remembered between calls, so every request must carry the whole conversation as alternating user and assistant messages, including earlier assistant replies (they may even be synthetic). The system prompt is not a message role; it is the top-level system parameter sent next to messages. Only some newer models accept a role \"system\" entry inside messages, and only after a user turn, never as the first entry. Do not fix this by asking Claude to \"remember\": there is no server-side session to remember into.",
+      "codeLanguage": "json",
+      "codeSnippet": "{\n  \"model\": \"claude-opus-5\",\n  \"max_tokens\": 1024,\n  \"system\": \"You are a support agent for Acme.\",\n  \"messages\": [\n    {\"role\": \"user\", \"content\": \"My order is late.\"},\n    {\"role\": \"assistant\", \"content\": \"Sorry to hear that. What is the order number?\"},\n    {\"role\": \"user\", \"content\": \"A-1029\"}\n  ]\n}",
+      "realWorldUsage": "Persist the full transcript per conversation and replay it; the model only knows what is in the request.",
+      "revision": 1,
+      "topic": "D2 Applications & integration"
+    }
+  ]
+}
