@@ -16,7 +16,9 @@ import { fileURLToPath } from 'node:url';
 const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const README = fileURLToPath(new URL('../../README.md', import.meta.url));
 
-const TOP_LEVEL = ['frontend', 'mobile', 'src_C', 'pg-layer', 'snowflake', 'docs', '.github'];
+// No `snowflake`: the folder was deleted when the warehouse path was retired on
+// 2026-10-02, and the README now only describes that retirement in prose.
+const TOP_LEVEL = ['frontend', 'mobile', 'src_C', 'pg-layer', 'docs', '.github'];
 
 /** Every backticked repo-relative path the README mentions, deduplicated. */
 function citedPaths(markdown: string): string[] {
@@ -40,6 +42,17 @@ describe('the root README', () => {
 
     const missing = cited.filter(path => !existsSync(new URL(path, `file://${REPO_ROOT}`)));
     expect(missing).toEqual([]);
+  });
+
+  it('records that Snowflake was retired, and the folder is really gone', () => {
+    // The README used to describe a Snowflake pipeline and a snowflake/ folder.
+    // Both were retired on 2026-10-02; a README still selling them would be the
+    // kind of confident, stale claim this file exists to catch.
+    const markdown = readFileSync(README, 'utf8');
+
+    expect(existsSync(`${REPO_ROOT}snowflake`)).toBe(false);
+    expect(markdown).not.toMatch(/`snowflake\//);
+    expect(markdown).toMatch(/Snowflake[^\n]*retired[^\n]*2026-10-02|2026-10-02[^\n]*retired[^\n]*Snowflake/);
   });
 
   it('ships a LICENSE with no unfilled template fields', () => {

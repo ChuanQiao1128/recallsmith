@@ -90,6 +90,11 @@ const DOCS = `${REPO_ROOT}docs`;
 // README.md does not cite but docs/ does: the R24 privacy review rests on
 // infra/modules/api/gateway.tf, and a citation nobody checks is the drift this
 // file exists for. Every infra/ path docs/ cited when it was added was on disk.
+//
+// `snowflake` stays in the list after the folder was deleted (2026-10-02, R26)
+// on purpose: docs/ still cites snowflake/ files as history, and keeping the
+// prefix is what forces each of those citations into a `paths-not-on-disk`
+// block — so recreating the folder turns the guard red instead of nothing.
 const TOP_LEVEL = ['frontend', 'mobile', 'src_C', 'pg-layer', 'snowflake', 'docs', '\\.github', 'infra'];
 
 // A trailing :123 or :12-34 is tolerated and stripped — docs cite line ranges
@@ -200,6 +205,26 @@ describe('the paths docs/ registers as gone', () => {
     const scattered = docs.filter(doc => doc.blockCount > 1).map(doc => doc.name);
 
     expect(scattered).toEqual([]);
+  });
+});
+
+describe('the Snowflake retirement (R26 D01)', () => {
+  it('leaves no snowflake/ folder, and no docs/ citation of it unregistered', () => {
+    expect(onDisk('snowflake')).toBe(false);
+
+    const unregistered = docs.flatMap(doc =>
+      doc.cited
+        .filter(path => path.startsWith('snowflake/') && !doc.exempt.includes(path))
+        .map(path => `${doc.name} -> ${path}`),
+    );
+
+    expect(unregistered).toEqual([]);
+  });
+
+  it('is explained in the interview walkthrough with its date', () => {
+    const markdown = readFileSync(`${DOCS}/interview-walkthrough-2026-09-23.md`, 'utf8');
+
+    expect(markdown).toMatch(/Snowflake[^\n]*2026-10-02/);
   });
 });
 
