@@ -18,8 +18,10 @@
 // conversions come from src/lib/funnelView.ts.
 //
 // A server without the analytics migration answers 503 NOT_READY; that is an
-// owner step, not an error, so it gets a neutral callout. The funnel route may
-// also not exist on the server yet (404), which gets the same callout.
+// owner step, not an error, so it gets a neutral callout. Every other funnel
+// error (a 404 included) shows the server message, and so does a response in
+// a shape the client does not know (BAD_RESPONSE), so a mismatch never reads
+// as "no install counted yet".
 import { useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 
@@ -81,11 +83,6 @@ function toLoadError(error: ApiError | null, fallback: string): LoadError {
 
 function isNotReady(error: LoadError | null): boolean {
   return error?.code === 'NOT_READY';
-}
-
-/** NOT_READY, or a server that predates the funnel route (404). */
-function isFunnelNotReady(error: LoadError | null): boolean {
-  return isNotReady(error) || error?.httpStatus === 404;
 }
 
 function Stat({ label, value, testId }: { label: string; value: string; testId?: string }) {
@@ -445,11 +442,10 @@ export function UsagePage() {
         </p>
         {funnelLoading ? (
           <p className="mt-2 text-sm text-slate-500">Loading the funnel…</p>
-        ) : isFunnelNotReady(funnel.error) ? (
+        ) : isNotReady(funnel.error) ? (
           <div className="mt-2" data-testid="funnel-not-ready">
             <Callout tone="info">
-              The anonymous funnel is not set up on the server yet (run the database migration and deploy the funnel
-              route).
+              The anonymous funnel is not set up on the server yet (run the database migration).
             </Callout>
           </div>
         ) : funnel.error ? (
