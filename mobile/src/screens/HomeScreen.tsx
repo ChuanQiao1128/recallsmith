@@ -76,13 +76,30 @@ const hasAnimated = typeof A.Value === 'function';
 
 // R24 §2.2: swap an installed starter pack for the full deck when the manifest is reachable. Lazy and
 // guarded: the starter module reaches deckRepository (expo-file-system, amplify), which Home itself
-// only reaches through deckActionResolver. Never throws.
+// only reaches through deckActionResolver. One shared import for the upgrade and the subscription.
+let starterModule: Promise<typeof import('../content/starterOffline')> | null = null;
+function loadStarterModule() {
+  starterModule ??= import('../content/starterOffline');
+  return starterModule;
+}
+
+/** Never throws. */
 async function upgradeStarterDecksOnFocus(): Promise<string[]> {
   try {
-    const mod = await import('../content/starterOffline');
-    return await mod.upgradeStarterDecks();
+    return await (await loadStarterModule()).upgradeStarterDecks();
   } catch {
     return [];
+  }
+}
+
+// Every upgrade run that replaced a starter deck reaches Home through this listener, whoever started
+// it: Home's own focus run, or App's foreground run while Home is already showing (no focus fires
+// then). Returns the unsubscribe function. Never throws.
+async function subscribeStarterUpgradesLazy(listener: (slugs: string[]) => void): Promise<() => void> {
+  try {
+    return (await loadStarterModule()).subscribeStarterUpgrades(listener);
+  } catch {
+    return () => {};
   }
 }
 
@@ -467,17 +484,24 @@ export function HomeScreen({ navigation, route }: Props) {
       };
     }, [refreshHome]),
   );
+  useEffect(() => {
+    let unsubscribe: (() => void) | null = null;
+    let cancelled = false;
+    void subscribeStarterUpgradesLazy(() => {
+      if (isMountedRef.current) void refreshHomeRef.current();
+    }).then((off) => {
+      if (cancelled) off();
+      else unsubscribe = off;
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, []);
   useFocusEffect(
     useCallback(() => {
-      let cancelled = false;
-      (async () => {
-        const upgraded = await upgradeStarterDecksOnFocus();
-        if (cancelled || !isMountedRef.current || upgraded.length === 0) return;
-        void refreshHomeRef.current();
-      })();
-      return () => {
-        cancelled = true;
-      };
+      // An upgrade that went in refreshes Home through the subscription above.
+      void upgradeStarterDecksOnFocus();
     }, []),
   );
   useEffect(() => {
