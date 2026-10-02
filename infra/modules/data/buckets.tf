@@ -98,6 +98,26 @@ resource "aws_s3_bucket_lifecycle_configuration" "content" {
     }
   }
 
+  # R25 P02: raw analytics exports under analytics/raw/ are kept 400 days; their noncurrent
+  # versions go after 30. S3 applies every matching rule and takes the earliest expiration, so
+  # noncurrent-90d still covers every other key (and multipart cleanup everywhere).
+  rule {
+    id     = "analytics-raw-400d"
+    status = "Enabled"
+
+    filter {
+      prefix = "analytics/raw/"
+    }
+
+    expiration {
+      days = 400
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+  }
+
   depends_on = [aws_s3_bucket_versioning.content]
 }
 

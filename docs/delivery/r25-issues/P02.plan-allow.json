@@ -1,0 +1,6 @@
+{
+  "tags_only_updates": false,
+  "changes": {
+    "module.data.aws_s3_bucket_lifecycle_configuration.content": { "action": "update", "keys": ["rule"] }
+  }
+}
