@@ -19,6 +19,7 @@ import { useAuthStore } from '../auth/authStore';
 import { friendlyAuthError, isAuthFlowError } from '../auth/authErrors';
 import { evaluatePassword, isPasswordValid } from '../auth/passwordPolicy';
 import type { RootStackParamList } from '../navigation/types';
+import { recordFunnelEvent } from '../telemetry/funnel';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'SignUp'>;
 
@@ -45,6 +46,8 @@ export default function SignUpScreen({ navigation }: Props) {
     if (!canSubmit) return;
 
     const e = normEmail(email);
+    // R24 M01: anonymous funnel step (no email or account data; once per install).
+    recordFunnelEvent('signup_started');
     try {
       await signUpWithEmail(e, password);
       navigation.replace('ConfirmSignUp', { email: e });

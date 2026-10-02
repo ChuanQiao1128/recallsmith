@@ -36,6 +36,7 @@ import { PAGE_GRADIENT_LIGHT, packImageForSlug, packPaletteFromSlug, type PackPa
 import { prewarmCeremonyAudio } from '../components/ceremonyAudio';
 import { prewarmFoilShader } from '../components/ceremony/FoilLayer';
 import type { DeckExport } from '../types/deckExport';
+import { recordFunnelEvent } from '../telemetry/funnel';
 
 function readRN<T = any>(key: string, fallback: T): T {
   try {
@@ -650,6 +651,8 @@ export function DrawScreen({ navigation, route }: Props) {
         // reason -- right after a draw is when a second device is most
         // worth reconciling.
         scheduleProgressSync({ delayMs: DRAW_COMMITTED_SYNC_DELAY_MS, reason: 'draw_committed' });
+        // R24 M01: anonymous funnel step; only the first committed pack of the install is recorded.
+        recordFunnelEvent('first_pack_opened', ready.slug);
 
         const latestPulls = spendablePullsNow(spent.wallet);
         setReady((prev) =>

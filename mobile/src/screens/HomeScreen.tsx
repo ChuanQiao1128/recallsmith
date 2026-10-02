@@ -53,6 +53,7 @@ import { colors } from '../theme/colors';
 import { spacing } from '../theme/spacing';
 import { typography } from '../theme/typography';
 import { packImageForSlug, packPaletteFromSlug } from '../theme/packArt';
+import { recordFunnelEvent } from '../telemetry/funnel';
 
 // Vitest supplies react-native without Image — guarded lookup so tests don't crash.
 function readRN<T = any>(key: string, fallback: T): T {
@@ -146,6 +147,8 @@ export function HomeScreen({ navigation, route }: Props) {
   const openStarterLesson = useCallback(
     (slug: string) => {
       setStarterStarted(true);
+      // R24 M01: anonymous funnel step; recorded once per install however often the lesson opens.
+      recordFunnelEvent('starter_started', slug);
       navigation.navigate('SessionCard', { slug, mode: 'learn-new' });
     },
     [navigation],
