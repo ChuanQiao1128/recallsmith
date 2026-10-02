@@ -116,7 +116,7 @@ describe('clientErrorReporter', () => {
       getAccessToken: () => 'tok',
       getEnv: () => ENV,
       getCurrentScreen: () => 'Home',
-      fetchImpl,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
       now: () => 0,
     });
     const sub = '3f2a9c1e-7b4d-4e8a-9c3b-2d1e0f9a8b7c';
