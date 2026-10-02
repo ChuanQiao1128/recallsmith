@@ -69,6 +69,9 @@ locals {
     agent_runner_heartbeat = { route_key = "POST /api/v1/authoring/automation/runner/heartbeat", integration = "core_vpc", auth = "agent" }
     agent_runner_claim     = { route_key = "POST /api/v1/authoring/automation/runner/claim", integration = "core_vpc", auth = "agent" }
     agent_runner_complete  = { route_key = "POST /api/v1/authoring/automation/runner/complete", integration = "core_vpc", auth = "agent" }
+
+    # R24 P01: anonymous install funnel events from the app (no JWT, no OPTIONS). Exact key (X08); tight throttle below.
+    public_events = { route_key = "POST /api/v1/public/events", integration = "core_vpc", auth = "none" }
   }
 
   integration_ids = {
@@ -97,6 +100,7 @@ locals {
     "POST /api/v1/authoring/automation/runner/heartbeat" = { burst = 10, rate = 5 }
     "POST /api/v1/authoring/automation/runner/claim"     = { burst = 10, rate = 5 }
     "POST /api/v1/authoring/automation/runner/complete"  = { burst = 10, rate = 5 }
+    "POST /api/v1/public/events"                         = { burst = 10, rate = 5 }
   }
 }
 
