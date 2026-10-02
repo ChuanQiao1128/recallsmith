@@ -1,0 +1,479 @@
+{
+  "slug": "aws-saa-c03",
+  "title": "AWS Associate Architect",
+  "locale": "en-US",
+  "deckType": 1,
+  "version": "20261001T043805Z-7c5e904e-starter",
+  "totalCards": 371,
+  "cards": [
+    {
+      "stableUid": "aws-s3-storage-classes",
+      "orderInDeck": 5,
+      "difficulty": 1,
+      "question": "An application writes logs to S3 that are read often for 30 days and almost never afterwards, but must be kept for 7 years. Which storage classes and mechanism fit?",
+      "explanation": "Keep the first 30 days in S3 Standard, then use a lifecycle rule to transition objects to S3 Glacier Flexible Retrieval or Deep Archive for the retention period, and expire them after 7 years. Lifecycle rules run automatically; you do not write code or move objects yourself. Use Intelligent-Tiering instead only when the access pattern is unknown.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Age out build artefacts and logs with a lifecycle rule instead of a cleanup script: keep 30 days hot, then transition to Glacier and expire at the retention deadline.",
+      "revision": 1,
+      "topic": "4.1 Cost-optimized storage"
+    },
+    {
+      "stableUid": "aws-s3-cloudfront-oac",
+      "orderInDeck": 10,
+      "difficulty": 2,
+      "question": "You serve a static site from S3 through CloudFront. Why keep the bucket private and use Origin Access Control instead of making the bucket public?",
+      "explanation": "With Origin Access Control the bucket policy grants read access only to the CloudFront distribution's service principal, so every request must come through CloudFront: the edge cache, HTTPS, WAF and logging all apply, and nobody can skip them with a direct S3 URL. A public bucket leaks the origin and lets clients skip the CDN. OAC replaced the older Origin Access Identity and supports SSE-KMS objects.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "A single-page app on S3 behind CloudFront with OAC needs a 403/404 to index.html custom error response for client-side routes.",
+      "revision": 1,
+      "topic": "1.2 Secure workloads"
+    },
+    {
+      "stableUid": "aws-iam-roles-vs-users",
+      "orderInDeck": 20,
+      "difficulty": 1,
+      "question": "An EC2 application needs to read from S3. A reviewer asks whether it should use an IAM user's access keys or a role, and what the rest of the account's IAM setup should look like. What do you answer?",
+      "explanation": "Attach a role to the instance profile. IAM is global and free; its objects are users (long-term passwords or keys, avoid wherever a role can work), groups (attach policies to many users at once), roles (assumed by services, federated people or other accounts, always temporary credentials) and policies (identity-based, resource-based, permissions boundaries, SCPs, session policies). Every request starts as an implicit deny, an explicit deny beats any allow, and tag conditions such as aws:PrincipalTag give you ABAC. The rest of the checklist: MFA and no access keys on the root user, humans through Identity Center, least privilege with conditions, rotate any long-term keys left, CloudTrail on everywhere. Any option that puts long-lived access keys on a server is wrong.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Give every function or task its own role scoped to the tables and buckets it touches; a shared role is the first thing an auditor flags.",
+      "revision": 1,
+      "topic": "1.1 Secure access"
+    },
+    {
+      "stableUid": "aws-lambda-cold-start-init",
+      "orderInDeck": 30,
+      "difficulty": 2,
+      "question": "A team is splitting a monolith into serverless pieces: a bursty API, a nightly 40-minute report, an S3-triggered thumbnailer with occasional slow cold starts, and a queue of 200,000 small messages. Which of Lambda or Fargate runs each, and what shortens the cold start?",
+      "explanation": "Lambda takes the short, event-driven, bursty units: API Gateway plus Lambda for the API, an S3 event for the thumbnailer, and an SQS event source mapping for the queue, which polls and hands over batches of up to 10 messages by default. Fargate takes the report: Lambda's 900-second timeout, 10,240 MB memory ceiling and 6 MB synchronous payload push anything long-running or container-shaped to a Fargate task or AWS Batch, and Step Functions coordinates multi-step flows. A cold start downloads the code, starts the runtime and runs the code outside the handler once per execution environment, so put database connections and SDK clients there; Provisioned Concurrency pre-initialises environments, and SnapStart resumes Java, Python and .NET functions from a snapshot.",
+      "codeLanguage": "csharp",
+      "codeSnippet": "// Created once per environment, reused by every warm invocation\nprivate static readonly NpgsqlDataSource Db = NpgsqlDataSource.Create(ConnString);",
+      "realWorldUsage": "Create the database connection and SDK clients outside the handler so they are built once per execution environment and reused by every warm invocation, and check whether a connection already exists before opening a new one.",
+      "revision": 1,
+      "topic": "3.2 Elastic compute"
+    },
+    {
+      "stableUid": "aws-sqs-visibility-timeout-dlq",
+      "orderInDeck": 40,
+      "difficulty": 2,
+      "question": "A web tier drops uploaded images into S3 and a fleet of EC2 workers resizes them. During spikes the workers fall behind, and when a worker crashes halfway through an image that upload is sometimes lost or processed twice. Which design is the MOST performant way to keep up with spikes without losing work?",
+      "explanation": "Put an SQS queue between the tiers and scale the workers on backlog per instance. S3 event notifications feed the queue; a received message stays hidden for the visibility timeout and reappears if the worker never deletes it, so a crash hands the image to another worker and consumers must be idempotent, while a redrive policy moves a message received more than maxReceiveCount times to a dead-letter queue instead of looping. Because ApproximateNumberOfMessagesVisible alone does not scale with fleet size, target tracking uses that count divided by InService instances against an acceptable backlog. Synchronous calls and SNS push have no buffer, CPU lags the backlog, and Kinesis Data Streams is a replayable ordered stream, not a work queue that hides and deletes items.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "A DLQ with a reprocessing path catches poison messages early instead of letting them trigger expensive downstream jobs on every retry.",
+      "revision": 1,
+      "topic": "3.2 Elastic compute",
+      "mcq": {
+        "v": 1,
+        "options": [
+          {
+            "key": "a",
+            "why": null,
+            "text": "Send S3 event notifications to an SQS queue, have workers delete a message only after the resize succeeds, attach a dead-letter queue through a redrive policy, and scale the worker Auto Scaling group with target tracking on a backlog-per-instance metric derived from ApproximateNumberOfMessagesVisible.",
+            "correct": true
+          },
+          {
+            "key": "b",
+            "why": "A synchronous call couples the tiers: a spike in uploads becomes a spike of open requests held on the workers, and a worker crash fails the user's request instead of leaving the job safely queued for another worker.",
+            "text": "Have the web tier call the worker fleet's resize API synchronously for each upload and return only once the image is processed.",
+            "correct": false
+          },
+          {
+            "key": "c",
+            "why": "SNS pushes each notification as it arrives and, for an HTTPS endpoint, retries a failed delivery only three times by default and never for more than an hour before discarding it; with no queue in front of the workers there is nothing to absorb the spike and nothing to hand a crashed worker's image to another one.",
+            "text": "Publish each upload to an SNS topic that pushes directly to the workers over HTTPS, so every upload is delivered immediately.",
+            "correct": false
+          },
+          {
+            "key": "d",
+            "why": "CPU says how busy the current workers are, not how far behind the queue is; a backlog can grow for minutes before CPU moves, and the documented approach is a backlog-per-instance metric with an acceptable-latency target.",
+            "text": "Keep the queue but scale the worker group on average CPU utilization so more instances launch when the fleet is busy.",
+            "correct": false
+          }
+        ],
+        "shuffle": true,
+        "qualifier": "MOST performant"
+      }
+    },
+    {
+      "stableUid": "aws-sqs-sns-eventbridge-choice",
+      "orderInDeck": 50,
+      "difficulty": 2,
+      "question": "An order service publishes events that a billing worker, a fraud checker and an analytics pipeline each consume, and last week a duplicate event double-charged a customer. When do you pick SQS, SNS or EventBridge, and what must every consumer do?",
+      "explanation": "Sources emit events: S3 notifications, DynamoDB Streams, AWS services and SaaS through EventBridge, or an application calling PutEvents. A router fans them out: SQS is a queue one consumer group drains with buffering and retries; SNS pushes one message to many subscribers with no buffer; EventBridge is a bus whose rules route by event content, with schema registry and archive/replay. Consumers (Lambda, SQS, Step Functions) must be idempotent, because delivery is at least once and ordering is not guaranteed, which double-charged the customer. Producers never wait for consumers, so spikes are absorbed. EventBridge retries a target up to 24 hours and 185 attempts, then drops the event unless a dead-letter queue exists; archive replay recovers a bad deploy.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Put one SQS job between an API that must answer in under a second and a worker that takes minutes; SNS when several teams need the same event; EventBridge when routing depends on the event body.",
+      "revision": 1,
+      "topic": "2.1 Loosely coupled architectures"
+    },
+    {
+      "stableUid": "aws-rds-multi-az-vs-read-replica",
+      "orderInDeck": 60,
+      "difficulty": 1,
+      "question": "An RDS PostgreSQL instance must survive an Availability Zone failure and also serve a growing reporting load. Which of Multi-AZ and read replicas answers each need, and how does the replica story differ on Aurora and DynamoDB?",
+      "explanation": "Multi-AZ keeps a synchronous standby in another Availability Zone and fails over to it automatically; the one-standby instance deployment serves no reads from the standby, only the two-standby Multi-AZ DB cluster deployment does. A read replica is an asynchronous copy you can query, up to 15 per primary, in the same or another Region, with its own endpoint, promotable to a standalone instance as a manual disaster-recovery step. Aurora replicas share the cluster volume instead of copying it: up to 15 per cluster behind one reader endpoint, lag usually well under 100 milliseconds, and they double as failover targets. DynamoDB global tables are multi-active, so every replica Region serves reads and writes. Multi-AZ answers \"keep running\"; replicas answer \"handle more reads\", never \"write faster\".",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Multi-AZ is the first switch to flip when uptime starts to matter more than cost; add a replica only once reads, not availability, are the problem.",
+      "revision": 1,
+      "topic": "3.3 High-performing databases"
+    },
+    {
+      "stableUid": "aws-vpc-private-subnet-nat",
+      "orderInDeck": 70,
+      "difficulty": 1,
+      "question": "An application in a private subnet must call a third-party HTTPS API, and a colleague wants to move the RDS instance into the public subnet to make it reachable. Why has the app no internet path, what do you add, and where does each tier belong?",
+      "explanation": "A subnet is public only because its route table sends 0.0.0.0/0 to an internet gateway and its instances carry public IPs; the app's private subnet has neither, so outbound traffic has nowhere to go. Add a NAT gateway in a public subnet and a 0.0.0.0/0 route to it from the private subnet: outbound connections work, inbound stays blocked. The third tier is isolated: no internet route at all. The standard layout puts load balancers, NAT gateways and bastions in public subnets, application servers in private subnets, databases in isolated subnets, each tier repeated per Availability Zone. RDS and Lambda never need a public subnet; a database reachable from the internet is the trap, not a feature.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Databases and workers live in private subnets; only the load balancer and NAT need a public subnet.",
+      "revision": 1,
+      "topic": "1.2 Secure workloads"
+    },
+    {
+      "stableUid": "aws-vpc-security-group-vs-nacl",
+      "orderInDeck": 80,
+      "difficulty": 2,
+      "question": "A team attaches a custom network ACL allowing inbound HTTPS to a subnet and its instances stop responding; they also need to block one abusive IP address for the whole subnet. What went wrong, and how do NACLs differ from security groups?",
+      "explanation": "A security group sits on the network interface, is stateful, has allow rules only, and the reply to allowed traffic returns automatically. A network ACL sits on the subnet, is stateless, and evaluates numbered allow and deny rules from the lowest number, first match wins, with an implicit deny at the asterisk rule; the default NACL allows everything, a custom one denies everything until you add rules. The team's NACL lets requests in but has no outbound rule for the ephemeral ports 1024-65535 that replies use, so responses die: return traffic must be allowed both ways. Blocking one IP is the NACL's real job: a low-numbered deny rule a security group cannot express. Security groups stay the primary control.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Reach for a NACL deny only to block a known bad CIDR; every other rule belongs in a security group referencing another group.",
+      "revision": 1,
+      "topic": "1.2 Secure workloads"
+    },
+    {
+      "stableUid": "aws-ec2-purchase-options",
+      "orderInDeck": 90,
+      "difficulty": 1,
+      "question": "A web tier runs steadily all year, and a nightly batch job can be interrupted and restarted. Which purchase options minimise cost?",
+      "explanation": "Cover the steady baseline with a Savings Plan or Reserved Instances, which discount committed usage over one or three years, and run the interruptible batch on Spot Instances, which are spare capacity at a large discount that AWS can reclaim with a two-minute warning. On-Demand is for unpredictable or short workloads. Never put a stateful single instance on Spot without a way to resume.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Buy the Savings Plan for the floor you have measured over 30 days, not the peak, and let Spot and On-Demand cover the rest.",
+      "revision": 1,
+      "topic": "4.2 Cost-optimized compute"
+    },
+    {
+      "stableUid": "aws-ebs-vs-efs-vs-instance-store",
+      "orderInDeck": 100,
+      "difficulty": 1,
+      "question": "An application needs three kinds of storage: a PostgreSQL data volume, a shared directory that web servers in three Availability Zones read and write, and user uploads served straight to browsers. Which AWS storage type fits each, and what rule decides?",
+      "explanation": "Decide by who needs the data and how they reach it. Block storage (EBS) is a raw device for one instance in one Availability Zone with the lowest latency, persistent and snapshot-able, so it takes the boot and database volumes; instance store is host-attached disk that is faster still but empties when the instance stops or the host fails, so it holds only caches and scratch. File storage (EFS, or FSx for SMB and Lustre) is a POSIX or SMB file system that many instances across Availability Zones mount at once, so the shared directory goes on EFS. Object storage (S3) is reached over an HTTPS API by anything with credentials, stores whole objects up to 5 GB in one PUT and up to 50 TB with multipart, has effectively unlimited capacity and is designed for eleven nines of durability, so browser-served uploads live there. Trap: S3 cannot be mounted as a boot or database volume, and an EBS volume cannot be shared across Availability Zones.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Put scratch and cache on instance store and anything you would miss on EBS with snapshots; if two instances in different AZs need the same files it is EFS, full stop.",
+      "revision": 1,
+      "topic": "2.1 Loosely coupled architectures"
+    },
+    {
+      "stableUid": "aws-alb-vs-nlb",
+      "orderInDeck": 110,
+      "difficulty": 2,
+      "question": "A financial feed streams a custom TCP protocol to millions of client connections with sudden spikes at market open, and client firewalls allow-list only fixed IP addresses. Which load balancer is the MOST performant choice for these requirements?",
+      "explanation": "Use a Network Load Balancer. It operates at layer 4, handles millions of requests per second with volatile, spiky traffic, and gets a static IP address per enabled Availability Zone that you can replace with your own Elastic IP, which is what partner firewalls need to allow-list. An Application Load Balancer is the layer-7 choice for HTTP and HTTPS routing by host, path or header with TLS termination and WAF; its IPs are not fixed. For fixed IPs that stay the same across several Regions, put AWS Global Accelerator in front. Remember that cross-zone load balancing is off by default on a Network Load Balancer, so spread targets across the enabled zones.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "One ALB with host and path rules fronts a dozen microservices; reach for NLB only when a partner needs a fixed IP or the protocol is not HTTP.",
+      "revision": 1,
+      "topic": "3.4 Scalable network",
+      "mcq": {
+        "v": 1,
+        "options": [
+          {
+            "key": "a",
+            "why": null,
+            "text": "A Network Load Balancer with an Elastic IP address in each enabled Availability Zone.",
+            "correct": true
+          },
+          {
+            "key": "b",
+            "why": "An Application Load Balancer works at layer 7 for HTTP and HTTPS only, has no TCP listener, and its node IP addresses change as it scales, so nothing here can be allow-listed or carry a custom protocol.",
+            "text": "An Application Load Balancer with a TCP listener and a static IP per Availability Zone.",
+            "correct": false
+          },
+          {
+            "key": "c",
+            "why": "CloudFront is an HTTP content delivery network: it terminates HTTP and HTTPS only, so a custom TCP feed protocol cannot pass through it whatever IP addresses it exposes.",
+            "text": "A CloudFront distribution in front of the feed servers.",
+            "correct": false
+          },
+          {
+            "key": "d",
+            "why": "One instance gives a fixed IP but becomes the ceiling and the single point of failure; it cannot absorb millions of connections or a market-open spike the way a managed layer-4 balancer scales.",
+            "text": "A single large EC2 instance with an Elastic IP address that fans connections out to the fleet.",
+            "correct": false
+          }
+        ],
+        "shuffle": true,
+        "qualifier": "MOST performant"
+      }
+    },
+    {
+      "stableUid": "aws-dynamodb-capacity-and-keys",
+      "orderInDeck": 120,
+      "difficulty": 3,
+      "question": "A DynamoDB table keyed on event date throttles writes every morning even though total consumption is far below the provisioned capacity, because one day's key receives all the writes. A nightly job must still read a whole day's events. Which two changes remove the throttling while keeping that read possible? (Choose two.)",
+      "explanation": "Reshape the key and read across the shards. Every partition delivers at most 3,000 read units and 1,000 write units per second, so a date-only partition key funnels a whole day's writes into one partition and throttles while the table looks idle. Appending a suffix calculated from the event ID spreads writes across partitions and still lets GetItem find one event; reading a day becomes one Query per suffix, run in parallel and merged. On-demand mode, more provisioned capacity, DAX and an index keyed on the same hot date all leave that single partition where it is, and a local secondary index cannot be added after table creation and would share the hot key anyway.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Start on-demand, read ConsumedCapacity for a month, then switch to provisioned with auto scaling if the curve is flat; a date-only partition key will throttle on day one.",
+      "revision": 1,
+      "topic": "3.3 High-performing databases",
+      "mcq": {
+        "v": 1,
+        "options": [
+          {
+            "key": "a",
+            "why": null,
+            "text": "Change the partition key to the date plus a calculated suffix derived from the event ID, so each day's writes spread across many partitions while a single event can still be fetched with GetItem.",
+            "correct": true
+          },
+          {
+            "key": "b",
+            "why": null,
+            "text": "Rewrite the nightly job to issue one Query per suffix value of that date, run them in parallel, and merge the results in the application.",
+            "correct": true
+          },
+          {
+            "key": "c",
+            "why": "On-demand removes the table-level provisioning decision, but every partition still tops out at 1,000 write units per second, so a single hot key throttles exactly as before.",
+            "text": "Switch the table to on-demand capacity mode.",
+            "correct": false
+          },
+          {
+            "key": "d",
+            "why": "DAX is a read-through and write-through cache that speeds repeated reads; writes still flow to the same hot partition, so it cannot lift a write throttle.",
+            "text": "Add a DAX cluster in front of the table.",
+            "correct": false
+          },
+          {
+            "key": "e",
+            "why": "Provisioned capacity is spread across partitions and a single partition is still limited to 1,000 write units per second; buying more table capacity leaves the one hot key exactly where it was.",
+            "text": "Raise the table's provisioned write capacity units.",
+            "correct": false
+          },
+          {
+            "key": "f",
+            "why": "Index writes are distributed by the index's own partition key, so every write for the day lands in one index partition under the same per-partition cap, and a write the index cannot absorb throttles the base table as well; only a high-cardinality key, on the table or on the index, spreads the load.",
+            "text": "Add a global secondary index with the date as its partition key and read the day through the index.",
+            "correct": false
+          }
+        ],
+        "shuffle": true,
+        "qualifier": null
+      }
+    },
+    {
+      "stableUid": "aws-kms-envelope-encryption",
+      "orderInDeck": 130,
+      "difficulty": 2,
+      "question": "An app must encrypt 50 MB uploads under a key the security team can audit and revoke; a regulator asks how data is protected in transit and whether a dedicated HSM is needed. How does KMS handle the object, and what do you pick for each half?",
+      "explanation": "Envelope encryption: GenerateDataKey returns a data key in plaintext and encrypted under the KMS key; the app encrypts the object locally, stores the wrapped key beside it, discards the plaintext copy, and later sends the wrapped key to Decrypt. KMS never sees the data, the 4,096-byte Encrypt limit does not apply, and S3 SSE-KMS does exactly this. Key type decides control: AWS owned is free and invisible, AWS managed rotates yearly with no editable policy, customer managed gives your own key policy, rotation and cross-account use, so audit and revoke means customer managed; CloudHSM is for single-tenant FIPS 140-3 Level 3 custody. In transit: ACM certificates on ALB, CloudFront and API Gateway, TLS to RDS, VPN or MACsec on links.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Use the AWS Encryption SDK or S3 SSE-KMS and you get envelope encryption for free; only code that calls kms:Encrypt on payloads over 4 KB is doing it wrong.",
+      "revision": 1,
+      "topic": "1.3 Data security controls"
+    },
+    {
+      "stableUid": "aws-cloudwatch-alarm-vs-eventbridge-rule",
+      "orderInDeck": 140,
+      "difficulty": 2,
+      "question": "You want to be paged when a Lambda's error rate exceeds 5%, and separately to run a job when an EC2 instance changes state. Which service handles each?",
+      "explanation": "The error rate is a metric threshold, so use a CloudWatch alarm on the Errors and Invocations metrics with a math expression, and send the alarm to an SNS topic that pages you. The instance state change is an event, so use an EventBridge rule matching the EC2 instance state-change event and target a Lambda or Step Functions workflow. Alarms watch metrics over time; EventBridge rules react to discrete events.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Emit EMF metrics from the function and alarm on the error metric with an SNS action; use an EventBridge rule for the discrete state-change events, not a metric.",
+      "revision": 1,
+      "topic": "D2 services"
+    },
+    {
+      "stableUid": "aws-iam-policy-evaluation-explicit-deny",
+      "orderInDeck": 150,
+      "difficulty": 2,
+      "question": "A developer's role has AdministratorAccess, but an SCP on the account denies s3:DeleteBucket. Can the developer delete a bucket, which policy types took part in the decision, and which of them can actually grant anything?",
+      "explanation": "No. Six types matter: identity-based (what can this principal do), resource-based (who can touch this resource; cross-account access without a role, and in the same account sufficient on its own), permissions boundary (cap on one user or role), SCP (cap on a whole member account), session policy (cap on one AssumeRole session) and ACLs (legacy S3 cross-account grants). Only the first two grant; boundaries, SCPs and session policies only shrink. Evaluation starts as implicit deny, any explicit deny in any layer ends the request as denied, then an allow must exist in every cap that applies and in an identity or resource policy. The trap is believing AdministratorAccess cancels a Deny; nothing overrides an explicit Deny.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "When debugging an unexpected AccessDenied, search every policy layer for a matching Deny before adding Allow statements, because extra permissions can never fix an explicit deny.",
+      "revision": 1,
+      "topic": "1.1 Secure access"
+    },
+    {
+      "stableUid": "aws-iam-permissions-boundary",
+      "orderInDeck": 160,
+      "difficulty": 3,
+      "question": "You want developers to create IAM roles for their own workloads without ever creating a role more powerful than they are. Which feature enforces that, and why does a restrictive identity policy on the developers not solve it?",
+      "explanation": "Use a permissions boundary: a managed policy attached to a user or role that caps what its identity-based policies can grant, so effective permissions are the intersection of the two, and the boundary grants nothing on its own. To delegate safely, allow iam:CreateRole and iam:AttachRolePolicy only with a Condition that iam:PermissionsBoundary equals your approved boundary ARN, and deny editing or removing that boundary policy. A restrictive identity policy is the distractor: it limits the developer, but any role the developer creates carries whatever permissions the developer chooses, so the escalation path stays open. A boundary is also not an SCP; it applies per entity, not per account.",
+      "codeLanguage": "json",
+      "codeSnippet": "{\n  \"Effect\": \"Allow\",\n  \"Action\": [\"iam:CreateRole\", \"iam:AttachRolePolicy\"],\n  \"Resource\": \"*\",\n  \"Condition\": {\"StringEquals\": {\"iam:PermissionsBoundary\": \"arn:aws:iam::111122223333:policy/DevBoundary\"}}\n}",
+      "realWorldUsage": "If a role created by automation cannot do something its policy plainly allows, check whether a permissions boundary was attached to it, since the console shows the boundary separately from the permissions policies.",
+      "revision": 1,
+      "topic": "1.1 Secure access"
+    },
+    {
+      "stableUid": "aws-sts-assume-role-cross-account",
+      "orderInDeck": 170,
+      "difficulty": 2,
+      "question": "A SaaS vendor needs read access to CloudWatch metrics in your account. Why do you create a role rather than an IAM user, what does the external ID add, and which other STS calls and session limits should you know?",
+      "explanation": "Create a role whose trust policy names the vendor's account, attach a least-privilege policy and share only the role ARN; the vendor calls sts:AssumeRole for credentials that expire, so no long-lived secret leaves your account. The external ID, checked by an sts:ExternalId condition, blocks the confused deputy who would reuse your role elsewhere; it is not a secret. Other calls: AssumeRoleWithSAML for an enterprise IdP, AssumeRoleWithWebIdentity for Cognito or OIDC, GetSessionToken for MFA-protected calls by an IAM user (15 minutes to 36 hours), GetFederationToken for a legacy broker. Role sessions run 15 minutes to the role's maximum of 12 hours, but role chaining caps at one hour. Issued credentials cannot be recalled early except by a deny on aws:TokenIssueTime.",
+      "codeLanguage": "json",
+      "codeSnippet": "{\n  \"Effect\": \"Allow\",\n  \"Principal\": {\"AWS\": \"999999999999\"},\n  \"Action\": \"sts:AssumeRole\",\n  \"Condition\": {\"StringEquals\": {\"sts:ExternalId\": \"vendor-generated-id\"}}\n}",
+      "realWorldUsage": "Before storing a customer's role ARN, test that the role cannot be assumed without the correct external ID, otherwise you have inherited the confused deputy problem.",
+      "revision": 1,
+      "topic": "1.1 Secure access"
+    },
+    {
+      "stableUid": "aws-organizations-scp",
+      "orderInDeck": 180,
+      "difficulty": 2,
+      "question": "An SCP on a member account's OU allows only ec2:* and s3:*, a user there has no IAM policies, and the CTO asks what else Organizations offers beyond that guardrail. What can the user do, and how do the multi-account layers fit together?",
+      "explanation": "Nothing: an SCP never grants, it caps what identity-based and resource-based policies can grant to every user and role in member accounts, root included, so someone must still attach an IAM policy. SCPs bind neither the management account nor service-linked roles, and they need all-features mode, as do tag policies and delegated administrators. Beyond guardrails, Organizations gives one management account with nested OUs that inherit policies, consolidated billing that shares volume tiers plus Reserved Instance and Savings Plans discounts, and delegated administrator accounts for services such as GuardDuty. Multi-account access stacks four layers: prevent with SCPs, grant with cross-account roles, give humans permission sets through Identity Center, and share subnets or transit gateways with RAM instead of copying them.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Test a new SCP on an OU holding a single sandbox account before attaching it near the root, since one typo can lock every member account out of a service at once.",
+      "revision": 1,
+      "topic": "1.1 Secure access",
+      "source": {
+        "url": "https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html",
+        "quote": "SCPs do not grant permissions to the IAM users and IAM roles in your organization."
+      }
+    },
+    {
+      "stableUid": "aws-iam-identity-center",
+      "orderInDeck": 190,
+      "difficulty": 2,
+      "question": "Dozens of accounts need single sign-on from corporate Okta, a second team runs one standalone account, and a mobile app's customers must upload to S3. Which federation path fits each, and where do IAM users still belong?",
+      "explanation": "Workforce across many accounts: IAM Identity Center, an organization instance in the management account connected to Okta over SAML 2.0 with SCIM provisioning; permission sets become IAM roles in each account and users get short-lived credentials from the access portal. One standalone account: a SAML 2.0 or OIDC identity provider created in IAM, whose assertion is exchanged through AssumeRoleWithSAML or AssumeRoleWithWebIdentity for one role in that account. App customers: a Cognito user pool signs them in and an identity pool exchanges the token for an IAM role's temporary credentials (its classic flow calls AssumeRoleWithWebIdentity directly). In every case the person lands in a role with STS credentials; IAM users with long-term keys are only for tools that cannot federate.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Assign a least-privilege permission set alongside the administrative one and choose the smaller role in the access portal for day-to-day work.",
+      "revision": 1,
+      "topic": "1.1 Secure access"
+    },
+    {
+      "stableUid": "aws-s3-bucket-policy-vs-iam-policy",
+      "orderInDeck": 200,
+      "difficulty": 2,
+      "question": "A Lambda role in account B must read objects from a bucket owned by account A. Which policy must account A write, and is an identity policy on the role still needed?",
+      "explanation": "Account A must attach a bucket policy, a resource-based policy, naming the role's ARN as Principal and allowing s3:GetObject on the objects, because an identity-based policy in account A cannot grant to a principal it does not own. The role in account B also needs an identity policy allowing s3:GetObject on the object ARN, arn:aws:s3:::bucket/*, not the bucket ARN, because s3:GetObject is an object operation and a cross-account request must be allowed in both accounts. Within one account either policy type alone is enough. Keep Object Ownership on bucket owner enforced so ACLs are disabled and account A owns every object. The distractor is an object ACL, or an IAM policy in account A naming account B's role.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "If a cross-account read still fails after the bucket policy looks right, check whether the objects use SSE-KMS, because the key policy must also allow the other account and the AWS managed key cannot be shared.",
+      "revision": 1,
+      "topic": "1.1 Secure access"
+    },
+    {
+      "stableUid": "aws-s3-block-public-access",
+      "orderInDeck": 210,
+      "difficulty": 1,
+      "question": "A team adds a bucket policy with Principal \"*\" to serve images publicly, but S3 rejects the PutBucketPolicy call. What is blocking it, and how do account-level and bucket-level settings interact?",
+      "explanation": "S3 Block Public Access. Every new bucket has all four settings on, and BlockPublicPolicy rejects any bucket policy that S3 classifies as public, while BlockPublicAcls and IgnorePublicAcls neutralise public ACLs and RestrictPublicBuckets cuts off cross-account access to a bucket whose policy is public. The settings exist at account level and bucket level, and S3 applies the most restrictive combination, so turning them off on one bucket achieves nothing while the account-level block stays on. The feature overrides policies and ACLs without editing them, so switching it off makes an existing public policy live again. The distractor is rewriting the policy when the block is the real cause; for public content prefer CloudFront in front of a private bucket.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "When a static website served straight from S3 returns 403 on every object, check Block Public Access at both the bucket and the account before touching the policy.",
+      "revision": 1,
+      "topic": "1.3 Data security controls"
+    },
+    {
+      "stableUid": "aws-s3-object-lock-worm",
+      "orderInDeck": 220,
+      "difficulty": 2,
+      "question": "Financial records must be undeletable for seven years, even by root, application logs must vanish after 90 days, and PII must be findable and locked down separately. Which Object Lock mode do you choose, and what sets the other two controls?",
+      "explanation": "Enable Object Lock on the bucket (it turns on Versioning) and apply a retention period in compliance mode: nobody, root included, can delete or shorten it before the retain-until date, and the only exit is closing the account. Governance mode is the distractor: a principal with the governance override permission can lift it, and a legal hold is a separate no-expiry lock. Retention floors come from Object Lock or Glacier Vault Lock; retention ceilings come from lifecycle expiration rules and CloudWatch Logs retention, which defaults to never expire and runs from 1 to 3,653 days. Classification is tags plus Macie discovery, then ABAC policies and a separate KMS key per class so PII has its own audit trail and revocation.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Trial the retention settings in governance mode on a test bucket first, because a compliance-mode retention period applied to the wrong prefix cannot be undone.",
+      "revision": 1,
+      "topic": "1.3 Data security controls"
+    },
+    {
+      "stableUid": "aws-s3-encryption-options-sse",
+      "orderInDeck": 230,
+      "difficulty": 2,
+      "question": "Auditors require proof of which principal decrypted each object and the ability to revoke a key for one dataset. Which S3 server-side encryption option satisfies this, and what cost issue follows?",
+      "explanation": "SSE-KMS with a customer managed key. SSE-S3 is the default and encrypts every new object with keys S3 manages, but it gives no key policy, no key lifecycle control and no CloudTrail record of key use, so it fails the audit. With SSE-KMS every upload and download calls KMS for GenerateDataKey or Decrypt, which is billed and counts against the KMS request quota; enable an S3 Bucket Key so S3 derives data keys from a bucket-level key and reduces KMS traffic. DSSE-KMS adds a second encryption layer for regulations demanding it and cannot use Bucket Keys. SSE-C means you send your own key on every request and S3 never stores it, so losing the key loses the object.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Keep buckets that receive S3 server access logs on SSE-S3, because switching the destination to SSE-KMS can produce log objects encrypted with a key you cannot read.",
+      "revision": 1,
+      "topic": "1.3 Data security controls"
+    },
+    {
+      "stableUid": "aws-s3-presigned-urls",
+      "orderInDeck": 240,
+      "difficulty": 1,
+      "question": "A mobile app must let users upload photos to a private S3 bucket without AWS credentials on the device. Why is a presigned URL the answer rather than opening the bucket?",
+      "explanation": "A presigned URL is a signed request that carries the permissions of the IAM principal who generated it, valid only until the expiry you set, so the bucket stays private and no credentials leave your backend. It works for downloads with GET and for uploads with PUT, and the client makes a plain HTTPS request. The trap is expiry: the URL dies when the signing credentials do, so one generated from an EC2 instance role or an STS session expires with that session even if you asked for longer, and only long-lived IAM user credentials reach the seven-day maximum. The exam distractor is making the bucket public, which exposes every object instead of one for a short time.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Sign URLs with a credential that outlives the URL, and remember an upload URL overwrites any existing object with the same key.",
+      "revision": 1,
+      "topic": "1.2 Secure workloads"
+    },
+    {
+      "stableUid": "aws-kms-key-rotation-and-multi-region",
+      "orderInDeck": 250,
+      "difficulty": 2,
+      "question": "Compliance demands yearly rotation, the DR plan decrypts backups in a second Region, and a new team asks which KMS key type to create, who controls access to it and what it costs. What do you tell them?",
+      "explanation": "KMS is Regional. Three ownership types: AWS owned (free, invisible, no policy), AWS managed aws/service (no monthly fee, rotated yearly, policy not editable, not shareable across accounts) and customer managed ($1 per key per month plus $0.03 per 10,000 requests, your key policy, optional rotation, cross-account use). Keys are symmetric by default or asymmetric/HMAC; Encrypt takes 4,096 bytes at most, so larger data needs envelope encryption. The key policy comes first and must delegate to IAM before IAM policies can allow; grants give services temporary access. Customer managed rotation defaults to 365 days and keeps old material, never re-encrypting. Deletion waits 7 to 30 days. Multi-Region keys share material so ciphertext decrypts in the replica Region; single-Region keys cannot convert.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Rotation never re-encrypts existing data or data keys, so a leaked data key is not fixed by rotating the KMS key; re-encrypt the data instead.",
+      "revision": 1,
+      "topic": "1.3 Data security controls"
+    },
+    {
+      "stableUid": "aws-acm-certificates-and-cloudfront-region",
+      "orderInDeck": 260,
+      "difficulty": 2,
+      "question": "A team requests one ACM certificate in ap-southeast-2 and attaches it to an ALB, then cannot select it for their CloudFront distribution. What went wrong, and when can an ACM certificate be exported?",
+      "explanation": "ACM certificates are Regional resources and cannot be copied between Regions. An ALB uses a certificate from its own Region, but CloudFront accepts only certificates in us-east-1, so request a second one there. Public certificates used with integrated services cost nothing extra and ACM renews them automatically when DNS validation is in place; imported certificates are never renewed. For export, an ordinary public certificate cannot be exported, and only one requested with export enabled, which carries a charge, or one issued by AWS Private CA gives you the private key for EC2 or on-premises servers. The distractor is exporting the existing certificate or attaching it directly to EC2, which ACM allows only through Nitro Enclaves.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Prefer DNS validation over email so renewals need no human action, and treat us-east-1 as the home for anything CloudFront will serve.",
+      "revision": 1,
+      "topic": "1.3 Data security controls"
+    },
+    {
+      "stableUid": "aws-cognito-user-pool-vs-identity-pool",
+      "orderInDeck": 270,
+      "difficulty": 2,
+      "question": "A mobile app needs sign-in with MFA and social login, and afterwards must upload files straight to S3. Which Cognito component does each job?",
+      "explanation": "A user pool is the user directory and authentication server: it handles sign-up, sign-in, MFA and federation with Google, Apple, SAML or OIDC providers, and issues OIDC JSON web tokens (ID, access and refresh) that your app or API can verify directly. It never hands out AWS credentials. An identity pool is a credentials broker: it takes a token from a user pool or another trusted provider and exchanges it through STS for temporary AWS credentials tied to an IAM role, so the app can call S3 or DynamoDB itself. It also supports unauthenticated guest identities with a limited role. The distractor is a user pool alone for S3 access, or IAM users for end customers.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Configure the IAM role trust policy so only your identity pool can assume it, and give the unauthenticated role the narrowest permissions you can.",
+      "revision": 1,
+      "topic": "1.2 Secure workloads"
+    },
+    {
+      "stableUid": "aws-guardduty-inspector-macie-detective",
+      "orderInDeck": 280,
+      "difficulty": 1,
+      "question": "Which service do you pick to find a leaked access key being used from an unusual country, an unpatched CVE in a container image, credit card numbers in a bucket, and the root cause after an alert?",
+      "explanation": "Match the verb. GuardDuty detects threats with no agents: it ingests CloudTrail management events, VPC Flow Logs and DNS logs, adds optional protection plans (S3, EKS, RDS login, Lambda, malware, runtime), is enabled organization-wide from a delegated administrator, and sends findings to EventBridge, so the leaked key is GuardDuty. Inspector manages vulnerabilities: it continuously rescans EC2 through the SSM Agent, ECR images and Lambda functions for CVEs and network reachability, so the CVE is Inspector. Macie is S3 only: it inventories buckets, flags public or unencrypted ones, and runs discovery jobs with managed and custom data identifiers, so the card numbers are Macie. Detective investigates after the alert, building a behavior graph from CloudTrail, flow logs and GuardDuty findings.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Route GuardDuty and Inspector findings through EventBridge to a ticket queue or chat channel, because findings nobody reads are the same as no detection.",
+      "revision": 1,
+      "topic": "1.2 Secure workloads"
+    },
+    {
+      "stableUid": "aws-vpc-endpoints-gateway-vs-interface",
+      "orderInDeck": 290,
+      "difficulty": 2,
+      "question": "Instances in a private subnet need S3 without a NAT gateway, and later an on-premises data centre must reach the same bucket privately. Gateway or interface endpoint, and why?",
+      "explanation": "A gateway endpoint exists only for S3 and DynamoDB, works as a prefix-list route in the subnet route table at no additional charge. It cannot be used from on premises, a peered VPC or another Region. For the data centre add an interface endpoint: a PrivateLink elastic network interface with a private IP in your subnet, guarded by a security group, and reachable over VPN, Direct Connect or a peered VPC. Both accept an endpoint policy that narrows which principals and buckets are reachable without replacing IAM or bucket policies. The distractor is an interface endpoint for traffic that never leaves the VPC, or a gateway endpoint for a client outside it.",
+      "codeLanguage": "",
+      "codeSnippet": "",
+      "realWorldUsage": "Add an S3 bucket policy condition on aws:sourceVpce once the endpoint exists, but test it first because a wrong endpoint ID locks everyone out, including the console.",
+      "revision": 1,
+      "topic": "1.2 Secure workloads"
+    }
+  ]
+}
