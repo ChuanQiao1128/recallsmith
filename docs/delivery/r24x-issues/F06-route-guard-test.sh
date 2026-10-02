@@ -2,7 +2,7 @@
 # F06 (r24x, p-tests-1): mutation test for the route guard in infra/modules/api/gateway.tf.
 # Offline: copies infra/ to a temp dir, applies one mutation at a time to the module's gateway.tf and runs
 # `terraform validate` on envs/prod (init -backend=false, providers from the lock file / plugin cache).
-# The unmutated copy must validate; every mutation must fail validate. No plan, no apply, no AWS call.
+# The unmutated copy must validate; every mutation must fail validate with the guard's ROUTE GUARD message. No plan, no apply, no AWS call.
 # Usage: bash docs/delivery/r24x-issues/F06-route-guard-test.sh   (from the repo root)
 set -euo pipefail
 
@@ -46,8 +46,12 @@ PY
   if validate; then
     echo "FAIL mutation still validates: $name"
     fail=1
+  elif ! tr -s ' \n' ' ' <"$work/out.txt" | grep -q 'cannot convert "ROUTE GUARD:'; then
+    echo "FAIL mutation failed validate without a ROUTE GUARD message: $name"
+    cat "$work/out.txt"
+    fail=1
   else
-    echo "ok   mutation rejected: $name"
+    echo "ok   mutation rejected: $name ($(tr -s ' \n' ' ' <"$work/out.txt" | sed -n 's/.*cannot convert "\(ROUTE GUARD:.*\)" to bool.*/\1/p'))"
   fi
   cp "$work/gateway.tf.orig" "$gw"
 done
