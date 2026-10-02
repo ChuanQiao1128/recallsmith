@@ -9,7 +9,7 @@ Contract: R24-00 §2.1 (offline first run, wave o).
   - Checks each deck.json against the manifest `sha256`.
   - Refuses a deck that is not `tier: free`, `availability: live` and `deckType: 1`.
   - Validates slug, version (must equal buildId), unique stableUids and integer `orderInDeck`.
-  - Writes the three packs and `index.ts`, and fails if the packs total 300 KB or more.
+  - Builds the three packs in memory and fails if they total 300 KB or more. Only after every fetch, validation and the size check pass does it write the packs and `index.ts`, so a failed refresh leaves all four files as they were (r24x F02; `tests/unit/buildStarterPacks.test.ts`).
 - `mobile/src/content/starter/aws-saa-c03.starter.json`, `claude-ccdv-f.starter.json`, `csharp-basics.starter.json` (new, generated).
 - `mobile/src/content/starter/index.ts` (new, generated): exports `STARTER_PACKS`, `STARTER_BUILD` and the types `StarterSlug`, `StarterPack`, `StarterPackCard`.
 - `mobile/tests/unit/starterPacks.test.ts` (new).

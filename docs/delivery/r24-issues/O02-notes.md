@@ -55,7 +55,8 @@ Screen behaviour:
 - **Draw and Library.** On the same download-failure conditions, any bundled slug installs the pack before the screen gives up. A thrown manifest error is still rethrown when there is no pack, so the existing error copy is unchanged ("No active pack yet" in Draw; "This deck is not available on this device yet." or "Install failed. Check your connection and retry." in Library).
 - **Home.**
   - With an empty manifest list and an empty update map, the shelf comes from `listInstalledDeckEntries()`.
-  - Every focus runs `upgradeStarterDecks()`, lazily imported and guarded. When it upgrades a deck, Home refreshes.
+  - Every focus runs `upgradeStarterDecks()`, lazily imported and guarded.
+  - Home subscribes to `subscribeStarterUpgrades` while mounted. It refreshes whenever any run upgrades a deck, including App's foreground run while Home is already showing (r24x F02).
   - Home's existing one-per-session auto-update can also pick up a starter deck, because its version differs from the manifest. Both paths join the repository's single-flight install.
 - **App.** On every return to the foreground: `void upgradeStarterDecks()`.
 
@@ -63,7 +64,7 @@ Progress, the owned set and the lesson record are keyed by slug and stableUid. T
 
 ## How it is tested
 
-Tests first. Each new test failed on the base and passes now; for each screen, I checked this by restoring the base file.
+Tests first. Tests 1, 2, 4, 5 and 6 below failed on the base and pass now. Test 4 exercises only the new `starterOffline` module, which does not exist on the base. For 1, 2, 5 and 6, this was checked by restoring the base screens. Tests 3 and 7 are regression guards: they also pass on the base. The online install and the offline errors for a deck with no bundled pack are unchanged behaviour. (Corrected in r24x F02, o-tests-4.)
 
 `tests/integration/offline-first-run.test.tsx` uses the real `deckRepository`, `deckCache`, starter module, wallet, draw commit, owned gate and storage. The fakes are an in-memory file system (`downloadAsync` copies `file://` sources as iOS does), in-memory AsyncStorage, and a `fetch` that throws while offline. It uses the real bundled `aws-saa-c03` pack. It covers:
 
@@ -73,21 +74,24 @@ Tests first. Each new test failed on the base and passes now; for each screen, I
    - The lesson then replaces to Draw with `rewardPending`.
    - Wallet 3 leads to Draw, then Open 1, then `DrawCeremony` with a result. The drawn card comes from the pack and is not a lesson card.
    - The owned set is updated and the wallet drops to 2.
-   - Only manifest fetches were tried.
-   - `loadHomeDeckSummaries` with no manifest lists the deck as studiable.
+   - The manifest was tried at least once, and only manifest fetches were tried.
+   - `loadHomeDeckSummaries` with no manifest lists the deck as studiable, at the full deck's `totalCards` (r24x F02).
 2. **The upgrade.**
    - Offline, the attempt fails, and the backoff then blocks a second attempt even once the network is back.
    - After 5 minutes the full build installs (meta buildId and card count). The lesson record, owned set and studied progress are identical before and after.
    - A further call makes no network request.
+   - A `subscribeStarterUpgrades` listener hears the upgraded slug once, and hears nothing about an empty run (r24x F02).
 3. **Online.** The normal install wins: the meta holds the full buildId and no notice shows.
 4. `ensureStarterDeckInstalled` returns `installed-starter`, then `already-installed`, then `unavailable` for an unknown slug. The cache copy is removed.
 5. Draw opens the bundled pack offline when no deck is installed.
 6. Library shows the bundled pack offline when no deck is installed.
-7. A non-bundled slug keeps its offline error in both Library and Draw.
+7. A non-bundled slug keeps its offline error in both Library and Draw. No deck meta is written for any slug.
+8. Shelf entries from `listInstalledDeckEntries` carry the pack's `totalCards` for a starter deck, and the installed card count once the full deck replaces it (r24x F02).
+9. SessionCard, offline, with the lesson's goal deck set to `csharp-basics`, opening the bundled `aws-saa-c03`: the deck is not installed, no starter notice shows, and the plain "Deck not available" error shows (r24x F02, the lesson-deck gate).
 
 Other tests:
 
-- `tests/integration/home-starter-lesson.spec.tsx`: Home calls `upgradeStarterDecks` on every focus, and reloads its shelf when the call reports an upgrade.
+- `tests/integration/home-starter-lesson.spec.tsx`: Home calls `upgradeStarterDecks` on every focus, and reloads its shelf when an upgrade goes in. That includes an upgrade started outside Home (App's foreground run), reported through the listener (r24x F02).
 - `tests/unit/starterUpgradeTriggers.test.ts` checks the source of `App.tsx`. App cannot mount under Node, so the test checks that `App.tsx` imports `upgradeStarterDecks` and calls it in the `AppState` `active` branch.
 - The existing starter tests are unchanged and green: `session-card-starter.screen.test.tsx`, `home-starter-lesson.spec.tsx`, `onboarding.screen.test.tsx` and `starterPacks.test.ts`.
 
