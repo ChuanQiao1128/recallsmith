@@ -38,6 +38,7 @@ const MODULES: readonly GuardedModule[] = [
 // them, this issue may not touch them). The release merge empties this list once
 // those branches land; the guard then covers them too. Never add a module here
 // to hide new jargon, and never widen BANNED's escape hatches instead.
+// W01 #669, W02 #670 and W03 #671 have landed on release/r24b, so nothing is pending.
 const PENDING: readonly string[] = [];
 
 // Literals that are code tokens, not copy: a storage key, a union member or an

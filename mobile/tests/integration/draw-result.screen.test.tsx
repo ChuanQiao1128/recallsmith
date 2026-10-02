@@ -1,6 +1,6 @@
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 let walletFixture = { availablePulls: 2, reservePulls: 0 };
 let viewportWidth = 390;
@@ -116,8 +116,29 @@ function collectText(tree: renderer.ReactTestRenderer): string {
     .join('\n');
 }
 
+// Every screen mounted here starts a real RATING_PROMPT_DELAY_MS timer. A tree a test leaves
+// mounted keeps that timer alive, and on a loaded machine it fires inside a later test, after
+// that test's mockClear(), as stray 'first-legendary' rating calls. Track every tree and unmount
+// it after each test so the screen's own cleanup clears the timer.
+const mountedTrees = new Set<renderer.ReactTestRenderer>();
+const realCreate = renderer.create;
+let createSpy: ReturnType<typeof vi.spyOn> | undefined;
+
 describe('DrawResultScreen v9', () => {
+  afterEach(async () => {
+    await act(async () => {
+      for (const tree of mountedTrees) tree.unmount();
+    });
+    mountedTrees.clear();
+    createSpy?.mockRestore();
+  });
+
   beforeEach(() => {
+    createSpy = vi.spyOn(renderer, 'create').mockImplementation((...args: Parameters<typeof renderer.create>) => {
+      const tree = realCreate(...args);
+      mountedTrees.add(tree);
+      return tree;
+    });
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
     walletFixture = { availablePulls: 2, reservePulls: 0 };
     walletLoader = async () => walletFixture;

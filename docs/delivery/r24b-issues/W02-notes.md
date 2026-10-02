@@ -66,8 +66,13 @@ Card detail: "Open reward draw" → "Open reward pack" (button and VoiceOver lab
 - Pinning tests updated to the new strings (list above). The sessionWords RoutePreview fixture title now says "Final check".
 - New `tests/unit/homePlainWords.spec.ts`: walks every Home status kind × deck shape × wallet state and fails if any
   learner field (hero, CTA, draw badge, status line, session preview) matches the old jargon words; pins the fallback
-  hero titles, the empty-deck helper, the status line and the preview titles; reads HomeScreen, LibraryHeader and
-  CardDetailScreen as source text for the new strings. It failed on the base and passes with the change.
+  hero titles, the empty-deck helper, the status line and the preview titles. It also reads HomeScreen,
+  LibraryHeader and CardDetailScreen as source text for the new strings; that source search is only a backstop.
+  It shows a literal is somewhere in the file, not which branch it is on or that it reaches the rendered Text or
+  VoiceOver label. It failed on the base and passes with the change.
+- Rendered coverage of the Library banner and the Card detail locked-card button was added in the r24bx fix round
+  (F02 h-tests-1): `tests/integration/plain-words-rendered.screen.test.tsx` renders LibraryHeader in both banner
+  branches and CardDetailScreen on a locked card and checks the Text and the accessibilityLabel.
 - Negative guards kept green: homeSelectors.spec "subline must not match /normal|elite|boss|pressure|route|node/",
   home-primary-cta "Peek at reward draw" / "Start first draw", the sessionWords "node" guards.
 - Gates: `npx tsc --noEmit`, `npx vitest run` (unit 1636, integration 561 passing).
