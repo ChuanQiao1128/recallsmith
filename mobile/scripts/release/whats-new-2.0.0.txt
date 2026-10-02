@@ -1,5 +1,5 @@
 DeveloperCards 2.0
-• New .NET & C# Interview deck: 217 cards for .NET 8 / C# 12, junior to mid, including 127 multiple-choice cards. Every wrong option is explained and every card quotes Microsoft Learn.
+• Rebuilt .NET & C# Interview deck (it replaces the old C# / .NET deck): 217 cards for .NET 8 / C# 12, junior to mid, including 127 multiple-choice cards. Every wrong option is explained and every card quotes Microsoft Learn.
 • A new first lesson: study each card first, then check what you recall. The lesson ends with 3 draws for that pack.
 • Your first lesson works offline: the first cards of each deck ship inside the app, and the full deck downloads when you are online.
 • Progress by domain: card counts for each exam domain, never a score.
