@@ -61,7 +61,7 @@ describe('reward wallet', () => {
     });
 
     expect(reward.rewardPulls).toBe(0);
-    expect(reward.rewardMessage).toMatch(/no free pulls this run/i);
+    expect(reward.rewardMessage).toMatch(/no free draws this session/i);
   });
 
   it('reports whether the wallet can still accept more pulls', () => {

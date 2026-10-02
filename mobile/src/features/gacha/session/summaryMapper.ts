@@ -1,37 +1,44 @@
 import type { HomeCtaKind } from '../selectors/homeSelectors';
-import { rewardLine as buildRewardLine, resolveSessionReward } from '../rewards/rewardResolver';
-import type { ResolvedSessionReward, RewardOutcome } from '../rewards/rewardResolver';
+import {
+  EMPTY_REWARD_WALLET,
+  rewardLine as buildRewardLine,
+  resolveSessionReward,
+  summaryRewardCounts,
+  walletLineCounts,
+} from '../rewards/rewardResolver';
+import type { ResolvedSessionReward, RewardOutcome, SummaryRewardCounts } from '../rewards/rewardResolver';
 import type { RewardWalletState } from '../rewards/rewardWallet';
 
 export const COPY = {
   title: {
-    fullClear: 'Run complete 🎉',
+    fullClear: 'Session complete 🎉',
     progress: 'Good progress today',
     // sessionDone 0: nothing was rated, so neither "progress" nor "complete"
     // is true. Same words as nextAction.emptyTitle so the hero and the
-    // action card stop contradicting each other on a run that never dealt.
-    none: 'No run logged yet',
+    // action card stop contradicting each other on a session that never dealt.
+    none: 'No session logged yet',
   },
   completion: {
-    fullClear: "Cleared today's run.",
+    fullClear: 'Cleared today’s session.',
     minimum: 'You kept the streak.',
     partial: 'Progress logged for today.',
     none: 'Nothing reviewed this time.',
   },
   reward: {
-    sectionFullClear: 'Run reward',
+    sectionFullClear: 'Session reward',
     sectionProgress: "Today's reward",
     sectionNoReward: 'Session update',
-    badge: (pulls: number) => (pulls > 0 ? `+${pulls} pull${pulls === 1 ? '' : 's'}` : 'Progress saved'),
-    noPull: 'No free pulls this run',
+    badge: (count: number) => (count > 0 ? `+${count} draw${count === 1 ? '' : 's'}` : 'Progress saved'),
+    noPull: 'No free draws this session',
     walletReady: (available: number) => `${available} ready for this pack`,
-    walletReserve: (available: number, reserve: number) => `${available} ready for this pack · ${reserve} pending in reserve`,
-    walletFull: (reserve: number) => `Pack pulls full · ${reserve} pending in reserve`,
+    walletReserve: (available: number, waiting: number) => `${available} ready for this pack · ${waiting} extra waiting`,
+    walletFull: (waiting: number) => `Saved draws full · ${waiting} extra waiting`,
+    useDraws: (available: number) => `Use ${available} draw${available === 1 ? '' : 's'}`,
   },
   progress: {
-    fullClearLabel: (done: number, total: number) => `${done} / ${total} cards · full clear`,
+    fullClearLabel: (done: number, total: number) => `${done} / ${total} cards · all due cards done`,
     minimumLabel: (done: number, total: number) => `${done} / ${total} cards · streak saved`,
-    partialLabel: (done: number, total: number) => `${done} / ${total} cards · route started`,
+    partialLabel: (done: number, total: number) => `${done} / ${total} cards · session started`,
     noneLabel: (total: number) => (total > 0 ? `0 / ${total} cards · not started` : 'No cards to review yet'),
     queueLabel: (dueCount: number) => `${dueCount} due card${dueCount === 1 ? '' : 's'} in today's queue`,
     streakRise: (before: number, after: number) => `🔥 ${before} → ${after}`,
@@ -43,12 +50,12 @@ export const COPY = {
     fullClearTitle: 'Cleared today. What now?',
     streakSavedTitle: 'Streak saved. Keep moving?',
     progressTitle: 'Progress saved. Keep going?',
-    emptyTitle: 'No run logged yet',
+    emptyTitle: 'No session logged yet',
     libraryTitle: 'Library is ready',
-    drawBody: 'Continue your day, then open draw when you want to spend pulls.',
-    homeBody: 'Continue to Home for the next run.',
+    drawBody: 'Continue your day, then open Draw when you want to use your draws.',
+    homeBody: 'Continue to Home for the next session.',
     libraryBody: "Browse your library to review today's updates.",
-    emptyBody: "Browse your library while we wait for tomorrow's run.",
+    emptyBody: 'Browse your library while we wait for tomorrow’s session.',
     continue: 'Continue',
     openLibrary: 'Open library',
     backHome: 'Back home',
@@ -56,13 +63,10 @@ export const COPY = {
 } as const;
 
 export type SessionSummaryVM = {
-  reward: {
+  reward: SummaryRewardCounts & {
     title: string;
     body: string;
     badge: string;
-    pulls: number;
-    walletBefore: { available: number; reserve: number };
-    walletAfter: { available: number; reserve: number };
     fullClear: boolean;
     minimumGoalMet: boolean;
     usePullsLabel: string | null;
@@ -98,18 +102,15 @@ export type SessionSummaryVM = {
   secondaryActionLabel: string;
 };
 
-function resolveWalletLine(walletAfter: {
-  availablePulls: number;
-  reservePulls: number;
-  dropped?: number;
-}): string {
-  if ((walletAfter.dropped ?? 0) > 0) {
-    return COPY.reward.walletFull(walletAfter.reservePulls);
+function resolveWalletLine(walletAfter: ResolvedSessionReward['walletAfter']): string {
+  const { ready, waiting, dropped } = walletLineCounts(walletAfter);
+  if (dropped > 0) {
+    return COPY.reward.walletFull(waiting);
   }
-  if (walletAfter.reservePulls > 0) {
-    return COPY.reward.walletReserve(walletAfter.availablePulls, walletAfter.reservePulls);
+  if (waiting > 0) {
+    return COPY.reward.walletReserve(ready, waiting);
   }
-  return COPY.reward.walletReady(walletAfter.availablePulls);
+  return COPY.reward.walletReady(ready);
 }
 
 function resolvePrimaryAction(params: {
@@ -204,15 +205,15 @@ export function buildSessionSummaryVM(params: {
     sessionDone,
     sessionLimit,
     minimumGoal,
-    wallet: wallet ?? { availablePulls: 0, reservePulls: 0 },
+    wallet: wallet ?? EMPTY_REWARD_WALLET,
     reward: reward ?? null,
   });
   const outcome = resolvedReward.outcome;
 
-  // A run with nothing rated. Reachable from an empty deck (planner limit 0,
-  // see sessionBuilder.EMPTY_ROUTE_LIMIT) and from any route-complete Continue
+  // A session with nothing rated. Reachable from an empty deck (planner limit 0,
+  // see sessionBuilder.EMPTY_ROUTE_LIMIT) and from any session-complete Continue
   // pressed before the first rating; both used to read "Good progress today ·
-  // 0/1 cleared" next to "No run logged yet".
+  // 0/1 cleared" next to "No session logged yet".
   const noRun = sessionDone <= 0;
 
   const completionLabel = noRun
@@ -226,7 +227,7 @@ export function buildSessionSummaryVM(params: {
   const legacyCompletionLabel = noRun
     ? 'No cards reviewed'
     : resolvedReward.completedFullRun
-      ? 'Full run cleared'
+      ? 'All due cards done'
       : resolvedReward.completedMinimumGoal
         ? 'Minimum goal cleared'
         : 'Practice progress saved';
@@ -243,11 +244,11 @@ export function buildSessionSummaryVM(params: {
     wallet == null
       ? resolvedReward.rewardPulls > 0
         ? rewardLine
-        : 'Progress saved for this run.'
+        : 'Progress saved for this session.'
       : resolvedReward.rewardMessage;
 
   // No Math.max(1, …): a limit of 0 with nothing done is an empty deck, and
-  // "0 / 1" invented a card that does not exist. Unlimited runs (limit 0,
+  // "0 / 1" invented a card that does not exist. Unlimited sessions (limit 0,
   // done > 0) still read done / done as before.
   const total = sessionLimit > 0 ? sessionLimit : Math.max(0, sessionDone);
   const progressBody = noRun
@@ -290,20 +291,12 @@ export function buildSessionSummaryVM(params: {
       title: rewardTitle,
       body: `${rewardLine} · ${walletLine}`,
       badge: COPY.reward.badge(resolvedReward.rewardPulls),
-      pulls: resolvedReward.rewardPulls,
-      walletBefore: {
-        available: (outcome.walletBefore ?? wallet)?.availablePulls ?? 0,
-        reserve: (outcome.walletBefore ?? wallet)?.reservePulls ?? 0,
-      },
-      walletAfter: {
-        available: resolvedReward.walletAfter.availablePulls,
-        reserve: resolvedReward.walletAfter.reservePulls,
-      },
+      ...summaryRewardCounts(resolvedReward, wallet),
       fullClear: resolvedReward.completedFullRun,
       minimumGoalMet: resolvedReward.completedMinimumGoal,
       usePullsLabel:
         resolvedReward.walletAfter.availablePulls > 0
-          ? `Use ${resolvedReward.walletAfter.availablePulls} pull${resolvedReward.walletAfter.availablePulls === 1 ? '' : 's'}`
+          ? COPY.reward.useDraws(resolvedReward.walletAfter.availablePulls)
           : null,
     },
     progress: {
@@ -331,7 +324,7 @@ export function buildSessionSummaryVM(params: {
     rewardBadge: COPY.reward.badge(resolvedReward.rewardPulls),
     completionLabel: legacyCompletionLabel,
     progressBody: `${progressBody} · ${COPY.progress.queueLabel(dueCount)}`,
-    nextActionLabel: resolvedReward.completedFullRun ? 'Back to home' : 'Keep momentum',
+    nextActionLabel: resolvedReward.completedFullRun ? 'Back to home' : 'Keep going',
     secondaryActionLabel: secondaryAction.label,
   };
 

@@ -109,7 +109,12 @@ function runOta(opts: { names: string[]; dryRun?: boolean }) {
   return { res, log, npx, security, diag };
 }
 
-describe('ota.sh', () => {
+// Each case spawns the real ota.sh, which starts node three to five times; on a loaded machine (a delivery
+// wave runs several suites at once) one case took ~5 s and hit vitest's 5 s default. The suites keep every
+// assertion and only state the budget a subprocess-driven case actually needs.
+const OTA_CASE_TIMEOUT_MS = 30_000;
+
+describe('ota.sh', { timeout: OTA_CASE_TIMEOUT_MS }, () => {
   it('refuses to publish when a required EXPO_PUBLIC name is missing from the production environment', () => {
     const names = ALL_NAMES.filter((n) => n !== 'EXPO_PUBLIC_RC_IOS_API_KEY');
     const { res, log, diag } = runOta({ names });
@@ -277,7 +282,7 @@ function runOtaTree(opts: TreeOpts) {
 
 const NAMES_180 = ALL_NAMES.filter((n) => n !== 'EXPO_PUBLIC_SENTRY_DSN');
 
-describe('ota.sh 1.9.0 release plumbing', () => {
+describe('ota.sh 1.9.0 release plumbing', { timeout: OTA_CASE_TIMEOUT_MS }, () => {
   it('runtime 1.9.0 without EXPO_PUBLIC_SENTRY_DSN refuses to publish (exit 3)', () => {
     const r = runOtaTree({ version: '1.9.0', sentryDependency: true, names: NAMES_180 });
     expect(r.res.status, r.diag).toBe(3);

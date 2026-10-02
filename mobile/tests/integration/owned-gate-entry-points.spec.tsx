@@ -325,6 +325,7 @@ describe('ownership gate — every entry point', () => {
       expect(blob).toContain('No cards yet');
       expect(blob).toContain('Open a pack to get your first cards');
       expect(blob).not.toContain('Route complete');
+      expect(blob).not.toContain('Session complete');
       expect(blob).not.toContain('Run 0/1');
       expect(blob).not.toContain('Card 1 of 1');
       expect(blob).not.toContain('Stranger question');

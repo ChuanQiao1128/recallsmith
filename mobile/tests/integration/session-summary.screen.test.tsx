@@ -162,7 +162,7 @@ describe('SessionSummaryScreen', () => {
 
     const texts = tree.root.findAll((node) => (node.type as any) === 'Text').map(getTextContent).join('\n');
     // economy-v2: the pull is paid at rating; the summary only renders the outcome.
-    expect(texts).toContain('+1 pull · 1 new card learned');
+    expect(texts).toContain('+1 draw · 1 new card learned');
     expect(texts).toContain('1 ready for this pack');
     expect(texts).toContain('Daily streak');
     expect(texts).toContain('First day complete');
@@ -248,7 +248,7 @@ describe('SessionSummaryScreen', () => {
     // row, reward body); the hero chip is the one that stays, the reward card
     // states the count through its anchor circle and its body sentence.
     const chipNodes = tree.root.findAll(
-      (node) => (node.type as any) === 'Text' && getTextContent(node.props.children) === '+5 pulls',
+      (node) => (node.type as any) === 'Text' && getTextContent(node.props.children) === '+5 draws',
     );
     expect(chipNodes).toHaveLength(1);
 
@@ -424,7 +424,7 @@ describe('SessionSummaryScreen', () => {
     });
 
     const texts = tree.root.findAll((node) => (node.type as any) === 'Text').map(getTextContent).join('\n');
-    expect(texts).toContain("Browse your library while we wait for tomorrow's run.");
+    expect(texts).toContain('Browse your library while we wait for tomorrow’s session.');
     expect(texts.toLowerCase()).not.toContain('choose cards');
     expect(texts.toLowerCase()).not.toContain('session launch');
 
@@ -478,7 +478,7 @@ describe('SessionSummaryScreen', () => {
     });
 
     const texts = tree.root.findAll((node) => (node.type as any) === 'Text').map(getTextContent).join('\n');
-    expect(texts).toContain('Three clean runs');
+    expect(texts).toContain('Three clean sessions');
     expect(texts).toContain('+1 more milestone unlocked');
   });
 

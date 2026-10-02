@@ -42,7 +42,7 @@ describe('buildChallengeRoute / planChallengeRoute', () => {
     expect(challenge.minimumGoal).toBe(1);
     expect(challenge.limit).toBe(5);
     expect(challenge.nodes.at(-1)?.role).toBe('boss');
-    expect(challenge.summary).toMatch(/keep momentum/i);
+    expect(challenge.summary).toMatch(/keep your streak/i);
   });
 
   it('creates a one-node maintenance route when today is clear but cards are owned', () => {
@@ -58,7 +58,8 @@ describe('buildChallengeRoute / planChallengeRoute', () => {
     expect(challenge.nodes[0]?.role).toBe('warmup');
     // R22 §5: the warm-up card carries no learner-visible title ('Warm-up node' is gone).
     expect(challenge.nodes[0]?.title).toBe('');
-    expect(challenge.summary).toMatch(/maintenance run/i);
+    expect(challenge.summary).toMatch(/maintenance session/i);
+    expect(challenge.summary).not.toMatch(/maintenance run/i);
   });
 
   it('returns an empty route (limit 0, no nodes) when the account owns no card of the deck', () => {

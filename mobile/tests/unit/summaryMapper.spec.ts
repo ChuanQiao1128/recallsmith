@@ -27,7 +27,7 @@ describe('summaryMapper wallet scenarios', () => {
     expect(summary.vm.reward.walletBefore).toEqual({ available: 0, reserve: 0 });
     expect(summary.vm.reward.walletAfter).toEqual({ available: 0, reserve: 0 });
     expect(summary.vm.progress.completionLabel).toBe('You kept the streak.');
-    expect(summary.vm.reward.body).toContain('No free pulls this run');
+    expect(summary.vm.reward.body).toContain('No free draws this session');
     expect(summary.vm.reward.body).toContain('0 ready for this pack');
   });
 
@@ -43,8 +43,8 @@ describe('summaryMapper wallet scenarios', () => {
     });
 
     expect(summary.vm.reward.walletAfter).toEqual({ available: 12, reserve: 0 });
-    expect(summary.vm.reward.body).toContain('No free pulls this run');
-    expect(summary.vm.reward.usePullsLabel).toBe('Use 12 pulls');
+    expect(summary.vm.reward.body).toContain('No free draws this session');
+    expect(summary.vm.reward.usePullsLabel).toBe('Use 12 draws');
   });
 
   it('maps 59 → 60 with one new card learned', () => {
@@ -67,10 +67,10 @@ describe('summaryMapper wallet scenarios', () => {
       },
     });
 
-    expect(summary.vm.progress.completionLabel).toBe("Cleared today's run.");
+    expect(summary.vm.progress.completionLabel).toBe('Cleared today’s session.');
     // +1 fits exactly in the remaining available room, so nothing spills into reserve.
     expect(summary.vm.reward.walletAfter).toEqual({ available: 60, reserve: 0 });
-    expect(summary.vm.reward.body).toContain('+1 pull · 1 new card learned');
+    expect(summary.vm.reward.body).toContain('+1 draw · 1 new card learned');
     expect(summary.vm.reward.body).toContain('60 ready for this pack');
   });
 
@@ -95,7 +95,7 @@ describe('summaryMapper wallet scenarios', () => {
     });
 
     expect(summary.vm.reward.walletAfter).toEqual({ available: 60, reserve: 5 });
-    expect(summary.vm.reward.body).toContain('Pack pulls full · 5 pending in reserve');
+    expect(summary.vm.reward.body).toContain('Saved draws full · 5 extra waiting');
   });
 
   it('maps next-action titles across ready states', () => {
@@ -133,8 +133,8 @@ describe('summaryMapper wallet scenarios', () => {
 
     expect(fullClear.vm.nextAction.title).toBe('Cleared today. What now?');
     expect(minimumGoal.vm.nextAction.title).toBe('Streak saved. Keep moving?');
-    expect(empty.vm.nextAction.title).toBe('No run logged yet');
-    expect(empty.vm.nextAction.body).toBe("Browse your library while we wait for tomorrow's run.");
+    expect(empty.vm.nextAction.title).toBe('No session logged yet');
+    expect(empty.vm.nextAction.body).toBe('Browse your library while we wait for tomorrow’s session.');
     expect(partialReady.vm.nextAction.title).toBe('Progress saved. Keep going?');
   });
 
@@ -174,14 +174,14 @@ describe('summaryMapper — a run with nothing rated', () => {
       reward: null,
     });
 
-    expect(summary.vm.title).toBe('No run logged yet');
+    expect(summary.vm.title).toBe('No session logged yet');
     expect(summary.vm.subtitle).toBe('Claude Developer Foundations (CCDV-F) · no cards reviewed');
     expect(summary.vm.progress.done).toBe(0);
     expect(summary.vm.progress.total).toBe(0);
     expect(summary.vm.progress.completionLabel).toBe('Nothing reviewed this time.');
     expect(summary.vm.progress.body).toBe("No cards to review yet · 0 due cards in today's queue");
     expect(summary.vm.completionLabel).toBe('No cards reviewed');
-    expect(summary.vm.nextAction.title).toBe('No run logged yet');
+    expect(summary.vm.nextAction.title).toBe('No session logged yet');
     expect(summary.vm.reward.fullClear).toBe(false);
     expect(summary.vm.reward.minimumGoalMet).toBe(false);
 
@@ -201,7 +201,7 @@ describe('summaryMapper — a run with nothing rated', () => {
       dueCount: 0,
       wallet: { availablePulls: 0, reservePulls: 0 },
     });
-    expect(summary.vm.title).toBe('No run logged yet');
+    expect(summary.vm.title).toBe('No session logged yet');
     expect(summary.vm.progress.total).toBe(4);
     expect(summary.vm.progress.body).toBe("0 / 4 cards · not started · 0 due cards in today's queue");
     expect(summary.vm.progress.completionLabel).toBe('Nothing reviewed this time.');
