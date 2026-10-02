@@ -41,6 +41,8 @@ From E06 the prod plan reads the real backend read-only (`init -reconfigure` wit
 `terraform plan -out=<tag>.tfplan`, the allow-list check, `terraform apply <tag>.tfplan`, the
 issue's post-apply CLI cleanups, and the second plan (§5).
 
+Release gates come first: for R26 P03 the core-vpc R26 build must already be the prod alias target (§9).
+
 ## 4. Post-apply cleanups
 
 Supervisor CLI after each apply (never a worker, never a file in git): stray log groups, stale
@@ -545,6 +547,8 @@ Terraform ignores `actions_enabled` on this alarm, so neither step causes drift.
     `aws lambda update-alias --function-name <fn> --name prod --function-version <new>`.
 
   Either way, finish with the Terraform revert so the next plan is empty.
+- **core-vpc after R26:** moving the alias back is limited once migration 045 has run; see "Rollback of core-vpc
+  (R26)" in §9 before using the `ROLLBACK` line.
 - **Synthetic check:** disable the schedule (`--state DISABLED` above) and the alarm actions
   (`disable-alarm-actions` above).
 - **SLOs:** revert H06 and I03; the apply removes the sixteen SLO alarms and restores
@@ -558,3 +562,43 @@ Cost: ≈ USD 4.80/month for the whole R18H release (H00 §9; H06's alarms ≈ U
 3.10/month for I03: three 30-minute children (api 5 + sync 6 + publish 2 = 13 alarm-metrics, USD 1.30), the api
 6-hour child going from 2 to 5 metrics (USD 0.30), and three slow-burn composites (3 × USD 0.50). The
 dashboard widget is free.
+
+## 9. R26: Snowflake and the analytics outbox retired
+
+R26 S01 removes the outbox publisher and the content-intelligence import from core-vpc and adds migration 045
+(drops `analytics_event_outbox` and the two `content_intelligence_*` tables). R26 P03 removes the Snowflake IAM role,
+the outbox alarm and widget, and the `core-vpc/analytics/*` object grant from the core-vpc role. The Terraform plan
+looks the same whatever build is live, so `check-plan.py` cannot catch a wrong order; these steps are the gate.
+
+1. **Deploy order: the core-vpc R26 build first, then the P03 terraform apply.** The pre-R26 build still writes
+   `analytics/raw/` (OutboxPublisher) and reads `analytics/marts/` (content-intelligence import); after P03's IAM
+   change those calls get S3 AccessDenied. Before `terraform apply`, confirm the prod alias runs a build that
+   contains S01 (read-only; do not call the old publish route as a probe, on a pre-R26 build it publishes):
+   ```bash
+   v="$(aws lambda get-alias --function-name core-vpc --name prod --query FunctionVersion --output text)"
+   sha="$(aws lambda get-function-configuration --function-name core-vpc --qualifier "$v" \
+     --query Description --output text | awk '{print $NF}')"
+   git merge-base --is-ancestor 66644472 "$sha" && echo "S01 is live: P03 may apply"
+   ```
+   No `S01 is live` line (including a `nogit` description): stop, deploy core-vpc (`ENV=prod ./src_C/deploy.sh`)
+   and check again.
+2. Plan and gate P03 as in §2/§3 with `docs/delivery/r26-issues/P03.plan-allow.json`, apply, second plan (§5).
+3. **Migration 045 is the owner's step.** Migrate stops before a destructive migration unless
+   `confirmDestructive=<version>` is passed (the version the dryRun shows): the owner runs
+   `POST /api/v1/admin/db/migrate?confirmDestructive=<045 version>` through `scripts/invoke-as-admin.sh`, only after
+   the deployed R26 build has been smoke-tested in prod. A plain migrate call applies the additive migrations before
+   045 and reports it as `blockedBy`.
+4. **Roll forward only once 045 has run.** Never move the core-vpc prod alias to a pre-R26 version: its ingest still
+   inserts into `analytics_event_outbox`, which 045 dropped, so signed-in sync pushes fail. Fix forward with a new
+   deploy instead.
+
+### Rollback of core-vpc (R26)
+
+- Before 045 has run: the `ROLLBACK` line from the deploy (alias back to the previous version) is safe only while
+  P03 is not applied. The core-vpc R26 build is deployed first and P03 applies after it, so once P03 is applied a
+  pre-R26 version gets S3 AccessDenied on `analytics/raw/` and `analytics/marts/`; roll back P03 (revert and apply)
+  before moving the alias, or fix forward.
+- After 045 has run: roll forward only. No pre-R26 version may become the prod alias target, because its ingest
+  inserts into the dropped `analytics_event_outbox`. There is no recreate script; deploy a fixed build instead.
+- Migrate never drops anything on its own: it stops before a destructive migration unless
+  `confirmDestructive=<version>` names that migration's version.
