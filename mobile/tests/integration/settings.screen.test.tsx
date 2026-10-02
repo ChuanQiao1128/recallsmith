@@ -489,6 +489,26 @@ describe('SettingsScreen', () => {
     }
   });
 
+  // F03 (q-correctness-1, q-security-1): no readable channel outside __DEV__ keeps the door shut.
+  it('7 taps on the version label do nothing when the update channel is missing', async () => {
+    for (const channel of [undefined, null, '']) {
+      updatesChannel.value = channel;
+      vi.useFakeTimers();
+      try {
+        const { tree, navigate } = await renderSettings();
+        expect((globalThis as any).__DEV__).toBe(false);
+        const label = findPressableByTestID(tree, 'settings-version-label');
+        for (let i = 0; i < 14; i += 1) {
+          act(() => { label.props.onPress?.(); });
+          vi.advanceTimersByTime(100);
+        }
+        expect(navigate).not.toHaveBeenCalledWith('DebugMenu');
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  });
+
   it('opens the Debug menu after 7 taps in __DEV__ even on the production channel', async () => {
     updatesChannel.value = 'production';
     (globalThis as any).__DEV__ = true;
