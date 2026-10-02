@@ -75,4 +75,4 @@ None for this issue. The release merge removes each PENDING entry once W01-W03 a
 
 - `mobile/app.json` photo-permission text ("saves a pull card image") belongs to R01.
 - `npm run test:smoke` (`tests/p2-smoke.ts`) fails on the base as well: it asserts "+2 pull" on summaryMapper reward copy, which W03 owns. Not touched here.
-- `tests/unit/otaReleaseScript.test.ts` times out (5 s per spawned script) in this worktree on the base commit as well; environmental, unrelated to copy.
+- `tests/unit/otaReleaseScript.test.ts` and `tests/unit/releasePlumbing190.test.ts` timed out at vitest's 5 s default (on the base commit as well) while the machine's load average was above 30. Their spawn-heavy `describe` blocks now carry an explicit 30 s `timeout` (`SPAWN_TIMEOUT_MS`). Every assertion is unchanged and the gate is green.
