@@ -53,6 +53,7 @@ describe('sentry kill-switch flag', () => {
       sentry: { enabled: false },
       cardReport: DEFAULT_FEATURE_FLAGS.cardReport,
       fsrs: DEFAULT_FEATURE_FLAGS.fsrs,
+      anonFunnel: DEFAULT_FEATURE_FLAGS.anonFunnel,
     });
   });
 

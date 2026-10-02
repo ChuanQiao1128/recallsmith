@@ -30,6 +30,9 @@ export type FeatureFlags = {
   // F02: remote kill switch for FSRS scheduling; off falls back to the ladder (scheduleNextReview).
   // Read as `?.enabled !== false` (isFsrsEnabled) because older test mocks omit the key.
   fsrs: { enabled: boolean };
+  // R24 M01: default-off gate for sending the anonymous install funnel (telemetry/funnel.ts).
+  // Events are still recorded locally while off; only `enabled === true` lets them be sent.
+  anonFunnel: { enabled: boolean };
 };
 
 export const DEFAULT_FEATURE_FLAGS: FeatureFlags = Object.freeze({
@@ -48,6 +51,7 @@ export const DEFAULT_FEATURE_FLAGS: FeatureFlags = Object.freeze({
   sentry: Object.freeze({ enabled: true }),
   cardReport: Object.freeze({ enabled: false }),
   fsrs: Object.freeze({ enabled: true }),
+  anonFunnel: Object.freeze({ enabled: false }),
 });
 
 let snapshot = DEFAULT_FEATURE_FLAGS;
@@ -72,6 +76,7 @@ function snapshotsEqual(left: FeatureFlags, right: FeatureFlags): boolean {
     && left.sentry.enabled === right.sentry.enabled
     && left.cardReport.enabled === right.cardReport.enabled
     && left.fsrs.enabled === right.fsrs.enabled
+    && left.anonFunnel.enabled === right.anonFunnel.enabled
   );
 }
 
@@ -109,6 +114,8 @@ export function applyRemoteFeatures(config: RemoteConfig | null | undefined): Fe
   const cardReport = isRecord(remoteCardReport) ? remoteCardReport : undefined;
   const remoteFsrs = features?.fsrs;
   const fsrs = isRecord(remoteFsrs) ? remoteFsrs : undefined;
+  const remoteAnonFunnel = features?.anonFunnel;
+  const anonFunnel = isRecord(remoteAnonFunnel) ? remoteAnonFunnel : undefined;
 
   const maxPerRun = mcq?.maxPerRun;
   const relatedCount = mistakeBook?.relatedCount;
@@ -183,6 +190,12 @@ export function applyRemoteFeatures(config: RemoteConfig | null | undefined): Fe
         typeof fsrs?.enabled === 'boolean'
           ? fsrs.enabled
           : DEFAULT_FEATURE_FLAGS.fsrs.enabled,
+    }),
+    anonFunnel: Object.freeze({
+      enabled:
+        typeof anonFunnel?.enabled === 'boolean'
+          ? anonFunnel.enabled
+          : DEFAULT_FEATURE_FLAGS.anonFunnel.enabled,
     }),
   });
 

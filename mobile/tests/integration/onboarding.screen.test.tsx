@@ -38,6 +38,11 @@ vi.mock('expo-linear-gradient', () => {
   return { LinearGradient: ({ children, ...props }: any) => React.createElement('LinearGradient', props, children) };
 });
 
+const recordFunnelEventMock = vi.fn();
+vi.mock('../../src/telemetry/funnel', () => ({
+  recordFunnelEvent: (...args: unknown[]) => recordFunnelEventMock(...args),
+}));
+
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SplashScreen } from '../../src/screens/SplashScreen';
 import { WelcomeScreen } from '../../src/screens/WelcomeScreen';
@@ -53,6 +58,7 @@ describe('phase A onboarding screens', () => {
 
   beforeEach(() => {
     store.clear();
+    recordFunnelEventMock.mockClear();
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
     errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -174,6 +180,7 @@ describe('phase A onboarding screens', () => {
     await press(tree, 'Finish setup');
 
     expect(replace).not.toHaveBeenCalled();
+    expect(recordFunnelEventMock).not.toHaveBeenCalled();
     expect(store.get('recallsmith:onboarding:stage:v1')).toBe('audience');
     const error = tree.root.findAll((node) => (node.type as any) === 'Text' && node.props.testID === 'goal-finish-error');
     expect(error).toHaveLength(1);
@@ -184,6 +191,8 @@ describe('phase A onboarding screens', () => {
     await press(tree, 'Finish setup');
     expect(store.get('recallsmith:onboarding:stage:v1')).toBe('starter');
     expect(replace).toHaveBeenCalledWith('Home');
+    expect(recordFunnelEventMock).toHaveBeenCalledTimes(1);
+    expect(recordFunnelEventMock).toHaveBeenCalledWith('goal_chosen', 'aws-saa-c03');
     expect(tree.root.findAll((node) => (node.type as any) === 'Text' && node.props.testID === 'goal-finish-error')).toHaveLength(0);
   });
 
@@ -220,6 +229,9 @@ describe('phase A onboarding screens', () => {
       await press(tree, 'Finish setup');
 
       expect(goal()).toEqual({ deckSlug: 'csharp-basics', examDate: '2026-11-09' });
+      // R24 M01: finishing the goal step is the anonymous funnel's goal_chosen, with the deck only.
+      expect(recordFunnelEventMock).toHaveBeenCalledTimes(1);
+      expect(recordFunnelEventMock).toHaveBeenCalledWith('goal_chosen', 'csharp-basics');
       expect(store.get('active-deck-slug')).toBe('csharp-basics');
       expect(store.get('recallsmith:onboarding:stage:v1')).toBe('starter');
       expect(replace).toHaveBeenCalledWith('Home');
