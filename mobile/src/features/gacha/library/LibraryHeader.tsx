@@ -1,9 +1,12 @@
 import React from 'react';
-import { Pressable, ScrollView, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import type { LibraryDeckOption, LibraryFilter, LibraryFilterChip, LibraryTopicChip } from './libraryMapper';
 import { libraryStyles as styles } from './libraryScreenStyles';
+import { a11y } from '../../../theme/a11y';
 import { colors } from '../../../theme/colors';
+import { spacing } from '../../../theme/spacing';
+import { typography } from '../../../theme/typography';
 import { COLLECTION_COPY } from '../copy/collectionCopy';
 
 // Progress ring using the classic two-half rotation trick (no SVG dep).
@@ -126,6 +129,9 @@ type Props = {
    *  the Mistake Book for the selected deck. */
   mistakeCount?: number;
   onOpenMistakes?: () => void;
+  /** "By domain" link (D02) next to the Mistakes pill; opens Progress by domain for the selected deck.
+   *  Rendered whenever given. */
+  onOpenDomains?: () => void;
   /** Called when the brand-new-user banner CTA fires. Only invoked when
    *  ownedCount === 0 (i.e. user hasn't pulled any cards yet). When
    *  undefined, the banner is hidden regardless of state. */
@@ -155,6 +161,7 @@ export function LibraryHeader({
   sweepCount = 0,
   mistakeCount = 0,
   onOpenMistakes,
+  onOpenDomains,
   onOpenFirstPack,
   openFirstPackHasPulls = false,
 }: Props) {
@@ -236,18 +243,35 @@ export function LibraryHeader({
         </Pressable>
       ) : null}
 
-      {onOpenMistakes && mistakeCount > 0 ? (
-        <Pressable
-          testID="library-mistakes-pill"
-          accessibilityRole="button"
-          accessibilityLabel={`Open Mistake Book, ${mistakeCount} mistake${mistakeCount === 1 ? '' : 's'}`}
-          style={({ pressed }) => [styles.mistakesPill, pressed && styles.pressed]}
-          onPress={onOpenMistakes}
-        >
-          <Text style={styles.mistakesPillText} numberOfLines={1}>
-            {`Mistakes · ${mistakeCount}`}
-          </Text>
-        </Pressable>
+      {(onOpenMistakes && mistakeCount > 0) || onOpenDomains ? (
+        <View style={headerStyles.pillRow}>
+          {onOpenMistakes && mistakeCount > 0 ? (
+            <Pressable
+              testID="library-mistakes-pill"
+              accessibilityRole="button"
+              accessibilityLabel={`Open Mistake Book, ${mistakeCount} mistake${mistakeCount === 1 ? '' : 's'}`}
+              style={({ pressed }) => [styles.mistakesPill, pressed && styles.pressed]}
+              onPress={onOpenMistakes}
+            >
+              <Text style={styles.mistakesPillText} numberOfLines={1}>
+                {`Mistakes · ${mistakeCount}`}
+              </Text>
+            </Pressable>
+          ) : null}
+          {onOpenDomains ? (
+            <Pressable
+              testID="library-domains-link"
+              accessibilityRole="button"
+              accessibilityLabel="Open Progress by domain"
+              style={({ pressed }) => [headerStyles.domainsLink, pressed && styles.pressed]}
+              onPress={onOpenDomains}
+            >
+              <Text style={headerStyles.domainsLinkText} numberOfLines={1}>
+                By domain
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
       ) : null}
 
       {/* Deck switcher — horizontal scroll instead of wrap-grid */}
@@ -371,3 +395,20 @@ export function LibraryHeader({
     </View>
   );
 }
+
+// Kept here rather than in libraryScreenStyles: only the header's pill row uses them.
+const headerStyles = StyleSheet.create({
+  pillRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: spacing.sm },
+  domainsLink: {
+    marginTop: spacing.sm,
+    minHeight: a11y.minTouch,
+    paddingHorizontal: spacing.xs,
+    justifyContent: 'center',
+  },
+  domainsLinkText: {
+    color: colors.ink,
+    fontSize: typography.bodySmall,
+    fontWeight: '800',
+    textDecorationLine: 'underline',
+  },
+});
