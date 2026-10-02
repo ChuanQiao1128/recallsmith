@@ -138,6 +138,7 @@ import {
 } from '../../src/sync/progressSync';
 import { syncDrawStateNow } from '../../src/sync/drawStateSync';
 import { useAuthStore } from '../../src/auth/authStore';
+import { signIn } from 'aws-amplify/auth';
 
 function callsAfterDelete(): string[] {
   const i = netLog.indexOf('DELETE /api/v1/user/me');
@@ -232,6 +233,19 @@ describe('account deletion blocks every sync', () => {
     await wait(20);
 
     expect(callsAfterDelete()).toEqual([]);
+  });
+
+  it('the next sign-in lifts the block', async () => {
+    await useAuthStore.getState().deleteAccountNow();
+    await wait(20);
+    (signIn as any).mockResolvedValueOnce({ isSignedIn: true });
+
+    await useAuthStore.getState().signInWithEmail('demo@example.com', 'a-Fake-passw0rd');
+    await recordReviewEvent('algo', 'c6', 'good', Date.now());
+    await forceProgressSync('manual');
+    await wait(20);
+
+    expect(callsAfterDelete().some((c) => c.includes('/api/v1/sync/push'))).toBe(true);
   });
 
   it('a failed deletion lifts the block so normal sync resumes', async () => {
