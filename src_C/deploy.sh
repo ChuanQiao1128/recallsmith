@@ -96,12 +96,15 @@ deploy_one() {
   # alias is moved too so both functions read the same.
   local alias="${PUBLISH_ALIAS:-prod}"
   if aws lambda get-alias --region "$REGION" --function-name "$fn" --name "$alias" >/dev/null 2>&1; then
-    local ver alias_sha
+    local ver alias_sha prev_ver
+    # Read before the move so the ROLLBACK line the RUNBOOK refers to names the version that was serving.
+    prev_ver="$(aws lambda get-alias --region "$REGION" --function-name "$fn" --name "$alias" --query 'FunctionVersion' --output text)"
     ver="$(aws lambda publish-version --region "$REGION" --function-name "$fn" --description "deploy.sh $(date -u +%Y-%m-%dT%H:%M:%SZ) $(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo nogit)" --query 'Version' --output text)"
     aws lambda update-alias --region "$REGION" --function-name "$fn" --name "$alias" --function-version "$ver" --query '[Name,FunctionVersion]' --output text
     alias_sha="$(aws lambda get-function-configuration --region "$REGION" --function-name "$fn:$alias" --query 'CodeSha256' --output text)"
     [ "$alias_sha" = "$local_sha" ] || { echo "$fn:$alias CodeSha256 mismatch after alias move: $alias_sha" >&2; exit 1; }
     echo "OK $fn:$alias -> version $ver (CodeSha256 verified)"
+    echo "ROLLBACK: aws lambda update-alias --region $REGION --function-name $fn --name $alias --function-version $prev_ver"
   else
     echo "note: $fn has no alias '$alias'; only \$LATEST updated"
   fi
