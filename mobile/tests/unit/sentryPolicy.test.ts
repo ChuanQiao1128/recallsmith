@@ -4,12 +4,14 @@ import {
   SENTRY_KILL_SWITCH_TIMEOUT_MS,
   SENTRY_MAX_BREADCRUMBS,
   SENTRY_MAX_EVENTS_PER_SESSION,
+  SENTRY_NATIVE_NETWORK_OPTIONS,
   SENTRY_SAMPLE_RATE,
   SENTRY_TRACES_SAMPLE_RATE,
   buildOtaTags,
   buildTracePropagationTargets,
   decideSentry,
   isSentryKilled,
+  mentionsRevenueCat,
   scrubBreadcrumb,
   scrubEvent,
   scrubString,
@@ -332,5 +334,63 @@ describe('buildOtaTags', () => {
     };
     expect(buildOtaTags(null)).toEqual(unknown);
     expect(buildOtaTags({})).toEqual(unknown);
+  });
+});
+
+describe('2.0 privacy: the Cognito sub never reaches Sentry', () => {
+  const SUB = '3f2a9c1e-7b4d-4e8a-9c3b-2d1e0f9a8b7c';
+  const RC_URL = `https://api.revenuecat.com/v1/subscribers/${SUB}/offerings`;
+
+  it('turns off the native SDK network breadcrumbs and network tracking', () => {
+    expect(SENTRY_NATIVE_NETWORK_OPTIONS).toEqual({ enableNetworkBreadcrumbs: false, enableNetworkTracking: false });
+  });
+
+  it('scrubString replaces UUID-shaped ids with <id>, in paths and in text', () => {
+    expect(scrubString(`GET ${API}/api/v1/user/${SUB}/progress`)).toBe(`GET ${API}/api/v1/user/<id>/progress`);
+    expect(scrubString(`sub ${SUB.toUpperCase()} failed`)).toBe('sub <id> failed');
+    expect(scrubString('trace 0123456789abcdef0123456789abcdef')).toBe('trace 0123456789abcdef0123456789abcdef');
+  });
+
+  it('mentionsRevenueCat looks at url, http.url, description and message', () => {
+    expect(mentionsRevenueCat({ data: { url: RC_URL } })).toBe(true);
+    expect(mentionsRevenueCat({ data: { 'http.url': RC_URL } })).toBe(true);
+    expect(mentionsRevenueCat({ description: `GET ${RC_URL}` })).toBe(true);
+    expect(mentionsRevenueCat({ message: `POST ${RC_URL}` })).toBe(true);
+    expect(mentionsRevenueCat({ data: { url: `${API}/api/v1/me` } })).toBe(false);
+    expect(mentionsRevenueCat(null)).toBe(false);
+  });
+
+  it('scrubBreadcrumb drops RevenueCat requests and replaces ids in url and message', () => {
+    expect(scrubBreadcrumb({ category: 'http', data: { url: RC_URL, method: 'GET' } })).toBeNull();
+    expect(scrubBreadcrumb({ category: 'xhr', message: `GET ${RC_URL}` })).toBeNull();
+    expect(scrubBreadcrumb({ category: 'fetch', message: `user ${SUB}`, data: { url: `${API}/u/${SUB}?x=1` } })).toEqual({
+      category: 'fetch',
+      message: 'user <id>',
+      data: { url: `${API}/u/<id>` },
+    });
+  });
+
+  it('scrubEvent drops RevenueCat breadcrumbs and spans and replaces ids in url, description and message', () => {
+    const out = scrubEvent({
+      message: `failed for ${SUB}`,
+      exception: { values: [{ type: 'Error', value: `no row ${SUB}` }] },
+      breadcrumbs: [
+        { category: 'http', data: { url: RC_URL } },
+        { category: 'fetch', data: { url: `${API}/u/${SUB}` } },
+      ],
+      spans: [
+        { op: 'http.client', description: `GET ${RC_URL}`, data: { 'http.url': RC_URL } },
+        { op: 'http.client', description: `GET ${API}/u/${SUB}` },
+      ],
+      tags: { 'ota.update_id': SUB, note: 'someone@example.com', email: 'x' },
+    }) as any;
+    expect(out.message).toBe('failed for <id>');
+    expect(out.exception.values[0].value).toBe('no row <id>');
+    expect(out.breadcrumbs).toEqual([{ category: 'fetch', data: { url: `${API}/u/<id>` } }]);
+    expect(out.spans).toEqual([{ op: 'http.client', description: `GET ${API}/u/<id>` }]);
+    // Our own OTA update id tag keeps its value; secrets in tags are still scrubbed.
+    expect(out.tags).toEqual({ 'ota.update_id': SUB, note: '[email]', email: '[redacted]' });
+    expect(JSON.stringify({ ...out, tags: undefined })).not.toContain(SUB);
+    expect(JSON.stringify(out)).not.toMatch(/revenuecat/i);
   });
 });
