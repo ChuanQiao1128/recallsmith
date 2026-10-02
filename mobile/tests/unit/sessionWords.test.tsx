@@ -117,7 +117,7 @@ describe("route titles — no 'Warm-up node', no 'node'", () => {
   // view model and must not carry the planner word either.
   it('keeps Home’s hero copy free of "node", with card counts pluralised', () => {
     const home = buildHomeVM({ selectedSlug: 'csharp', hasSignedInUser: true, deckSummaries: [sampleDeck()] });
-    expect(home.hero.helper).toBe('Clear 1 card to keep momentum. Full run stays capped at 5 cards.');
+    expect(home.hero.helper).toBe('Clear 1 card to keep making progress. A full session stays capped at 5 cards.');
     for (const word of [home.hero.title, home.hero.subtitle, home.hero.helper, home.hero.headline, home.hero.subline]) {
       expect(word).not.toMatch(/node/i);
     }
@@ -128,7 +128,7 @@ describe('RoutePreview', () => {
   it('renders no empty title line and no Warm-up label', () => {
     const nodes: RoutePreviewNode[] = [
       { id: 'warmup-0', role: 'warmup', title: '', subtitle: 'An easy first card.' },
-      { id: 'boss-1', role: 'boss', title: 'Boss check', subtitle: 'A closing test.' },
+      { id: 'boss-1', role: 'boss', title: 'Final check', subtitle: 'A closing test.' },
     ];
     let tree!: renderer.ReactTestRenderer;
     act(() => {
@@ -139,7 +139,7 @@ describe('RoutePreview', () => {
       .map((node) => node.props.children);
     expect(texts).not.toContain('');
     expect(texts).not.toContain('Warm-up');
-    expect(texts).toContain('Boss check');
+    expect(texts).toContain('Final check');
     expect(texts.join(' ')).not.toMatch(/node/i);
   });
 });

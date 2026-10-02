@@ -280,7 +280,7 @@ const homeWithWork = buildHomeVM({
     },
   ],
 });
-assert.equal(homeWithWork.hero.ctaLabel, 'Start today’s challenge');
+assert.equal(homeWithWork.hero.ctaLabel, 'Start today’s session');
 assert.equal(homeWithWork.hero.ctaAction, 'challenge');
 assert.match(homeWithWork.drawStatusLabel, /unlock after you clear today’s work/i);
 

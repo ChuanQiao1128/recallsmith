@@ -121,7 +121,7 @@ describe('buildHomeVM CTA kinds', () => {
     });
 
     expect(vm.cta.kind).toBe('today_pending');
-    expect(vm.cta.label).toBe('Start today’s challenge');
+    expect(vm.cta.label).toBe('Start today’s session');
     expect(vm.hero.ctaAction).toBe('challenge');
   });
 
@@ -139,7 +139,7 @@ describe('buildHomeVM CTA kinds', () => {
     });
 
     expect(vm.cta.kind).toBe('today_partial');
-    expect(vm.cta.label).toBe('Continue today’s challenge');
+    expect(vm.cta.label).toBe('Continue today’s session');
     expect(vm.cta.nav).toBe('challenge');
   });
 
@@ -162,7 +162,7 @@ describe('buildHomeVM CTA kinds', () => {
     });
 
     expect(vm.cta.kind).toBe('today_done');
-    expect(vm.cta.label).toBe('Continue today’s challenge');
+    expect(vm.cta.label).toBe('Continue today’s session');
     expect(vm.cta.nav).toBe('challenge');
   });
 
@@ -213,7 +213,7 @@ describe('buildHomeVM CTA kinds', () => {
 
     for (const vm of drawVms) {
       expect(vm.cta.nav).toBe('draw');
-      expect(vm.cta.label).toBe('Open reward draw');
+      expect(vm.cta.label).toBe('Open reward pack');
       expect(vm.cta.label).not.toContain('C# Interview');
     }
   });
@@ -232,7 +232,7 @@ describe('buildHomeVM CTA kinds', () => {
     });
 
     expect(vm.cta.kind).toBe('today_done');
-    expect(vm.cta.label).toBe('Continue today’s challenge');
+    expect(vm.cta.label).toBe('Continue today’s session');
     expect(vm.cta.nav).toBe('challenge');
   });
 
@@ -250,7 +250,7 @@ describe('buildHomeVM CTA kinds', () => {
     });
 
     expect(vm.cta.kind).toBe('today_full_clear');
-    expect(vm.cta.label).toBe('Open reward draw');
+    expect(vm.cta.label).toBe('Open reward pack');
     expect(vm.cta.nav).toBe('draw');
   });
 
@@ -294,7 +294,7 @@ describe('buildHomeVM CTA kinds', () => {
     });
 
     expect(vm.draw.state).toBe('wallet-full');
-    expect(vm.draw.label).toMatch(/Wallet full/i);
+    expect(vm.draw.label).toBe('Saved draws full (60 + 5 waiting)');
   });
 
   describe('empty deck (installed, nothing owned)', () => {
@@ -340,8 +340,8 @@ describe('buildHomeVM CTA kinds', () => {
       expect(vm.hero.subline).toMatch(/open a pack/i);
       // Locked wallet: the badge says what the floor will do, without claiming cards are "due".
       expect(vm.draw.state).toBe('locked');
-      expect(vm.draw.label).toBe('No cards yet · a free pull returns tomorrow');
-      expect(vm.drawStatusLabel).toBe('No cards yet · a free pull returns tomorrow');
+      expect(vm.draw.label).toBe('No cards yet · a free draw returns tomorrow');
+      expect(vm.drawStatusLabel).toBe('No cards yet · a free draw returns tomorrow');
     });
 
     it('outranks runtime status: nothing can have been completed in a deck with no cards', () => {
@@ -427,7 +427,7 @@ describe('Home copy glossary', () => {
     });
 
     expect(vm.hero.subline).toBe(
-      'Each new card you learn earns a pull · up to 5 cards a run.',
+      'Each new card you learn earns a draw · up to 5 cards a session.',
     );
     expect(vm.hero.subline).not.toMatch(/normal|elite|boss|pressure|route|node/i);
   });
@@ -464,9 +464,9 @@ describe('Home copy glossary', () => {
       wallet: { availablePulls: 0, reservePulls: 0 },
     });
 
-    expect(onePull.draw.label).toBe('1 pull ready for this pack · 2 more waiting');
-    expect(twoPulls.draw.label).toBe('2 pulls ready for this pack · 3 more waiting');
-    expect(locked.draw.label).toBe('Learn a new card to earn a pull');
+    expect(onePull.draw.label).toBe('1 draw ready for this pack · 2 more waiting');
+    expect(twoPulls.draw.label).toBe('2 draws ready for this pack · 3 more waiting');
+    expect(locked.draw.label).toBe('Learn a new card to earn a draw');
   });
 
   it('deck rows say new, not fresh', () => {

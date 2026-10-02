@@ -269,7 +269,7 @@ describe('home primary CTA target', () => {
     const ctaLabel = cta
       .find((node) => (node.type as any) === 'Text' && typeof node.props?.numberOfLines === 'number')
       .props.children;
-    expect(ctaLabel).toBe('Start today’s challenge');
+    expect(ctaLabel).toBe('Start today’s session');
   });
 
   it('sends a brand-new user with starter pulls straight to Draw', async () => {
@@ -319,7 +319,7 @@ describe('home primary CTA target', () => {
     const ctaLabel = cta
       .find((node) => (node.type as any) === 'Text' && typeof node.props?.numberOfLines === 'number')
       .props.children;
-    expect(ctaLabel).toBe('Open reward draw');
+    expect(ctaLabel).toBe('Open reward pack');
 
     await act(async () => {
       cta.props.onPress();

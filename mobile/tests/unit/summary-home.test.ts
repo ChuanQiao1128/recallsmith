@@ -124,7 +124,7 @@ describe('buildHomeVM', () => {
       ],
     });
 
-    expect(home.hero.ctaLabel).toBe('Start today’s challenge');
+    expect(home.hero.ctaLabel).toBe('Start today’s session');
     expect(home.hero.ctaAction).toBe('challenge');
     expect(home.drawStatusLabel).toMatch(/unlock after you clear today’s work/i);
   });
