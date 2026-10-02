@@ -28,7 +28,8 @@ namespace RecallSmith.Lambda.Vpc.Runtime;
 /// </summary>
 public static class AccountDeletion
 {
-  public sealed record AccountDeletionResult(int OutboxRows, int PremiumStateRows, int WebhookEventRows, int UserRows, int CardReportRows = 0);
+  public sealed record AccountDeletionResult(int OutboxRows, int PremiumStateRows, int WebhookEventRows, int UserRows, int CardReportRows = 0,
+    int RevenueCatQueued = 0);
 
   /// <summary>
   /// Deletes every row keyed by <paramref name="userSub"/> in one transaction, in a fixed order:
@@ -36,8 +37,9 @@ public static class AccountDeletion
   /// rc_webhook_events by app_user_id, then the users row -- whose <c>on delete cascade</c> removes
   /// user_entitlements, user_subscriptions, user_progress_events, user_progress, user_draw_owned,
   /// user_draw_meta, user_wallet and user_deck_wallet. The learner's card reports (R20 V05, migration 037) go too;
-  /// before 037 the table does not exist and that step is skipped. A failure rolls the whole thing back, so the
-  /// phone keeps the account and can retry.
+  /// before 037 the table does not exist and that step is skipped. The sub is queued for the RevenueCat customer
+  /// deletion (R25X F04, <see cref="RevenueCatDeletions"/>) in the same transaction; before migration 044 that step is
+  /// skipped. A failure rolls the whole thing back, so the phone keeps the account, nothing is queued and it can retry.
   /// </summary>
   public static async Task<AccountDeletionResult> DeleteUserDataAsync(NpgsqlConnection conn, string userSub)
   {
@@ -60,13 +62,15 @@ public static class AccountDeletion
       ? await DbUtil.ExecuteAsync(conn, tx, "delete from card_reports where user_sub = $1", [userSub])
       : 0;
 
+    var revenueCatQueued = await RevenueCatDeletions.EnqueueAsync(conn, tx, userSub);
+
     var userRows = await DbUtil.ExecuteAsync(conn, tx,
       "delete from users where user_sub = $1",
       [userSub]);
 
     await tx.CommitAsync();
 
-    return new AccountDeletionResult(outboxRows, premiumStateRows, webhookEventRows, userRows, cardReportRows);
+    return new AccountDeletionResult(outboxRows, premiumStateRows, webhookEventRows, userRows, cardReportRows, revenueCatQueued);
   }
 
   public static async Task<APIGatewayProxyResponse> HandleDeleteMe(LambdaRequest req, Res res, AuthContext auth)
@@ -96,11 +100,11 @@ public static class AccountDeletion
       webhookEventRows = r.WebhookEventRows,
       userRows = r.UserRows,
       cardReportRows = r.CardReportRows,
+      revenueCatQueued = r.RevenueCatQueued,
     });
 
-    // R25 G04: only after the commit, and never able to change this response (it logs and swallows).
-    await RevenueCatCustomerDeletion.DeleteCustomerAsync(auth.UserSub!);
-
+    // R25X F04: no outbound call here (core-vpc has no egress). The notifier deletes the RevenueCat customer record
+    // from the row queued above.
     return res.Raw(204, string.Empty);
   }
 

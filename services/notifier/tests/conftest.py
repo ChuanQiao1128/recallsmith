@@ -78,6 +78,20 @@ def _local_server() -> Iterator[Callable[[Responder], LocalServer]]:
                 self.wfile.write(body)
                 self.close_connection = True
 
+            def do_GET(self) -> None:
+                captured = Captured("GET", self.path, self.headers, b"")
+                srv = state["srv"]
+                srv.requests.append(captured)
+                status, headers, body = respond(srv, captured)
+                self.send_response(status)
+                for key, value in headers.items():
+                    self.send_header(key, value)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.write(body)
+                self.close_connection = True
+
             def log_message(self, format: str, *args: Any) -> None:
                 return
 
@@ -134,13 +148,27 @@ class FakeCore:
             "skipped": None,
             "actions": {"digest": 0, "alerts": 1, "summaries": 2, "notificationsResent": 0},
         }
+        # R25X F04: the RevenueCat deletion queue.
+        self.rc_pending: list[Any] = []
+        self.rc_pending_status = 200
+        self.rc_report_status = 200
         self.server = start(self._respond)
 
     def _respond(self, srv: LocalServer, req: Captured) -> tuple[int, dict[str, str], bytes]:
         headers = {"Content-Type": "application/json"}
         if not verify_signature(req, self.secrets):
             return 403, headers, error_envelope("FORBIDDEN")
+        if req.method == "GET":
+            if req.path.split("?")[0] == "/api/v1/internal/revenuecat-deletions":
+                if self.rc_pending_status != 200:
+                    return self.rc_pending_status, headers, error_envelope("SERVER_ERROR")
+                return 200, headers, envelope({"subs": list(self.rc_pending)})
+            return 404, headers, error_envelope("NOT_FOUND")
         body = req.json()
+        if req.path == "/api/v1/internal/revenuecat-deletions/report":
+            if self.rc_report_status != 200:
+                return self.rc_report_status, headers, error_envelope("SERVER_ERROR")
+            return 200, headers, envelope({"deleted": 0, "retried": 0, "unknown": 0})
         if req.path == "/api/internal/automation/notifications/report":
             status = self.report_script.pop(0) if self.report_script else self.report_status
             if status != 200:
@@ -158,6 +186,12 @@ class FakeCore:
 
     def reports(self) -> list[dict[str, Any]]:
         return [r.json() for r in self.requests if r.path == "/api/internal/automation/notifications/report"]
+
+    def rc_gets(self) -> list[Captured]:
+        return [r for r in self.requests if r.method == "GET"]
+
+    def rc_reports(self) -> list[Any]:
+        return [r.json() for r in self.requests if r.path == "/api/v1/internal/revenuecat-deletions/report"]
 
     def ticks(self) -> list[Captured]:
         return [r for r in self.requests if r.path == "/api/internal/automation/tick"]
