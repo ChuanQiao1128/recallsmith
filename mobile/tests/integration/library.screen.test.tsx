@@ -444,7 +444,7 @@ describe('LibraryScreen Progress by domain entry point (D02)', () => {
     // Same row: the nearest host View above each pill is the one shared row.
     const hostRow = (node: renderer.ReactTestInstance) => {
       let current = node.parent;
-      while (current && current.type !== 'View') current = current.parent;
+      while (current && (current.type as unknown) !== 'View') current = current.parent;
       return current;
     };
     expect(hostRow(pill[0])).not.toBeNull();
