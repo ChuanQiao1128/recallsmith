@@ -78,6 +78,18 @@ changes followed to their publish (`GET /api/v1/admin/automation/freshness`)
 with the median minutes to draft, decision and publish. Until the analytics
 migration has run, both show a neutral "not set up yet" callout.
 
+Between By deck and Freshness, the "Funnel (anonymous installs)" section reads
+`GET /api/v1/admin/analytics/funnel?days=90` (anonymous counts only, no user or
+device id): every funnel step (first open, goal chosen, starter started and
+completed, first pack opened, returned day 1 and day 7, sign-up started and
+completed) with its count, the conversion from first open and a plain SVG bar;
+the last 12 cohort weeks (newest first, each step as "count (share of that
+week's first opens)"); and by deck the goal, starter and first-pack steps,
+converted from goal chosen. The conversions are computed in
+`src/lib/funnelView.ts`. A server without the funnel migration (`NOT_READY`) or
+without the route yet (404) gets a neutral callout; an empty window says no
+anonymous install has been counted yet.
+
 Related, all optional and hidden when the server does not send them (except
 the Semantic duplicates panel, which always shows on the AI QA page):
 

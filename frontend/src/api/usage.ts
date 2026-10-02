@@ -2,7 +2,9 @@
 // Learner usage analytics and publish freshness, console side (R20 contract §7):
 //   GET /api/v1/admin/analytics/usage?days=30
 //   GET /api/v1/admin/automation/freshness?days=30
-// Both are RequireAdmin and read-only. Every function returns an ApiResult and
+// and the anonymous install funnel (R24 contract §3.2, §3.5):
+//   GET /api/v1/admin/analytics/funnel?days=90
+// All are RequireAdmin and read-only. Every function returns an ApiResult and
 // never throws. Postgres int and numeric columns may arrive as numeric strings,
 // so every number is coerced here; a figure the server has not computed yet
 // (a column added by migration 040, or a retention that has not matured) stays
@@ -62,6 +64,50 @@ export type FreshnessReport = {
   items: FreshnessItem[];
   medians: { minutesToDraft: number | null; minutesToDecision: number | null; minutesToPublish: number | null };
   n: number;
+};
+
+/** The funnel's default window, in days (R24 contract §3.2). */
+export const FUNNEL_DAYS = 90;
+
+/** The anonymous funnel events in funnel order (R24 contract §3.1). */
+export const FUNNEL_EVENTS = [
+  'first_open',
+  'goal_chosen',
+  'starter_started',
+  'starter_completed',
+  'first_pack_opened',
+  'returned_day_1',
+  'returned_day_7',
+  'signup_started',
+  'signup_completed',
+] as const;
+
+export type FunnelEvent = (typeof FUNNEL_EVENTS)[number];
+
+/** The events that carry a deckSlug, counted per deck by the server. */
+export const FUNNEL_DECK_EVENTS = ['goal_chosen', 'starter_started', 'starter_completed', 'first_pack_opened'] as const;
+
+export type FunnelDeckEvent = (typeof FUNNEL_DECK_EVENTS)[number];
+
+/** Installs that reached each event; null where the server sent no figure. */
+export type FunnelCounts = Record<FunnelEvent, number | null>;
+
+export type FunnelDeckCounts = Record<FunnelDeckEvent, number | null>;
+
+/** One ISO cohort week: installs whose first open fell in the week starting that Monday. */
+export type FunnelWeek = {
+  /** YYYY-MM-DD, the Monday the cohort week starts. */
+  weekStart: string;
+  counts: FunnelCounts;
+};
+
+export type FunnelDeck = { deckSlug: string; counts: FunnelDeckCounts };
+
+export type FunnelReport = {
+  days: number;
+  overall: FunnelCounts;
+  weeks: FunnelWeek[];
+  decks: FunnelDeck[];
 };
 
 type Raw = Record<string, unknown>;
@@ -133,6 +179,31 @@ function normalizeFreshnessItem(value: unknown): FreshnessItem | null {
   };
 }
 
+/**
+ * The counts of `events` read from `value.counts` when the server nests them,
+ * else from `value` itself, keyed by the event name.
+ */
+function readCounts<E extends string>(value: Raw, events: readonly E[]): Record<E, number | null> {
+  const source = isRecord(value.counts) ? value.counts : value;
+  const out = {} as Record<E, number | null>;
+  for (const event of events) out[event] = nullableNumber(source[event]);
+  return out;
+}
+
+function normalizeFunnelWeek(value: unknown): FunnelWeek | null {
+  if (!isRecord(value)) return null;
+  const weekStart = nullableText(value.cohortWeek) ?? nullableText(value.weekStart) ?? nullableText(value.week);
+  if (weekStart === null) return null;
+  return { weekStart, counts: readCounts(value, FUNNEL_EVENTS) };
+}
+
+function normalizeFunnelDeck(value: unknown): FunnelDeck | null {
+  if (!isRecord(value)) return null;
+  const deckSlug = nullableText(value.deckSlug);
+  if (deckSlug === null) return null;
+  return { deckSlug, counts: readCounts(value, FUNNEL_DECK_EVENTS) };
+}
+
 /** GET /api/v1/admin/analytics/usage?days=. `503 NOT_READY` passes through as the error code. */
 export async function fetchUsage(days: number = USAGE_DAYS): Promise<ApiResult<UsageReport>> {
   try {
@@ -178,6 +249,36 @@ export async function fetchFreshness(days: number = USAGE_DAYS): Promise<ApiResu
     };
   } catch (err) {
     return apiResultFromError<FreshnessReport>(err);
+  }
+}
+
+/**
+ * GET /api/v1/admin/analytics/funnel?days=. Counts per event overall, per ISO
+ * cohort week and per deck; the page derives the conversions. `503 NOT_READY`
+ * passes through as the error code.
+ */
+export async function fetchFunnel(days: number = FUNNEL_DAYS): Promise<ApiResult<FunnelReport>> {
+  try {
+    const resp = await http.get<ApiResult<unknown>>('/api/v1/admin/analytics/funnel', { params: { days } });
+    const res = resp.data;
+    if (!res.success) return { ...res, data: null };
+    const data = res.data;
+    if (!isRecord(data) || (!isRecord(data.overall) && !Array.isArray(data.weeks))) return badResponse('funnel');
+    return {
+      ...res,
+      data: {
+        days: nullableNumber(data.days) ?? days,
+        overall: readCounts(asRecord(data.overall), FUNNEL_EVENTS),
+        weeks: Array.isArray(data.weeks)
+          ? data.weeks.map(normalizeFunnelWeek).filter((w): w is FunnelWeek => w !== null)
+          : [],
+        decks: Array.isArray(data.decks)
+          ? data.decks.map(normalizeFunnelDeck).filter((d): d is FunnelDeck => d !== null)
+          : [],
+      },
+    };
+  } catch (err) {
+    return apiResultFromError<FunnelReport>(err);
   }
 }
 
