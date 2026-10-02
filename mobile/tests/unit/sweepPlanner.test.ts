@@ -5,6 +5,7 @@ import { countLearned, pickNextCard, planChallengeRoute } from '../../src/featur
 import { buildFocusRoute, buildSweepRoute } from '../../src/features/gacha/planner/sessionBuilder';
 import { buildRatedSessionState, buildSessionProgressVM, modeLabel } from '../../src/features/gacha/session/sessionReviewHelpers';
 import { scheduleNextReview } from '../../src/review/model';
+import { scheduleWithFsrs } from '../../src/review/fsrsScheduler';
 import type { ReviewRating } from '../../src/review/model';
 import { SESSION_MAIN_ROUTE_DEFAULT, SWEEP_SPREAD_DAYS } from '../../src/features/gacha/constants';
 import {
@@ -244,7 +245,8 @@ describe('sweep planner', () => {
 
           const sweep = buildRatedSessionState({ ...base, mode: 'sweep' as const });
           const mixed = buildRatedSessionState({ ...base, mode: 'mixed' as const });
-          const expected = { ...scheduleNextReview(cardProgress, rating, NOW), lastSeenRevision: 1 };
+          // The session scheduler (FSRS while features.fsrs is on, R24 §4.3), whatever the mode.
+          const expected = { ...scheduleWithFsrs(cardProgress, rating, NOW.getTime()), lastSeenRevision: 1 };
 
           expect(sweep.updatedOne).toEqual(expected);
           expect(sweep.updatedOne).toEqual(mixed.updatedOne);

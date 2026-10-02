@@ -84,6 +84,8 @@ const featureFlagsMock = vi.hoisted(() => vi.fn());
 vi.mock('../../src/config/featureFlags', () => ({
   useFeatureFlags: () => featureFlagsMock(),
   getFeatureFlags: () => featureFlagsMock(),
+  // Same reading as the real isFsrsEnabled: FSRS unless the flags turn it off explicitly.
+  isFsrsEnabled: () => featureFlagsMock()?.fsrs?.enabled !== false,
 }));
 
 const store = new Map<string, string>();
@@ -509,8 +511,11 @@ describe('SessionCardScreen focus run', () => {
     expect(events[0].progressAfter.stage).toBe(3);
     expect(events[0].progressAfter.nextReviewAt).toBe(FIXED_NOW_MS + 7 * DAY_MS);
     expect(events[0].progressAfter.lastReviewedAt).toBe(FIXED_NOW_MS);
-    // c2 is due: a scheduled review like any other.
+    // c2 is due: a scheduled review like any other, through FSRS (R24 §4.3): its one-day interval
+    // stands for a stability of one day, and a Good after it is 4 days out, rung 2.
     expect(events[1].reviewStage).toBe('repeat_review');
-    expect(events[1].progressAfter.stage).toBe(4);
+    expect(events[1].progressAfter.stage).toBe(2);
+    expect(events[1].progressAfter.nextReviewAt).toBe(FIXED_NOW_MS + 4 * DAY_MS);
+    expect(events[1].progressAfter.fsrsAnchorAt).toBe(FIXED_NOW_MS);
   });
 });
