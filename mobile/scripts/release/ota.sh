@@ -2,8 +2,9 @@
 # ota.sh "<message>" — publish an OTA to channel production (runtime = app.json version).
 # DRY_RUN=1 checks the required EXPO_PUBLIC_* names and prints the command without publishing.
 #
-# Dual-runtime rule (binding once 1.9.0 ships): runtime-1.8.0 OTAs are published from a release/1.8.x
-# checkout, runtime-1.9.0 OTAs from main. A runtime below 1.9.0 has no RNSentry native module, so a tree
+# Dual-runtime rule: runtime-1.8.0 OTAs are published from a release/1.8.x checkout, runtime-1.9.0 OTAs
+# from a release/1.9.x checkout (cut from the last 1.9.0 commit before 2.0.0 merges), runtime-2.0.0 OTAs
+# from main. A runtime below 1.9.0 has no RNSentry native module, so a tree
 # whose package.json depends on @sentry/react-native refuses to publish for it (exit 6).
 # Runtime >= 1.9.0 also needs EXPO_PUBLIC_SENTRY_DSN in the EAS production environment and, after a
 # successful publish, uploads the OTA's source maps (mobile/dist) to Sentry. The result is one stdout line

@@ -307,6 +307,12 @@ describe('SettingsScreen', () => {
       .map((node) => nodeText(node))
       .join('\n');
     expect(blob).toContain('Privacy');
+    // 2.0 privacy: the counts carry platform and app version, so the body only
+    // promises no account, email or device ID.
+    expect(blob).toContain(
+      'Counts of first steps, like finishing setup or opening a first pack. No account, email or device ID is sent.',
+    );
+    expect(blob).not.toContain('device details');
 
     const toggle = () => findPressableByTestID(tree, 'settings-share-usage-counts-toggle');
     expect(toggle().props.accessibilityRole).toBe('switch');
@@ -391,8 +397,9 @@ describe('SettingsScreen', () => {
       .map((node) => nodeText(node))
       .join('\n');
 
-    expect(textBlob).toContain('Momentum');
-    expect(textBlob).toContain('0 days streak');
+    expect(textBlob).toContain('Progress');
+    expect(textBlob).toContain('0 days streak · 0 sessions that counted');
+    expect(textBlob).not.toMatch(/Momentum|qualified sessions/);
 
     const roots = findHostNodesByTestID(tree, 'SafeAreaView', 'screen-settings-root');
     const primaryCtas = findHostNodesByTestID(tree, 'Pressable', 'screen-settings-primary-cta');
@@ -423,7 +430,7 @@ describe('SettingsScreen', () => {
       .findAll((node) => (node.type as any) === 'Text')
       .map((node) => nodeText(node))
       .join('\n');
-    expect(postRetryBlob).toContain('Momentum');
+    expect(postRetryBlob).toContain('Progress');
   });
   it('opens the Debug menu after 7 taps on the version label within 3 s, even outside __DEV__', async () => {
     vi.useFakeTimers();

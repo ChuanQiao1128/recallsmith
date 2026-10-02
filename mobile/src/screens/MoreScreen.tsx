@@ -152,7 +152,7 @@ export function MoreScreen({ navigation }: Props) {
               onPress={() => navigation.navigate('HelpFAQ')}
             >
               <Text style={styles.rowTitle}>Help</Text>
-              <Text style={styles.rowSubtitle}>Pulls, pity, offline, Android</Text>
+              <Text style={styles.rowSubtitle}>Draws, rare cards, offline, devices</Text>
             </Pressable>
             <Pressable
               accessibilityRole="button"

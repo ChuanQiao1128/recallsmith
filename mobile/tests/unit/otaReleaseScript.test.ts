@@ -109,7 +109,12 @@ function runOta(opts: { names: string[]; dryRun?: boolean }) {
   return { res, log, npx, security, diag };
 }
 
-describe('ota.sh', () => {
+// Each case spawns the real ota.sh, which starts node three to five times; on a loaded machine (a delivery
+// wave runs several suites at once) one case took ~5 s and hit vitest's 5 s default. The suites keep every
+// assertion and only state the budget a subprocess-driven case actually needs.
+const OTA_CASE_TIMEOUT_MS = 30_000;
+
+describe('ota.sh', { timeout: OTA_CASE_TIMEOUT_MS }, () => {
   it('refuses to publish when a required EXPO_PUBLIC name is missing from the production environment', () => {
     const names = ALL_NAMES.filter((n) => n !== 'EXPO_PUBLIC_RC_IOS_API_KEY');
     const { res, log, diag } = runOta({ names });
@@ -277,7 +282,7 @@ function runOtaTree(opts: TreeOpts) {
 
 const NAMES_180 = ALL_NAMES.filter((n) => n !== 'EXPO_PUBLIC_SENTRY_DSN');
 
-describe('ota.sh 1.9.0 release plumbing', () => {
+describe('ota.sh 1.9.0 release plumbing', { timeout: OTA_CASE_TIMEOUT_MS }, () => {
   it('runtime 1.9.0 without EXPO_PUBLIC_SENTRY_DSN refuses to publish (exit 3)', () => {
     const r = runOtaTree({ version: '1.9.0', sentryDependency: true, names: NAMES_180 });
     expect(r.res.status, r.diag).toBe(3);
@@ -434,5 +439,56 @@ describe('ota.sh 1.9.0 release plumbing', () => {
     expect(r.res.stdout).not.toContain('DRY: npx');
     expect(r.eas).not.toContain('update');
     expect(r.npx).toBe('');
+  });
+});
+
+// R24BX F05 (r-tests-2): 2.0.0 crosses a major version. GE190 must compare the whole version, so the
+// DSN name stays required and the RNSentry runtime guard stays off at 2.0.0.
+describe('ota.sh at runtime 2.0.0', { timeout: OTA_CASE_TIMEOUT_MS }, () => {
+  it('runtime 2.0.0 without EXPO_PUBLIC_SENTRY_DSN refuses to publish (exit 3)', () => {
+    const r = runOtaTree({ version: '2.0.0', sentryDependency: true, names: NAMES_180 });
+    expect(r.res.status, r.diag).toBe(3);
+    expect(r.res.stderr).toContain('EXPO_PUBLIC_SENTRY_DSN');
+    expect(r.res.stderr).not.toContain('RNSentry');
+    expect(r.eas).not.toContain('update');
+    expect(r.npx).toBe('');
+  });
+
+  it('runtime 2.0.0 with every name passes the runtime guard and plans the publish (DRY_RUN=1)', () => {
+    const r = runOtaTree({
+      version: '2.0.0',
+      sentryDependency: true,
+      org: 'example-org',
+      project: 'example-project',
+      names: ALL_NAMES,
+      env: { SENTRY_AUTH_TOKEN: 'fake-sentry-token-not-real', DRY_RUN: '1' },
+    });
+    expect(r.res.status, r.diag).toBe(0);
+    expect(r.res.stdout).toContain('ota: runtime=2.0.0 channel=production environment=production');
+    expect(r.res.stdout).toContain('DRY: eas update --channel production --environment production');
+    expect(r.res.stdout).toContain('DRY: SENTRY_UPLOAD=ok-planned');
+    expect(r.eas).not.toContain('update');
+    expect(r.out).not.toContain('fake-sentry-token-not-real');
+  });
+});
+
+// R24BX F05 (r-correctness-1 / r-tests-1): once 2.0.0 merges, main is runtime 2.0.0, so the header of
+// ota.sh and the README guard row must send runtime-1.9.0 OTAs to release/1.9.x, never to main.
+describe('ota.sh dual-runtime branch rule', () => {
+  const README = path.resolve(HERE, '../../scripts/release/README.md');
+  it('the ota.sh header names release/1.9.x for runtime 1.9.0 and main for runtime 2.0.0', () => {
+    const header = fs.readFileSync(OTA, 'utf8').split('\nset -euo pipefail')[0].replace(/\n# ?/g, ' ');
+    expect(header).toContain('runtime-1.9.0 OTAs from a release/1.9.x checkout');
+    expect(header).toContain('runtime-2.0.0 OTAs from main');
+    expect(header).not.toMatch(/runtime-1\.9\.0 OTAs from main/);
+  });
+
+  it('the README guard row agrees and says when release/1.9.x is cut', () => {
+    const readme = fs.readFileSync(README, 'utf8');
+    const row = readme.split('\n').find((l) => l.startsWith('| `ota.sh` runtime guard')) ?? '';
+    expect(row).toContain('runtime-1.9.0 OTAs from `release/1.9.x`');
+    expect(row).toContain('runtime-2.0.0 OTAs from `main`');
+    expect(readme).not.toMatch(/runtime-1\.9\.0 OTAs from `main`/);
+    expect(readme).toMatch(/cut `release\/1\.9\.x` from the last 1\.9\.0 commit/);
   });
 });

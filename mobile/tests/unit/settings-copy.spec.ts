@@ -19,6 +19,7 @@ import { REMINDERS_COPY } from '../../src/features/gacha/settings/reminders/Remi
 import { APPEARANCE_COPY } from '../../src/features/gacha/settings/appearance/AppearanceSection';
 import { ABOUT_COPY } from '../../src/features/gacha/settings/about/AboutSection';
 import { DEBUG_COPY } from '../../src/features/gacha/settings/debug/DebugSection';
+import { FEEDBACK_COPY } from '../../src/features/gacha/settings/feedback/FeedbackSection';
 
 const FORBIDDEN = ['wipe', 'delete all'];
 
@@ -36,5 +37,23 @@ describe('settings section copy', () => {
     for (const word of FORBIDDEN) {
       expect(all).not.toContain(word);
     }
+  });
+
+  // R24B §1/§3: learner settings copy uses plain words (debug copy is dev-only).
+  it('uses plain words for draws, sessions and pack opening', () => {
+    expect(FEEDBACK_COPY.soundBody).toBe('Pack opening sounds. They stay quiet when your ringer is on silent.');
+    expect(ACCOUNT_COPY.deleteBody).toBe(
+      'Permanently deletes your account and the progress, cards and saved draws stored for it on our servers and on this device. This cannot be undone.',
+    );
+    const learnerCopy = JSON.stringify([
+      ACCOUNT_COPY.deleteBody,
+      ACCOUNT_COPY,
+      CONTENT_COPY,
+      REMINDERS_COPY,
+      APPEARANCE_COPY,
+      ABOUT_COPY,
+      FEEDBACK_COPY,
+    ]);
+    expect(learnerCopy).not.toMatch(/\b(pulls?|pity|wallet|reserve|run|runs|ceremony|momentum|rescue)\b/i);
   });
 });

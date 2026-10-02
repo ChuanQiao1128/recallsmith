@@ -131,6 +131,8 @@ describe('Me tab · real data', () => {
     expect(texts).not.toContain('4');
     expect(texts).not.toContain('2');
     expect(textBlob(tree)).toContain('21 sessions have counted toward a streak');
+    expect(textBlob(tree)).toContain('Sessions that counted');
+    expect(textBlob(tree)).toContain('3 of 7 days completed this week · best streak 9');
   });
 
   it('reports a brand-new user as zero rather than as somebody else', async () => {

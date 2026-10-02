@@ -239,7 +239,7 @@ describe('MistakeBookScreen done state (M01)', () => {
     const button = byTestID(tree, 'mistake-review-aws')[0];
     expect(texts(button)).toEqual(['Review mistakes + up to 3 related']);
     expect(button.props.accessibilityHint).toBe(REVIEW_HINT);
-    expect(REVIEW_HINT).toBe('Starts a focus run with these mistakes');
+    expect(REVIEW_HINT).toBe('Starts a focus session with these mistakes');
     expect(byTestID(tree, 'mistake-done-today-aws')).toHaveLength(0);
   });
 

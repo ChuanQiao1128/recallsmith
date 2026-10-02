@@ -96,7 +96,9 @@ describe('me final flow', () => {
     expect(profileBlob).toContain('Your study profile');
     expect(profileBlob).toContain('Current setup');
     expect(profileBlob).not.toContain('Learner #local');
-    expect(profileBlob).toContain('Momentum this week');
+    expect(profileBlob).toContain('Progress this week');
+    expect(profileBlob).toContain('Sessions that counted');
+    expect(profileBlob).not.toMatch(/Momentum|Qualified runs|best run/);
     expect(profileBlob).not.toContain('Next best return point');
     expect(profileBlob).not.toContain('premium learner card');
 

@@ -68,7 +68,7 @@ export async function shareDrawImage(
     await sharing.shareAsync(uri, {
       mimeType: 'image/png',
       UTI: 'public.png',
-      dialogTitle: `${opts.deckTitle?.trim() || opts.slug} pull`,
+      dialogTitle: `${opts.deckTitle?.trim() || opts.slug} cards`,
     });
     return { status: 'shared' };
   } catch {

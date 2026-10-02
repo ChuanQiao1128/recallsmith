@@ -1,0 +1,33 @@
+Preparing for a .NET interview, the AWS SAA-C03 or the Claude Developer Foundations exam? DeveloperCards 2.0 turns the prep into a card collection: studying earns most of the draws that fill it.
+
+WHAT'S INSIDE
+Three free decks, all in English:
+• .NET & C# Interview: 217 cards for .NET 8 / C# 12, junior to mid. 90 question-and-answer cards and 127 multiple-choice cards; every wrong option is explained and every card quotes Microsoft Learn.
+• AWS Associate Architect: 371 cards for the SAA-C03, including 165 multiple-choice cards with every wrong option explained.
+• Claude Developer Foundations (CCDV-F): 441 cards across all 8 exam domains, including 142 multiple-choice cards.
+
+HOW DRAWS WORK
+• Pick a goal (add an exam date if you have one: reviews finish the day before the exam), then take a 5-card starter lesson: study each card, then check what you recall. The lesson ends with 3 draws for that pack.
+• Learn a new card to earn a draw for its pack: the first time you answer Remembered, Hard, Good or Easy, or get a multiple-choice card right. Clearing all due cards adds one more draw, once a day. Every other pack gives 3 draws the first time you open it.
+• Draws are earned, never sold.
+• No repeat draws: a card you have drawn never comes up again.
+• After 10 Commons in a row, a rare card is guaranteed: the next card is Rare or better while the pack still has a Rare or Legendary you are missing.
+• Open 1 or Open 10. You only spend draws for cards you receive.
+• Each pack saves up to 60 draws, plus 5 extra draws waiting. With nothing left to study and no draws, you get 1 free draw a day per pack.
+
+HOW STUDY WORKS
+Two buttons by default, Forgot and Remembered; turn on all four (Again / Hard / Good / Easy) in Settings › Study. On a multiple-choice card you decide first, tap Show options, then answer Sure, Not sure or I don't know. Reviews are scheduled with FSRS, the open-source spaced-repetition algorithm (default parameters), never more than 90 days out. A card counts as Mastered once its next review is 15 or more days away. Cards you miss go to the Mistake Book. Progress by domain shows card counts for each exam domain, never a score. Many cards show their source. Reminders are optional and you can turn them off.
+
+OFFLINE AND ACCOUNT
+The first cards of each deck ship inside the app, so your first lesson works with no connection. The full deck downloads when your phone is online; after that, study works offline. An account is optional: signing in adds cloud backup, Report a card and the Premium subscription.
+
+FROM ONE DEVELOPER
+DeveloperCards is an indie project: one developer built the app and the backend. Cards are drafted with AI assistance from official documentation (AWS, Anthropic, Microsoft Learn), checked by automated checks and AI review passes. If a card looks wrong, sign in and tap Report a problem under its answer. All three decks are free. A monthly Premium subscription exists for future premium decks, but there is nothing premium to unlock yet.
+
+PREMIUM SUBSCRIPTION
+Premium is an optional auto-renewing monthly subscription (1-month period). The app shows its price in your currency before you buy. Payment is charged to your Apple Account when you confirm the purchase. It renews automatically unless cancelled at least 24 hours before the end of the current period; the renewal is charged within the 24 hours before the period ends. Manage or cancel it in your App Store account settings.
+Terms of Use (EULA): https://www.apple.com/legal/internet-services/itunes/dev/stdeula/
+Privacy Policy: https://tartan-tortoise-e81.notion.site/DevCards-Spaced-Recall-Privacy-Policy-2bfa758eb54580db99a3ed89369f9a13
+
+Not official exam material and not an exam simulator.
+AWS is a trademark of Amazon.com, Inc. Claude and Anthropic are trademarks of Anthropic, PBC. .NET and C# are trademarks of Microsoft Corporation. DeveloperCards is not affiliated with, sponsored by, or endorsed by Amazon, Anthropic or Microsoft.

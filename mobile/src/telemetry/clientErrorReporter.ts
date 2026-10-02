@@ -8,11 +8,15 @@
 // signed-in user's bearer token — fire-and-forget, rate-limited, all failures
 // swallowed, and nothing at all for anonymous users.
 //
-// IMPORTANT: this module imports nothing at runtime (types only). The access
+// IMPORTANT: this module's only runtime import is the pure sentryPolicy.ts
+// (itself import-free), so message and stack get the same scrubbing as the
+// Sentry path (emails, tokens, query strings, UUIDs). The access
 // token, device info, current screen and fetch implementation are injected from
 // App.tsx via `configureClientErrorReporting`, so rootErrorBoundary.test can
 // pull it in behind a minimal react-native mock without dragging authStore,
 // amplify, AsyncStorage or expo modules into the graph.
+
+import { scrubString } from './sentryPolicy';
 
 export const CLIENT_ERRORS_PATH = '/api/v1/user/client-errors';
 export const CLIENT_ERROR_STACK_MAX_CHARS = 4096;
@@ -75,9 +79,9 @@ export function buildClientErrorPayload(
   env: ClientErrorEnv,
   kind: ClientErrorKind = 'js_error',
 ): ClientErrorPayload {
-  const message = safeMessage(error).slice(0, CLIENT_ERROR_MESSAGE_MAX_CHARS);
+  const message = scrubString(safeMessage(error)).slice(0, CLIENT_ERROR_MESSAGE_MAX_CHARS);
   const rawStack = error instanceof Error && typeof error.stack === 'string' ? error.stack : null;
-  const stack = rawStack != null ? rawStack.slice(0, CLIENT_ERROR_STACK_MAX_CHARS) : null;
+  const stack = rawStack != null ? scrubString(rawStack).slice(0, CLIENT_ERROR_STACK_MAX_CHARS) : null;
   return {
     kind,
     message,

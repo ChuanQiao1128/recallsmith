@@ -411,7 +411,7 @@ describe('SessionCardScreen focus run', () => {
       dueCount: 3,
       nodes: [
         { id: 'warmup-0', role: 'warmup', title: '', subtitle: 'Start.' },
-        { id: 'boss-1', role: 'boss', title: 'Boss check', subtitle: 'End.' },
+        { id: 'boss-1', role: 'boss', title: 'Final check', subtitle: 'End.' },
       ],
     } as any);
     const { tree } = await mount(['c3', 'c1', 'c4']);
@@ -425,7 +425,7 @@ describe('SessionCardScreen focus run', () => {
       expect(hasText(tree, `Question ${uid}`)).toBe(true);
       expect(hasText(tree, 'Focus review')).toBe(true);
       expect(hasText(tree, 'Warm-up node')).toBe(false);
-      expect(hasText(tree, 'Boss check')).toBe(false);
+      expect(hasText(tree, 'Final check')).toBe(false);
       if (uid !== 'c4') await rateGood(tree);
     }
   });

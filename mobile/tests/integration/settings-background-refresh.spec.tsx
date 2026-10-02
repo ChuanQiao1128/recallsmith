@@ -258,7 +258,7 @@ describe('SettingsScreen background refresh', () => {
 
   it('keeps the settings content mounted when the screen refocuses', async () => {
     const { tree } = await renderSettings();
-    expect(textBlob(tree)).toContain('Momentum');
+    expect(textBlob(tree)).toContain('Progress');
 
     // A refocus while the reminder read is still pending must not swap the
     // screen for the spinner after the first successful load.
@@ -269,7 +269,7 @@ describe('SettingsScreen background refresh', () => {
 
     const blob = textBlob(tree);
     expect(blob).not.toContain('Loading settings...');
-    expect(blob).toContain('Momentum');
+    expect(blob).toContain('Progress');
   });
 
   it('keeps the typed DELETE confirmation across a refocus', async () => {
@@ -294,7 +294,7 @@ describe('SettingsScreen background refresh', () => {
 
   it('keeps the settings screen visible when a background refresh fails', async () => {
     const { tree } = await renderSettings();
-    expect(textBlob(tree)).toContain('Momentum');
+    expect(textBlob(tree)).toContain('Progress');
 
     getReminderPrefsMock.mockRejectedValueOnce(new Error('network down'));
     await act(async () => {
@@ -304,7 +304,7 @@ describe('SettingsScreen background refresh', () => {
 
     const blob = textBlob(tree);
     expect(blob).not.toContain('Settings unavailable');
-    expect(blob).toContain('Momentum');
+    expect(blob).toContain('Progress');
   });
 
   it('keeps the settings content while auth reloads after the first load', async () => {
@@ -315,7 +315,7 @@ describe('SettingsScreen background refresh', () => {
       tree = renderer.create(renderElement(navigate, goBack));
     });
     await flush();
-    expect(textBlob(tree)).toContain('Momentum');
+    expect(textBlob(tree)).toContain('Progress');
 
     authFixture.loading = true;
     await act(async () => {
@@ -324,6 +324,6 @@ describe('SettingsScreen background refresh', () => {
 
     const blob = textBlob(tree);
     expect(blob).not.toContain('Loading settings...');
-    expect(blob).toContain('Momentum');
+    expect(blob).toContain('Progress');
   });
 });

@@ -26,7 +26,7 @@ const ZERO_STEP: RatingRewardStep = {
 
 const routeNodes: RoutePreviewNode[] = [
   { id: 'warmup-0', role: 'warmup', title: '', subtitle: 'Start easy' },
-  { id: 'boss-1', role: 'boss', title: 'Boss check', subtitle: 'Finish strong' },
+  { id: 'boss-1', role: 'boss', title: 'Final check', subtitle: 'Finish strong' },
 ];
 
 describe('sessionStore', () => {

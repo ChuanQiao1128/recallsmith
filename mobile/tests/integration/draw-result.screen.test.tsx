@@ -1,6 +1,6 @@
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 let walletFixture = { availablePulls: 2, reservePulls: 0 };
 let viewportWidth = 390;
@@ -116,8 +116,29 @@ function collectText(tree: renderer.ReactTestRenderer): string {
     .join('\n');
 }
 
+// Every screen mounted here starts a real RATING_PROMPT_DELAY_MS timer. A tree a test leaves
+// mounted keeps that timer alive, and on a loaded machine it fires inside a later test, after
+// that test's mockClear(), as stray 'first-legendary' rating calls. Track every tree and unmount
+// it after each test so the screen's own cleanup clears the timer.
+const mountedTrees = new Set<renderer.ReactTestRenderer>();
+const realCreate = renderer.create;
+let createSpy: ReturnType<typeof vi.spyOn> | undefined;
+
 describe('DrawResultScreen v9', () => {
+  afterEach(async () => {
+    await act(async () => {
+      for (const tree of mountedTrees) tree.unmount();
+    });
+    mountedTrees.clear();
+    createSpy?.mockRestore();
+  });
+
   beforeEach(() => {
+    createSpy = vi.spyOn(renderer, 'create').mockImplementation((...args: Parameters<typeof renderer.create>) => {
+      const tree = realCreate(...args);
+      mountedTrees.add(tree);
+      return tree;
+    });
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
     walletFixture = { availablePulls: 2, reservePulls: 0 };
     walletLoader = async () => walletFixture;
@@ -202,7 +223,7 @@ describe('DrawResultScreen v9', () => {
     expect(text).toBe('No. 004 / 20');
   });
 
-  it('renders rarity strip in COM, RAR, LEG order', async () => {
+  it('renders rarity strip in Common, Rare, Legendary order with plain words', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(
@@ -219,7 +240,9 @@ describe('DrawResultScreen v9', () => {
       const c = node.props.children;
       return Array.isArray(c) ? c.join('') : String(c ?? '');
     });
-    expect(stripTexts).toEqual(['0 COM', '1 RAR', '1 LEG']);
+    // Learners see the kept collection words, never the internal rarity codes.
+    expect(stripTexts).toEqual(['0 Common', '1 Rare', '1 Legendary']);
+    expect(stripTexts.join(' ')).not.toMatch(/\b(COM|RAR|LEG)\b/);
   });
 
   it('routes primary action to Draw when pulls remain', async () => {
@@ -238,7 +261,7 @@ describe('DrawResultScreen v9', () => {
       primary.props.onPress();
     });
 
-    expect(collectText(tree)).toContain('Continue draw');
+    expect(collectText(tree)).toContain('Continue drawing');
     expect(navigate).toHaveBeenCalledWith('Draw', { slug: 'csharp' });
   });
 
@@ -259,7 +282,11 @@ describe('DrawResultScreen v9', () => {
       primary.props.onPress();
     });
 
-    expect(collectText(tree)).toContain('Go to Library');
+    expect(collectText(tree)).toContain('Go to Library  ·  earn draws in study');
+    expect(tree.root.findByProps({ testID: 'draw-result-earn-pulls-link' }).props.accessibilityLabel).toBe(
+      'Earn more draws by studying',
+    );
+    expect(collectText(tree)).toContain('Earn more draws →');
     // Was `{ focusSlug, scrollToNew }` only, which left Library guessing and
     // guessing wrong (it highlighted the first *unstudied* card). The uids
     // of the cards this screen is showing are now part of the ask.
@@ -291,7 +318,9 @@ describe('DrawResultScreen v9', () => {
     });
 
     const primary = tree.root.findByProps({ testID: 'screen-draw-result-primary-cta' });
-    expect(collectText(tree)).toContain('Checking pulls...');
+    expect(collectText(tree)).toContain('Checking draws...');
+    // VoiceOver hears plain words while the saved draws load.
+    expect(primary.props.accessibilityLabel).toBe('Checking remaining draws');
     act(() => {
       primary.props.onPress();
     });
@@ -443,7 +472,7 @@ describe('DrawResultScreen v9', () => {
     });
     await flush();
 
-    expect(collectText(tree)).toContain('Nothing pulled');
+    expect(collectText(tree)).toContain('No cards drawn');
 
     const primary = tree.root.findByProps({ testID: 'screen-draw-result-primary-cta' });
     act(() => {
@@ -707,7 +736,7 @@ describe('DrawResultScreen v9', () => {
 
       const status = tree2.root.findByProps({ testID: 'draw-result-share-status' });
       expect(status.props.children).toBe('Sharing is not available on this device');
-      expect(collectText(tree2)).toContain('Share this pull');
+      expect(collectText(tree2)).toContain('Share these cards');
     } finally {
       await act(async () => {
         tree?.unmount();

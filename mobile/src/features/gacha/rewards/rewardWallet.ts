@@ -68,11 +68,11 @@ export function applyRewardToWallet(current: RewardWalletState, rewardPulls: num
 
 export function getRewardWalletMessage(state: AppliedRewardWalletState): string {
   if (state.appliedToReserve > 0) {
-    return `${state.availablePulls} ready · ${state.reservePulls} pending in reserve`;
+    return `${state.availablePulls} ready · ${state.reservePulls} extra waiting`;
   }
 
   if (state.dropped > 0) {
-    return `${state.availablePulls} ready · reserve full for now`;
+    return `${state.availablePulls} ready · extra draws full for now`;
   }
 
   return `${state.availablePulls} ready to use`;

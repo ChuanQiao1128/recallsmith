@@ -1108,7 +1108,7 @@ describe('DrawCeremonyScreen v9', () => {
 
     const assertControls = () => {
       expect(tree.root.findAllByProps({ testID: 'draw-ceremony-fast-forward' })).toHaveLength(0);
-      expect(tree.root.findByProps({ accessibilityLabel: 'Leave ceremony' })).toBeTruthy();
+      expect(tree.root.findByProps({ accessibilityLabel: 'Leave pack opening' })).toBeTruthy();
     };
 
     assertControls();

@@ -224,7 +224,7 @@ describe('HomeScreen — economy floor wiring', () => {
     // load instead would leave this reading "Clear today's route to unlock
     // pulls" until the next focus -- the screen telling the user they are
     // stuck on the very load that unstuck them.
-    expect(badgeText(tree)).toBe('1 pull ready for this pack');
+    expect(badgeText(tree)).toBe('1 draw ready for this pack');
     expect(await loadDeckWallet('csharp')).toEqual({ availablePulls: 1, reservePulls: 0 });
     expect(store.get('devcards:u:anon:recallsmith:economy-floor:v1:csharp')).toBeTruthy();
   });
@@ -234,7 +234,7 @@ describe('HomeScreen — economy floor wiring', () => {
 
     const tree = await renderHome();
 
-    expect(badgeText(tree)).toBe('Learn a new card to earn a pull');
+    expect(badgeText(tree)).toBe('Learn a new card to earn a draw');
     expect(await loadDeckWallet('csharp')).toEqual({ availablePulls: 0, reservePulls: 0 });
     expect(store.has('devcards:u:anon:recallsmith:economy-floor:v1:csharp')).toBe(false);
   });

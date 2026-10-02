@@ -4,8 +4,8 @@ import type { RatingRewardStep } from './sessionRewards';
 
 // Duplicated here on purpose: this module must not import the summary mapper (the
 // mapper imports the resolver, so the dependency runs one way only). COPY.reward.noPull
-// in that mapper carries the same literal and stays unchanged.
-const NO_PULL_LINE = 'No free pulls this run';
+// in that mapper carries the same literal; change both together.
+const NO_PULL_LINE = 'No free draws this session';
 
 export type RewardOutcome = {
   newCardPulls: number;          // count of steps with newCardPaid
@@ -49,28 +49,28 @@ export function accumulateRewardOutcome(prev: RewardOutcome, step: RatingRewardS
 }
 
 /** Copy (economy-v2 §5):
- *  newCardPulls>0, dueClearPulls=0 → `+${n} pull${n===1?'':'s'} · ${n} new card${n===1?'':'s'} learned`
+ *  newCardPulls>0, dueClearPulls=0 → `+${n} draw${n===1?'':'s'} · ${n} new card${n===1?'':'s'} learned`
  *  newCardPulls=0, dueClearPulls=1 → `+1 · cleared today's due`
- *  both                            → `+${n+1} pulls · ${n} new card${n===1?'':'s'} learned · cleared today's due`
- *  none                            → 'No free pulls this run' (same literal as COPY.reward.noPull, unchanged) */
+ *  both                            → `+${n+1} draws · ${n} new card${n===1?'':'s'} learned · cleared today's due`
+ *  none                            → 'No free draws this session' (same literal as COPY.reward.noPull) */
 export function rewardLine(outcome: RewardOutcome): string {
   const n = outcome.newCardPulls;
   if (n > 0 && outcome.dueClearPulls === 0) {
-    return `+${n} pull${n === 1 ? '' : 's'} · ${n} new card${n === 1 ? '' : 's'} learned`;
+    return `+${n} draw${n === 1 ? '' : 's'} · ${n} new card${n === 1 ? '' : 's'} learned`;
   }
   if (n === 0 && outcome.dueClearPulls === 1) {
     return `+1 · cleared today's due`;
   }
   if (n > 0 && outcome.dueClearPulls === 1) {
-    return `+${n + 1} pulls · ${n} new card${n === 1 ? '' : 's'} learned · cleared today's due`;
+    return `+${n + 1} draws · ${n} new card${n === 1 ? '' : 's'} learned · cleared today's due`;
   }
   return NO_PULL_LINE;
 }
 
-/** `+${rewardPulls} pull${…}` or 'Progress saved' — same shape as COPY.reward.badge. */
+/** `+${rewardPulls} draw${…}` or 'Progress saved' — same shape as COPY.reward.badge. */
 export function rewardBadge(outcome: RewardOutcome): string {
   const n = outcome.rewardPulls;
-  return n > 0 ? `+${n} pull${n === 1 ? '' : 's'}` : 'Progress saved';
+  return n > 0 ? `+${n} draw${n === 1 ? '' : 's'}` : 'Progress saved';
 }
 
 export type ResolvedSessionReward = {
@@ -129,4 +129,37 @@ export function resolveSessionReward(params: {
     rewardMessage,
     outcome,
   };
+}
+
+export const EMPTY_REWARD_WALLET: RewardWalletState = { availablePulls: 0, reservePulls: 0 };
+
+/** One wallet as the summary's reward card reads it (field names match RewardSummaryCard's props). */
+export type SummaryWalletCounts = { available: number; reserve: number };
+
+/** The count fields of the summary's reward block: draws earned, and the wallet before and after. */
+export type SummaryRewardCounts = {
+  pulls: number;
+  walletBefore: SummaryWalletCounts;
+  walletAfter: SummaryWalletCounts;
+};
+
+function toSummaryWalletCounts(wallet: RewardWalletState | null | undefined): SummaryWalletCounts {
+  return { available: wallet?.availablePulls ?? 0, reserve: wallet?.reservePulls ?? 0 };
+}
+
+/** `wallet` is the balance the summary was built from; the outcome's own walletBefore wins when present. */
+export function summaryRewardCounts(
+  resolved: ResolvedSessionReward,
+  wallet: RewardWalletState | null | undefined,
+): SummaryRewardCounts {
+  return {
+    pulls: resolved.rewardPulls,
+    walletBefore: toSummaryWalletCounts(resolved.outcome.walletBefore ?? wallet),
+    walletAfter: toSummaryWalletCounts(resolved.walletAfter),
+  };
+}
+
+/** Ready draws, extra draws waiting, and draws lost to the cap, for the summary's wallet line. */
+export function walletLineCounts(walletAfter: AppliedRewardWalletState): { ready: number; waiting: number; dropped: number } {
+  return { ready: walletAfter.availablePulls, waiting: walletAfter.reservePulls, dropped: walletAfter.dropped ?? 0 };
 }

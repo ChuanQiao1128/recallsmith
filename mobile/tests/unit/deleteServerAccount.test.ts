@@ -112,4 +112,66 @@ describe('deleteServerAccountData', () => {
     ).rejects.toBeInstanceOf(AccountDeletionError);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+
+  describe('production build (2.0): a missing server delete is a failure', () => {
+    it('throws on 404, 405 and 501 so the Cognito account is never deleted', async () => {
+      for (const status of [404, 405, 501]) {
+        await expect(
+          deleteServerAccountData('access-abc', {
+            apiBase: API_BASE,
+            fetchImpl: fetchReturning(status) as unknown as typeof fetch,
+            isDev: false,
+          }),
+        ).rejects.toMatchObject({ name: 'AccountDeletionError', kind: 'server', status });
+      }
+    });
+
+    it('throws when no API base is configured, without calling fetch', async () => {
+      const fetchImpl = fetchReturning(200);
+      await expect(
+        deleteServerAccountData('access-abc', {
+          apiBase: '',
+          fetchImpl: fetchImpl as unknown as typeof fetch,
+          isDev: false,
+        }),
+      ).rejects.toMatchObject({ name: 'AccountDeletionError', kind: 'server', status: null });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    it('still returns deleted on a 2xx', async () => {
+      const outcome = await deleteServerAccountData('access-abc', {
+        apiBase: API_BASE,
+        fetchImpl: fetchReturning(204) as unknown as typeof fetch,
+        isDev: false,
+      });
+      expect(outcome).toBe('deleted');
+    });
+
+    it('reads __DEV__ when isDev is not passed', async () => {
+      const globals = globalThis as Record<string, unknown>;
+      const previous = globals.__DEV__;
+      globals.__DEV__ = false;
+      try {
+        await expect(
+          deleteServerAccountData('access-abc', {
+            apiBase: API_BASE,
+            fetchImpl: fetchReturning(404) as unknown as typeof fetch,
+          }),
+        ).rejects.toMatchObject({ kind: 'server', status: 404 });
+      } finally {
+        globals.__DEV__ = previous;
+      }
+    });
+  });
+
+  it('keeps the dev-build behaviour: 404 and an empty API base let deletion continue', async () => {
+    expect(
+      await deleteServerAccountData('access-abc', {
+        apiBase: API_BASE,
+        fetchImpl: fetchReturning(404) as unknown as typeof fetch,
+        isDev: true,
+      }),
+    ).toBe('endpoint_unavailable');
+    expect(await deleteServerAccountData('access-abc', { apiBase: '', isDev: true })).toBe('endpoint_unavailable');
+  });
 });
