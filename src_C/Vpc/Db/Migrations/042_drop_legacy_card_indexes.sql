@@ -13,5 +13,9 @@
 -- never have them, so this is a no-op there. Idempotent; Migrate.ApplyOne wraps this file in one transaction.
 -- =========================
 
+-- DROP INDEX takes an exclusive lock on cards: fail fast instead of queueing every card read behind an open
+-- transaction (safe to retry; Migrate.ApplyOne runs this file in one transaction, so SET LOCAL is scoped to it).
+set local lock_timeout = '5s';
+
 drop index if exists uq_cards_deck_order_in_deck;
 drop index if exists uq_cards_deck_stable_uid;

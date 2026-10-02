@@ -25,6 +25,7 @@ public static class Helpers
         switch (constraint)
         {
           case "uq_cards_deck_uid":
+          case "uq_cards_deck_stable_uid": // legacy drift index, dropped by migration 042
             message = "Another card in this deck already uses this Stable UID.";
             break;
           case "uq_cards_deck_order":
