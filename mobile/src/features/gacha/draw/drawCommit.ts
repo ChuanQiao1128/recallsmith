@@ -9,6 +9,7 @@ import {
   type DrawHistoryEntry,
 } from './drawStateStore';
 import { normalizePityState } from './pity';
+import { loadDrawPoolOwned } from './drawPool';
 import { selectDrawCards } from './poolSelection';
 import { rankCardsByOrder } from '../library/cardRank';
 import { getFeatureFlags } from '../../../config/featureFlags';
@@ -73,14 +74,15 @@ export async function commitDraw(
   drawCount: 1 | 10,
   options?: CommitDrawOptions,
 ): Promise<DrawCommitResult | null> {
-  // review/storage is deliberately absent from this import. A draw used
-  // to load the deck's review progress and hand it to selectDrawCards,
-  // which stopped reading it when the review-history weighting was
-  // deleted. The load stayed: a storage round-trip on every pull whose
-  // result was discarded, and a dependency edge from gacha to review
-  // that nothing justified. The direction is now one-way by
-  // construction -- review may read the owned set, gacha never reads
-  // review -- which is what lets the two be reasoned about separately.
+  // A draw never calls loadDeckProgress. It used to load the deck's
+  // review progress and hand it to selectDrawCards, which stopped reading
+  // it when the review-history weighting was deleted; the load stayed, a
+  // storage round-trip (with migration writes) whose result was discarded.
+  // What a draw does read now is narrower and has a reason: the pool is
+  // the cards missing from the effective owned set (R25 G01,
+  // loadDrawPoolOwned), so a card the Library already shows as collected
+  // -- learned, or in the open starter lesson -- is never drawn. That read
+  // is write-free and only decides membership, never weighting.
   const passed = options?.deck;
   let deck: DeckExport | null;
   if (passed && passed.Slug === slug && Array.isArray(passed.Cards)) {
@@ -91,8 +93,7 @@ export async function commitDraw(
   }
   if (!deck) return null;
 
-  const drawState = await loadDrawState(slug);
-  const ownedSet = new Set(drawState.owned);
+  const [drawState, ownedSet] = await Promise.all([loadDrawState(slug), loadDrawPoolOwned(slug)]);
   const pityState = normalizePityState(drawState.pity);
 
   // Same value for both fields today: the RNG is seeded from the clock.
@@ -111,8 +112,13 @@ export async function commitDraw(
   });
 
   const drawnUids = selection.cards.map((card) => card.StableUid);
+  // Only drawState.owned is written: learned and starter-lesson cards stay a
+  // read-time union (effectiveOwned.ts), so the drawn cards join the stored
+  // set, not the effective one.
+  const storedOwnedAfter = new Set(drawState.owned);
   const ownedAfterSet = new Set(ownedSet);
   for (const stableUid of drawnUids) {
+    storedOwnedAfter.add(stableUid);
     ownedAfterSet.add(stableUid);
   }
 
@@ -121,7 +127,7 @@ export async function commitDraw(
   // granted that never counted toward pity (or the reverse), and nothing
   // on disk could tell us which half to trust.
   await saveDrawState(slug, {
-    owned: [...ownedAfterSet],
+    owned: [...storedOwnedAfter],
     pity: selection.pityNext,
   });
 
@@ -134,6 +140,8 @@ export async function commitDraw(
     slug,
     seed,
     drawCount,
+    // The set the pool excluded (effective, not just stored), which is what
+    // replayDraw needs to rebuild the same pool.
     ownedBefore: [...ownedSet],
     pityBefore: pityState,
     drawnUids,
@@ -174,6 +182,7 @@ export async function commitDraw(
     poolExhausted: selection.poolExhausted,
     pityFiredFor: selection.pityFiredFor,
     highlightedRarity,
+    // Effective count, the number the Library shows as collected.
     ownedAfter: ownedAfterSet.size,
     totalCards: deck.Cards.length,
     pityBefore: pityState.draws,
@@ -203,8 +212,9 @@ export type DrawReplayResult = {
  *
  * What makes a replay possible at all is that every input to a draw is
  * either in the record or in the deck. Selection is uniform over the
- * missing pool and reads no review history, so nothing about the user's
- * study state has to be recorded. If weighting by review history ever
+ * missing pool and reads no review history; the learned and starter cards
+ * that shape the pool (R25 G01) are already folded into `ownedBefore`, so
+ * nothing else about the user's study state has to be recorded. If weighting by review history ever
  * comes back, that state joins DrawHistoryEntry in the same change or
  * replay quietly stops being a replay.
  */
