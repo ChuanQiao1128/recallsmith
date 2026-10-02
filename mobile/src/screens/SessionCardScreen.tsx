@@ -871,6 +871,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
         focusRun: focusIndex !== null,
         excludeUids: studiedUidsRef.current,
         examDate: examDateRef.current,
+        learningCheck: isLearningCheck,
       });
       // Focus run: serve the next focus card in order instead of the planner's pick.
       if (focusIndex) focusRatedUidsRef.current.add(current.card.StableUid);

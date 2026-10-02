@@ -176,6 +176,12 @@ function normalizeProgressEntry(raw: any): CardProgress | null {
   const hardStreak = normalizeNonNegative(raw.hardStreak);
   const revisionDemotedAt = normalizeNonNegative(raw.revisionDemotedAt);
 
+  // FSRS memory state: kept when it is a finite number, otherwise dropped, in
+  // which case the scheduler derives the state from the ladder fields.
+  const fsrsStability = normalizeFinite(raw.fsrsStability);
+  const fsrsDifficulty = normalizeFinite(raw.fsrsDifficulty);
+  const fsrsAnchorAt = normalizeFinite(raw.fsrsAnchorAt);
+
   return {
     stableUid,
     stage,
@@ -185,7 +191,14 @@ function normalizeProgressEntry(raw: any): CardProgress | null {
     lapses,
     hardStreak,
     revisionDemotedAt,
+    fsrsStability,
+    fsrsDifficulty,
+    fsrsAnchorAt,
   };
+}
+
+function normalizeFinite(v: unknown): number | undefined {
+  return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
 }
 
 function cardRevision(card: any): number {

@@ -89,6 +89,8 @@ const featureFlagsMock = vi.hoisted(() => vi.fn());
 vi.mock('../../src/config/featureFlags', () => ({
   useFeatureFlags: () => featureFlagsMock(),
   getFeatureFlags: () => featureFlagsMock(),
+  // Same reading as the real isFsrsEnabled: FSRS unless the flags turn it off explicitly.
+  isFsrsEnabled: () => featureFlagsMock()?.fsrs?.enabled !== false,
 }));
 
 const store = new Map<string, string>();
@@ -476,10 +478,12 @@ describe('Mistake Book loop across SessionCard and the real store', () => {
     const scheduleOf = (uid: string) => ({ stage: saved.get(uid).stage, nextReviewAt: saved.get(uid).nextReviewAt });
 
     // First run: the due mistake earns its credit; the two related cards, not due, earn none.
+    // c1's credit is the FSRS step (R24 §4.3): a Good an hour after a lapse is 2 days out, still rung 1.
     const first = await openMistakeBookAndTapReview();
     expect(first).toEqual({ focusUids: ['c1', 'c2', 'c3'], doneToday: false });
     await focusRunAllGood(first.focusUids!);
-    expect(scheduleOf('c1')).toEqual({ stage: 2, nextReviewAt: DAY0_MS + 4 * DAY_MS });
+    expect(scheduleOf('c1')).toEqual({ stage: 1, nextReviewAt: DAY0_MS + 2 * DAY_MS });
+    expect(saved.get('c1').fsrsAnchorAt).toBe(DAY0_MS);
     expect(scheduleOf('c2')).toEqual({ stage: 1, nextReviewAt: DAY0_MS + DAY_MS });
     expect(scheduleOf('c3')).toEqual({ stage: 1, nextReviewAt: DAY0_MS + DAY_MS });
     expect(saved.get('c2').lastReviewedAt).toBe(DAY0_MS);

@@ -1,4 +1,5 @@
-import { isDue, scheduleNextReview, type CardProgress, type ReviewRating } from '../../../review/model';
+import { isDue, type CardProgress, type ReviewRating } from '../../../review/model';
+import { scheduleWithFsrs } from '../../../review/fsrsScheduler';
 import type { CardExport, DeckExport } from '../../../types/deckExport';
 import type { OwnedGate } from '../contracts';
 import type { CurrentCardLike } from '../session/sessionReviewHelpers';
@@ -81,6 +82,6 @@ export function isFocusPractice(p: CardProgress, rating: ReviewRating, now: Date
  * The Mistake Book still records the rating either way.
  */
 export function scheduleFocusReview(p: CardProgress, rating: ReviewRating, now: Date): CardProgress {
-  if (!isFocusPractice(p, rating, now)) return scheduleNextReview(p, rating, now);
+  if (!isFocusPractice(p, rating, now)) return scheduleWithFsrs(p, rating, now.getTime());
   return { ...p, lastReviewedAt: now.getTime() };
 }

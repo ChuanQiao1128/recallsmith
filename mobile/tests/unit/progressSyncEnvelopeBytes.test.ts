@@ -135,7 +135,8 @@ function expectedEvents(id: string | null) {
       reviewedAtMs: 1_000,
       eventTimeMs: 1_000,
       nextReviewAtMs: null,
-      schedulerVersion: 'ladder-v1',
+      // Stamped at record time; features.fsrs is on by default (R24 §4.3).
+      schedulerVersion: 'fsrs-5',
       progressAfter: null,
       lastSeenRevision: null,
     },

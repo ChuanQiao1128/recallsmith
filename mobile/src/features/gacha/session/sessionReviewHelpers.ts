@@ -1,6 +1,6 @@
 import type { CardExport } from '../../../types/deckExport';
 import type { CardProgress, ReviewRating } from '../../../review/model';
-import { scheduleNextReview } from '../../../review/model';
+import { scheduleWithFsrs } from '../../../review/fsrsScheduler';
 import { countDueToday, pickNextCard } from '../planner/sessionPlanner';
 import { scheduleFocusReview } from '../mistakes/focusSession';
 import { capNextReviewToExam } from '../../goal/studyGoal';
@@ -68,6 +68,8 @@ export function buildRatedSessionState(params: {
   excludeUids?: ReadonlySet<string> | null;
   /** The study goal's exam date (R22 §7): no review is scheduled after the start of the day before it. */
   examDate?: string | null;
+  /** The recall check of a card studied this session (R22 §6): a pass is scheduled as FSRS initState(hard), due tomorrow. */
+  learningCheck?: boolean;
 }): {
   updatedProgress: CardProgress[];
   updatedOne: CardProgress;
@@ -76,11 +78,15 @@ export function buildRatedSessionState(params: {
   prevLearnedCount: number;
   remainingDueCount: number;
 } {
-  const { current, progress, rating, mode, sessionDone, sessionLimit, now, cardIndex, ownedSet = null, kindHint = null, focusRun = false, excludeUids = null, examDate = null } = params;
+  const { current, progress, rating, mode, sessionDone, sessionLimit, now, cardIndex, ownedSet = null, kindHint = null, focusRun = false, excludeUids = null, examDate = null, learningCheck = false } = params;
 
-  const schedule = focusRun ? scheduleFocusReview : scheduleNextReview;
+  // R24 §4.3: FSRS behind features.fsrs.enabled (scheduleWithFsrs falls back to the ladder when it is off).
+  // Only a passed check is the learning-check schedule; a Forgot keeps the 10 minute relearn step.
+  const scheduled = focusRun
+    ? scheduleFocusReview(current.progress, rating, now)
+    : scheduleWithFsrs(current.progress, rating, now.getTime(), { learningCheck: learningCheck && rating !== 'again' });
   const updatedOne: CardProgress = {
-    ...capNextReviewToExam(schedule(current.progress, rating, now), examDate, now.getTime()),
+    ...capNextReviewToExam(scheduled, examDate, now.getTime()),
     lastSeenRevision: typeof current.card.Revision === 'number' && current.card.Revision > 0 ? current.card.Revision : 1,
   };
 
