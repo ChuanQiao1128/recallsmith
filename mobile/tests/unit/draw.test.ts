@@ -72,7 +72,8 @@ describe('drawState', () => {
 
     expect(state.state).toBe('wallet-full-with-reserve');
     expect(state.canOpen).toBe(true);
-    expect(state.helper).toMatch(/reserve/i);
+    expect(state.title).toBe('Saved draws full, extra draws waiting');
+    expect(state.helper).toMatch(/waiting/i);
   });
 
   it('keeps draw locked when no active pool is available even with pulls in wallet', () => {
@@ -85,6 +86,23 @@ describe('drawState', () => {
     expect(state.state).toBe('locked');
     expect(state.canOpen).toBe(false);
     expect(state.ctaLabel).toBe('View library');
+  });
+
+  it('speaks plain words in every state: draws, sessions, saved and waiting draws', () => {
+    const states = [
+      buildDrawState({ wallet: { availablePulls: 2, reservePulls: 0 }, hasTodayWork: false, hasActivePool: false }),
+      buildDrawState({ wallet: { availablePulls: 1, reservePulls: 0 }, hasTodayWork: false, rewardPending: true }),
+      buildDrawState({ wallet: { availablePulls: 60, reservePulls: 2 }, hasTodayWork: false }),
+      buildDrawState({ wallet: { availablePulls: 1, reservePulls: 0 }, hasTodayWork: false }),
+      buildDrawState({ wallet: { availablePulls: 0, reservePulls: 0 }, hasTodayWork: true }),
+      buildDrawState({ wallet: { availablePulls: 0, reservePulls: 0 }, hasTodayWork: false }),
+    ];
+    const text = states.flatMap((s) => [s.title, s.helper, s.ctaLabel]).join('\n');
+
+    expect(text).not.toMatch(/\b(pulls?|pity|wallet|reserve|runs?|pool)\b/i);
+    expect(states[1].helper).toContain('1 ready draw.');
+    expect(states[3].helper).toContain('1 draw ready.');
+    expect(states[2].helper).toContain('60 draws are saved and 2 more are waiting');
   });
 });
 

@@ -738,7 +738,7 @@ export function DrawScreen({ navigation, route }: Props) {
                 Draw unavailable right now
               </Text>
               <Text style={styles.stateBody} numberOfLines={2}>
-                {error ?? 'Unable to load draw chamber right now.'}
+                {error ?? 'Unable to load Draw right now.'}
               </Text>
               <Pressable
                 testID="screen-draw-primary-cta"
@@ -810,7 +810,7 @@ export function DrawScreen({ navigation, route }: Props) {
   const emphasizeSingle = ready.canPullSingle && !ready.canPullMulti;
   const open10BaseStyle = emphasizeSingle ? styles.secondaryCta : styles.primaryCta;
   const open10TextStyle = emphasizeSingle ? styles.secondaryCtaText : styles.primaryCtaText;
-  const open10Label = emphasizeSingle ? 'Open 10 · need 10 pulls' : 'Open 10';
+  const open10Label = emphasizeSingle ? 'Open 10 · need 10 draws' : 'Open 10';
   const open1BaseStyle = emphasizeSingle ? styles.primaryCta : styles.secondaryCta;
   const open1TextStyle = emphasizeSingle ? styles.primaryCtaText : styles.secondaryCtaText;
   // One always-present status line under the footer. minHeight keeps the
@@ -843,7 +843,7 @@ export function DrawScreen({ navigation, route }: Props) {
               style={styles.pullsBadge}
               testID="draw-pack-pulls-badge"
               nativeID="draw-wallet-badge"
-              accessibilityLabel={`${ready.walletPulls} pull${ready.walletPulls === 1 ? '' : 's'} for ${ready.deckTitle}`}
+              accessibilityLabel={`${ready.walletPulls} draw${ready.walletPulls === 1 ? '' : 's'} for ${ready.deckTitle}`}
             >
               {/* Currency token — solid gold gem with subtle inner facet.
                   Replaced the Pokeball-style 2-tone token (top blue / bottom
@@ -941,7 +941,7 @@ export function DrawScreen({ navigation, route }: Props) {
                 via a hidden probe when the empty-pulls CTA takes over. */}
             {!ready.canPullSingle ? (
               <Text style={styles.swipeHintHidden} numberOfLines={1}>
-                No pulls for this pack yet. Learn its cards to earn more.
+                No draws for this pack yet. Learn its cards to earn more.
               </Text>
             ) : null}
           </View>
@@ -952,7 +952,7 @@ export function DrawScreen({ navigation, route }: Props) {
                   primary + ghost (current behavior).
               (b) Wallet empty → hide the disabled pair as 0×0 probes
                   (test contract preserves the testIDs + disabled props)
-                  and show a prominent pokeBlue "Earn pulls by studying"
+                  and show a prominent pokeBlue "Earn draws by studying"
                   CTA that navigates straight to SessionCard. Restores
                   actionability instead of the dead-end grey buttons. */}
           {ready.collectionComplete ? (
@@ -995,14 +995,14 @@ export function DrawScreen({ navigation, route }: Props) {
               <Pressable
                 testID="draw-earn-pulls-cta"
                 accessibilityRole="button"
-                accessibilityLabel="Start today's session to earn pulls"
+                accessibilityLabel="Start today's session to earn draws"
                 style={({ pressed }) => [styles.primaryCta, pressed && styles.pressed]}
                 onPress={() => {
                   navigation.navigate('SessionCard', { slug: ready.slug });
                 }}
               >
                 <Text style={styles.primaryCtaText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
-                  Earn pulls by studying  →
+                  Earn draws by studying  →
                 </Text>
               </Pressable>
               {/* Hidden test probes — preserve testID + disabled state

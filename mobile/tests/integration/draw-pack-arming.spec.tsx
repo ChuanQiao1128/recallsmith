@@ -331,7 +331,7 @@ describe('DrawScreen pack arming (I01)', () => {
     const midOpen10 = mid.tree.root.findByProps({ testID: 'screen-draw-primary-cta' });
     expect(flattenStyle(midOpen1.props.style).backgroundColor).toBe(colors.pokeBlue);
     expect(flattenStyle(midOpen10.props.style).backgroundColor).toBe('transparent');
-    expect(collectText(mid.tree)).toContain('Open 10 · need 10 pulls');
+    expect(collectText(mid.tree)).toContain('Open 10 · need 10 draws');
 
     walletFixture = { availablePulls: 12, reservePulls: 0 };
     const full = renderDraw({ slug: 'csharp' });
@@ -342,7 +342,7 @@ describe('DrawScreen pack arming (I01)', () => {
     const fullOpen10 = full.tree.root.findByProps({ testID: 'screen-draw-primary-cta' });
     expect(flattenStyle(fullOpen10.props.style).backgroundColor).toBe(colors.pokeBlue);
     expect(flattenStyle(fullOpen1.props.style).backgroundColor).toBe('transparent');
-    expect(collectText(full.tree)).not.toContain('need 10 pulls');
+    expect(collectText(full.tree)).not.toContain('need 10');
   });
 
   it('says why the open buttons are disabled while a pack loads or opens', async () => {

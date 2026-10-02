@@ -191,7 +191,7 @@ describe('DrawScreen · per-pack wallet', () => {
 
   it('shows the selected pack pulls on the badge and switches with the pack', async () => {
     const tree = await mountDraw(vi.fn(), 'aws');
-    expect(badgeLabel(tree)).toBe('5 pulls for AWS Core');
+    expect(badgeLabel(tree)).toBe('5 draws for AWS Core');
 
     // Switch to the neighbour pack; the badge follows the selected pack.
     await act(async () => {
@@ -200,7 +200,7 @@ describe('DrawScreen · per-pack wallet', () => {
     });
     await flush();
 
-    expect(badgeLabel(tree)).toBe('2 pulls for C# Interview');
+    expect(badgeLabel(tree)).toBe('2 draws for C# Interview');
   });
 
   it('charges an open to the selected pack only', async () => {
