@@ -15,7 +15,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from . import emf, ses, tracectx
+from . import emf, revenuecat, ses, tracectx
 from .internal_client import REPORT_PATH, TICK_PATH, InternalClient
 from .logs import log
 from .settings import Settings, get_recipient, get_secret, load_settings, previous_secret_name, ses_client
@@ -353,7 +353,16 @@ def _failed_steps(data: Mapping[str, Any]) -> list[str]:
     return [step for step in raw if isinstance(step, str)] if isinstance(raw, list) else []
 
 
-def _handle_job(settings: Settings, job: str) -> dict[str, Any]:
+def _revenuecat_step(settings: Settings, secret: str, context: Any) -> None:
+    """R25X F04: delete the queued RevenueCat customer records. Never raises, never changes the tick's outcome."""
+    try:
+        key = get_secret(revenuecat.KEY_SSM_NAME, optional=True)
+        revenuecat.run(_client(settings, secret), key, lambda: _remaining_s(context))
+    except Exception as exc:
+        log("error", TAG, event=revenuecat.EVENT, outcome="error", errorClass=type(exc).__name__)
+
+
+def _handle_job(settings: Settings, job: str, context: Any = None) -> dict[str, Any]:
     if job == "tick":
         # The heartbeat the tick-missing alarm watches: SQS email deliveries never emit it.
         emf.tick(settings.metrics_namespace)
@@ -366,6 +375,9 @@ def _handle_job(settings: Settings, job: str) -> dict[str, Any]:
     tick_id = str(uuid.uuid4())
     client = _client(settings, secret, timeout_s=TICK_TIMEOUT_S)
     result = client.post(TICK_PATH, {"v": 1, "tickId": tick_id, "job": job}, retry_pauses=())
+    if job == "tick":
+        # After the tick, whatever core answered: a failed tick must not hold up the RevenueCat deletions.
+        _revenuecat_step(settings, secret, context)
     if not result.ok:
         emf.tick_failure(settings.metrics_namespace)
         log("error", TAG, event="tick_failed", job=job, tickId=tick_id, status=result.status, error=result.error)
@@ -411,6 +423,6 @@ def lambda_handler(event: Any, context: Any) -> dict[str, Any]:
     if isinstance(event, dict) and isinstance(event.get("Records"), list):
         return _handle_sqs(settings, event["Records"], context)
     if isinstance(event, dict) and event.get("job") in JOBS:
-        return _handle_job(settings, event["job"])
+        return _handle_job(settings, event["job"], context)
     log("info", TAG, event="ignored_event")
     return {"ignored": True}
