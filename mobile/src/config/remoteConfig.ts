@@ -35,9 +35,14 @@ export type PaywallRemoteFeatures = {
   hidden?: boolean;
 };
 
+export type FsrsRemoteFeatures = {
+  enabled?: boolean;
+};
+
 export type RemoteFeatures = {
   mcq?: McqRemoteFeatures;
   paywall?: PaywallRemoteFeatures;
+  fsrs?: FsrsRemoteFeatures;
 };
 
 export type RemoteConfig = {

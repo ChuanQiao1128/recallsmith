@@ -52,6 +52,7 @@ describe('sentry kill-switch flag', () => {
       cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
       sentry: { enabled: false },
       cardReport: DEFAULT_FEATURE_FLAGS.cardReport,
+      fsrs: DEFAULT_FEATURE_FLAGS.fsrs,
     });
   });
 
