@@ -109,6 +109,33 @@ describe('clientErrorReporter', () => {
     expect(payload.stack).toHaveLength(CLIENT_ERROR_STACK_MAX_CHARS);
   });
 
+  it('scrubs emails, tokens, query strings and UUIDs from message and stack before posting (2.0 privacy)', async () => {
+    const fetchImpl = makeFetch();
+    const reporter = createClientErrorReporter({
+      apiBase: 'https://api.example.test',
+      getAccessToken: () => 'tok',
+      getEnv: () => ENV,
+      getCurrentScreen: () => 'Home',
+      fetchImpl,
+      now: () => 0,
+    });
+    const sub = '3f2a9c1e-7b4d-4e8a-9c3b-2d1e0f9a8b7c';
+    const error = new Error(
+      `GET https://api.revenuecat.com/v1/subscribers/${sub}?k=v failed for someone@example.com with Bearer abc.def`,
+    );
+    error.stack = `Error: at https://cdn.example.test/x.json?Signature=s user ${sub} eyJhbGciOiJub25lIn0.eyJzdWIiOiJ4In0.sig`;
+    expect(reporter.report(error)).toBe(true);
+    await Promise.resolve();
+    await Promise.resolve();
+    const body = JSON.parse(String(fetchImpl.mock.calls[0][1].body));
+    expect(body.message).toBe(
+      'GET https://api.revenuecat.com/v1/subscribers/<id>?[redacted] failed for [email] with Bearer [redacted]',
+    );
+    expect(body.stack).toBe('Error: at https://cdn.example.test/x.json?[redacted] user <id> [jwt]');
+    // The Authorization header still carries the real token; only the payload is scrubbed.
+    expect((fetchImpl.mock.calls[0][1].headers as Record<string, string>).Authorization).toBe('Bearer tok');
+  });
+
   it('drops reports beyond 10 per minute', async () => {
     const fetchImpl = makeFetch();
     let t = 1000;
