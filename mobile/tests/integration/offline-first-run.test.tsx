@@ -35,6 +35,18 @@ vi.mock('react-native', () => {
     View: ({ children, ...props }: any) => React.createElement('View', props, children),
     Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
     ScrollView: ({ children, ...props }: any) => React.createElement('ScrollView', props, children),
+    FlatList: ({ data = [], renderItem, ListHeaderComponent, ListEmptyComponent, ...props }: any) =>
+      React.createElement(
+        'FlatList',
+        props,
+        typeof ListHeaderComponent === 'function' ? React.createElement(ListHeaderComponent) : ListHeaderComponent,
+        (data as any[]).length === 0
+          ? typeof ListEmptyComponent === 'function'
+            ? ListEmptyComponent()
+            : ListEmptyComponent
+          : null,
+        ...(data as any[]).map((item, index) => renderItem({ item, index })),
+      ),
     ActivityIndicator: (props: any) => React.createElement('ActivityIndicator', props),
     Pressable: ({ children, onPress, ...props }: any) =>
       React.createElement(
@@ -215,6 +227,8 @@ vi.mock('../../src/features/gacha/mistakes/mistakeBook', () => ({
 import { AudienceSurveyScreen } from '../../src/screens/AudienceSurveyScreen';
 import { SessionCardScreen } from '../../src/screens/SessionCardScreen';
 import { DrawScreen } from '../../src/screens/DrawScreen';
+import { LibraryScreen } from '../../src/screens/LibraryScreen';
+import { setActiveDeckSlug } from '../../src/content/activeDeck';
 import { invalidateDeckCache, getCachedDeck } from '../../src/content/deckCache';
 import { STARTER_BUILD, STARTER_PACKS } from '../../src/content/starter';
 import {
@@ -414,8 +428,9 @@ describe('offline first run with the bundled starter pack (R24 §2.2)', () => {
   let warnSpy: ReturnType<typeof vi.spyOn>;
   let logSpy: ReturnType<typeof vi.spyOn>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     store.clear();
+    await setActiveDeckSlug(null);
     files.clear();
     dirs.clear();
     fetchCalls.length = 0;
@@ -545,5 +560,75 @@ describe('offline first run with the bundled starter pack (R24 §2.2)', () => {
     expect(await ensureStarterDeckInstalled('not-a-bundled-deck')).toBe('unavailable');
     // The temporary copy in the cache directory is cleaned up.
     expect([...files.keys()].filter((k) => k.startsWith('file:///cache/'))).toEqual([]);
+  });
+
+  it('Draw opens the bundled pack when the deck is missing and the network is down', async () => {
+    store.set(STAGE_KEY, 'done');
+    await setActiveDeckSlug(SLUG);
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawScreen
+          navigation={{ goBack: vi.fn(), navigate: vi.fn(), replace: vi.fn() } as any}
+          route={{ key: 'draw', name: 'Draw', params: { slug: SLUG } } as any}
+        />,
+      );
+    });
+    await flush();
+    expect(hasText(tree, 'No active pack yet')).toBe(false);
+    expect(tree.root.findAllByProps({ testID: 'draw-card-stack-stage' }).length).toBeGreaterThan(0);
+    expect(JSON.parse(store.get(META_KEY)!).buildId).toBe(PACK.version);
+    act(() => tree.unmount());
+  });
+
+  it('Library shows the bundled pack when the deck is missing and the network is down', async () => {
+    store.set(STAGE_KEY, 'done');
+    await setActiveDeckSlug(SLUG);
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <LibraryScreen
+          navigation={{ goBack: vi.fn(), navigate: vi.fn(), replace: vi.fn(), setParams: vi.fn() } as any}
+          route={{ key: 'library', name: 'Library', params: {} } as any}
+        />,
+      );
+    });
+    await flush();
+    expect(tree.root.findAllByProps({ testID: 'library-unavailable-state' })).toHaveLength(0);
+    expect(tree.root.findAllByProps({ testID: 'library-card-grid' }).length).toBeGreaterThan(0);
+    expect(JSON.parse(store.get(META_KEY)!).buildId).toBe(PACK.version);
+    act(() => tree.unmount());
+  });
+
+  it('a deck with no bundled pack keeps its offline error in Draw and Library', async () => {
+    store.set(STAGE_KEY, 'done');
+    await setActiveDeckSlug('not-a-bundled-deck');
+    let library!: renderer.ReactTestRenderer;
+    await act(async () => {
+      library = renderer.create(
+        <LibraryScreen
+          navigation={{ goBack: vi.fn(), navigate: vi.fn(), replace: vi.fn(), setParams: vi.fn() } as any}
+          route={{ key: 'library', name: 'Library', params: {} } as any}
+        />,
+      );
+    });
+    await flush();
+    expect(library.root.findAllByProps({ testID: 'library-unavailable-state' }).length).toBeGreaterThan(0);
+    expect(hasText(library, 'This deck is not available on this device yet.')).toBe(true);
+    act(() => library.unmount());
+
+    let draw!: renderer.ReactTestRenderer;
+    await act(async () => {
+      draw = renderer.create(
+        <DrawScreen
+          navigation={{ goBack: vi.fn(), navigate: vi.fn(), replace: vi.fn() } as any}
+          route={{ key: 'draw', name: 'Draw', params: { slug: 'not-a-bundled-deck' } } as any}
+        />,
+      );
+    });
+    await flush();
+    expect(hasText(draw, 'No active pack yet')).toBe(true);
+    expect(store.has(META_KEY)).toBe(false);
+    act(() => draw.unmount());
   });
 });
