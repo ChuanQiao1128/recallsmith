@@ -1,0 +1,31 @@
+{
+  "tags_only_updates": false,
+  "changes": {
+    "module.operators.aws_iam_role_policy.agent_readonly_deny": {
+      "action": "update",
+      "keys": [
+        "policy"
+      ]
+    },
+    "module.operators.aws_iam_role_policy.deployer": {
+      "action": "update",
+      "keys": [
+        "policy"
+      ]
+    },
+    "module.operators.aws_iam_role.admin_mfa": {
+      "action": "update",
+      "keys": [
+        "assume_role_policy",
+        "max_session_duration"
+      ]
+    },
+    "module.operators.aws_iam_policy.operator_base": {
+      "action": "update",
+      "keys": [
+        "policy"
+      ]
+    }
+  },
+  "_note": "operator_base reads as policy (known after apply) only because admin_mfa is updated in the same plan; the rendered document is unchanged, which the empty second plan confirms."
+}

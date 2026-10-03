@@ -617,7 +617,7 @@ per role, each with `source_profile = dev`:
 |---|---|---|---|---|
 | `devcards-ro` | `devcards-agent-readonly` | no | Claude sessions, workflow and DDW workers, investigations | AWS ReadOnlyAccess **minus** SSM/KMS decrypt, Secrets Manager, Lambda configuration (its environment holds the injected secrets), S3 object reads (tfstate, user content, CloudTrail), Cognito user records, RDS logs, SQS receive |
 | `devcards-deploy` | `devcards-deployer` | no | `src_C/deploy.sh`, `services/deploy-python-lambda.sh`, `frontend/deploy.sh`, `site/deploy.sh`, `infra/scripts/rds-snapshot.sh` (all default to it) | update / publish / re-alias core-vpc, worker-lambda and the five `developercards-*` Python functions; read `/developercards` SSM through KMS-via-SSM; sync the console and site buckets and invalidate their two distributions; pre-migration DB snapshot. Not: edge-public, newsapp, IAM, `lambda:InvokeFunction`, tfstate, content buckets |
-| `devcards-admin` | `devcards-admin-mfa` | **yes** | the owner; Terraform; `scripts/invoke-as-admin.sh`; break-glass | AdministratorAccess, 12-hour session |
+| `devcards-admin` | `devcards-admin-mfa` | **yes** | the owner; Terraform; `scripts/invoke-as-admin.sh`; break-glass | AdministratorAccess, 1-hour session |
 
 ```
 profile                      add to ~/.aws/config
@@ -627,7 +627,7 @@ profile                      add to ~/.aws/config
                              source_profile = dev, role_session_name = deploy, region = ap-southeast-2
 [profile devcards-admin]     role_arn = arn:aws:iam::622994489535:role/devcards-admin-mfa
                              source_profile = dev, mfa_serial = arn:aws:iam::622994489535:mfa/TimeAwakeAdmin
-                             duration_seconds = 43200, role_session_name = owner-admin, region = ap-southeast-2
+                             duration_seconds = 3600, role_session_name = owner-admin, region = ap-southeast-2
 ```
 
 CloudTrail now names the actor: `assumed-role/devcards-deployer/deploy` is a deploy,
@@ -635,7 +635,7 @@ CloudTrail now names the actor: `assumed-role/devcards-deployer/deploy` is a dep
 
 **Terraform after the cutover.** Even `plan` needs `devcards-admin`: it reads the tfstate object and refreshes Lambda
 configuration, both denied to `devcards-ro` by design. The owner types the MFA code once: `aws sts get-caller-identity --profile devcards-admin`.
-The CLI caches the 12-hour session; Terraform (which cannot prompt for MFA) then runs with
+The CLI caches the 1-hour session; Terraform (which cannot prompt for MFA) then runs with
 `eval "$(aws configure export-credentials --profile devcards-admin --format env)"` in the same shell. The MFA code is the
 owner's approval step for every infrastructure change; the plan allow-list (§2–§5) is unchanged.
 
@@ -644,6 +644,14 @@ owner's approval step for every infrastructure change; the plan allow-list (§2�
 `devcards-operator-base` (assume the three roles, see own user), detaches AmazonEC2FullAccess / AmazonS3FullAccess,
 removes the user from `admins`, and proves `dev` alone is now denied. Rollback is the printed
 `aws iam add-user-to-group --profile devcards-admin --user-name devcards-admin --group-name admins`.
+
+**What this does not stop (review of PR #736, 2026-10-03).** The roles bind whoever *chooses* a profile. Every
+agent on the deploy Mac runs as the same macOS user that can read `~/.aws/credentials` and the CLI's role-session
+cache, so an agent that ignores the rules can still use `devcards-deploy` (no MFA), and `devcards-admin` while an
+owner session is cached. Hence the 1-hour admin session; clear `~/.aws/cli/cache` after admin work. The deployer can
+also ship code to core-vpc, whose environment holds the database password, so narrowing its SSM read by name would
+not narrow what it can reach. The real closes are a separate OS user or sandbox for agents, and MFA (or GitHub OIDC
+with a protected environment, E11) in front of the deployer.
 
 **Owner-only, console:** rotate the key (create the new key, update `~/.aws/credentials [dev]`, deactivate the old one,
 delete it after a week of `GetAccessKeyLastUsed` silence). Later (enterprise phase): IAM Identity Center for people and
