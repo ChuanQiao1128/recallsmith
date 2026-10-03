@@ -120,7 +120,8 @@ the hashed assets under `dist/` to the console bucket as immutable
 `no-cache`, invalidates the CloudFront distribution, then reads `index.html` back
 from the live URL and compares its hash against the built one. Knobs, all read
 from the environment: `DRY_RUN=1` builds and prints the commands without touching
-AWS; `AWS_PROFILE` (default `dev`) picks the credentials; `CONSOLE_BUCKET` and
+AWS (not even the SSM lookup of the Sentry DSN, unless `CONSOLE_SENTRY_DSN_PARAM` is
+set explicitly); `AWS_PROFILE` (default `devcards-deploy`, see below) picks the credentials; `CONSOLE_BUCKET` and
 `CONSOLE_DISTRIBUTION_ID` override the bucket and distribution defaults.
 
 Production deploys run in CD (`.github/workflows/cd.yml`, `infra/RUNBOOK.md` §12): a
@@ -176,7 +177,9 @@ SDK is never loaded and nothing leaves the browser.
 Creating the parameter is a supervisor step, not part of `deploy.sh`: an SSM
 parameter of type String named `/developercards/prod/console-sentry-dsn`, in the
 deploy region, holding the console project's DSN. Afterwards
-`DRY_RUN=1 ./deploy.sh` should print `VITE_SENTRY_DSN: set`.
+`CONSOLE_SENTRY_DSN_PARAM=/developercards/prod/console-sentry-dsn DRY_RUN=1 ./deploy.sh`
+should print `VITE_SENTRY_DSN: set` (a plain `DRY_RUN=1` makes no AWS call, so it
+reads no parameter).
 
 Sentry project settings the owner turns on: the server-side Data Scrubber,
 "Prevent Storing of IP Addresses", spike protection, and Allowed Domains set to
