@@ -3,8 +3,12 @@
 # "assume a role" (devcards-operator-base) and a leaked key no longer means a leaked account:
 #
 #   devcards-agent-readonly  no MFA   AWS ReadOnlyAccess minus secrets and user data (explicit denies below)
-#   devcards-deployer        no MFA   update/publish/re-alias the listed functions, sync two static sites,
-#                                     read /developercards SSM (deploy.sh injects it), pre-migration snapshot
+#   devcards-deployer        MFA      update/publish/re-alias the listed functions, sync two static sites,
+#                                     read /developercards SSM (deploy.sh injects it), pre-migration snapshot.
+#                                     Since the CD pipeline (owner choice C, 2026-10-03) this is the local
+#                                     break-glass path only; normal deploys go through developercards-gha-prod.
+#   developercards-gha-prod  OIDC     the same permissions plus invoking the synthetic check, for GitHub
+#                                     Actions jobs in the "production" environment (owner approval) only.
 #   devcards-admin-mfa       MFA      AdministratorAccess, 1-hour sessions; Terraform and break-glass. The MFA
 #                                     code is the owner's approval step for production infrastructure changes.
 
@@ -168,9 +172,10 @@ resource "aws_iam_role_policy" "agent_readonly_deny" {
 
 # ── devcards-deployer ──────────────────────────────────────────────────────────────────────────────────
 resource "aws_iam_role" "deployer" {
-  name                 = "devcards-deployer"
-  description          = "src_C/deploy.sh, services/deploy-python-lambda.sh, frontend/deploy.sh, site/deploy.sh, rds-snapshot.sh"
-  assume_role_policy   = data.aws_iam_policy_document.trust_key.json
+  name        = "devcards-deployer"
+  description = "Break-glass local deploys (MFA): src_C/deploy.sh, services/deploy-python-lambda.sh, frontend/deploy.sh, site/deploy.sh, rds-snapshot.sh"
+  # MFA since CD (review of #736, finding 2): without it any process of the owner's macOS user could ship code.
+  assume_role_policy   = data.aws_iam_policy_document.trust_mfa.json
   max_session_duration = 3600
 }
 
@@ -269,4 +274,54 @@ resource "aws_iam_policy" "operator_base" {
   name        = "devcards-operator-base"
   description = "The static operator key: assume the three operator roles, nothing else"
   policy      = data.aws_iam_policy_document.operator_base.json
+}
+
+# ── developercards-gha-prod: GitHub Actions CD (.github/workflows/cd.yml, RUNBOOK §12) ──────────────────
+# Only a job that declares `environment: production` gets a token whose sub matches, and that environment
+# requires the owner's approval and allows only main. No static credential exists for CI.
+resource "aws_iam_openid_connect_provider" "github" {
+  url            = "https://token.actions.githubusercontent.com"
+  client_id_list = ["sts.amazonaws.com"]
+}
+
+data "aws_iam_policy_document" "trust_github_production" {
+  statement {
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+    principals {
+      type        = "Federated"
+      identifiers = [aws_iam_openid_connect_provider.github.arn]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:sub"
+      values   = ["repo:${var.github_repository}:environment:${var.github_environment}"]
+    }
+  }
+}
+
+resource "aws_iam_role" "gha_prod" {
+  name                 = "developercards-gha-prod"
+  description          = "GitHub Actions CD, environment ${var.github_environment} of ${var.github_repository} only"
+  assume_role_policy   = data.aws_iam_policy_document.trust_github_production.json
+  max_session_duration = 3600
+}
+
+data "aws_iam_policy_document" "gha_prod" {
+  source_policy_documents = [data.aws_iam_policy_document.deployer.json]
+  statement {
+    sid       = "PostDeploySmoke" # the five end-to-end probes, services/synthetic-check
+    actions   = ["lambda:InvokeFunction"]
+    resources = ["${local.lambda_arn}:developercards-synthetic-check:prod"]
+  }
+}
+
+resource "aws_iam_role_policy" "gha_prod" {
+  name   = "release-listed-functions-and-sites"
+  role   = aws_iam_role.gha_prod.id
+  policy = data.aws_iam_policy_document.gha_prod.json
 }

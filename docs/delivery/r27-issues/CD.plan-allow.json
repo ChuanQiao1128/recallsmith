@@ -1,0 +1,10 @@
+{
+  "tags_only_updates": false,
+  "changes": {
+    "module.operators.aws_iam_openid_connect_provider.github": "create",
+    "module.operators.aws_iam_role.gha_prod": "create",
+    "module.operators.aws_iam_role_policy.gha_prod": "create",
+    "module.operators.aws_iam_role.deployer": { "action": "update", "keys": ["assume_role_policy", "description"] }
+  },
+  "outputs": ["operator_role_arns"]
+}
