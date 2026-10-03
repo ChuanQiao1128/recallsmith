@@ -314,6 +314,7 @@ jobs:
           bash -n src_C/deploy.sh
           bash -n frontend/deploy.sh
           bash -n services/lambda-release.sh
+          bash -n infra/scripts/operator-cutover.sh
           bash -n src_C/scripts/merge-env.sh
       # Pure jq, no aws, no network (jq ships on ubuntu-latest).
       - run: bash src_C/scripts/merge-env.test.sh
