@@ -11,7 +11,7 @@ resource "aws_lambda_function" "worker" {
   memory_size                    = 512
   reserved_concurrent_executions = 2
   role                           = var.role_arn
-  runtime                        = "dotnet8"
+  runtime                        = "dotnet10"
   timeout                        = 615
   ephemeral_storage {
     size = 512
