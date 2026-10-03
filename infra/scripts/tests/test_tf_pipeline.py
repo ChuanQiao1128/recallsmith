@@ -2,12 +2,16 @@
 
 Run: python3 -m unittest discover -s infra/scripts/tests -v   (CI: job "python")
 Offline: throwaway git repositories, synthetic plan JSON and a fake Actions API; no AWS, no network, no gh.
-Covered: which files are plan-affecting (and that terraform.yml's push paths say the same), the pull request rule
-(exactly one allow file with a Terraform change, never two, the allow file's shape), the allow file a push to main
-selects, the refusal of a commit older than the last one applied, the break-glass guard on a plan (module.operators,
-denied resource types, the audit and state buckets, trust policies naming anything but an AWS service), the error
-diagnosis that never quotes a message, the bootstrap allow file TFCI against check-plan.py, and the static facts of
-terraform.yml, ci.yml and the developercards-gha-infra role that a wrong edit would break.
+Covered: which files are plan-affecting (and that terraform.yml's push paths say the same, non-ASCII paths
+included), the pull request rule (at least one allow file with a Terraform change; several are combined when they
+agree; the allow file's shape and path), preflight (providers other than hashicorp/aws, provisioners,
+aws_lambda_invocation, action blocks, *.tf.json, outside modules), the allow files a push to main selects, the
+refusal of a commit older than the last one that changed AWS, the break-glass guard on a plan (module.operators and
+moves into or out of it, denied resource types, the audit and state buckets, trust policies naming anything but an
+AWS service, escalating grants and admin attachments, provisioners), the error diagnosis that never quotes a
+message, the bootstrap allow file TFCI against check-plan.py, the workflow's step bodies under bash -e (stubbed
+python3, terraform and aws), and the static facts of terraform.yml, ci.yml and the developercards-gha-infra role
+(its deny never blocks a refresh read) that a wrong edit would break.
 """
 
 import contextlib
@@ -22,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import unicodedata
 import unittest
 
 SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "tf-pipeline.py"
@@ -40,6 +45,7 @@ TFCI = REPO_ROOT / "docs" / "delivery" / "r27-issues" / "TFCI.plan-allow.json"
 REPO = "ChuanQiao1128/recallsmith"
 
 ALLOW_OK = {"tags_only_updates": False, "changes": {"module.api.aws_apigatewayv2_route.this[\"x\"]": "create"}}
+LOCK_AWS = 'provider "registry.terraform.io/hashicorp/aws" {\n  version = "6.0.0"\n}\n'
 
 
 def capture(fn, *args, **kwargs):
@@ -87,7 +93,8 @@ class InRepo(unittest.TestCase):
         self.repo = GitRepo()
         self.cwd = os.getcwd()
         os.chdir(self.repo.dir)
-        self.base = self.repo.commit({"infra/envs/prod/main.tf": "# base\n", "README.md": "x\n"}, "base")
+        self.base = self.repo.commit({"infra/envs/prod/main.tf": "# base\n", "README.md": "x\n",
+                                      "infra/envs/prod/.terraform.lock.hcl": LOCK_AWS}, "base")
 
     def tearDown(self):
         os.chdir(self.cwd)
@@ -429,8 +436,13 @@ class StaleTest(InRepo):
         entry.update(kw)
         return entry
 
-    def applied(self, conclusion="success"):
-        return [{"name": "select (no AWS)", "conclusion": "success"}, {"name": tfp.APPLY_JOB, "conclusion": conclusion}]
+    def applied(self, conclusion="success", step="success"):
+        """The jobs of one run: select, and the apply job with its step "apply the saved plan"."""
+        steps = [{"name": "plan to a saved file (never printed)", "conclusion": "success"},
+                 {"name": tfp.APPLY_STEP, "conclusion": step},
+                 {"name": "the second plan must be empty", "conclusion": "skipped" if step == "skipped" else conclusion}]
+        return [{"name": "select (no AWS)", "conclusion": "success"},
+                {"name": tfp.APPLY_JOB, "conclusion": conclusion, "steps": steps}]
 
     def setUp(self):
         super().setUp()
@@ -448,11 +460,15 @@ class StaleTest(InRepo):
             ([], {}),
             ([self.run_entry(7, self.old)], {"7": self.applied()}),                       # same commit
             ([self.run_entry(7, self.base)], {"7": self.applied()}),                      # older commit
-            ([self.run_entry(7, self.new)], {"7": self.applied("skipped")}),              # apply job skipped
+            ([self.run_entry(7, self.new)], {"7": self.applied("skipped", "skipped")}),   # apply job skipped
+            # refused at the guard or the gate: the apply step never ran, nothing changed AWS
+            ([self.run_entry(7, self.new, conclusion="failure")], {"7": self.applied("failure", "skipped")}),
+            ([self.run_entry(7, self.new, conclusion="failure")], {"7": [{"name": tfp.APPLY_JOB, "conclusion": "failure"}]}),
+            ([self.run_entry(7, self.new, conclusion=None, status="in_progress")],
+             {"7": self.applied(None, None)}),                                              # still running
             ([self.run_entry(7, self.new, event="workflow_dispatch")], {"7": self.applied()}),
             ([self.run_entry(7, self.new, path=".github/workflows/evil.yml")], {"7": self.applied()}),
             ([self.run_entry(7, self.new, head_repository={"full_name": "fork/recallsmith"})], {"7": self.applied()}),
-            ([self.run_entry(7, self.new, conclusion="failure")], {"7": self.applied()}),
             ([self.run_entry(9, self.new)], {"9": self.applied()}),                       # this run itself
             ([self.run_entry(7, "f" * 40)], {"7": self.applied()}),                       # not in the clone
         ]
@@ -505,7 +521,8 @@ def trust(principal):
 
 class GuardTest(unittest.TestCase):
     def guard(self, p):
-        return tfp.guard(p)
+        rc, counts, refusals, _ = tfp.guard(p)
+        return rc, counts, refusals
 
     def test_routine_changes_pass(self):
         rc, counts, refusals = self.guard(plan(
@@ -519,7 +536,7 @@ class GuardTest(unittest.TestCase):
             resource("module.edge.data.aws_iam_policy_document.d", ["read"], mode="data"),
             resource("module.api.aws_lambda_function.f", ["no-op"])))
         self.assertEqual((rc, refusals), (0, []))
-        self.assertEqual(counts, {"effective": 4, "importing": 0, "outputs": 0})
+        self.assertEqual(counts, {"effective": 4, "moved": 0, "importing": 0, "outputs": 0})
 
     def test_module_operators_is_refused(self):
         for actions in (["create"], ["update"], ["delete"], ["delete", "create"], ["forget"]):
@@ -686,7 +703,7 @@ class BootstrapAllowTest(unittest.TestCase):
         self.assertEqual(rc, 1, out)
 
     def test_guard_refuses_it(self):
-        rc, _, refusals = tfp.guard(self.bootstrap_plan())
+        rc, _, refusals, _ = tfp.guard(self.bootstrap_plan())
         self.assertEqual(rc, 1)
         self.assertEqual(sorted(a for a, _ in refusals), [
             "module.operators.aws_iam_role.gha_infra", "module.operators.aws_iam_role_policy.gha_infra_deny",
@@ -757,7 +774,12 @@ class WorkflowFactsTest(unittest.TestCase):
         self.assertTrue(before(apply, "tf-pipeline.py stale", creds))
         self.assertTrue(before(apply, "TF_VAR_ALERT_EMAIL is not set", creds))
         self.assertTrue(before(apply, "plan -input=false", "tf-pipeline.py guard"))
-        self.assertTrue(before(apply, "tf-pipeline.py combine --out \"$RUNNER_TEMP/tf/allow.json\" $ALLOW", creds))
+        self.assertTrue(before(apply, 'read -r -a allow_files <<< "$ALLOW"', creds))
+        self.assertTrue(before(apply, 'tf-pipeline.py combine --out "$RUNNER_TEMP/tf/allow.json" "${allow_files[@]}"',
+                               creds))
+        self.assertNotIn("$ALLOW\n", apply)
+        self.assertNotIn("SC2086", apply)
+        self.assertTrue(before(apply, "tf-pipeline.py preflight", creds))
         self.assertTrue(before(apply, "tf-pipeline.py guard", "check-plan.py --plan \"$RUNNER_TEMP/tf/plan.json\" --allow"))
         self.assertTrue(before(apply, '--allow "$RUNNER_TEMP/tf/allow.json"', " apply -input=false"))
         self.assertIn('apply -input=false -no-color -lock-timeout=10m "$RUNNER_TEMP/tf/apply.tfplan"', apply)
@@ -803,9 +825,14 @@ class CiFactsTest(unittest.TestCase):
     def test_infra_job_runs_the_pull_request_rule(self):
         infra = jobs_of(CI.read_text())["infra"]
         self.assertIn("fetch-depth: 0", infra)
-        self.assertIn("if: github.event_name == 'pull_request'", infra)
-        self.assertIn('python3 infra/scripts/tf-pipeline.py pr-check --base "$BASE_REF"', infra)
-        self.assertIn("BASE_REF: origin/${{ github.base_ref }}", infra)
+        step = infra[infra.index("name: Terraform allow-list rule"):]
+        step = step[:step.index("\n      - ")]
+        # Every run but a push to main: a branch push reports a check of the same name for the same commit as its
+        # pull request, and that one must not pass by skipping the rule.
+        self.assertIn("if: github.ref != 'refs/heads/main'", step)
+        self.assertNotIn("event_name", step)
+        self.assertIn("BASE_REF: origin/${{ github.base_ref || 'main' }}", step)
+        self.assertIn('python3 infra/scripts/tf-pipeline.py pr-check --base "$BASE_REF"', step)
         self.assertNotIn("id-token", CI.read_text())
 
 
@@ -854,11 +881,11 @@ class GhaInfraRoleTest(unittest.TestCase):
         doc = hcl_block(self.main, 'data "aws_iam_policy_document" "gha_infra_deny"')
         found = {}
         for block in re.findall(r"\n  statement \{(.*?)\n  \}", doc, re.S):
-            self.assertIn('effect = "Deny"', block)
+            self.assertRegex(block, r'effect\s*=\s*"Deny"')
             sid = re.search(r'sid\s*=\s*"(\w+)"', block).group(1)
-            acts = re.search(r"actions = \[(.*?)\]", block, re.S).group(1)
+            acts = re.search(r"actions\s*=\s*\[(.*?)\]", block, re.S).group(1)
             code = "\n".join(line.split("#", 1)[0] for line in acts.splitlines())
-            found[sid] = (re.findall(r'"([^"]+)"', code), re.search(r"resources = (.*)", block).group(1))
+            found[sid] = (re.findall(r'"([^"]+)"', code), re.search(r"resources\s*=\s*(.*)", block).group(1))
         return found
 
     def denies(self, sid, action):
@@ -911,6 +938,615 @@ class GhaInfraRoleTest(unittest.TestCase):
     def test_output(self):
         outputs = (REPO_ROOT / "infra" / "envs" / "prod" / "outputs.tf").read_text()
         self.assertIn("gha_infra      = module.operators.gha_infra_role_arn", outputs)
+
+
+class NonAsciiPathTest(InRepo):
+    """git quotes a non-ASCII path ("infra/envs/prod/na\303\257ve.tf") unless -z: it must still count."""
+    NAME = "infra/envs/prod/naïve.tf"
+
+    def test_changed_files_are_verbatim(self):
+        after = self.repo.commit({self.NAME: "# x\n", "docs/a b.md": "x\n"})
+        got = sorted((st, unicodedata.normalize("NFC", p)) for st, p in tfp.changed_files(self.base, after))
+        self.assertEqual(got, [("A", "docs/a b.md"), ("A", self.NAME)])
+
+    def test_pull_request_needs_an_allow_file(self):
+        self.repo.git("checkout", "-q", "-b", "pr")
+        self.repo.commit({self.NAME: "# x\n"})
+        rc, out = capture(tfp.pr_check, "main")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("adds or changes no docs/delivery", out)
+
+    def test_select_runs_the_apply(self):
+        after = self.repo.commit({self.NAME: "# x\n"})
+        (rc, outputs, _), out = capture(tfp.select, self.base, after)
+        self.assertEqual((rc, outputs), (0, {"apply": "true", "allow": ""}), out)
+
+
+class AllowPathTest(unittest.TestCase):
+    def test_paths(self):
+        self.assertIsNone(tfp.allow_path_problem("docs/delivery/r27-issues/TFCI.plan-allow.json"))
+        for bad in ("docs/delivery/x/*.plan-allow.json", "docs/delivery/x/[a].plan-allow.json",
+                    "docs/delivery/x/a?.plan-allow.json", "docs/delivery/a b.plan-allow.json",
+                    "docs/delivery/../x.plan-allow.json", "/docs/delivery/x.plan-allow.json",
+                    "docs/delivery/x/naïve.plan-allow.json", "docs/delivery/x/$(id).plan-allow.json",
+                    "infra/x.plan-allow.json", "docs/delivery/x/a.json"):
+            self.assertIsNotNone(tfp.allow_path_problem(bad), bad)
+
+    def test_committed_allow_files_have_plain_paths(self):
+        for path in (REPO_ROOT / "docs" / "delivery").rglob("*" + tfp.ALLOW_SUFFIX):
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            self.assertIsNone(tfp.allow_path_problem(rel), rel)
+
+    def test_combine_refuses_a_glob(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                os.makedirs("docs/delivery/x")
+                for name in ("NEW", "OLD"):
+                    with open("docs/delivery/x/%s.plan-allow.json" % name, "w") as handle:
+                        json.dump({"changes": {"aws_sqs_queue.%s" % name.lower(): "create"}}, handle)
+                rc, out = capture(tfp.run_combine, ["docs/delivery/x/*.plan-allow.json"], "allow.json")
+                self.assertEqual(rc, 1, out)
+                self.assertIn("A-Z a-z 0-9", out)
+                self.assertFalse(os.path.exists("allow.json"))
+            finally:
+                os.chdir(cwd)
+
+
+class SelectPathTest(InRepo):
+    def test_a_glob_named_allow_file_is_refused(self):
+        after = self.repo.commit({"docs/delivery/r99/*.plan-allow.json": ALLOW_OK})
+        (rc, outputs, _), out = capture(tfp.select, self.base, after)
+        self.assertEqual((rc, outputs["apply"]), (1, "false"), out)
+
+
+class PreflightTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="tfp-pre-")
+        self.write("infra/envs/prod/.terraform.lock.hcl", LOCK_AWS)
+        self.write("infra/envs/prod/main.tf", 'module "api" {\n  source = "../../modules/api"\n\n  name = "x"\n}\n')
+        self.write("infra/modules/api/main.tf", 'resource "aws_sqs_queue" "q" {\n  name = "q"\n}\n')
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def write(self, path, text):
+        full = os.path.join(self.dir, path)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w") as handle:
+            handle.write(text)
+
+    def problems(self):
+        return " / ".join(tfp.preflight(self.dir))
+
+    def test_clean_tree_passes(self):
+        self.assertEqual(self.problems(), "")
+        rc, out = capture(tfp.run_preflight, self.dir)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("PREFLIGHT OK", out)
+
+    def test_the_repository_passes(self):
+        self.assertEqual(tfp.preflight(str(REPO_ROOT)), [])
+
+    def test_providers_other_than_aws_are_refused(self):
+        self.write("infra/envs/prod/.terraform.lock.hcl", LOCK_AWS + 'provider "registry.terraform.io/hashicorp/external" {\n}\n')
+        self.assertIn("lists provider registry.terraform.io/hashicorp/external", self.problems())
+        os.remove(os.path.join(self.dir, "infra/envs/prod/.terraform.lock.hcl"))
+        self.assertIn("is missing", self.problems())
+        self.write("infra/envs/prod/.terraform.lock.hcl", "# nothing\n")
+        self.assertIn("lists no provider", self.problems())
+
+    def test_code_that_runs_is_refused(self):
+        cases = {
+            'resource "terraform_data" "x" {\n  provisioner "local-exec" {\n    command = "id"\n  }\n}\n': "provisioner",
+            'resource null_resource x {\n  provisioner local-exec {\n    command = "id"\n  }\n}\n': "provisioner",
+            'data "aws_lambda_invocation" "x" {\n  function_name = "f"\n  input = "{}"\n}\n': "aws_lambda_invocation",
+            'ephemeral "aws_lambda_invocation" "x" {\n}\n': "aws_lambda_invocation",
+            'resource aws_lambda_invocation x {\n}\n': "aws_lambda_invocation",
+            'action "aws_lambda_invoke" "x" {\n  config {\n    function_name = "f"\n  }\n}\n': "action block",
+            'module "m" {\n  source = "git::https://example.com/m.git"\n}\n': "outside this repository",
+            'module "m" {\n  source = "terraform-aws-modules/vpc/aws"\n}\n': "outside this repository",
+            'module "m" {\n  source = local.where\n}\n': "no plain string source",
+        }
+        for text, want in cases.items():
+            self.write("infra/modules/api/extra.tf", text)
+            self.assertIn(want, self.problems(), text)
+        self.write("infra/modules/api/extra.tf", "x")
+        self.write("infra/modules/api/extra.tf.json", '{"resource": {}}')
+        self.assertIn("JSON configuration", self.problems())
+
+    def test_lookalikes_pass(self):
+        self.write("infra/modules/api/extra.tf", (
+            '# provisioner "local-exec" { is never used here\n'
+            'resource "aws_wafv2_web_acl" "w" {\n  default_action {\n    allow {}\n  }\n  rule {\n    action {\n'
+            '      block {}\n    }\n  }\n}\n'
+            'resource "aws_s3_object" "o" {\n  source = "${path.module}/x.txt"\n}\n'
+            'module "inner" {\n  source = "./inner"\n}\n'))
+        # Terraform's own module cache is not configuration.
+        self.write("infra/envs/prod/.terraform/modules/x/main.tf", 'resource "a" "b" {\n  provisioner "local-exec" {}\n}\n')
+        self.assertEqual(self.problems(), "")
+
+    def test_run_preflight_reports_errors(self):
+        self.write("infra/modules/api/extra.tf", 'data "aws_lambda_invocation" "x" {\n}\n')
+        rc, out = capture(tfp.run_preflight, self.dir)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("::error::PREFLIGHT infra/modules/api/extra.tf", out)
+
+
+class PrCheckPreflightTest(InRepo):
+    def test_pull_request_with_a_provisioner_fails(self):
+        self.repo.git("checkout", "-q", "-b", "pr")
+        self.repo.commit({"infra/modules/api/x.tf": 'resource "terraform_data" "x" {\n  provisioner "local-exec" {\n'
+                                                    '    command = "id"\n  }\n}\n',
+                          "docs/delivery/r99/X.plan-allow.json": {"changes": {"module.api.terraform_data.x": "create"}}})
+        rc, out = capture(tfp.pr_check, "main")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("PREFLIGHT", out)
+        self.assertNotIn("PR CHECK OK", out)
+
+
+class StaleMoreTest(StaleTest):
+    def stale_with(self, conclusion, jobs):
+        return capture(tfp.stale, self.old, REPO, "9", self.api([self.run_entry(7, self.new, conclusion=conclusion)],
+                                                                   {"7": jobs}))
+
+    def test_an_apply_under_a_red_second_plan_counts(self):
+        rc, out = self.stale_with("failure", self.applied("failure", "success"))
+        self.assertEqual(rc, 1, out)
+
+    def test_an_apply_that_failed_part_way_counts(self):
+        rc, out = self.stale_with("failure", self.applied("failure", "failure"))
+        self.assertEqual(rc, 1, out)
+
+    def test_a_cancelled_apply_counts(self):
+        rc, out = self.stale_with("cancelled", self.applied("cancelled", "cancelled"))
+        self.assertEqual(rc, 1, out)
+
+    def test_an_earlier_attempt_counts(self):
+        # Attempt 1 applied and went red on the second plan; attempt 2 (a re-run) stopped at the gate.
+        rc, out = self.stale_with("failure", self.applied("failure", "success") + self.applied("failure", "skipped"))
+        self.assertEqual(rc, 1, out)
+
+    def test_an_empty_plan_confirmed_in_sync_counts(self):
+        rc, out = self.stale_with("success", self.applied("success", "skipped"))
+        self.assertEqual(rc, 1, out)
+
+    def test_the_queries(self):
+        api = self.api([self.run_entry(7, self.new)], {"7": self.applied()})
+        capture(tfp.stale, self.old, REPO, "9", api)
+        self.assertNotIn("status=", api.calls[0])
+        self.assertIn("per_page=100", api.calls[0])
+        self.assertIn("filter=all", api.calls[1])
+
+
+def policy(*statements):
+    return json.dumps({"Version": "2012-10-17", "Statement": list(statements)})
+
+
+SERVICE_TRUST = trust({"Service": "lambda.amazonaws.com"})
+
+
+class GuardMoreTest(unittest.TestCase):
+    def guard(self, *entries, configuration=None):
+        p = plan(*entries)
+        if configuration is not None:
+            p["configuration"] = configuration
+        return tfp.guard(p)
+
+    def moved(self, address, previous, actions=("no-op",), **kw):
+        entry = resource(address, list(actions), **kw)
+        entry["previous_address"] = previous
+        return entry
+
+    def test_moves_out_of_and_into_module_operators_are_refused(self):
+        rc, counts, refusals, _ = self.guard(self.moved("aws_iam_role_policy.ops",
+                                                        "module.operators.aws_iam_role_policy.gha_infra_deny",
+                                                        ("update",), before={"name": "a"}, after={"name": "b"}))
+        self.assertEqual(rc, 1)
+        self.assertIn("moved from module.operators", refusals[0][1])
+        rc, counts, refusals, _ = self.guard(self.moved("module.operators.aws_iam_role.x", "module.identity.aws_iam_role.x"))
+        self.assertEqual((rc, counts["moved"]), (1, 1))
+
+    def test_a_routine_move_needs_an_apply(self):
+        p = plan(self.moved("module.api.aws_sqs_queue.new", "module.api.aws_sqs_queue.old"))
+        rc, counts, refusals, _ = tfp.guard(p)
+        self.assertEqual((rc, counts["moved"], counts["effective"]), (0, 1, 0))
+        with tempfile.TemporaryDirectory() as tmp:
+            path, out_file = os.path.join(tmp, "plan.json"), os.path.join(tmp, "out")
+            with open(path, "w") as handle:
+                json.dump(p, handle)
+            rc, out = capture(tfp.run_guard, path, out_file)
+            with open(out_file) as handle:
+                self.assertEqual(handle.read(), "apply_needed=true\n")
+        self.assertIn("moved=1", out)
+
+    def test_escalating_grants_are_refused(self):
+        bad = [
+            {"Effect": "Allow", "Action": "*", "Resource": "*"},
+            {"Effect": "Allow", "Action": ["iam:*"], "Resource": "arn:aws:iam::1:role/x"},
+            {"Effect": "Allow", "Action": "IAM:PutRolePolicy", "Resource": "arn:aws:iam::1:role/x"},
+            {"Effect": "Allow", "Action": "iam:Put*", "Resource": "arn:aws:iam::1:role/x"},
+            {"Effect": "Allow", "Action": "iam:CreateRole", "Resource": "arn:aws:iam::1:role/x"},
+            {"Effect": "Allow", "Action": "sts:AssumeRole", "Resource": "*"},
+            {"Effect": "Allow", "Action": "sts:Assume*", "NotResource": "arn:aws:iam::1:role/x"},
+            {"Effect": "Allow", "Action": "iam:PassRole", "Resource": ["arn:aws:iam::1:role/x", "*"]},
+            {"Effect": "Allow", "NotAction": "s3:*", "Resource": "*"},
+            {"Action": "*", "Resource": "*"},
+        ]
+        for st in bad:
+            for rtype in tfp.POLICY_TYPES:
+                rc, _, refusals, _ = self.guard(resource("module.identity.%s.p" % rtype, ["create"], rtype=rtype,
+                                                         after={"policy": policy({"Effect": "Allow", "Action": "s3:GetObject",
+                                                                                  "Resource": "*"}, st)}))
+                self.assertEqual(rc, 1, (rtype, st))
+            rc, _, refusals, _ = self.guard(resource("module.identity.aws_iam_role.r", ["update"],
+                                                     before={"assume_role_policy": SERVICE_TRUST},
+                                                     after={"assume_role_policy": SERVICE_TRUST,
+                                                            "inline_policy": [{"name": "x", "policy": policy(st)}]}))
+            self.assertEqual(rc, 1, st)
+            self.assertIn("inline_policy", refusals[0][1])
+
+    def test_ordinary_grants_pass(self):
+        ok = policy({"Effect": "Allow", "Action": ["sqs:SendMessage"], "Resource": ["arn:aws:sqs:ap-southeast-2:1:q"]},
+                    {"Effect": "Allow", "Action": ["ec2:CreateNetworkInterface"], "Resource": "*"},
+                    {"Effect": "Allow", "Action": "sts:AssumeRole", "Resource": "arn:aws:iam::1:role/scoped"},
+                    {"Effect": "Allow", "Action": "iam:PassRole", "Resource": "arn:aws:iam::1:role/scheduler"},
+                    {"Effect": "Allow", "Action": ["iam:GetRole", "iam:ListRoles"], "Resource": "*"},
+                    {"Effect": "Deny", "Action": "*", "Resource": "*"})
+        rc, _, refusals, unchecked = self.guard(
+            resource("module.identity.aws_iam_role_policy.p", ["update"], before={"policy": "{}"}, after={"policy": ok}),
+            resource("module.identity.aws_iam_policy.p", ["create"], after={"policy": ok}),
+            resource("module.identity.aws_iam_role_policy_attachment.rds", ["create"],
+                     after={"policy_arn": "arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole"}),
+            resource("module.identity.aws_iam_role_policy.gone", ["delete"],
+                     before={"policy": policy({"Effect": "Allow", "Action": "*", "Resource": "*"})}))
+        self.assertEqual((rc, refusals, unchecked), (0, [], []))
+
+    def test_admin_attachments_are_refused(self):
+        cases = [("aws_iam_role_policy_attachment", {"policy_arn": "arn:aws:iam::aws:policy/AdministratorAccess"}),
+                 ("aws_iam_policy_attachment", {"policy_arn": "arn:aws:iam::aws:policy/IAMFullAccess"}),
+                 ("aws_iam_role_policy_attachments_exclusive", {"policy_arns": ["arn:aws:iam::aws:policy/PowerUserAccess"]}),
+                 ("aws_iam_role", {"assume_role_policy": SERVICE_TRUST,
+                                   "managed_policy_arns": ["arn:aws:iam::aws:policy/AdministratorAccess"]})]
+        for rtype, after in cases:
+            rc, _, refusals, _ = self.guard(resource("module.identity.%s.x" % rtype, ["create"], rtype=rtype, after=after))
+            self.assertEqual(rc, 1, rtype)
+            self.assertIn("attaches the AWS managed policy", refusals[0][1])
+
+    def test_unknown_policies_are_named_not_refused(self):
+        entry = resource("module.identity.aws_iam_role_policy.new_queue", ["create"], after={},
+                         unknown={"policy": True})
+        rc, _, refusals, unchecked = self.guard(entry)
+        self.assertEqual((rc, refusals, unchecked), (0, [], [("module.identity.aws_iam_role_policy.new_queue", "policy")]))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "plan.json")
+            with open(path, "w") as handle:
+                json.dump(plan(entry), handle)
+            rc, out = capture(tfp.run_guard, path)
+        self.assertEqual(rc, 0)
+        self.assertIn("::warning::UNCHECKED module.identity.aws_iam_role_policy.new_queue: its policy", out)
+        self.assertIn("unchecked=1", out)
+
+    def test_a_new_role_with_computed_inline_policies_is_not_unchecked(self):
+        rc, _, refusals, unchecked = self.guard(resource(
+            "module.identity.aws_iam_role.new", ["create"], after={"assume_role_policy": SERVICE_TRUST},
+            unknown={"inline_policy": True, "managed_policy_arns": True, "arn": True}))
+        self.assertEqual((rc, refusals, unchecked), (0, [], []))
+        rc, _, _, unchecked = self.guard(resource(
+            "module.identity.aws_iam_role.new", ["create"],
+            after={"assume_role_policy": SERVICE_TRUST, "inline_policy": [{"name": "x"}]},
+            unknown={"inline_policy": [{"policy": True}]}))
+        self.assertEqual((rc, unchecked), (0, [("module.identity.aws_iam_role.new", "inline_policy")]))
+
+    def test_deferred_policy_documents_are_checked(self):
+        def doc(actions):
+            return resource("module.identity.data.aws_iam_policy_document.d", ["read"], mode="data",
+                            rtype="aws_iam_policy_document",
+                            after={"statement": [{"effect": "Allow", "actions": actions, "resources": None}]})
+        rc, _, refusals, _ = self.guard(doc(["iam:*"]))
+        self.assertEqual(rc, 1)
+        rc, _, _, _ = self.guard(doc(["sqs:SendMessage"]))
+        self.assertEqual(rc, 0)
+
+    def test_configuration_that_runs_code_is_refused(self):
+        configuration = {"root_module": {
+            "resources": [{"address": "aws_sqs_queue.q", "mode": "managed", "type": "aws_sqs_queue"}],
+            "module_calls": {"api": {"module": {
+                "resources": [{"address": "terraform_data.x", "mode": "managed", "type": "terraform_data",
+                               "provisioners": [{"type": "local-exec"}]}],
+                "module_calls": {"inner": {"module": {"resources": [
+                    {"address": "data.aws_lambda_invocation.i", "mode": "data", "type": "aws_lambda_invocation"}]}}}}}}}}
+        rc, _, refusals, _ = self.guard(configuration=configuration)
+        self.assertEqual(rc, 1)
+        self.assertEqual([a for a, _ in refusals], ["module.api.terraform_data.x",
+                                                    "module.api.module.inner.data.aws_lambda_invocation.i"])
+
+    def test_a_refusal_never_prints_policy_text(self):
+        secret = "s3cr3t-sid-0123"
+        p = plan(resource("module.identity.aws_iam_policy.p", ["create"],
+                          after={"policy": policy({"Sid": secret, "Effect": "Allow", "Action": "*", "Resource": "*"})}))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "plan.json")
+            with open(path, "w") as handle:
+                json.dump(p, handle)
+            rc, out = capture(tfp.run_guard, path)
+        self.assertEqual(rc, 1)
+        self.assertIn("REFUSED module.identity.aws_iam_policy.p", out)
+        self.assertNotIn(secret, out)
+
+
+# ── the workflow's step bodies, run the way GitHub runs them (bash -e, pipefail) with stubbed tools ──────────
+
+STUB = """#!/bin/sh
+# Records its arguments, then behaves as $STUB_<TOOL> says.
+echo "$(basename "$0") $*" >> "$STUB_LOG"
+case "$(basename "$0")" in
+  python3)
+    case "$STUB_PYTHON" in
+      fail) echo "PLAN VIOLATION: unlisted create aws_sqs_queue.q" >&2; exit 1 ;;
+      empty) echo "PLAN EMPTY"; exit 0 ;;
+      *) echo "aws_sqs_queue.q  create  -"; echo "PLAN OK 1"; exit 0 ;;
+    esac ;;
+  terraform)
+    case "$*" in
+      *"state push"*) [ "$STUB_PUSH" = ok ] && exit 0; echo "Error: cannot push" >&2; exit 1 ;;
+      *show*) echo "{}" ;;
+    esac
+    exit 0 ;;
+  aws) [ "$STUB_AWS" = ok ] && exit 0; exit 1 ;;
+esac
+"""
+
+
+def step_body(text, name):
+    """The `run: |` body of the step called NAME (first match in TEXT), dedented."""
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if re.match(r"^\s+(?:- )?name: " + re.escape(name) + r"$", line):
+            break
+    else:
+        raise AssertionError("no step named " + name)
+    for j in range(i + 1, len(lines)):
+        m = re.match(r"^(\s+)run: \|$", lines[j])
+        if m:
+            indent = len(m.group(1))
+            body = []
+            for line in lines[j + 1:]:
+                if line.strip() and len(line) - len(line.lstrip()) <= indent:
+                    break
+                body.append(line[indent + 2:])
+            return "\n".join(body) + "\n"
+        if re.match(r"^\s+- ", lines[j]):
+            break
+    raise AssertionError("step " + name + " has no run block")
+
+
+class StepBodyTest(unittest.TestCase):
+    def setUp(self):
+        self.text = WORKFLOW.read_text()
+        self.jobs = jobs_of(self.text)
+        self.tmp = tempfile.mkdtemp(prefix="tfp-step-")
+        self.bin = os.path.join(self.tmp, "bin")
+        self.work = os.path.join(self.tmp, "work")
+        self.runner_temp = os.path.join(self.tmp, "runner")
+        for d in (self.bin, self.work, os.path.join(self.runner_temp, "tf")):
+            os.makedirs(d)
+        for tool in ("python3", "terraform", "aws"):
+            path = os.path.join(self.bin, tool)
+            with open(path, "w") as handle:
+                handle.write(STUB)
+            os.chmod(path, 0o755)
+        self.summary = os.path.join(self.tmp, "summary.md")
+        self.log = os.path.join(self.tmp, "stub.log")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def run_step(self, job, name, **env):
+        script = os.path.join(self.tmp, "step.sh")
+        with open(script, "w") as handle:
+            handle.write(step_body(self.jobs[job], name))
+        full = {"PATH": self.bin + os.pathsep + os.environ["PATH"], "RUNNER_TEMP": self.runner_temp,
+                "GITHUB_STEP_SUMMARY": self.summary, "GITHUB_SHA": "a" * 40, "GITHUB_RUN_ID": "11",
+                "GITHUB_RUN_ATTEMPT": "2", "STUB_LOG": self.log, "ALLOW": "", "TF_VAR_alert_email": "x@example.invalid"}
+        full.update(env)
+        proc = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", script], cwd=self.work, env=full,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+        return proc.returncode, proc.stdout
+
+    def tf(self, name):
+        return os.path.join(self.runner_temp, "tf", name)
+
+    def read(self, path):
+        try:
+            with open(path) as handle:
+                return handle.read()
+        except OSError:
+            return ""
+
+    def test_gate_prints_the_violation_and_fails(self):
+        for allow in ("", "docs/delivery/r99/X.plan-allow.json"):
+            rc, out = self.run_step("apply", "the plan must match the allow-list (check-plan.py)", STUB_PYTHON="fail",
+                                    ALLOW=allow)
+            self.assertEqual(rc, 1, out)
+            self.assertIn("PLAN VIOLATION: unlisted create aws_sqs_queue.q", out)
+        rc, out = self.run_step("apply", "the plan must match the allow-list (check-plan.py)", STUB_PYTHON="ok",
+                                ALLOW="docs/delivery/r99/X.plan-allow.json")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("PLAN OK 1", out)
+
+    def test_second_plan_prints_the_violation_and_fails(self):
+        rc, out = self.run_step("apply", "the second plan must be empty", STUB_PYTHON="fail")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("PLAN VIOLATION: unlisted create aws_sqs_queue.q", out)
+        rc, out = self.run_step("apply", "the second plan must be empty", STUB_PYTHON="empty")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("PLAN EMPTY", out)
+
+    def test_plan_only_writes_the_drift_report_and_fails(self):
+        rc, out = self.run_step("plan", "main and AWS must agree (check-plan.py, no allow file)", STUB_PYTHON="fail")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("PLAN VIOLATION", out)
+        summary = self.read(self.summary)
+        self.assertIn("Drift or unapplied changes", summary)
+        self.assertIn("    PLAN VIOLATION: unlisted create aws_sqs_queue.q", summary)
+
+    def test_preflight_passes_allow_paths_without_globbing(self):
+        os.makedirs(os.path.join(self.work, "docs/delivery/x"))
+        for name in ("A", "OLD"):
+            with open(os.path.join(self.work, "docs/delivery/x/%s.plan-allow.json" % name), "w") as handle:
+                handle.write("{}")
+        rc, out = self.run_step("apply", "preflight (no credentials yet)",
+                                ALLOW="docs/delivery/x/A.plan-allow.json docs/delivery/x/*.plan-allow.json")
+        self.assertEqual(rc, 0, out)
+        calls = self.read(self.log).splitlines()
+        self.assertIn("python3 infra/scripts/tf-pipeline.py preflight", calls)
+        combine = [c for c in calls if " combine " in c]
+        self.assertEqual(combine, ["python3 infra/scripts/tf-pipeline.py combine --out %s "
+                                   "docs/delivery/x/A.plan-allow.json docs/delivery/x/*.plan-allow.json"
+                                   % self.tf("allow.json")])
+
+    def test_summary_survives_every_state(self):
+        name = "job summary"
+        base = {"GUARD": "success", "GATE": "success", "APPLY": "success", "SECOND": "failure", "NEEDED": "true"}
+        # A red second plan with violations: the count, not an aborted step.
+        with open(self.tf("second.txt"), "w") as handle:
+            handle.write("PLAN VIOLATION: unexpected update aws_sqs_queue.q\n")
+        with open(self.tf("gate.txt"), "w") as handle:
+            handle.write("aws_sqs_queue.q  update  tags\n")  # no PLAN / SUMMARY line
+        rc, out = self.run_step("apply", name, **base)
+        self.assertEqual(rc, 0, out)
+        summary = self.read(self.summary)
+        self.assertIn("**NOT EMPTY**: 1 unexpected change(s), listed in the log", summary)
+        self.assertIn("| `aws_sqs_queue.q` | update | tags |", summary)
+        # A second plan that printed something but no violation line (a usage error): grep -c finds 0.
+        with open(self.tf("second.txt"), "w") as handle:
+            handle.write("usage\n")
+        rc, out = self.run_step("apply", name, **base)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("**NOT EMPTY**: 0 unexpected change(s)", self.read(self.summary))
+        # Nothing ran at all.
+        for f in ("second.txt", "gate.txt"):
+            os.remove(self.tf(f))
+        rc, out = self.run_step("apply", name, GUARD="", GATE="", APPLY="", SECOND="", NEEDED="")
+        self.assertEqual(rc, 0, out)
+        # The state recovery line.
+        with open(self.tf("recovery.txt"), "w") as handle:
+            handle.write("errored.tfstate pushed\n")
+        rc, out = self.run_step("apply", name, **base)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("- **state**: errored.tfstate pushed", self.read(self.summary))
+
+    def test_errored_state_is_pushed_or_kept(self):
+        name = "save the state if Terraform could not (errored.tfstate)"
+        rc, out = self.run_step("apply", name)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("no errored.tfstate", out)
+        errored = os.path.join(self.work, "infra/envs/prod/errored.tfstate")
+        os.makedirs(os.path.dirname(errored))
+        for push, aws, want in (("ok", "", "errored.tfstate pushed"),
+                                ("", "ok", "recovery/errored-11-2.tfstate"),
+                                ("", "", "could not be pushed or kept")):
+            with open(errored, "w") as handle:
+                handle.write('{"secret": "value-0123"}')
+            rc, out = self.run_step("apply", name, STUB_PUSH=push, STUB_AWS=aws)
+            self.assertEqual(rc, 1, out)
+            self.assertIn(want, out)
+            self.assertIn(want, self.read(self.tf("recovery.txt")))
+            self.assertFalse(os.path.exists(errored))
+            self.assertNotIn("value-0123", out)
+        calls = self.read(self.log)
+        self.assertIn("terraform -chdir=infra/envs/prod state push -no-color -lock-timeout=10m errored.tfstate", calls)
+        self.assertIn("aws s3 cp infra/envs/prod/errored.tfstate s3://recallsmith-tfstate-622994489535/recovery/", calls)
+        self.assertNotIn("-force", calls)
+
+
+class WorkflowMoreFactsTest(unittest.TestCase):
+    def setUp(self):
+        self.text = WORKFLOW.read_text()
+        self.jobs = jobs_of(self.text)
+
+    def test_no_bare_exit_code_capture(self):
+        # Under bash -e a failing command never reaches a bare `rc=$?` on the next line.
+        for n, line in enumerate(self.text.splitlines(), 1):
+            if "rc=$?" in line and not line.lstrip().startswith("#"):
+                self.assertIn("|| rc=$?", line, "terraform.yml line %d" % n)
+
+    def test_apply_step_name_matches_the_stale_check(self):
+        self.assertIn("\n        name: %s\n" % tfp.APPLY_STEP, self.jobs["apply"])
+
+    def test_preflight_runs_before_credentials_everywhere(self):
+        select = self.jobs["select"]
+        self.assertTrue(before(select, "tf-pipeline.py preflight", "tf-pipeline.py select --before"))
+        for job in ("apply", "plan"):
+            self.assertTrue(before(self.jobs[job], "tf-pipeline.py preflight", "configure-aws-credentials"), job)
+
+    def test_errored_state_is_handled_before_cleanup_and_never_uploaded(self):
+        apply = self.jobs["apply"]
+        self.assertIn("      - id: recover\n", apply)
+        self.assertIn("steps.recover.outcome == 'failure'", apply)
+        self.assertTrue(before(apply, "      - id: recover\n", "name: delete the plans and logs"))
+        self.assertTrue(before(apply, "      - id: recover\n", "name: job summary"))
+        recover = apply[apply.index("id: recover"):apply.index("name: what Terraform reported")]
+        self.assertIn("if: always()", recover)
+        self.assertIn('> "$RUNNER_TEMP/tf/state-push.log" 2>&1', recover)
+        self.assertNotIn("-force", recover)
+        self.assertIn("errored.tfstate", self.jobs["apply"].split("name: delete the plans and logs", 1)[1])
+        self.assertNotIn("upload-artifact", self.text)
+
+
+class GhaInfraDenyReadsTest(GhaInfraRoleTest):
+    # Refresh reads of the types module.operators and the rest of envs/prod manage, plus the backend's own calls.
+    REFRESH_READS = [
+        "iam:GetOpenIDConnectProvider", "iam:ListOpenIDConnectProviders", "iam:ListOpenIDConnectProviderTags",
+        "iam:GetRole", "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies", "iam:ListRoleTags",
+        "iam:ListInstanceProfilesForRole", "iam:GetPolicy", "iam:GetPolicyVersion", "iam:ListPolicyVersions",
+        "iam:ListPolicyTags", "iam:GetUser", "iam:ListGroups", "iam:ListMFADevices", "iam:GetSAMLProvider",
+        "cloudtrail:GetTrail", "cloudtrail:DescribeTrails", "cloudtrail:GetTrailStatus", "cloudtrail:GetEventSelectors",
+        "cloudtrail:GetInsightSelectors", "cloudtrail:ListTags", "s3:GetBucketPolicy", "s3:GetBucketVersioning",
+        "s3:GetLifecycleConfiguration", "s3:GetBucketAcl", "s3:GetObject", "s3:ListBucket", "sts:GetCallerIdentity",
+    ]
+    BACKEND = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"]
+
+    def matches(self, patterns, action):
+        return any(fnmatch.fnmatchcase(action.lower(), p.lower()) for p in patterns)
+
+    def test_no_deny_blocks_a_refresh_read(self):
+        for sid, (patterns, _) in self.statements().items():
+            for action in self.REFRESH_READS:
+                self.assertFalse(self.matches(patterns, action), "%s denies %s" % (sid, action))
+
+    def test_credential_deny_names_write_actions_only(self):
+        patterns = self.statements()["NoStaticOrHumanCredentials"][0]
+        for p in patterns:
+            if p.startswith("iam:"):
+                self.assertNotIn("*", p, p)
+                self.assertFalse(p.startswith(("iam:Get", "iam:List")), p)
+
+    def test_no_role_hopping(self):
+        patterns, resources = self.statements()["NoRoleHopping"]
+        self.assertTrue(self.matches(patterns, "sts:AssumeRole"))
+        self.assertEqual(resources.split("#")[0].strip(), '["*"]')
+        for sid, (patterns, _) in self.statements().items():
+            for action in ("sts:AssumeRoleWithWebIdentity", "sts:GetCallerIdentity"):
+                self.assertFalse(self.matches(patterns, action), (sid, action))
+        for path in ("providers.tf", "backend.tf", "versions.tf"):
+            text = (REPO_ROOT / "infra" / "envs" / "prod" / path).read_text()
+            self.assertNotIn("assume_role", text, path)
+            self.assertNotIn("role_arn", text, path)
+
+    def test_state_versions_are_kept_and_the_backend_still_works(self):
+        patterns, resources = self.statements()["KeepStateVersions"]
+        self.assertEqual(resources.strip(), '["${local.state_bucket_arn}/*"]')
+        self.assertTrue(self.matches(patterns, "s3:DeleteObjectVersion"))
+        for sid in ("KeepStateHistory", "KeepStateVersions"):
+            for action in self.BACKEND:
+                self.assertFalse(self.matches(self.statements()[sid][0], action), (sid, action))
+
+    def test_the_header_comment_names_what_it_does_not_stop(self):
+        self.assertNotIn("can never mint a way in that outlives the job", self.main)
+        self.assertIn("What it does not stop", self.main)
 
 
 class CliTest(unittest.TestCase):

@@ -284,7 +284,7 @@ jobs:
 
   # Terraform and deploy-script checks that need no AWS: fmt, an offline init (-backend=false, the
   # provider comes from the public registry) and validate, the observability module's terraform
-  # test (mocked provider), on a pull request the allow-list rule of the Terraform pipeline, the
+  # test (mocked provider), on every run but a push to main the allow-list rule of the Terraform pipeline, the
   # agent-route census, bash -n on the deploy scripts, the merge-env.sh unit tests and the CD script
   # tests (fake aws/gh/curl). Never plan or apply: both need AWS credentials, and this job has none
   # (terraform.yml applies after merge, behind the infra-prod approval; infra/RUNBOOK.md §15).
@@ -313,13 +313,15 @@ jobs:
       - run: terraform -chdir=infra/modules/observability test
       # A pull request that changes Terraform (a plan-affecting file under infra/) adds or changes its
       # docs/delivery/**/*.plan-allow.json (one per change; a release brings several, which must not contradict
-      # each other), of the shape check-plan.py reads. After merge, terraform.yml checks the plan against them
-      # before it applies. The rule runs here, in a required job, because only these nine checks gate auto-merge;
-      # terraform.yml has no pull request job.
+      # each other), of the shape check-plan.py reads, and carries no code the pipeline refuses to run
+      # (tf-pipeline.py preflight). After merge, terraform.yml checks the plan against them before it applies.
+      # The rule runs here, in a required job, because only these nine checks gate auto-merge; terraform.yml has
+      # no pull request job. It runs on every run but a push to main: a branch push reports a check under the
+      # same name for the same commit as its pull request, and that check must not pass by skipping the rule.
       - name: Terraform allow-list rule (tf-pipeline.py pr-check)
-        if: github.event_name == 'pull_request'
+        if: github.ref != 'refs/heads/main'
         env:
-          BASE_REF: origin/${{ github.base_ref }}
+          BASE_REF: origin/${{ github.base_ref || 'main' }}
         run: python3 infra/scripts/tf-pipeline.py pr-check --base "$BASE_REF"
       - run: python3 infra/scripts/check-agent-routes.py
       # Every `runtime = "..."` under infra/ against a table of AWS Lambda deprecation dates; fails on

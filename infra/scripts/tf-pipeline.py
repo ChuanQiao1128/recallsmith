@@ -4,12 +4,19 @@
 Stdlib only, so the workflow and the unit tests (infra/scripts/tests/test_tf_pipeline.py) run the same code.
 
   pr-check --base REF
-      A pull request (ci.yml, no AWS). Compared with the merge base of REF and HEAD: a change to a plan-affecting
-      file under infra/ (anything but documentation, infra/scripts/, Terraform tests, *.tfvars.example) adds or
-      changes at least one allow file (docs/delivery/**/*.plan-allow.json): one per change, so a release that
-      brings several changes brings several. Each has the shape check-plan.py reads, and together they must not
-      contradict each other (see combine). An allow file that lists a break-glass address is a warning here: the
-      change is reviewed and merged as usual, then applied locally with MFA.
+      A pull request, or a push to a branch other than main (ci.yml, no AWS). Compared with the merge base of REF
+      and HEAD: a change to a plan-affecting file under infra/ (anything but documentation, infra/scripts/,
+      Terraform tests, *.tfvars.example) adds or changes at least one allow file (docs/delivery/**/*.plan-allow.json):
+      one per change, so a release that brings several changes brings several. Each has the shape check-plan.py
+      reads, and together they must not contradict each other (see combine). An allow file that lists a
+      break-glass address is a warning here: the change is reviewed and merged as usual, then applied locally with
+      MFA. Runs preflight too: what preflight refuses would stop every later pipeline run, so it never merges.
+  preflight
+      Before any credential (ci.yml, select, apply, plan only). Terraform code that would run something other than
+      the AWS API calls of a plan, outside the guard's reach because a plan already runs it: a provider other than
+      hashicorp/aws in infra/envs/prod/.terraform.lock.hcl (a data "external" runs at plan time), a provisioner,
+      an aws_lambda_invocation (data, ephemeral or resource), an action block, a *.tf.json file (not scanned) or a
+      module from outside this repository.
   select --before SHA --after SHA [--output FILE] [--summary FILE]
       A push to main (terraform.yml job `select`, no AWS). The allow files this push added or changed and whether
       the apply job runs at all: only when a plan-affecting file or an allow file changed (none with a
@@ -22,15 +29,20 @@ Stdlib only, so the workflow and the unit tests (infra/scripts/tests/test_tf_pip
       replace absorbs an update of the same resource; any other pair (create and delete, ...) is a conflict.
       Repeats select's checks, so the apply job never trusts the select job's output alone.
   stale --sha SHA --repo OWNER/REPO [--run-id ID]
-      Refuses SHA when a later commit on main was already applied (or confirmed in sync) by a successful
-      "apply (infra-prod)" job of terraform.yml: re-running an old run would otherwise put old configuration
-      back. Read from the Actions API through `gh api` (runs and jobs, which a token cannot forge).
+      Refuses SHA when a later commit on main already changed AWS (or was confirmed in sync) through the pipeline:
+      a later push run of terraform.yml whose "apply (infra-prod)" job succeeded, or whose step "apply the saved
+      plan" ran at all (succeeded, failed part-way or was cancelled) in any attempt. Re-running an old run would
+      otherwise put old configuration back. Read from the Actions API through `gh api` (runs and jobs, which a
+      token cannot forge).
   guard --plan PLAN_JSON [--output FILE]
-      Refuses a plan (terraform show -json) with an effective change the pipeline must not make: anything in
-      module.operators, a resource type the pipeline role is denied (IAM users, keys, groups, identity
-      providers, CloudTrail, organizations, account settings), the audit and state buckets, an IAM role whose
-      trust policy would name anything but an AWS service, and any import. These are break-glass (RUNBOOK §15). With
-      --output it appends apply_needed=true|false (any effective resource, import or output change).
+      Refuses a plan (terraform show -json) with a change the pipeline must not make: anything in (or moved into or
+      out of) module.operators, a resource type the pipeline role is denied (IAM users, keys, groups, identity
+      providers, CloudTrail, organizations, account settings), the audit and state buckets, an IAM role whose trust
+      policy would name anything but an AWS service, an IAM policy that grants IAM role or policy writes or
+      sts:AssumeRole / iam:PassRole on every resource, an attachment of AdministratorAccess, IAMFullAccess or
+      PowerUserAccess, any import, and configuration that runs code (provisioners, aws_lambda_invocation). These
+      are break-glass (RUNBOOK §15). A policy unknown until apply cannot be read and is named in a warning. With
+      --output it appends apply_needed=true|false (any effective resource, move, import or output change).
   diagnose --log FILE [FILE ...]
       Terraform's errors without their text: for each `Error:` its leading phrase, the resource address, the
       AWS operation, HTTP status and error code. Never the message itself, which can quote values.
@@ -40,6 +52,7 @@ Exit codes: 0 pass, 1 refused or violation, 2 usage or unreadable input.
 """
 
 import argparse
+import fnmatch
 import json
 import os
 import re
@@ -103,6 +116,35 @@ BREAK_GLASS_TYPE_PREFIXES = ("aws_organizations_", "aws_account_", "aws_ssoadmin
 # Also in the deny (variables audit_bucket_name / state_bucket_name of module.operators in envs/prod/main.tf).
 PROTECTED_BUCKETS = ("developercards-cloudtrail-622994489535", "recallsmith-tfstate-622994489535")
 
+# The apply job's step that changes AWS (terraform.yml). A later run in which it ran at all makes older runs stale.
+APPLY_STEP = "apply the saved plan"
+STEP_RAN = ("success", "failure", "cancelled")
+
+# preflight: the only provider the pipeline runs. Others can run code or reach the network at plan time, before the
+# guard (hashicorp/external, hashicorp/http, ...); one that cannot is added here after review.
+LOCK_FILE = "infra/envs/prod/.terraform.lock.hcl"
+ALLOWED_PROVIDERS = ("registry.terraform.io/hashicorp/aws",)
+SCAN_ROOT = "infra"
+_LABEL = r'(?:"[^"\n]*"|[A-Za-z_][\w-]*)'
+RE_PROVISIONER = re.compile(r"^[ \t]*provisioner[ \t]+" + _LABEL + r"[ \t]*\{", re.M)
+RE_INVOCATION = re.compile(r'^[ \t]*(?:data|resource|ephemeral)[ \t]+(?:"aws_lambda_invocation"|aws_lambda_invocation)[ \t]', re.M)
+RE_ACTION = re.compile(r"^[ \t]*action[ \t]+" + _LABEL + r"[ \t]+" + _LABEL + r"[ \t]*\{", re.M)
+RE_MODULE = re.compile(r'^([ \t]*)module[ \t]+("[^"\n]*"|[A-Za-z_][\w-]*)[ \t]*\{[ \t]*$', re.M)
+# Allow-file paths travel through GITHUB_OUTPUT and a shell word list: plain characters only, no glob or space.
+SAFE_PATH = re.compile(r"^[A-Za-z0-9._/-]+$")
+
+# guard: IAM grants that turn "create a role" into "become admin". Matched with the policy's own wildcards, so
+# "*", "iam:*" or "iam:Put*" count as granting them.
+PRIVILEGED_MANAGED = re.compile(r"^arn:aws[a-z-]*:iam::aws:policy/(AdministratorAccess|IAMFullAccess|PowerUserAccess)$")
+ESCALATING_ACTIONS = (
+    "iam:CreateRole", "iam:PutRolePolicy", "iam:AttachRolePolicy", "iam:UpdateAssumeRolePolicy",
+    "iam:CreatePolicyVersion", "iam:SetDefaultPolicyVersion", "iam:PutRolePermissionsBoundary",
+    "iam:DeleteRolePermissionsBoundary",
+)
+# Refused on every resource ("*" or NotResource) only: scoped to named roles they are ordinary.
+EVERY_RESOURCE_ACTIONS = ("sts:AssumeRole", "iam:PassRole")
+POLICY_TYPES = ("aws_iam_role_policy", "aws_iam_policy")
+
 
 class UsageError(Exception):
     pass
@@ -141,8 +183,9 @@ def plan_affecting(path):
 # ── git ────────────────────────────────────────────────────────────────────────────────────────────────
 
 def git(*args, check=True):
+    # surrogateescape: a path that is not UTF-8 still comes back as a path (and is plan-affecting under infra/).
     proc = subprocess.run(["git"] + list(args), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                          universal_newlines=True)
+                          encoding="utf-8", errors="surrogateescape")
     if check and proc.returncode != 0:
         raise UsageError("git " + " ".join(args) + " failed: " + proc.stderr.strip())
     return proc
@@ -163,14 +206,17 @@ def is_ancestor(older, newer):
 
 
 def changed_files(base, head):
-    """[(status letter, path)] between two commits; a rename gives its old path as D and its new one as A."""
-    out = git("diff", "--name-status", "--no-renames", base, head).stdout
+    """[(status letter, path)] between two commits; a rename gives its old path as D and its new one as A.
+    NUL-separated and unquoted: without -z git prints "infra/envs/prod/na\\303\\257ve.tf" in quotes, which
+    is not under infra/ and would let a Terraform change through without its allow file."""
+    out = git("-c", "core.quotePath=false", "diff", "-z", "--name-status", "--no-renames", base, head).stdout
+    fields = out.split("\0")
     result = []
-    for line in out.splitlines():
-        if not line.strip():
-            continue
-        parts = line.split("\t")
-        result.append((parts[0][:1], parts[-1]))
+    for i in range(0, len(fields) - 1, 2):
+        status, path = fields[i], fields[i + 1]
+        if not status:
+            break
+        result.append((status[:1], path))
     return result
 
 
@@ -343,12 +389,25 @@ def combine(items):
     return combined, conflicts
 
 
+def allow_path_problem(path):
+    """Why PATH cannot be an allow file the pipeline reads, or None. The paths reach the apply job as one
+    space-separated output: a glob character there would let the shell add files the select summary never showed."""
+    if not SAFE_PATH.match(path):
+        return "has a character other than A-Z a-z 0-9 . _ / - (rename it)"
+    if path.startswith("/") or ".." in path.split("/"):
+        return "is not a plain repository path"
+    if not is_allow_file(path):
+        return "is not a docs/delivery/**/*%s file" % ALLOW_SUFFIX
+    return None
+
+
 def check_allow_files(paths, repo_root=".", glass_is_error=True):
     """Shape, break-glass and conflicts of the allow files one change brings. (combined or None, failed)."""
     failed, items = False, []
     for path in paths:
-        if re.search(r"\s", path):
-            error("allow file path %r contains whitespace" % path)
+        problem = allow_path_problem(path)
+        if problem:
+            error("allow file path %r %s" % (path, problem))
             failed = True
             continue
         data, problems = load_allow(path, repo_root)
@@ -377,6 +436,85 @@ def check_allow_files(paths, repo_root=".", glass_is_error=True):
     return (None if failed else combined), failed
 
 
+# ── preflight ──────────────────────────────────────────────────────────────────────────────────────────
+
+def lock_problems(repo_root="."):
+    try:
+        with open(os.path.join(repo_root, LOCK_FILE)) as handle:
+            text = handle.read()
+    except OSError:
+        return [LOCK_FILE + " is missing: init -lockfile=readonly needs it"]
+    providers = re.findall(r'^[ \t]*provider[ \t]+"([^"\n]+)"', text, re.M)
+    if not providers:
+        return [LOCK_FILE + " lists no provider"]
+    return ["%s lists provider %s: the pipeline runs only %s, because another provider can run code or reach the "
+            "network while it plans, before the guard. Add a provider that cannot to ALLOWED_PROVIDERS in "
+            "infra/scripts/tf-pipeline.py after review, or apply locally (%s)" % (
+                LOCK_FILE, name, ", ".join(ALLOWED_PROVIDERS), RUNBOOK)
+            for name in providers if name not in ALLOWED_PROVIDERS]
+
+
+def module_source_problems(path, text):
+    """Each module block's source must be a path inside this repository. Relies on terraform fmt (CI job infra):
+    the block closes with a brace at the header's indentation and its own arguments sit two spaces further in."""
+    problems = []
+    for m in RE_MODULE.finditer(text):
+        indent, name = m.group(1), m.group(2).strip('"')
+        close = re.compile(r"^" + re.escape(indent) + r"\}", re.M).search(text, m.end())
+        body = text[m.end():close.start() if close else len(text)]
+        src = re.search(r"^" + re.escape(indent) + r'  source[ \t]*=[ \t]*"([^"\n]*)"[ \t]*$', body, re.M)
+        if not src:
+            problems.append("%s: module %s has no plain string source this check can read" % (path, name))
+        elif not src.group(1).startswith(("./", "../")):
+            problems.append("%s: module %s comes from outside this repository; its code is never scanned" % (
+                path, name))
+    return problems
+
+
+def code_problems(repo_root="."):
+    """Terraform files under infra/ that would run code the plan and the guard cannot hold back."""
+    problems = []
+    root = os.path.join(repo_root, SCAN_ROOT)
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d != ".terraform")
+        for filename in sorted(filenames):
+            full = os.path.join(dirpath, filename)
+            rel = os.path.relpath(full, repo_root).replace(os.sep, "/")
+            if filename.endswith(".tf.json"):
+                problems.append(rel + ": JSON configuration is not scanned by this check; write it as .tf")
+                continue
+            if not filename.endswith(".tf"):
+                continue
+            with open(full, encoding="utf-8", errors="replace") as handle:
+                text = handle.read()
+            if RE_PROVISIONER.search(text):
+                problems.append(rel + ": a provisioner runs commands on the runner (or a host) with the pipeline's "
+                                      "credentials, outside the plan")
+            if RE_INVOCATION.search(text):
+                problems.append(rel + ": aws_lambda_invocation runs a Lambda function from Terraform (a data source "
+                                      "does so while planning, before the guard)")
+            if RE_ACTION.search(text):
+                problems.append(rel + ": an action block runs an imperative AWS operation the allow-list cannot list")
+            problems += module_source_problems(rel, text)
+    return problems
+
+
+def preflight(repo_root="."):
+    """[problems]: what makes the pipeline refuse to start Terraform at all."""
+    return lock_problems(repo_root) + code_problems(repo_root)
+
+
+def run_preflight(repo_root="."):
+    problems = preflight(repo_root)
+    for problem in problems:
+        error("PREFLIGHT " + problem + " (" + RUNBOOK + ")")
+    if problems:
+        return 1
+    log("PREFLIGHT OK: providers %s only; no provisioner, aws_lambda_invocation, action block, *.tf.json or "
+        "outside module under %s/" % (", ".join(ALLOWED_PROVIDERS), SCAN_ROOT))
+    return 0
+
+
 # ── pr-check ───────────────────────────────────────────────────────────────────────────────────────────
 
 def pr_check(base, head="HEAD", repo_root="."):
@@ -399,6 +537,8 @@ def pr_check(base, head="HEAD", repo_root="."):
     if allow:
         _, bad = check_allow_files(allow, repo_root, glass_is_error=False)
         failed = failed or bad
+    if run_preflight(repo_root) != 0:
+        failed = True
     if failed:
         return 1
     log("PR CHECK OK")
@@ -475,16 +615,31 @@ def gh_api(path):
         raise UsageError("gh api " + path + " returned no JSON: " + str(exc))
 
 
+def changed_aws(jobs):
+    """True when an apply job among JOBS (every attempt of one run) applied or confirmed the plan: the job
+    succeeded (an empty plan confirms main and AWS agree), or its step "apply the saved plan" ran at all. A step that
+    failed part-way or was cancelled may have changed AWS too, and a red second plan follows a real apply."""
+    for job in jobs:
+        if job.get("name") != APPLY_JOB:
+            continue
+        if job.get("conclusion") == "success":
+            return True
+        for step in job.get("steps") or []:
+            if step.get("name") == APPLY_STEP and step.get("conclusion") in STEP_RAN:
+                return True
+    return False
+
+
 def newer_applied(sha, repo, run_id=None, api=gh_api):
-    """The first successful terraform.yml push run on main whose commit descends from SHA and whose apply job
-    succeeded, or None."""
-    runs = api("repos/%s/actions/workflows/terraform.yml/runs?branch=main&event=push&status=success&per_page=100"
+    """The newest terraform.yml push run on main, other than RUN_ID, whose commit descends from SHA and which
+    changed AWS (changed_aws, in any of its attempts), or None. Any conclusion: a run that went red after its apply
+    step counts. The newest 100 runs are read; the runs that matter are the ones after SHA's own."""
+    runs = api("repos/%s/actions/workflows/terraform.yml/runs?branch=main&event=push&per_page=100"
                % repo).get("workflow_runs") or []
     for run in runs:
         if run_id is not None and str(run.get("id")) == str(run_id):
             continue
         if (run.get("path") != WORKFLOW_PATH or run.get("event") != "push" or run.get("head_branch") != "main"
-                or run.get("conclusion") != "success"
                 or (run.get("head_repository") or {}).get("full_name") != repo):
             continue
         head = run.get("head_sha") or ""
@@ -496,8 +651,9 @@ def newer_applied(sha, repo, run_id=None, api=gh_api):
             continue
         if not later:
             continue
-        jobs = api("repos/%s/actions/runs/%s/jobs?per_page=100" % (repo, run.get("id"))).get("jobs") or []
-        if any(j.get("name") == APPLY_JOB and j.get("conclusion") == "success" for j in jobs):
+        # filter=all: an earlier attempt may have applied before a re-run went red at the gate.
+        jobs = api("repos/%s/actions/runs/%s/jobs?filter=all&per_page=100" % (repo, run.get("id"))).get("jobs") or []
+        if changed_aws(jobs):
             return run
     return None
 
@@ -550,44 +706,171 @@ def trust_problem(change):
     return None
 
 
+def as_list(value):
+    if value is None:
+        return []
+    return value if isinstance(value, list) else [value]
+
+
+def grants(patterns, action):
+    """True when one of a policy's action PATTERNS (IAM wildcards, any case) covers ACTION."""
+    return any(isinstance(p, str) and fnmatch.fnmatchcase(action.lower(), p.lower()) for p in patterns)
+
+
+def statement_problem(effect, actions, not_actions, resources, not_resource):
+    """Why one policy statement is refused, or None. Names only this script's constants, never policy text."""
+    if (effect or "Allow") != "Allow":
+        return None
+    if not_actions:
+        return "it allows NotAction, which grants nearly every action"
+    for action in ESCALATING_ACTIONS:
+        if grants(actions, action):
+            return "it grants %s (or a wildcard that covers it): a role it reaches could widen itself" % action
+    every = not_resource or any(r == "*" for r in resources)
+    for action in EVERY_RESOURCE_ACTIONS:
+        if every and grants(actions, action):
+            return "it grants %s on every resource" % action
+    return None
+
+
+def policy_problem(doc):
+    """Why an IAM identity policy (JSON text) is refused, or None."""
+    try:
+        parsed = json.loads(doc) if isinstance(doc, str) else doc
+    except ValueError:
+        return "its policy is not JSON"
+    statements = parsed.get("Statement") if isinstance(parsed, dict) else None
+    for st in as_list(statements):
+        if not isinstance(st, dict):
+            continue
+        problem = statement_problem(st.get("Effect"), as_list(st.get("Action")), as_list(st.get("NotAction")),
+                                    as_list(st.get("Resource")), "NotResource" in st)
+        if problem:
+            return problem
+    return None
+
+
+def document_problem(after):
+    """Why a data.aws_iam_policy_document read at apply time is refused, or None: its statements are known in the
+    plan even when the JSON it renders is not (an ARN of a resource the same plan creates)."""
+    for st in as_list((after or {}).get("statement")):
+        if not isinstance(st, dict):
+            continue
+        problem = statement_problem(st.get("effect"), as_list(st.get("actions")), as_list(st.get("not_actions")),
+                                    as_list(st.get("resources")), bool(st.get("not_resources")))
+        if problem:
+            return problem
+    return None
+
+
+def grant_problems(rtype, change):
+    """[(reason)] for an IAM policy or attachment change, and [unchecked] when its policy is unknown until apply."""
+    after = change.get("after") or {}
+    unknown = change.get("after_unknown") or {}
+    problems, unchecked = [], []
+    if rtype in POLICY_TYPES:
+        if unknown.get("policy"):
+            unchecked.append("policy")
+        else:
+            problem = policy_problem(after.get("policy"))
+            if problem:
+                problems.append(problem)
+    if rtype == "aws_iam_role":
+        # inline_policy wholly unknown is the computed default of a new role (its policies are aws_iam_role_policy
+        # resources, checked on their own); a configured block whose policy is unknown is what cannot be read.
+        inline_unknown = unknown.get("inline_policy")
+        for n, block in enumerate(as_list(after.get("inline_policy"))):
+            block_unknown = inline_unknown[n] if isinstance(inline_unknown, list) and n < len(inline_unknown) else {}
+            if isinstance(block_unknown, dict) and block_unknown.get("policy"):
+                unchecked.append("inline_policy")
+                continue
+            problem = policy_problem((block or {}).get("policy"))
+            if problem:
+                problems.append("inline_policy: " + problem)
+    arns = as_list(after.get("policy_arn")) + as_list(after.get("policy_arns")) + as_list(after.get("managed_policy_arns"))
+    for arn in arns:
+        if isinstance(arn, str) and PRIVILEGED_MANAGED.match(arn):
+            problems.append("it attaches the AWS managed policy %s" % arn.rsplit("/", 1)[-1])
+    return problems, unchecked
+
+
+def configuration_problems(module, prefix=""):
+    """[(config address, reason)] for configuration that runs code: provisioners and aws_lambda_invocation, in the
+    root module and every module call (plan JSON "configuration")."""
+    found = []
+    if not isinstance(module, dict):
+        return found
+    for res in module.get("resources") or []:
+        address = prefix + str(res.get("address", ""))
+        if res.get("provisioners"):
+            found.append((address, "it has a provisioner, which runs commands with the pipeline's credentials"))
+        if res.get("type") == "aws_lambda_invocation":
+            found.append((address, "aws_lambda_invocation runs a Lambda function from Terraform"))
+    for name, call in sorted((module.get("module_calls") or {}).items()):
+        found += configuration_problems((call or {}).get("module"), prefix + "module." + name + ".")
+    return found
+
+
 def guard(plan):
-    """(exit code, counts dict, refusals [(address, reason)])."""
+    """(exit code, counts dict, refusals [(address, reason)], unchecked [(address, attribute)])."""
     if not isinstance(plan, dict):
         raise UsageError("plan is not a JSON object")
-    refusals = []
-    counts = {"effective": 0, "importing": 0, "outputs": 0}
+    refusals = configuration_problems((plan.get("configuration") or {}).get("root_module"))
+    unchecked = []
+    counts = {"effective": 0, "moved": 0, "importing": 0, "outputs": 0}
     for entry in plan.get("resource_changes") or []:
-        if entry.get("mode") == "data":
-            continue
         change = entry.get("change") or {}
         actions = change.get("actions") or []
-        importing = bool(change.get("importing"))
-        effective = actions != ["no-op"]
-        if not effective and not importing:
-            continue
-        counts["effective"] += int(effective)
-        counts["importing"] += int(importing)
         address = entry.get("address", "")
         rtype = entry.get("type") or ""
+        if entry.get("mode") == "data":
+            # Read at apply time (it depends on something the plan creates): its statements are still known.
+            if rtype == "aws_iam_policy_document" and actions != ["no-op"]:
+                problem = document_problem(change.get("after"))
+                if problem:
+                    refusals.append((address, problem))
+            continue
+        importing = bool(change.get("importing"))
+        effective = actions != ["no-op"]
+        previous = entry.get("previous_address") or ""
+        moved = bool(previous) and previous != address
+        if not effective and not importing and not moved:
+            continue
+        counts["effective"] += int(effective)
+        counts["moved"] += int(moved)
+        counts["importing"] += int(importing)
         reason = break_glass_reason(address, rtype)
+        if not reason and moved:
+            reason = break_glass_reason(previous, rtype)
+            if reason:
+                reason = "moved from " + previous + ": " + reason
         if reason:
             refusals.append((address, reason))
             continue
         if importing:
             refusals.append((address, "adopting an existing resource (import) is break-glass"))
             continue
+        if not effective:
+            continue
         if rtype.startswith("aws_s3_bucket"):
             names = {(change.get("before") or {}).get("bucket"), (change.get("after") or {}).get("bucket")}
             if names & set(PROTECTED_BUCKETS):
                 refusals.append((address, "the audit trail's or the state's bucket is break-glass"))
                 continue
-        if rtype == "aws_iam_role" and effective:
+        if actions == ["delete"] or actions == ["forget"]:
+            continue
+        if rtype == "aws_iam_role":
             problem = trust_problem(dict(change, actions=actions))
             if problem:
                 refusals.append((address, problem))
+                continue
+        if rtype.startswith("aws_iam_"):
+            problems, unknown = grant_problems(rtype, change)
+            refusals += [(address, problem) for problem in problems]
+            unchecked += [(address, attribute) for attribute in unknown]
     counts["outputs"] = sum(1 for oc in (plan.get("output_changes") or {}).values()
                             if (oc.get("actions") or []) != ["no-op"])
-    return (1 if refusals else 0), counts, refusals
+    return (1 if refusals else 0), counts, refusals, unchecked
 
 
 def run_guard(plan_path, output=None):
@@ -596,14 +879,18 @@ def run_guard(plan_path, output=None):
             plan = json.load(handle)
     except (OSError, ValueError) as exc:
         raise UsageError("cannot read " + plan_path + ": " + str(exc))
-    rc, counts, refusals = guard(plan)
+    rc, counts, refusals, unchecked = guard(plan)
     for address, reason in refusals:
         error("REFUSED %s: %s. Nothing was applied; apply this change locally with the owner's MFA (%s)" % (
             address, reason, RUNBOOK))
-    needed = bool(counts["effective"] or counts["importing"] or counts["outputs"])
+    for address, attribute in unchecked:
+        warn("UNCHECKED %s: its %s is known only at apply, so the guard cannot read its grants (%s, What it does "
+             "not stop)" % (address, attribute, RUNBOOK))
+    needed = bool(counts["effective"] or counts["moved"] or counts["importing"] or counts["outputs"])
     if rc == 0:
-        log("GUARD OK effective=%d importing=%d outputs=%d apply_needed=%s" % (
-            counts["effective"], counts["importing"], counts["outputs"], str(needed).lower()))
+        log("GUARD OK effective=%d moved=%d importing=%d outputs=%d unchecked=%d apply_needed=%s" % (
+            counts["effective"], counts["moved"], counts["importing"], counts["outputs"], len(unchecked),
+            str(needed).lower()))
     if output:
         with open(output, "a") as handle:
             handle.write("apply_needed=%s\n" % str(needed and rc == 0).lower())
@@ -676,6 +963,7 @@ def main(argv=None):
     p = sub.add_parser("pr-check")
     p.add_argument("--base", required=True)
     p.add_argument("--head", default="HEAD")
+    sub.add_parser("preflight")
     p = sub.add_parser("select")
     p.add_argument("--before", default="")
     p.add_argument("--after", required=True)
@@ -697,6 +985,8 @@ def main(argv=None):
     try:
         if args.cmd == "pr-check":
             return pr_check(args.base, args.head)
+        if args.cmd == "preflight":
+            return run_preflight()
         if args.cmd == "select":
             rc, outputs, summary = select(args.before, args.after)
             write_outputs(args.output, outputs)
