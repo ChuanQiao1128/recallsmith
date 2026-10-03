@@ -282,7 +282,8 @@ module "observability" {
 }
 
 # Enterprise audit 2026-10-03 SEC-01: operator roles that replace the shared static admin key
-# (read-only for agents, scoped deployer, MFA admin). RUNBOOK §11 has the profiles and the cutover.
+# (read-only for agents, scoped deployer, MFA admin, the CD and Terraform pipeline roles). RUNBOOK §10 has the
+# profiles and the cutover, §12 the CD role, §15 the Terraform pipeline role.
 module "operators" {
   source = "../../modules/operators"
 
@@ -302,4 +303,8 @@ module "operators" {
   deploy_bucket_names     = ["recallsmith-console-622994489535", "developercards-site-622994489535"]
   deploy_distribution_ids = ["E85FKUMZZWQWX", "EML9BSZ8EXMQ1"]
   rds_instance_id         = "developercards"
+
+  # Kept out of reach of the pipeline role developercards-gha-infra (RUNBOOK §15).
+  audit_bucket_name = "developercards-cloudtrail-${var.account_id}"
+  state_bucket_name = "recallsmith-tfstate-${var.account_id}"
 }
