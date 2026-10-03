@@ -15,8 +15,15 @@
 #   ONLY=vpc ./deploy.sh | ONLY=worker ./deploy.sh
 #   LAMBDA_RUNTIME=dotnet10 (default)           # the Lambda runtime set before publish-version; it must
 #                                               # match the zip's target framework (net10.0)
+#   PREBUILT=1 ./deploy.sh                      # ship dist/vpc.zip + dist/worker.zip as they are (CD: built without
+#                                               # AWS credentials and sha256-verified); no packaging, no SDK needed
 #
-# Needs the .NET 10 SDK on PATH (package_lambda_zip.sh stops with instructions otherwise).
+# Needs the .NET 10 SDK on PATH (package_lambda_zip.sh stops with instructions otherwise), except with PREBUILT=1.
+#
+# Production deploys run in CD (.github/workflows/cd.yml, infra/RUNBOOK.md §12). From a laptop (not DRY_RUN, not in
+# GitHub Actions) ../scripts/deploy-preflight.sh first requires a clean tree, HEAD = origin/main and green CI on it;
+# BREAK_GLASS=1 overrides that with a loud warning. AWS_PROFILE defaults to devcards-deploy (MFA) only when the
+# environment carries no credentials of its own (CD's OIDC session does).
 #
 # Database migrations are NOT run here: they go through POST /api/v1/admin/db/migrate (super_admin,
 # src_C/Vpc/Db/Migrate.cs) — the console's Migrate button, or scripts/release with a refresh token.
@@ -29,7 +36,9 @@ source "$HERE/scripts/merge-env.sh"
 # deploy also removes a stale REVENUECAT_SECRET_API_KEY that the R25 G04 mapping may have left on core-vpc.
 SSM_NOT_ENV="${SSM_NOT_ENV%]},\"revenuecat-secret-api-key\"]"
 SSM_OPTIONAL_ENV="${SSM_OPTIONAL_ENV%]},\"REVENUECAT_SECRET_API_KEY\"]"
-export AWS_PROFILE="${AWS_PROFILE:-devcards-deploy}"
+# Credentials already in the environment (CD's OIDC session, `aws configure export-credentials`) win over a profile
+# default: CD has no devcards-deploy profile, and naming one would fail every aws call.
+[ -n "${AWS_PROFILE:-}${AWS_ACCESS_KEY_ID:-}${AWS_SESSION_TOKEN:-}${AWS_WEB_IDENTITY_TOKEN_FILE:-}" ] || export AWS_PROFILE=devcards-deploy
 REGION="${AWS_REGION:-ap-southeast-2}"
 ARCH="${LAMBDA_ARCH:-linux-arm64}"          # both functions are arm64 (aws lambda get-function-configuration)
 LAMBDA_RUNTIME="${LAMBDA_RUNTIME:-dotnet10}"
@@ -43,8 +52,24 @@ SSM_PATH="/developercards/$ENV"
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }
 file_env="$(jq -c . "$ENV_FILE")"          # a missing or invalid ENV_FILE is a hard error
 
-./package_lambda_zip.sh "$ARCH"
-ls -la dist/vpc.zip dist/worker.zip
+"$HERE/../scripts/deploy-preflight.sh" src_C/deploy.sh
+
+if [ "${PREBUILT:-0}" = 1 ]; then
+  # CD's deploy job: the build job packaged these (same script, same ARCH) without AWS credentials and the deploy job
+  # checked them against the build's SHA256SUMS. Rebuilding here would ship bytes nobody verified.
+  zips=""
+  [ "$ONLY" = worker ] || zips="dist/vpc.zip"
+  [ "$ONLY" = vpc ] || zips="${zips:+$zips }dist/worker.zip"
+  for z in $zips; do
+    [ -s "$z" ] || { echo "PREBUILT=1 but $HERE/$z is missing; nothing deployed" >&2; exit 1; }
+  done
+  echo "PREBUILT=1: deploying $zips as built"
+  # shellcheck disable=SC2086
+  ls -la $zips
+else
+  ./package_lambda_zip.sh "$ARCH"
+  ls -la dist/vpc.zip dist/worker.zip
+fi
 
 sha_b64() { openssl dgst -sha256 -binary "$1" | openssl base64 -A; }   # Lambda's CodeSha256 is base64(sha256)
 
