@@ -12,7 +12,7 @@ ZIP_WORKER="$DIST/worker.zip"
 
 usage() {
   cat <<'EOF'
-Build zip files for AWS Lambda (framework-dependent .NET 8).
+Build zip files for AWS Lambda (framework-dependent .NET 10, Lambda runtime dotnet10).
 
 Usage:
   ./package_lambda_zip.sh [portable|linux-x64|linux-arm64]
@@ -23,6 +23,7 @@ Examples:
   ./package_lambda_zip.sh linux-arm64
 
 Notes:
+  - Needs the .NET 10 SDK (src_C/global.json); the script stops before building with any other.
   - This script outputs:
     * dist/vpc.zip    (HTTP API Lambda)
     * dist/worker.zip (SQS Worker Lambda)
@@ -38,6 +39,33 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
 fi
 
 RUNTIME="${1:-portable}"
+
+# Preflight: the projects target net10.0 and src_C/global.json pins SDK 10, so an SDK 8 `dotnet` cannot
+# build them. Checked here, from this directory (global.json is looked up from the working directory),
+# so the failure says what to do instead of being an SDK-resolution error halfway through a deploy.
+cd "$HERE"
+sdk_version="" sdk_problem=""
+if ! command -v dotnet >/dev/null 2>&1; then
+  sdk_problem="there is no dotnet on PATH"
+elif ! sdk_version="$(dotnet --version 2>/dev/null)"; then
+  # An SDK 8-only dotnet lands here: under global.json, --version itself fails.
+  sdk_problem="no SDK this dotnet has satisfies global.json (it has: $(dotnet --list-sdks 2>/dev/null | awk '{print $1}' | paste -sd, - || true))"
+elif [[ "$sdk_version" != 10.* ]]; then
+  sdk_problem="\`dotnet --version\` printed $sdk_version"
+fi
+if [[ -n "$sdk_problem" ]]; then
+  {
+    echo "error: package_lambda_zip.sh needs the .NET 10 SDK, but $sdk_problem."
+    echo "  dotnet on PATH: $(command -v dotnet || echo 'none')"
+    echo "  Point DOTNET_ROOT and PATH at an SDK 10 install for this shell, then rerun, for example:"
+    echo "    export DOTNET_ROOT=/opt/homebrew/opt/dotnet@10/libexec   # Homebrew dotnet@10"
+    echo "    # (or /usr/local/share/dotnet for the Microsoft installer, \$HOME/.dotnet for dotnet-install.sh)"
+    echo "    export PATH=\"\$DOTNET_ROOT:\$PATH\""
+    echo "    (cd src_C && dotnet --version)   # must print 10.0.x"
+  } >&2
+  exit 1
+fi
+echo "Using .NET SDK $sdk_version ($(command -v dotnet))"
 
 rm -rf "$DIST"
 mkdir -p "$DIST"
