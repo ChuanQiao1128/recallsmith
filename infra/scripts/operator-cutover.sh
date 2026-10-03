@@ -38,8 +38,13 @@ in_group="$(aws iam list-groups-for-user --profile devcards-admin --user-name "$
 attached="$(aws iam list-attached-user-policies --profile devcards-admin --user-name "$USER_NAME" --query 'AttachedPolicies[].PolicyArn' --output text)"
 echo "now: in group $ADMIN_GROUP=$in_group; attached: ${attached:-none}"
 
+todo=()
+grep -q "$BASE_POLICY" <<<"$attached" || todo+=("attach $BASE_POLICY")
+for p in "${DIRECT_POLICIES[@]}"; do grep -q "$p" <<<"$attached" && todo+=("detach $p"); done
+[ "$in_group" = 0 ] || todo+=("remove $USER_NAME from $ADMIN_GROUP")
+if [ "${#todo[@]}" = 0 ]; then echo "already cut over: nothing to do"; exit 0; fi
 if [ "${CONFIRM:-0}" != 1 ]; then
-  echo "would: attach $BASE_POLICY; detach ${DIRECT_POLICIES[*]}; remove $USER_NAME from $ADMIN_GROUP"
+  printf 'would: %s\n' "${todo[@]}"
   echo "preflight only. Re-run with CONFIRM=1 to make the change."
   exit 0
 fi
