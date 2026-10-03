@@ -11,7 +11,7 @@
 # (the published version records the commit). It prints the one-line alias rollback command.
 #
 #   DRY_RUN=1 services/deploy-python-lambda.sh webhook-dispatcher   # build + print, never calls aws
-#   AWS_PROFILE=dev services/deploy-python-lambda.sh webhook-dispatcher   # supervisor only
+#   AWS_PROFILE=devcards-deploy services/deploy-python-lambda.sh webhook-dispatcher   # supervisor only
 #
 # No secret is ever injected: each Python function reads its SSM parameters at runtime.
 # This script never reads SSM and never prints an environment value (key names only).
@@ -20,7 +20,7 @@ set +x
 
 usage() {
   echo "usage: $(basename "$0") <webhook-dispatcher|ai-qa|source-watcher|notifier|synthetic-check>" >&2
-  echo "  env: ENV (prod), AWS_REGION (ap-southeast-2), AWS_PROFILE (dev), PUBLISH_ALIAS (prod), UV, DRY_RUN=1" >&2
+  echo "  env: ENV (prod), AWS_REGION (ap-southeast-2), AWS_PROFILE (devcards-deploy), PUBLISH_ALIAS (prod), UV, DRY_RUN=1" >&2
   exit 2
 }
 
@@ -39,7 +39,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 ENV="${ENV:-prod}"
 REGION="${AWS_REGION:-ap-southeast-2}"
-export AWS_PROFILE="${AWS_PROFILE:-dev}"
+export AWS_PROFILE="${AWS_PROFILE:-devcards-deploy}"
 PUBLISH_ALIAS="${PUBLISH_ALIAS:-prod}"
 UV="${UV:-uv}"
 if ! command -v "$UV" >/dev/null 2>&1; then UV="$HOME/.local/bin/uv"; fi

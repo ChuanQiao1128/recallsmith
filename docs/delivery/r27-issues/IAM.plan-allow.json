@@ -1,0 +1,14 @@
+{
+  "tags_only_updates": false,
+  "changes": {
+    "module.operators.aws_iam_role.agent_readonly": "create",
+    "module.operators.aws_iam_role_policy_attachment.agent_readonly": "create",
+    "module.operators.aws_iam_role_policy.agent_readonly_deny": "create",
+    "module.operators.aws_iam_role.deployer": "create",
+    "module.operators.aws_iam_role_policy.deployer": "create",
+    "module.operators.aws_iam_role.admin_mfa": "create",
+    "module.operators.aws_iam_role_policy_attachment.admin_mfa": "create",
+    "module.operators.aws_iam_policy.operator_base": "create"
+  },
+  "outputs": ["operator_role_arns", "operator_base_policy_arn"]
+}

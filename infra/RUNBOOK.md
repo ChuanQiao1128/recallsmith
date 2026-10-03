@@ -12,7 +12,7 @@ for the whole wave; deleting it is the first post-wave chore.
 
 ## 2. Plan (every issue)
 
-Read-only, `AWS_PROFILE=dev`, never `apply`/`import`. For E01–E05 (prod) and every staging root,
+Read-only, `AWS_PROFILE=dev` (after the §10 cutover: `devcards-admin`), never `apply`/`import`. For E01–E05 (prod) and every staging root,
 use an empty local state via a gitignored override:
 
 1. Write `infra/envs/prod/backend_override.tf`:
@@ -606,3 +606,46 @@ From this date `src_C/deploy.sh` prints a `ROLLBACK:` line (the alias version it
   inserts into the dropped `analytics_event_outbox`. There is no recreate script; deploy a fixed build instead.
 - Migrate never drops anything on its own: it stops before a destructive migration unless
   `confirmDestructive=<version>` names that migration's version.
+
+## 10. Operator identities (enterprise audit SEC-01, 2026-10-03)
+
+The static key (user `devcards-admin`, profile `dev`) used to carry AdministratorAccess for the owner, every
+deploy and every agent. `infra/modules/operators` splits that into three roles; `~/.aws/config` has one profile
+per role, each with `source_profile = dev`:
+
+| Profile | Role | MFA | Who | Can |
+|---|---|---|---|---|
+| `devcards-ro` | `devcards-agent-readonly` | no | Claude sessions, workflow and DDW workers, investigations | AWS ReadOnlyAccess **minus** SSM/KMS decrypt, Secrets Manager, Lambda configuration (its environment holds the injected secrets), S3 object reads (tfstate, user content, CloudTrail), Cognito user records, RDS logs, SQS receive |
+| `devcards-deploy` | `devcards-deployer` | no | `src_C/deploy.sh`, `services/deploy-python-lambda.sh`, `frontend/deploy.sh`, `site/deploy.sh`, `infra/scripts/rds-snapshot.sh` (all default to it) | update / publish / re-alias core-vpc, worker-lambda and the five `developercards-*` Python functions; read `/developercards` SSM through KMS-via-SSM; sync the console and site buckets and invalidate their two distributions; pre-migration DB snapshot. Not: edge-public, newsapp, IAM, `lambda:InvokeFunction`, tfstate, content buckets |
+| `devcards-admin` | `devcards-admin-mfa` | **yes** | the owner; Terraform; `scripts/invoke-as-admin.sh`; break-glass | AdministratorAccess, 12-hour session |
+
+```
+profile                      add to ~/.aws/config
+[profile devcards-ro]        role_arn = arn:aws:iam::622994489535:role/devcards-agent-readonly
+                             source_profile = dev, role_session_name = agent-readonly, region = ap-southeast-2
+[profile devcards-deploy]    role_arn = arn:aws:iam::622994489535:role/devcards-deployer
+                             source_profile = dev, role_session_name = deploy, region = ap-southeast-2
+[profile devcards-admin]     role_arn = arn:aws:iam::622994489535:role/devcards-admin-mfa
+                             source_profile = dev, mfa_serial = arn:aws:iam::622994489535:mfa/TimeAwakeAdmin
+                             duration_seconds = 43200, role_session_name = owner-admin, region = ap-southeast-2
+```
+
+CloudTrail now names the actor: `assumed-role/devcards-deployer/deploy` is a deploy,
+`assumed-role/devcards-agent-readonly/agent-readonly` an agent, `assumed-role/devcards-admin-mfa/owner-admin` the owner.
+
+**Terraform after the cutover.** Even `plan` needs `devcards-admin`: it reads the tfstate object and refreshes Lambda
+configuration, both denied to `devcards-ro` by design. The owner types the MFA code once: `aws sts get-caller-identity --profile devcards-admin`.
+The CLI caches the 12-hour session; Terraform (which cannot prompt for MFA) then runs with
+`eval "$(aws configure export-credentials --profile devcards-admin --format env)"` in the same shell. The MFA code is the
+owner's approval step for every infrastructure change; the plan allow-list (§2–§5) is unchanged.
+
+**Cutover (owner present).** 1) Owner: `aws sts get-caller-identity --profile devcards-admin` (enter the code).
+2) `infra/scripts/operator-cutover.sh` (preflight) then `CONFIRM=1 infra/scripts/operator-cutover.sh`: attaches
+`devcards-operator-base` (assume the three roles, see own user), detaches AmazonEC2FullAccess / AmazonS3FullAccess,
+removes the user from `admins`, and proves `dev` alone is now denied. Rollback is the printed
+`aws iam add-user-to-group --profile devcards-admin --user-name devcards-admin --group-name admins`.
+
+**Owner-only, console:** rotate the key (create the new key, update `~/.aws/credentials [dev]`, deactivate the old one,
+delete it after a week of `GetAccessKeyLastUsed` silence). Later (enterprise phase): IAM Identity Center for people and
+GitHub OIDC for CI deploys remove the static key entirely.
+

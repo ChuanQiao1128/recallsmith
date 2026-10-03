@@ -283,3 +283,26 @@ module "observability" {
   notifier_function_name       = module.worker.notifier_function_name
   source_watcher_function_name = module.worker.source_watcher_function_name
 }
+
+# Enterprise audit 2026-10-03 SEC-01: operator roles that replace the shared static admin key
+# (read-only for agents, scoped deployer, MFA admin). RUNBOOK §11 has the profiles and the cutover.
+module "operators" {
+  source = "../../modules/operators"
+
+  account_id         = var.account_id
+  region             = var.region
+  operator_user_arns = ["arn:aws:iam::${var.account_id}:user/devcards-admin"]
+
+  deploy_function_names = [
+    "core-vpc",
+    "worker-lambda",
+    "developercards-ai-qa",
+    "developercards-notifier",
+    "developercards-source-watcher",
+    "developercards-synthetic-check",
+    "developercards-webhook-dispatcher",
+  ]
+  deploy_bucket_names     = ["recallsmith-console-622994489535", "developercards-site-622994489535"]
+  deploy_distribution_ids = ["E85FKUMZZWQWX", "EML9BSZ8EXMQ1"]
+  rds_instance_id         = "developercards"
+}
