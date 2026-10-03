@@ -910,3 +910,28 @@ ruleset 24415242, variable `CONSOLE_SENTRY_DSN` (read from the live console bund
 
 Tests: `scripts/tests/cd-scripts.test.sh` (CI job `infra`) runs every script here against fake `aws`, `gh` and
 `curl`.
+
+## 13. Database restore (enterprise audit DR-01, drilled 2026-10-04)
+
+**Drill (quarterly, and after any RDS/engine change).** The owner enters MFA (`aws sts get-caller-identity --profile
+devcards-admin`), then `infra/scripts/dr-restore-drill.sh` (preflight) and `CONFIRM=1 infra/scripts/dr-restore-drill.sh`.
+It restores `developercards` to its latest restorable time into `dc-dr-drill-<stamp>` (same subnets and SGs), runs a
+throwaway copy of the live core-vpc build against it, compares the applied migrations and the live decks/card totals
+with production, writes `docs/ops/dr-restore-drill-<date>.md`, and deletes both throwaways in an EXIT trap. About
+30 minutes, about US$0.03. First run: `docs/ops/dr-restore-drill-2026-10-04.md` — PASS, restore 26 min, measured
+restore-point lag 8 min.
+
+**Real incident (data loss or corruption).**
+1. Stop writes that would make it worse: the §7 kill switch for automation; for a bad deploy, roll the aliases back (§12).
+2. Pick the restore point: just before the damage (`--restore-time <UTC>`), or the latest restorable time for an
+   instance loss. Restore it beside production, exactly as the drill's step 1 does but with that time, and verify it
+   the drill's way (`CONFIRM=1` stops at its trap, so for an incident run the commands from the script by hand and
+   skip the cleanup).
+3. Cut over without touching any configuration: the endpoint name comes from the instance identifier. Rename
+   production out of the way (`modify-db-instance --db-instance-identifier developercards
+   --new-db-instance-identifier developercards-damaged-<date> --apply-immediately`), then rename the restored
+   instance to `developercards`. core-vpc and worker reconnect on the next connection (their `PGHOST` is unchanged).
+   Re-enable deletion protection and the 14-day backup retention on the new `developercards`; Terraform's next plan
+   shows any other drift.
+4. Keep `developercards-damaged-<date>` until the incident is closed; delete it (final snapshot) only with the owner.
+5. Write the postmortem in `docs/ops/`.
