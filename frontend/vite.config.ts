@@ -8,8 +8,7 @@ export default defineConfig({
   proxy: {
     '/api': {
       target: 'https://ktbq1sie2c.execute-api.ap-southeast-2.amazonaws.com/dev',
-      changeOrigin: true,
-      rewrite: (path) => path.replace(/^\/api/, '/api')
+      changeOrigin: true
     }
   }
 }
