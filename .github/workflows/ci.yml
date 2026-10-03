@@ -29,6 +29,23 @@ jobs:
           cache: npm
           cache-dependency-path: mobile/package-lock.json
       - run: npm ci
+      # Dependency advisories as a gate, the frontend job's way: the shipped tree
+      # only (`--omit=dev`), failing on high and critical. Unlike frontend this one
+      # could not start at zero. On 2026-10-03 the tree carried 71 high/critical
+      # advisories in 20 packages, and every fix changes package-lock.json, which
+      # reaches users only through an App Store binary or an OTA update — a mobile
+      # change of its own. All but nanoid are absent from the exported bundle, and
+      # nanoid's call sites cannot reach the advisories (see each entry's reason).
+      #
+      # So they are listed in npm-audit-allowlist.json, one entry per advisory with
+      # its reason and an expiry date. A high or critical advisory that is not
+      # listed fails here, and so does every entry from its expiry date on, so the
+      # list cannot quietly become permanent. `|| true` because npm audit exits 1
+      # whenever it finds anything at all; the script decides, and treats a report
+      # it cannot read (a registry error, say) as a failure, never as a pass.
+      - run: |
+          npm audit --omit=dev --json > "$RUNNER_TEMP/npm-audit.json" || true
+          python3 ../infra/scripts/check-npm-audit.py --allowlist npm-audit-allowlist.json --audit-json "$RUNNER_TEMP/npm-audit.json"
       # `tsc --noEmit`, and unlike the frontend job that IS a real check here:
       # mobile/tsconfig.json extends expo/tsconfig.base and has no `include`,
       # so tsc falls back to "every .ts/.tsx under the project root" — 315
