@@ -685,3 +685,156 @@ and the `dotnet10` runtime have to arrive in the same published version.
 5. **Next time.** CI job `infra` runs `python3 infra/scripts/check-lambda-runtimes.py`, which fails 90 days
    before any runtime in `infra/**/*.tf` reaches its AWS deprecation date (nodejs24.x is next, 2028-04-30).
    Update its date table from the AWS lambda-runtimes page when it fires.
+
+## 12. CD pipeline (GitHub OIDC) (enterprise audit SDLC-03, 2026-10-03)
+
+Production is deployed by `.github/workflows/cd.yml`, behind the owner's approval, with short-lived credentials from
+GitHub OIDC. No deploy credential is needed on the laptop: `devcards-deploy` becomes break-glass and requires the
+owner's MFA.
+
+### Flow
+
+A push to `main` runs CI (the nine checks the ruleset requires). When CI **succeeds** on a push to `main` in this
+repository, CD starts (`workflow_run`; a pull request, a fork or a red CI never starts it):
+
+1. **plan** (no AWS). `scripts/cd/plan.sh decide`: which targets changed between the commit of the last successful
+   *full* CD deployment and this commit. Nothing to deploy: the run ends here, with no approval request. The run
+   summary lists the commit, the base, the targets and the changed paths.
+2. **build** (no AWS credentials). The Lambda zips with the .NET 10 SDK (`DRY_RUN=1 src_C/deploy.sh`), the console
+   (`npm ci && npm run build`, Sentry DSN from the repository variable `CONSOLE_SENTRY_DSN`), each changed Python
+   service (`DRY_RUN=1 services/deploy-python-lambda.sh <svc>`: its tests, then the hash-verified build), a
+   `SHA256SUMS` manifest (`scripts/cd/artifact.sh stage`). Artifact `cd-build-<sha>`, kept 30 days.
+3. **deploy** (environment `production`: **waits for the owner's approval**). Then, in one job:
+   verify the artifact against the manifest sha256 the build job passed (not read from the artifact store) →
+   assume `arn:aws:iam::622994489535:role/developercards-gha-prod` (its trust accepts only
+   `repo:ChuanQiao1128/recallsmith:environment:production`; session `gha-cd-<run id>-<attempt>`, which is how
+   CloudTrail names it) → preflight (identity; the console bundle carries the DSN SSM holds) → **restore point**
+   (`scripts/cd/restore-point.sh record`: every prod alias about to move, the console's `index.html`, the site bucket)
+   → deploy in order: backend (`PREBUILT=1 ENV=prod src_C/deploy.sh`), Python services
+   (`PREBUILT=1 services/deploy-python-lambda.sh <svc>`), console (`PREBUILT=1 frontend/deploy.sh`), site
+   (`site/deploy.sh`) → **smoke** (`scripts/smoke.sh`) → on any failure or cancel, **automatic rollback** → job
+   summary. Smoke and rollback are steps of the approved job on purpose: a second job naming `production` would wait
+   for a second approval.
+
+`PREBUILT=1` makes each script ship the verified bytes as they are; none of them builds in the deploy job.
+
+### Approving
+
+GitHub notifies the owner (the environment's only required reviewer). Open the run (Actions → CD, or the e-mail /
+GitHub mobile notification), read the **plan** summary (targets, changed paths) and the **build** summary
+(`SHA256SUMS`), then **Review deployments → production → Approve and deploy** (or **Reject**). A pending approval
+waits up to 30 days. Rejecting deploys nothing; the changes stay in the next run's plan. The environment must not have
+"Prevent self-review" on: the owner both merges and approves.
+
+### What deploys when
+
+| Changed path (since the last full deployment) | Target | Deployed by |
+|---|---|---|
+| `src_C/**` except `src_C/Tests/**`, `src_C/Public/**` (neither is in a zip) and `*.md` | `backend` = core-vpc + worker-lambda | `src_C/deploy.sh` |
+| `services/<svc>/**` except `tests/**` and `*.md`; svc = ai-qa, notifier, source-watcher, synthetic-check, webhook-dispatcher | `<svc>` | `services/deploy-python-lambda.sh` |
+| `frontend/**` except `frontend/tests/**` and `*.md` | `console` | `frontend/deploy.sh` |
+| `site/**` | `site` | `site/deploy.sh` |
+| everything else: `docs/`, `infra/`, `mobile/`, `tools/`, `.github/`, `scripts/`, … | nothing | no deploy job, no approval request |
+
+"Since the last full deployment", not "in this push": a run that was rejected, rolled back, or cancelled while
+queued leaves its changes in the next run's plan. A full deployment is marked by the environment URL the deploy job
+sets on success, `https://github.com/ChuanQiao1128/recallsmith/commit/<sha>#cd-full`; a run with an explicit target
+list sets `#cd-partial` and a manual rollback `#cd-rollback`, and neither becomes the next base. With no full
+deployment on record (the **first run**) every target deploys: backend, the five Python services, console and site,
+under one approval. A commit older than the last deployment (CI finishing out of order, a re-run of an old run)
+deploys nothing: CD never deploys backwards.
+
+### Smoke
+
+`scripts/smoke.sh`, up to 3 attempts per check 15 s apart: (1) `GET https://api.developercards.app/health` → 200 and
+`"ok": true`; (2) `aws lambda invoke --function-name developercards-synthetic-check:prod --payload
+'{"job":"synthetic-check"}'` → `{"ok": true, "failed": []}` (api-health, cdn-manifest, cdn-deck, console-index,
+api-auth-guard; §8). The CD role may invoke only that alias. Results are in the job summary.
+
+### Automatic rollback
+
+On a failed or cancelled deploy or smoke, `scripts/cd/restore-point.sh restore` (with freshly assumed credentials)
+puts back exactly what moved since the restore point, then the job fails:
+
+- each Lambda prod alias whose version changed goes back through `scripts/rollback.sh` (target version checked
+  Active/Successful first, alias re-read after); an alias that was on `$LATEST` goes to the version
+  `lambda-release.sh` froze the live code into, never to `$LATEST`;
+- the console's `index.html` is uploaded again and the distribution invalidated (the old hashed assets were never
+  deleted, so that is the whole old console);
+- the site bucket is synced back from its copy and invalidated.
+
+The summary says `rollback: restored` or `incomplete`; on `incomplete`, finish by hand from the `FAILED` lines. Not
+rolled back: `$LATEST` code and environment (nothing serves `$LATEST`), the database (CD runs no migration), and
+anything a Python service already did while it ran.
+
+### Manual rollback
+
+- **CD:** Actions → CD → Run workflow (from `main`), `rollback_target` = vpc / worker / ai-qa / notifier /
+  source-watcher / synthetic-check / webhook-dispatcher, `rollback_version` = the version (a deploy's job summary has
+  "before this run" for each alias; or `aws lambda list-versions-by-function --function-name <fn>`). It waits for the
+  same approval.
+- **Break-glass, local:** `aws sts get-caller-identity --profile devcards-deploy` (MFA code), then
+  `scripts/rollback.sh vpc 75` (`DRY_RUN=1` prints first).
+
+`scripts/rollback.sh` refuses core-vpc versions below 74 (§9: roll forward only). A rollback is not a deployment
+base, and the next push redeploys the function only when its files change. To put `main` back without a change, Run
+workflow with `targets` set to that target (e.g. `backend`). Console or site: revert on `main` and let CD deploy it,
+or break-glass with the old build, `gh run download <run id> -n cd-build-<sha>`, then
+`tar -xzf frontend/console-dist.tgz -C frontend && BREAK_GLASS=1 PREBUILT=1 frontend/deploy.sh`.
+
+### Manual deploy
+
+Actions → CD → Run workflow from `main`; `targets` = `changed` (default: the plan above), `all`, or a list such as
+`backend console`. It deploys `main`'s head and only when all nine required checks succeeded on it. A dispatch from
+any other branch is refused.
+
+### Queueing
+
+One `production` lane for whole runs: a run waits while another (including one waiting for approval) is in flight,
+and GitHub keeps one queued run, replacing an older queued one (which loses nothing, see above). A run that will not
+deploy (CI failed, a pull request) never takes that slot. Consequences: a manual rollback waits behind a deploy that
+waits for approval (reject that deploy first), and a push landing while a rollback is queued replaces it (run it
+again, or use the local rollback).
+
+### Break-glass local deploy
+
+For an outage that cannot wait for CI. `devcards-deploy` now needs the owner's MFA; the owner's `~/.aws/config`
+entry gets `mfa_serial = arn:aws:iam::622994489535:mfa/TimeAwakeAdmin` (as for `devcards-admin`). Enter the code once
+with `aws sts get-caller-identity --profile devcards-deploy`; the CLI caches the session for the scripts, which keep
+defaulting to that profile when the environment has no credentials of its own. `AWS_PROFILE` or exported credentials
+(`eval "$(aws configure export-credentials --profile <p> --format env)"`) always win.
+
+`src_C/deploy.sh` and `frontend/deploy.sh` first run `scripts/deploy-preflight.sh`: the working tree is clean
+(untracked files count), `HEAD` is `origin/main` after a fetch, and the nine required checks succeeded on it
+(`gh api`, logged-in `gh` needed). Otherwise they refuse; `BREAK_GLASS=1` turns the refusal into a loud warning and
+deploys. `DRY_RUN=1` never needs it. A local deploy is not a CD deployment, so CD's next plan still counts those
+changes and redeploys them (same code, one more version). Merge the fix to `main` afterwards.
+
+### Setup (supervisor and owner, once)
+
+1. Terraform (supervisor, local with MFA, separate change): the GitHub OIDC provider and role
+   `developercards-gha-prod` (the deployer policy plus `lambda:InvokeFunction` on `developercards-synthetic-check:prod`),
+   and MFA on `devcards-deployer`.
+2. GitHub environment `production`: required reviewer ChuanQiao1128, deployment branches `main` only, "Prevent
+   self-review" off.
+3. Repository variable (not a secret: the DSN is public in the bundle) `CONSOLE_SENTRY_DSN` = the SSM String
+   `/developercards/prod/console-sentry-dsn`:
+   `gh variable set CONSOLE_SENTRY_DSN --repo ChuanQiao1128/recallsmith --body "$(aws ssm get-parameter --profile devcards-admin --name /developercards/prod/console-sentry-dsn --query Parameter.Value --output text)"`.
+   Change both together: the deploy stops before any change when the bundle lacks the DSN SSM holds.
+4. After the first deploy, check its record carries the marker:
+   `gh api "repos/ChuanQiao1128/recallsmith/deployments?environment=production" --jq '.[0].id'`, then
+   `gh api repos/ChuanQiao1128/recallsmith/deployments/<id>/statuses --jq '.[].environment_url'` must show
+   `…/commit/<sha>#cd-full`. Without it every run deploys every target (safe, but noisy).
+
+### Not covered
+
+- **Terraform** stays local, behind the owner's MFA, with the plan allow-list (§2–§5).
+- **Mobile**: OTA updates and App Store / Play binaries stay owner-driven.
+- **edge-public** (`src_C/Public`), which the deploy role cannot touch.
+- **Database migrations**: the console's Migrate button or `scripts/invoke-as-admin.sh` (owner). CD takes no RDS
+  snapshot because it migrates nothing; snapshot before migrating, as before.
+- **Staging**: there is none yet. The smoke runs against production right after the deploy, and the restore point
+  is the safety net.
+
+Tests: `scripts/tests/cd-scripts.test.sh` (CI job `infra`) runs every script here against fake `aws`, `gh` and
+`curl`.

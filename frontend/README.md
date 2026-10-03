@@ -123,6 +123,16 @@ from the environment: `DRY_RUN=1` builds and prints the commands without touchin
 AWS; `AWS_PROFILE` (default `dev`) picks the credentials; `CONSOLE_BUCKET` and
 `CONSOLE_DISTRIBUTION_ID` override the bucket and distribution defaults.
 
+Production deploys run in CD (`.github/workflows/cd.yml`, `infra/RUNBOOK.md` §12): a
+build job without AWS credentials runs `npm run build` with `VITE_SENTRY_DSN` from the
+repository variable `CONSOLE_SENTRY_DSN`, and the approved deploy job runs
+`PREBUILT=1 ./deploy.sh`, which ships `dist/` as built (no build, no npm) after
+`scripts/check-bundle-dsn.sh` has confirmed the bundle carries the DSN the SSM parameter
+holds. Run from a laptop (not `DRY_RUN`), `deploy.sh` first requires a clean tree at
+`origin/main` with green CI (`../scripts/deploy-preflight.sh`; `BREAK_GLASS=1` overrides).
+`AWS_PROFILE` defaults to `devcards-deploy` only when the environment carries no
+credentials of its own.
+
 The sync keeps old chunks on purpose — it no longer deletes what is not in the
 new build. A tab opened before a deploy still points at the previous
 `index.html`, and its next navigation asks for a hashed chunk from that older
