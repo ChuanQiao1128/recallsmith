@@ -482,9 +482,10 @@ public sealed class VpcFunction
         return await Vpc.Runtime.DrawStateSync.HandleDrawStateSync(req, res, auth);
       }
 
-      // Admin users routes are retired (CBE-01). The console lists and creates editors
-      // through edge-public's /api/v1/admin/cognito/users; core-vpc no longer answers a
-      // 501 "TODO" here. It still recognises the old paths only to reject them with 404,
+      // Admin users routes are retired (CBE-01): core-vpc no longer answers a 501 "TODO"
+      // here. (The console then used edge-public's Cognito routes; edge-public was retired
+      // too, R27 EDGE 2026-10-04, and console accounts are managed with the AWS CLI,
+      // infra/RUNBOOK.md §13.) It still recognises the old paths only to reject them with 404,
       // so legacy callers get a plain "route not found" and stay metered under their
       // bounded RouteMetrics labels rather than minting a metric per user id.
       {

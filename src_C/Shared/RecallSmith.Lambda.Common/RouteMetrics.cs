@@ -181,12 +181,9 @@ public static class RouteMetrics
     "/api/v1/admin/automation/freshness",
     "/api/v1/admin/analytics/usage",
 
-    // edge-public
-    "/api/v1/billing/verify",
-    "/api/v1/billing/webhook/apple",
-    "/api/v1/billing/webhook/google",
-    "/api/v1/ai/explain-card",
-    "/api/v1/admin/cognito/users",
+    // edge-public's labels (billing, AI and Cognito admin: five paths here, two templates below) left
+    // with it on 2026-10-04 (R27 EDGE). Those paths now reach core-vpc, which has no route for them:
+    // a 404, labelled "unmatched".
   ];
 
   // The parameterised routes, and the whole reason the table cannot be a plain list of
@@ -201,8 +198,6 @@ public static class RouteMetrics
   [
     "/api/v1/admin/users/:userSub/entitlements",
     "/api/v1/admin/users/:userSub",
-    "/api/v1/admin/cognito/users/:username/disable",
-    "/api/v1/admin/cognito/users/:username/delete",
     "/api/v1/admin/webhooks/subscriptions/:subscriptionId",
     "/api/v1/admin/webhooks/subscriptions/:subscriptionId/test",
     "/api/v1/admin/webhooks/deliveries/:deliveryId/redeliver",
@@ -259,10 +254,11 @@ public static class RouteMetrics
   /// Every label this class can produce apart from <see cref="UnmatchedRoute"/>.
   /// </summary>
   /// <remarks>
-  /// Exposed so that a test can hold this list against the route literals in the two
-  /// dispatchers. That check is the answer to the allowlist's one real weakness: a route
-  /// added to VpcFunction and forgotten here would silently report as "unmatched", and no
-  /// behavioural test can notice, because the function still works perfectly.
+  /// Exposed so that a test can hold this list against the route literals in the dispatcher
+  /// (VpcFunction; edge-public's PublicFunction was a second one until R27 EDGE). That check
+  /// is the answer to the allowlist's one real weakness: a route added to VpcFunction and
+  /// forgotten here would silently report as "unmatched", and no behavioural test can notice,
+  /// because the function still works perfectly.
   /// </remarks>
   public static IReadOnlyList<string> KnownRoutes { get; } = [.. StaticRoutes, .. TemplateRoutes];
 

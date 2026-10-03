@@ -40,9 +40,5 @@ internal static class SnapStartHooks
     try { Vpc.Authoring.ManifestRebuild.Reset(); } catch { /* best-effort */ }
     try { Vpc.Runtime.PremiumDeckUrl.Reset(); } catch { /* best-effort */ }
 #endif
-
-#if LAMBDA_PUBLIC
-    try { Public.CognitoAdmin.CognitoClient.Reset(); } catch { /* best-effort */ }
-#endif
   }
 }

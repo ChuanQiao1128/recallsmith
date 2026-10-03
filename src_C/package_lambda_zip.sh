@@ -2,11 +2,9 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-PROJ_PUBLIC="$HERE/Public/RecallSmith.Lambda.Public.csproj"
 PROJ_VPC="$HERE/Vpc/RecallSmith.Lambda.Vpc.csproj"
 PROJ_WORKER="$HERE/Worker/RecallSmith.Lambda.Worker.csproj"
 DIST="$HERE/dist"
-ZIP_PUBLIC="$DIST/public.zip"
 ZIP_VPC="$DIST/vpc.zip"
 ZIP_WORKER="$DIST/worker.zip"
 
