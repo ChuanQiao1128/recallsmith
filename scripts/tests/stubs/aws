@@ -1,0 +1,255 @@
+#!/usr/bin/env python3
+"""A fake `aws` CLI for scripts/tests/cd-scripts.test.sh. No network, no credentials: every call is appended to
+$STUB_LOG as one JSON line (argv plus the AWS_PROFILE / credential variables it saw), Lambda and SSM state lives in
+the JSON file $STUB_STATE, and S3 buckets are directories under $STUB_S3 (ETag = quoted md5 of the bytes).
+Only the calls the deploy, rollback, restore-point and smoke scripts make are implemented; anything else exits 2."""
+
+import base64
+import fnmatch
+import hashlib
+import json
+import os
+import shutil
+import sys
+
+args = sys.argv[1:]
+STATE_PATH = os.environ["STUB_STATE"]
+S3_ROOT = os.environ["STUB_S3"]
+state = json.load(open(STATE_PATH))
+
+with open(os.environ["STUB_LOG"], "a") as log:
+    log.write(json.dumps({
+        "argv": args,
+        "profile": os.environ.get("AWS_PROFILE", ""),
+        "has_key": bool(os.environ.get("AWS_ACCESS_KEY_ID") or os.environ.get("AWS_SESSION_TOKEN")),
+    }) + "\n")
+
+FLAGS = {"--delete", "--only-show-errors", "--quiet", "--no-progress", "--with-decryption", "--no-cli-pager"}
+
+
+def fail(msg, code=254):
+    sys.stderr.write(msg + "\n")
+    sys.exit(code)
+
+
+def save():
+    json.dump(state, open(STATE_PATH, "w"), indent=1)
+
+
+def opt(name, default=None):
+    return args[args.index(name) + 1] if name in args else default
+
+
+def opts(name):
+    return [args[i + 1] for i, a in enumerate(args) if a == name]
+
+
+def positionals(start=2):
+    out, i = [], start
+    while i < len(args):
+        a = args[i]
+        if a.startswith("--"):
+            i += 1 if a in FLAGS else 2
+            continue
+        out.append(a)
+        i += 1
+    return out
+
+
+def b64sha(path):
+    return base64.b64encode(hashlib.sha256(open(path, "rb").read()).digest()).decode()
+
+
+if state.get("fail_all"):
+    fail("stub: every call fails (fail_all)")
+if not args:
+    fail("stub: no arguments", 2)
+service, cmd = args[0], (args[1] if len(args) > 1 else "")
+
+# ---------------------------------------------------------------- lambda
+if service == "lambda":
+    if cmd == "wait":
+        sys.exit(0)
+    name = opt("--function-name", "")
+    qualifier = opt("--qualifier")
+    if ":" in name:
+        name, qualifier = name.split(":", 1)
+    fn = state["functions"].get(name)
+    if fn is None:
+        fail(f"ResourceNotFoundException: Function not found: {name}")
+
+    def conf_for(q):
+        if q in (None, "$LATEST"):
+            return fn["latest"]
+        if not q.isdigit():  # an alias name
+            if q != "prod":
+                fail(f"alias {q} not found")
+            q = fn["alias"]
+            if q == "$LATEST":
+                return fn["latest"]
+        v = fn["versions"].get(q)
+        if v is None:
+            fail(f"ResourceNotFoundException: version {q} of {name}")
+        return v
+
+    query = opt("--query")
+    if cmd == "get-alias":
+        print(fn["alias"])
+    elif cmd == "update-alias":
+        v = opt("--function-version")
+        if v != "$LATEST" and v not in fn["versions"]:
+            fail(f"ResourceNotFoundException: version {v} of {name}")
+        fn["alias"] = v
+        save()
+        print(f"prod\t{v}")
+    elif cmd == "get-function-configuration":
+        c = conf_for(qualifier)
+        st = c.get("state", "Active")
+        if query == "Environment.Variables":
+            print(json.dumps(c.get("env", {})))
+        elif query == "LastUpdateStatus":
+            print("Successful")
+        elif query == "CodeSha256":
+            print(c["sha"])
+        elif query == "Runtime":
+            print(c.get("runtime", "dotnet10"))
+        elif query == "[State,LastUpdateStatus,CodeSha256]":
+            print(f"{st}\tSuccessful\t{c['sha']}")
+        elif query == "[State,LastUpdateStatus]":
+            print(f"{st}\tSuccessful")
+        else:
+            fail(f"stub: unexpected query {query}", 2)
+    elif cmd == "update-function-configuration":
+        if "--environment" in args:
+            fn["latest"]["env"] = json.loads(opt("--environment"))["Variables"]
+        if "--runtime" in args:
+            fn["latest"]["runtime"] = opt("--runtime")
+        save()
+        print("InProgress")
+    elif cmd == "update-function-code":
+        path = opt("--zip-file")
+        assert path.startswith("fileb://"), path
+        fn["latest"]["sha"] = b64sha(path[len("fileb://"):])
+        save()
+        print(f"{name}\tInProgress\t{fn['latest']['sha']}")
+    elif cmd == "publish-version":
+        new = str(max([int(k) for k in fn["versions"]] or [0]) + 1)
+        fn["versions"][new] = dict(fn["latest"], state=state.get("next_version_state", "Active"),
+                                   description=opt("--description", ""))
+        save()
+        print(new)
+    elif cmd == "list-versions-by-function":
+        prefix = "pre-deploy freeze of the live"
+        print("\t".join(k for k, v in sorted(fn["versions"].items(), key=lambda kv: int(kv[0]))
+                        if v.get("description", "").startswith(prefix)))
+    elif cmd == "invoke":
+        outfile = positionals()[0]
+        with open(outfile, "w") as f:
+            json.dump(state.get("invoke", {}).get(name, {}), f)
+        print(state.get("invoke_error", "None"))
+    else:
+        fail(f"stub: unexpected lambda {cmd}", 2)
+
+# ---------------------------------------------------------------- ssm
+elif service == "ssm":
+    if cmd == "get-parameters-by-path":
+        path = opt("--path")
+        print(json.dumps({"Parameters": [{"Name": f"{path}/{k}", "Value": v} for k, v in state.get("ssm", {}).items()]}))
+    elif cmd == "get-parameter":
+        if not state.get("dsn"):
+            fail("ParameterNotFound")
+        print(state["dsn"])
+    else:
+        fail(f"stub: unexpected ssm {cmd}", 2)
+
+# ---------------------------------------------------------------- s3 / s3api
+elif service in ("s3", "s3api"):
+
+    def split(uri):
+        rest = uri[len("s3://"):]
+        bucket, _, key = rest.partition("/")
+        return bucket, key
+
+    def etag(path):
+        return '"' + hashlib.md5(open(path, "rb").read()).hexdigest() + '"'
+
+    if service == "s3api":
+        bucket = opt("--bucket")
+        root = os.path.join(S3_ROOT, bucket)
+        if cmd == "head-object":
+            p = os.path.join(root, opt("--key"))
+            if not os.path.isfile(p):
+                fail("Not Found")
+            print(etag(p))
+        elif cmd == "list-objects-v2":
+            for d, _, files in sorted(os.walk(root)):
+                for f in sorted(files):
+                    p = os.path.join(d, f)
+                    print(f"{os.path.relpath(p, root)}\t{etag(p)}")
+        else:
+            fail(f"stub: unexpected s3api {cmd}", 2)
+        sys.exit(0)
+
+    src, dst = positionals()[:2]
+    excludes = opts("--exclude")
+    if cmd == "cp":
+        if dst.startswith("s3://"):
+            b, k = split(dst)
+            target = os.path.join(S3_ROOT, b, k)
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            shutil.copyfile(src, target)
+        else:
+            b, k = split(src)
+            source = os.path.join(S3_ROOT, b, k)
+            if not os.path.isfile(source):
+                fail("fatal error: An error occurred (404) when calling the HeadObject operation: Key not found")
+            os.makedirs(os.path.dirname(os.path.abspath(dst)) or ".", exist_ok=True)
+            shutil.copyfile(source, dst)
+    elif cmd == "sync":
+        if dst.startswith("s3://"):
+            b, k = split(dst)
+            target_root = os.path.join(S3_ROOT, b, k)
+            source_root = src
+        else:
+            b, k = split(src)
+            source_root = os.path.join(S3_ROOT, b, k)
+            target_root = dst
+        os.makedirs(target_root, exist_ok=True)
+        os.makedirs(source_root, exist_ok=True)
+
+        def rel_files(root):
+            out = set()
+            for d, _, files in os.walk(root):
+                for f in files:
+                    out.add(os.path.relpath(os.path.join(d, f), root))
+            return out
+
+        def excluded(rel):
+            return any(fnmatch.fnmatch(rel, pat) for pat in excludes)
+
+        wanted = {r for r in rel_files(source_root) if not excluded(r)}
+        for r in sorted(wanted):
+            t = os.path.join(target_root, r)
+            os.makedirs(os.path.dirname(t), exist_ok=True)
+            shutil.copyfile(os.path.join(source_root, r), t)
+        if "--delete" in args:
+            for r in rel_files(target_root):
+                if r not in wanted and not excluded(r):
+                    os.remove(os.path.join(target_root, r))
+    else:
+        fail(f"stub: unexpected s3 {cmd}", 2)
+
+# ---------------------------------------------------------------- cloudfront / sts
+elif service == "cloudfront":
+    if cmd == "create-invalidation":
+        state["invalidations"] = state.get("invalidations", 0) + 1
+        save()
+        print(f"INV{state['invalidations']}")
+    elif cmd == "wait":
+        sys.exit(0)
+    else:
+        fail(f"stub: unexpected cloudfront {cmd}", 2)
+elif service == "sts" and cmd == "get-caller-identity":
+    print("arn:aws:sts::622994489535:assumed-role/stub/stub")
+else:
+    fail(f"stub: unexpected {service} {cmd}", 2)

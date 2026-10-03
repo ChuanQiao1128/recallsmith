@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+"""A fake `curl` for scripts/tests/cd-scripts.test.sh. <host>/health answers $STUB_HEALTH_CODE (default 200) with
+$STUB_HEALTH_BODY; <host>/index.html answers the index.html in the stub bucket that serves that host (the console or
+the site bucket under $STUB_S3), the read-back frontend/deploy.sh and site/deploy.sh do. Supports -o, -w '%{http_code}'
+and -f; every other flag is accepted and ignored."""
+
+import json
+import os
+import sys
+
+args = sys.argv[1:]
+with open(os.environ["STUB_LOG"], "a") as log:
+    log.write(json.dumps({"curl": args}) + "\n")
+url = [a for a in args if a.startswith("http")][-1]
+out = args[args.index("-o") + 1] if "-o" in args else None
+fmt = args[args.index("-w") + 1] if "-w" in args else None
+fail_on_http = any(a.startswith("-") and not a.startswith("--") and "f" in a for a in args)
+
+if url.endswith("/health"):
+    code = os.environ.get("STUB_HEALTH_CODE", "200")
+    body = os.environ.get("STUB_HEALTH_BODY", '{"success":true,"data":{"ok":true}}').encode()
+elif url.endswith("/index.html"):
+    bucket = "recallsmith-console-622994489535" if "console" in url else "developercards-site-622994489535"
+    p = os.path.join(os.environ["STUB_S3"], bucket, "index.html")
+    code, body = ("200", open(p, "rb").read()) if os.path.exists(p) else ("404", b"not found")
+else:
+    code, body = "404", b"not found"
+
+if fail_on_http and code != "200":
+    sys.stderr.write(f"curl: (22) The requested URL returned error: {code}\n")
+    sys.exit(22)
+if out:
+    open(out, "wb").write(body)
+else:
+    sys.stdout.buffer.write(body)
+if fmt == "%{http_code}":
+    sys.stdout.write(code)

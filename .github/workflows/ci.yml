@@ -281,8 +281,8 @@ jobs:
   # Terraform and deploy-script checks that need no AWS: fmt, an offline init (-backend=false, the
   # provider comes from the public registry) and validate, the observability module's terraform
   # test (mocked provider), the agent-route census, bash -n on the
-  # deploy scripts and the merge-env.sh unit tests. Never plan or apply: both need AWS credentials,
-  # and this job has none.
+  # deploy scripts, the merge-env.sh unit tests and the CD script tests (fake aws/gh/curl). Never
+  # plan or apply: both need AWS credentials, and this job has none.
   infra:
     name: infra (terraform fmt/validate + agent routes + deploy scripts)
     runs-on: ubuntu-latest
@@ -316,8 +316,17 @@ jobs:
           bash -n services/lambda-release.sh
           bash -n infra/scripts/operator-cutover.sh
           bash -n src_C/scripts/merge-env.sh
+          bash -n site/deploy.sh
+          bash -n frontend/scripts/check-bundle-dsn.sh
+          for f in scripts/*.sh scripts/lib/*.sh scripts/cd/*.sh scripts/tests/*.sh; do bash -n "$f"; done
       # Pure jq, no aws, no network (jq ships on ubuntu-latest).
       - run: bash src_C/scripts/merge-env.test.sh
+      # The CD pipeline's scripts (.github/workflows/cd.yml) and the deploy scripts' PREBUILT mode, AWS_PROFILE
+      # default and local preflight, run for real against fake aws/gh/curl in a throwaway git repo: no network, no
+      # credentials. Also pins cd.yml's static facts (pinned actions, OIDC only in the approved jobs) and that the
+      # preflight's required-check list equals this file's job names.
+      - name: CD and deploy-script tests (scripts/tests/cd-scripts.test.sh)
+        run: bash scripts/tests/cd-scripts.test.sh
 
   mcp-server:
     name: tools/mcp-server (build + vitest)
