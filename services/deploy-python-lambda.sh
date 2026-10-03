@@ -16,8 +16,11 @@
 #                                                                    # build, no uv (CD: built by `DRY_RUN=1` in a job
 #                                                                    # without AWS credentials, sha256-verified)
 #
-# Production deploys run in CD (.github/workflows/cd.yml, infra/RUNBOOK.md §12). AWS_PROFILE defaults to
-# devcards-deploy (MFA) only when the environment carries no credentials of its own (CD's OIDC session does).
+# Production deploys run in CD (.github/workflows/cd.yml, infra/RUNBOOK.md §12). From a laptop (not DRY_RUN, not in
+# GitHub Actions) ../scripts/deploy-preflight.sh first requires a clean tree, HEAD = origin/main and green CI on it;
+# BREAK_GLASS=1 overrides that with a loud warning (the per-service check below still refuses uncommitted changes under
+# services/<svc>). AWS_PROFILE defaults to devcards-deploy (MFA) only when the environment carries no credentials of its
+# own (CD's OIDC session does).
 #
 # No secret is ever injected: each Python function reads its SSM parameters at runtime.
 # This script never reads SSM and never prints an environment value (key names only).
@@ -73,6 +76,7 @@ jq -e 'type == "object" and all(.[]; type == "string")' "$ENV_FILE" >/dev/null 2
 file_env="$(jq -c . "$ENV_FILE")"
 
 # --- preflight --------------------------------------------------------------------------------
+"$ROOT/scripts/deploy-preflight.sh" services/deploy-python-lambda.sh
 dirty="$(git -C "$ROOT" status --porcelain -- "services/$SERVICE" 2>/dev/null || echo "not a git checkout")"
 if [ -n "$dirty" ]; then
   if [ "${DRY_RUN:-0}" = 1 ]; then

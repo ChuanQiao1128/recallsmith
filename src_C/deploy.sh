@@ -73,11 +73,48 @@ fi
 
 sha_b64() { openssl dgst -sha256 -binary "$1" | openssl base64 -A; }   # Lambda's CodeSha256 is base64(sha256)
 
+# mask_json_values <json object or array> [min-length] — inside GitHub Actions only, register every value (each line of
+# a multi-line one) with ::add-mask::, so the runner prints *** for it in every later line of this public repository's
+# CD log. '%' is escaped as the runner unescapes it. Outside GitHub Actions it prints nothing at all (the command line
+# would show the value on a terminal). Values shorter than min-length (default 1) are skipped.
+mask_json_values() {
+  [ "${GITHUB_ACTIONS:-}" = true ] || return 0
+  local line
+  jq -r --argjson min "${2:-1}" '.[] | tostring | select(length >= $min)' <<<"$1" | while IFS= read -r line; do
+    line="${line%$'\r'}"
+    [ -n "$line" ] || continue
+    printf '::add-mask::%s\n' "${line//%/%25}"
+  done
+}
+
+# set_environment <fn> <merged env json> — update-function-configuration with the environment in a 0600 file, never on
+# the command line (where `ps` shows it). On failure only the AWS error code is printed: Lambda's message for an
+# environment over 4 KB quotes the whole environment, every secret value included.
+set_environment() {
+  local fn="$1" tmp code
+  tmp="$(mktemp -d)"
+  ( umask 077 && jq -cn --argjson v "$2" '{Variables: $v}' > "$tmp/env.json" ) || { rm -rf "$tmp"; echo "$fn: cannot write the environment file" >&2; return 1; }
+  if aws lambda update-function-configuration --region "$REGION" --function-name "$fn" --environment "file://$tmp/env.json" \
+    --query 'LastUpdateStatus' --output text 2>"$tmp/err"; then
+    rm -rf "$tmp"
+    return 0
+  fi
+  code="$(grep -oE 'An error occurred \([A-Za-z0-9.]+\)' "$tmp/err" | head -n 1 | sed -E 's/.*\((.*)\)/\1/' || true)"
+  rm -rf "$tmp"
+  echo "$fn: update-function-configuration (environment) failed: ${code:-unknown error}. The AWS message is not printed: it can quote every environment value, secrets included." >&2
+  return 1
+}
+
 # The decrypted SSM values, fetched once per run (not per function) and only for a real injecting
 # deploy: a DRY_RUN or an INJECT_ENV=0 run never touches AWS here.
 SECRETS_ALL=""
 if [ "${DRY_RUN:-0}" != 1 ] && [ "$INJECT_ENV" = 1 ]; then
-  SECRETS_ALL="$(ssm_to_env "$(aws ssm get-parameters-by-path --region "$REGION" --path "$SSM_PATH" --with-decryption --output json)")"
+  SSM_RAW="$(aws ssm get-parameters-by-path --region "$REGION" --path "$SSM_PATH" --with-decryption --output json)"
+  # Every decrypted value is a secret from here on (CD logs of this repository are public): masked before anything
+  # can echo it, the leaves that never become an env var included.
+  mask_json_values "$(jq -c '[.Parameters[]?.Value]' <<<"$SSM_RAW")"
+  SECRETS_ALL="$(ssm_to_env "$SSM_RAW")"
+  unset SSM_RAW
   # An internal-secret leaf still at its Terraform placeholder is never deployed (R18C L2): it is dropped with a
   # warning here, so drop_absent_optional below also removes a stale copy from the live environment.
   SECRETS_ALL="$(drop_placeholder_secrets "$SECRETS_ALL")"
@@ -104,11 +141,15 @@ deploy_one() {
   if [ "$INJECT_ENV" = 1 ]; then
     local current secrets merged
     current="$(aws lambda get-function-configuration --region "$REGION" --function-name "$fn" --query 'Environment.Variables' --output json)"
+    # The live environment holds the injected secrets and maybe stray ones: mask every value whose key is not a
+    # committed non-secret (the env file's keys). Under 8 characters is no credential, and masking "1" would star out
+    # every 1 in the log.
+    mask_json_values "$(jq -c --argjson file "$3" 'if type == "object" then with_entries(select(.key as $k | $file | has($k) | not)) else {} end' <<<"$current")" 8
     secrets="$(pick_keys "$SECRETS_ALL" "$4")"
     # An optional secret (a -previous rotation leaf, a per-route secret) whose leaf is gone leaves the env too.
     current="$(drop_absent_optional "$current" "$secrets")"
     merged="$(merge_env "$current" "$3" "$secrets")"
-    aws lambda update-function-configuration --region "$REGION" --function-name "$fn" --environment "$(jq -cn --argjson v "$merged" '{Variables: $v}')" --query 'LastUpdateStatus' --output text
+    set_environment "$fn" "$merged" || exit 1
     aws lambda wait function-updated --region "$REGION" --function-name "$fn"
     echo "OK $fn environment: $(jq -r 'keys | length' <<<"$merged") keys"
   else

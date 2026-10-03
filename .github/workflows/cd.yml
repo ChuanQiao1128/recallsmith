@@ -4,16 +4,19 @@ name: CD
 # owner's choice C: GitHub OIDC behind an approval, no deploy credential on the laptop). infra/RUNBOOK.md §12 is the
 # operator's guide: what deploys when, how to approve, the automatic and the manual rollback, break-glass.
 #
-#   plan    no AWS. Which targets changed since the last successful full deployment to production (GitHub
-#           Deployments API, scripts/cd/plan.sh). Nothing to deploy: the run ends here, with no approval request.
+#   plan    no AWS. Runs main's own scripts (never the pushed commit's). Refuses a commit that is not on main (a tag
+#           named main looks like a push to main here). Which targets changed since the last successful full
+#           deployment to production (GitHub Deployments API, scripts/cd/plan.sh); main's tip instead of the commit CI
+#           ran for when the tip is newer and green. Nothing to deploy: the run ends here, with no approval request.
 #   build   no AWS. Lambda zips (.NET 10 SDK, src_C/deploy.sh DRY_RUN=1), console bundle, Python zips
 #           (services/deploy-python-lambda.sh DRY_RUN=1, tests included), a SHA256SUMS manifest; artifact kept 30 days.
-#   deploy  environment `production`: waits for the owner's approval, then assumes
+#   deploy  environment `production`: waits for the owner's approval, refuses a stale plan (a re-run of an old run's
+#           failed job after a newer deployment), verifies the artifact, then assumes
 #           arn:aws:iam::622994489535:role/developercards-gha-prod through GitHub OIDC (the role trusts only
-#           repo:ChuanQiao1128/recallsmith:environment:production). Verifies the artifact, records a restore point,
-#           deploys each target with the existing scripts in PREBUILT mode, smokes production, and on any failure
-#           restores everything that moved. Smoke and rollback are steps of this job on purpose: a second job naming
-#           `production` would wait for a second approval.
+#           repo:ChuanQiao1128/recallsmith:environment:production). Smokes production as a baseline, records a restore
+#           point, deploys each target with the existing scripts in PREBUILT mode, smokes production again, and on any
+#           new failure restores everything that moved. Smoke and rollback are steps of this job on purpose: a second
+#           job naming `production` would wait for a second approval.
 #   rollback  environment `production` (approval too): workflow_dispatch with rollback_target + rollback_version
 #           moves one Lambda's prod alias back (scripts/rollback.sh).
 #
@@ -50,12 +53,14 @@ permissions:
   contents: read
 
 # One production lane. A deploy in flight (including one waiting for approval) is never cancelled; GitHub keeps at most
-# one run queued behind it and cancels an older queued one, which loses nothing: the plan measures changes from the last
-# successful deployment, so the newer run carries the older run's changes. Whole runs queue (not just the deploy job),
-# so each plan sees the outcome of the deploy before it. A run that cannot deploy (CI failed, a pull request, a fork:
-# the plan job's `if` skips it; a dispatch from another branch: the plan refuses it) gets a group of its own, so it
-# never takes the queued slot from a real deploy. Keep the condition = the plan job's `if` plus the main-only dispatch
-# (scripts/tests/cd-scripts.test.sh checks it).
+# one run queued behind it, and a newly queued run replaces (cancels) the pending one whatever commit either carries:
+# CI runs finish out of order, and a CI re-run of an old commit arrives last. Nothing is lost: the plan measures changes
+# from the last successful deployment, and deploys main's tip (not the commit CI ran for) when the tip's CI is green;
+# when it is not green yet, the plan says which merged commits wait for their own run. Whole runs queue (not just the
+# deploy job), so each plan sees the outcome of the deploy before it. A run that cannot deploy (CI failed, a pull
+# request, a fork: the plan job's `if` skips it; a dispatch from another branch: the plan refuses it) gets a group of
+# its own, so it never takes the queued slot from a real deploy. Keep the condition = the plan job's `if` plus the
+# main-only dispatch (scripts/tests/cd-scripts.test.sh checks it).
 concurrency:
   group: >-
     ${{ ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
@@ -86,12 +91,14 @@ jobs:
     permissions:
       contents: read
       deployments: read
-      checks: read
+      # The CI verdict and the deployment records are read back through the Actions API (runs and jobs).
+      actions: read
     outputs:
       mode: ${{ steps.plan.outputs.mode }}
       deploy: ${{ steps.plan.outputs.deploy }}
       sha: ${{ steps.plan.outputs.sha }}
       base: ${{ steps.plan.outputs.base }}
+      last_success: ${{ steps.plan.outputs.last_success }}
       targets: ${{ steps.plan.outputs.targets }}
       scope: ${{ steps.plan.outputs.scope }}
       has_backend: ${{ steps.plan.outputs.has_backend }}
@@ -103,16 +110,33 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          # The exact commit CI passed (workflow_run), or main's head (a dispatch). Full history, no blobs: the plan
-          # only diffs trees.
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          # github.sha: main's tip for workflow_run (GitHub sets it, the pushed commit cannot), the dispatched head for
+          # a dispatch. So the plan runs main's scripts, never those of the commit CI ran for, which is only diffed.
+          # Full history of every branch (refs/remotes/origin/*) and tag, no blobs: the plan only diffs trees.
+          ref: ${{ github.sha }}
           fetch-depth: 0
           filter: blob:none
           persist-credentials: false
+      # Inline, from this file (always the default branch's for workflow_run), before any script runs: workflow_run
+      # reports a tag push as head_branch = the tag's name, so a tag named `main` passes the `if` above. Only a commit
+      # on the main branch (an ancestor of, or equal to, refs/remotes/origin/main; fully qualified because a tag named
+      # main makes `main` ambiguous) goes on. plan.sh checks it again for every event.
+      - name: the commit CI ran for must be on the main branch
+        if: github.event_name == 'workflow_run'
+        env:
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          if ! git merge-base --is-ancestor "$RUN_SHA" refs/remotes/origin/main; then
+            echo "::error::commit $RUN_SHA is not on the main branch (a push of a tag or another ref named main?): nothing is deployed"
+            exit 1
+          fi
+          echo "commit $RUN_SHA is on main ($(git rev-parse refs/remotes/origin/main))"
       - id: plan
         name: decide what to deploy
         env:
           GH_TOKEN: ${{ github.token }}
+          DEPLOY_REPO: ${{ github.repository }}
           EVENT: ${{ github.event_name }}
           REF: ${{ github.ref }}
           RUN_SHA: ${{ github.event.workflow_run.head_sha }}
@@ -222,8 +246,10 @@ jobs:
     needs: [plan, build]
     if: needs.plan.outputs.deploy == 'true'
     runs-on: ubuntu-latest
-    # Counted from the approval, not from the request. Well inside the 1-hour OIDC session, so a timed-out deploy still
-    # has time to roll back (and the rollback step re-assumes the role first anyway).
+    # Counted from the approval, not from the request. A timeout is a cancellation: GitHub then runs the
+    # `cancelled()` steps but force-stops the job about 5 minutes later. So the rollback re-assumes the role, restores
+    # every alias and bucket first, creates the CloudFront invalidations and, on a cancel, does not wait for them
+    # (scripts/cd/restore-point.sh); it prints its state as an annotation before the slow part.
     timeout-minutes: 45
     environment:
       name: production
@@ -233,6 +259,8 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      deployments: read
+      actions: read
     env:
       SHA: ${{ needs.plan.outputs.sha }}
       TARGETS: ${{ needs.plan.outputs.targets }}
@@ -244,6 +272,14 @@ jobs:
         with:
           ref: ${{ needs.plan.outputs.sha }}
           persist-credentials: false
+      # "Re-run failed jobs" (or re-running this job alone) reuses the plan and build of the first attempt. After a
+      # newer deployment that would put old code back, so a plan is used only while it is still the latest word:
+      # before any credential, before the restore point, nothing recorded (no rollback follows).
+      - name: refuse a stale plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LAST_SUCCESS: ${{ needs.plan.outputs.last_success }}
+        run: scripts/cd/plan.sh still-current "$LAST_SUCCESS"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: cd-build-${{ needs.plan.outputs.sha }}
@@ -271,7 +307,16 @@ jobs:
           if [ "$HAS_CONSOLE" = true ]; then
             bash frontend/scripts/check-bundle-dsn.sh frontend/dist
           fi
-      - name: record the restore point
+      # What production looked like before: the smoke after the deploy fails (and rolls back) only on a check that was
+      # passing here, so a check that was already red (maybe what this deploy fixes) does not roll every deploy back.
+      - name: smoke production before the deploy (baseline, never fails the job)
+        run: |
+          set -uo pipefail
+          if ! SMOKE_REPORT="$RUNNER_TEMP/smoke-before.tsv" scripts/smoke.sh; then
+            echo "::warning::production was not fully healthy before this deploy (baseline in the job summary): the smoke after it fails only on a check that newly fails"
+          fi
+      - id: record
+        name: record the restore point
         run: |
           set -euo pipefail
           # shellcheck disable=SC2086
@@ -296,11 +341,12 @@ jobs:
         name: deploy the site
         run: site/deploy.sh
       - name: smoke production
-        run: SMOKE_REPORT="$RUNNER_TEMP/smoke.tsv" scripts/smoke.sh
+        run: SMOKE_BASELINE="$RUNNER_TEMP/smoke-before.tsv" SMOKE_REPORT="$RUNNER_TEMP/smoke.tsv" scripts/smoke.sh
       # A fresh session for the rollback, so a deploy that ran long cannot leave it with expired credentials. If this
-      # fails, the rollback still tries with the session it has.
+      # fails, the rollback still tries with the session it has. Neither runs when the job stopped before the restore
+      # point (a stale plan, the artifact, the credentials or the preflight): nothing in production changed then.
       - name: refresh credentials for the rollback
-        if: failure() || cancelled()
+        if: (failure() || cancelled()) && steps.record.outcome != 'skipped'
         continue-on-error: true
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
@@ -310,16 +356,28 @@ jobs:
           role-duration-seconds: 3600
       - id: rollback
         name: roll back everything that moved
-        if: failure() || cancelled()
+        if: (failure() || cancelled()) && steps.record.outcome != 'skipped'
+        env:
+          # A cancel or timeout leaves about 5 minutes: create the CloudFront invalidations, do not wait for them.
+          RESTORE_SKIP_WAIT: ${{ job.status == 'cancelled' }}
         run: |
           set -uo pipefail
-          if scripts/cd/restore-point.sh restore "$RUNNER_TEMP/restore-point"; then
-            echo "result=restored" >> "$GITHUB_OUTPUT"
-            echo "::error::the deploy or its smoke failed; everything that had moved is back at the restore point"
-          else
-            echo "result=incomplete" >> "$GITHUB_OUTPUT"
-            echo "::error::the deploy or its smoke failed and the rollback is INCOMPLETE: see the FAILED lines and infra/RUNBOOK.md §12"
-          fi
+          scripts/cd/restore-point.sh restore "$RUNNER_TEMP/restore-point"
+          rc=$?
+          case "$rc" in
+            0)
+              echo "result=restored" >> "$GITHUB_OUTPUT"
+              echo "::error::the deploy or its smoke failed; everything that had moved is back at the restore point"
+              ;;
+            3)
+              echo "result=not needed (nothing was recorded, so nothing had changed)" >> "$GITHUB_OUTPUT"
+              echo "::error::the deploy failed before its restore point was recorded; nothing in production changed, nothing to roll back"
+              ;;
+            *)
+              echo "result=incomplete" >> "$GITHUB_OUTPUT"
+              echo "::error::the deploy or its smoke failed and the rollback is INCOMPLETE: see the FAILED lines and infra/RUNBOOK.md §12"
+              ;;
+          esac
           exit 1
       - name: job summary
         if: always()
@@ -327,26 +385,45 @@ jobs:
           SCOPE: ${{ needs.plan.outputs.scope }}
           BASE: ${{ needs.plan.outputs.base }}
           ROLLBACK_RESULT: ${{ steps.rollback.outputs.result }}
+          JOB_STATUS: ${{ job.status }}
         run: |
           set -uo pipefail
+          smoke_table() {
+            echo "| $1 | result | detail |"
+            echo "|---|---|---|"
+            awk -F '\t' '{ printf "| %s | %s | %s |\n", $1, $2, $3 }' "$2"
+          }
+          if [ -n "$ROLLBACK_RESULT" ]; then
+            rollback="$ROLLBACK_RESULT"
+          elif [ "$JOB_STATUS" = success ]; then
+            rollback="not needed"
+          else
+            rollback="not needed: the job stopped before the restore point was recorded, so nothing in production changed"
+          fi
           {
             echo "### CD deploy of \`$SHA\` ($SCOPE)"
             echo
             echo "- targets: $TARGETS"
             echo "- last full deployment before this run: ${BASE:-none on record}"
-            echo "- rollback: ${ROLLBACK_RESULT:-not needed}"
+            echo "- rollback: $rollback"
             echo
             scripts/cd/restore-point.sh summary "$RUNNER_TEMP/restore-point" 2>/dev/null || true
             echo
+            if [ -s "$RUNNER_TEMP/smoke-before.tsv" ]; then
+              smoke_table "smoke before the deploy (baseline)" "$RUNNER_TEMP/smoke-before.tsv"
+              echo
+            fi
             if [ -s "$RUNNER_TEMP/smoke.tsv" ]; then
-              echo "| smoke check | result | detail |"
-              echo "|---|---|---|"
-              awk -F '\t' '{ printf "| %s | %s | %s |\n", $1, $2, $3 }' "$RUNNER_TEMP/smoke.tsv"
+              smoke_table "smoke after the deploy" "$RUNNER_TEMP/smoke.tsv"
+              if awk -F '\t' '$2 == "TOLERATED" { found = 1 } END { exit !found }' "$RUNNER_TEMP/smoke.tsv"; then
+                echo
+                echo "TOLERATED: failing in the baseline too, so not caused by this deploy (and not rolled back)."
+              fi
             else
-              echo "Smoke: not run."
+              echo "Smoke after the deploy: not run."
             fi
             echo
-            echo "Console or site back to an older build: revert on main (CD redeploys), or \`gh run download <run id> -n cd-build-<sha>\` and RUNBOOK §12 break-glass."
+            echo "Console or site back to an older build: revert on main (CD redeploys), or RUNBOOK §12 Manual rollback (console: \`gh run download <run id> -n cd-build-<sha>\`; site: its files at that commit)."
           } >> "$GITHUB_STEP_SUMMARY"
       - id: done
         name: mark the deployment
@@ -367,6 +444,8 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      deployments: read
+      actions: read
     env:
       ROLLBACK_TARGET: ${{ needs.plan.outputs.rollback_target }}
       ROLLBACK_VERSION: ${{ needs.plan.outputs.rollback_version }}
@@ -375,6 +454,12 @@ jobs:
         with:
           ref: ${{ needs.plan.outputs.sha }}
           persist-credentials: false
+      # Like the deploy job: re-running this job of an old run would move the alias back over a newer deployment.
+      - name: refuse a stale plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LAST_SUCCESS: ${{ needs.plan.outputs.last_success }}
+        run: scripts/cd/plan.sh still-current "$LAST_SUCCESS"
       - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: arn:aws:iam::622994489535:role/developercards-gha-prod

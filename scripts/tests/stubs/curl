@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """A fake `curl` for scripts/tests/cd-scripts.test.sh. <host>/health answers $STUB_HEALTH_CODE (default 200) with
-$STUB_HEALTH_BODY; <host>/index.html answers the index.html in the stub bucket that serves that host (the console or
+$STUB_HEALTH_BODY, or, with $STUB_HEALTH_SEQ (e.g. "502,200"), the next code of that list on each call (the last one
+repeats; the count is kept in $STUB_LOG.health); <host>/index.html answers the index.html in the stub bucket that serves that host (the console or
 the site bucket under $STUB_S3), the read-back frontend/deploy.sh and site/deploy.sh do. Supports -o, -w '%{http_code}'
 and -f; every other flag is accepted and ignored."""
 
@@ -18,6 +19,13 @@ fail_on_http = any(a.startswith("-") and not a.startswith("--") and "f" in a for
 
 if url.endswith("/health"):
     code = os.environ.get("STUB_HEALTH_CODE", "200")
+    seq = os.environ.get("STUB_HEALTH_SEQ", "")
+    if seq:
+        counter = os.environ["STUB_LOG"] + ".health"
+        n = int(open(counter).read()) if os.path.exists(counter) else 0
+        open(counter, "w").write(str(n + 1))
+        codes = seq.split(",")
+        code = codes[min(n, len(codes) - 1)]
     body = os.environ.get("STUB_HEALTH_BODY", '{"success":true,"data":{"ok":true}}').encode()
 elif url.endswith("/index.html"):
     bucket = "recallsmith-console-622994489535" if "console" in url else "developercards-site-622994489535"

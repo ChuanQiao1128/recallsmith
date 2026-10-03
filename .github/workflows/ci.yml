@@ -1,7 +1,11 @@
 name: CI
 
 on:
+  # Branches only, so a pushed tag runs no CI. CD (cd.yml) starts on this workflow's push runs, and workflow_run reports
+  # a tag push with head_branch = the tag's name: a tag named `main` would look like a push to main there (cd.yml also
+  # refuses any commit that is not on the main branch).
   push:
+    branches: ['**']
   pull_request:
 
 # Read-only token for every job: nothing here pushes, comments, deploys or reads a secret.

@@ -3,7 +3,10 @@
 #
 #   restore-point.sh record  <dir> <deploy-target>...   before the first change: every prod alias the targets move,
 #                                                       the console's index.html, the whole site bucket
-#   restore-point.sh restore <dir>                      after a failed deploy or smoke: put back whatever moved
+#   restore-point.sh restore <dir>                      after a failed deploy or smoke: put back whatever moved.
+#                                                       Exit 0 restored (or nothing had moved), 1 incomplete (FAILED
+#                                                       lines), 3 no restore point at <dir> (nothing was recorded, so
+#                                                       the deploy never changed anything)
 #   restore-point.sh summary <dir>                      markdown rows for the job summary (before / now / rollback)
 #
 # The deploy job of .github/workflows/cd.yml runs `record` right after it has credentials and before any deploy
@@ -12,11 +15,17 @@
 #   - a Lambda alias whose version differs from the recorded one goes back with scripts/rollback.sh (which checks the
 #     version is Active/Successful and re-reads the alias). An alias recorded on $LATEST (a Python function's first
 #     deploy, see services/lambda-release.sh) goes to the version lambda-release.sh froze the live code into.
-#   - the console's index.html, when its ETag changed, is uploaded again (no-cache) and the distribution invalidated.
-#     The hashed assets of the old build are still in the bucket (frontend/deploy.sh never deletes them), so the old
-#     index.html is the whole old console.
-#   - the site bucket, when its listing changed, is synced back from the copy (`--delete`, the way site/deploy.sh
-#     syncs it) and its distribution invalidated.
+#   - the console's index.html, when its ETag changed, is uploaded again (no-cache) and its ETag read back. The hashed
+#     assets of the old build are still in the bucket (frontend/deploy.sh never deletes them), so the old index.html is
+#     the whole old console.
+#   - the site bucket, when its listing changed: every recorded file is uploaded again (`cp --recursive`, never
+#     `sync`, which skips a changed file of the same size: the deploy left every object newer than the copy), objects
+#     the deploy added are removed (`sync --delete`), and the listing (key + ETag) is read back and must equal the
+#     recorded one.
+# The slow part, CloudFront, comes last: every bucket is restored first, then both invalidations are created, then
+# waited for. A cancelled or timed-out run gets only a few minutes before GitHub stops the job, so RESTORE_SKIP_WAIT=true
+# (cd.yml sets it on a cancel) creates the invalidations and does not wait for them. Before that part a one-line state
+# is printed as an annotation (::error:: in GitHub Actions), so a job killed mid-wait still says what was restored.
 # It goes on after a failed item and exits 1 if any item could not be restored. Prints names, versions and ETags only.
 set -euo pipefail
 set +x
@@ -30,9 +39,15 @@ CONSOLE_BUCKET="${CONSOLE_BUCKET:-recallsmith-console-622994489535}"
 CONSOLE_DISTRIBUTION_ID="${CONSOLE_DISTRIBUTION_ID:-E85FKUMZZWQWX}"
 SITE_BUCKET="${SITE_BUCKET:-developercards-site-622994489535}"
 SITE_DISTRIBUTION_ID="${SITE_DISTRIBUTION_ID:-}"
+SKIP_WAIT="${RESTORE_SKIP_WAIT:-false}"
 aws_profile_default
 
 die() { echo "restore-point: $*" >&2; exit 1; }
+
+# note <text> — a line that stays visible on the run page (an annotation) even if the job is killed right after
+note() {
+  if [ "${GITHUB_ACTIONS:-}" = true ]; then echo "::error::$*"; else echo "$*"; fi
+}
 
 alias_version() {
   aws lambda get-alias --region "$REGION" --function-name "$1" --name "$ALIAS" --query 'FunctionVersion' --output text
@@ -46,11 +61,13 @@ site_listing() {
   aws s3api list-objects-v2 --bucket "$SITE_BUCKET" --query 'Contents[].[Key,ETag]' --output text | LC_ALL=C sort
 }
 
-invalidate() {
-  local dist="$1" inv
-  inv="$(aws cloudfront create-invalidation --distribution-id "$dist" --paths '/*' --query 'Invalidation.Id' --output text)"
-  aws cloudfront wait invalidation-completed --distribution-id "$dist" --id "$inv"
-  echo "  invalidation $inv on $dist completed"
+# create_invalidation <distribution> → the invalidation id; 1 when it could not be created. Every command is checked
+# here: bash ignores set -e inside a function called from an if or a && list.
+create_invalidation() {
+  local inv
+  inv="$(aws cloudfront create-invalidation --distribution-id "$1" --paths '/*' --query 'Invalidation.Id' --output text)" || return 1
+  [ -n "$inv" ] && [ "$inv" != None ] || return 1
+  echo "$inv"
 }
 
 cmd_record() {
@@ -94,11 +111,33 @@ freeze_version() {
     | tr '\t' '\n' | grep -E '^[0-9]+$' | sort -n | tail -n 1
 }
 
+# restore_console <dir> — upload the recorded index.html again and read its ETag back
+restore_console() {
+  local dir="$1"
+  aws s3 cp --only-show-errors "$dir/console/index.html" "s3://$CONSOLE_BUCKET/index.html" \
+    --cache-control no-cache --content-type text/html || return 1
+  [ "$(console_etag || true)" = "$(cat "$dir/console/etag")" ] || { echo "  console index.html ETag differs from the restore point after the upload" >&2; return 1; }
+}
+
+# restore_site <dir> — every recorded object uploaded again, the deploy's extra objects removed, index.html last, then
+# the listing read back
+restore_site() {
+  local dir="$1"
+  aws s3 cp --only-show-errors --recursive "$dir/site/files" "s3://$SITE_BUCKET" --exclude index.html \
+    --cache-control 'public,max-age=3600' || return 1
+  aws s3 sync --only-show-errors "$dir/site/files" "s3://$SITE_BUCKET" --delete --exclude index.html \
+    --cache-control 'public,max-age=3600' || return 1
+  aws s3 cp --only-show-errors "$dir/site/files/index.html" "s3://$SITE_BUCKET/index.html" \
+    --cache-control no-cache --content-type text/html || return 1
+  [ "$(site_listing || echo unreadable)" = "$(cat "$dir/site/listing")" ] \
+    || { echo "  the site bucket's listing (key, ETag) still differs from the restore point" >&2; return 1; }
+}
+
 cmd_restore() {
-  local dir="${1:?usage: restore <dir>}" failed=0 lt fn v cur target cur_etag
+  local dir="${1:?usage: restore <dir>}" failed=0 lt fn v cur target cur_etag dists="" d inv pending="" state=""
   if [ ! -d "$dir" ]; then
-    echo "restore-point: no restore point at $dir: nothing was recorded, so nothing was changed"
-    return 0
+    echo "restore-point: no restore point at $dir: nothing was recorded, so the deploy changed nothing"
+    return 3
   fi
   if [ -s "$dir/aliases.tsv" ]; then
     # The file is read on fd 3 so nothing below (aws, rollback.sh) can swallow its lines from stdin.
@@ -107,6 +146,7 @@ cmd_restore() {
       if ! cur="$(alias_version "$fn")"; then
         echo "FAILED $fn:$ALIAS: cannot read the alias (recorded $v)" >&2
         failed=1
+        state="$state $fn:FAILED"
         continue
       fi
       if [ "$cur" = "$v" ]; then
@@ -120,14 +160,18 @@ cmd_restore() {
         if [ -z "$target" ]; then
           echo "FAILED $fn:$ALIAS: recorded on \$LATEST and no pre-deploy freeze version found; now $cur" >&2
           failed=1
+          state="$state $fn:FAILED"
           continue
         fi
         echo "$fn:$ALIAS was on \$LATEST before the deploy; its live code was frozen as version $target"
       fi
       echo "rolling back $fn:$ALIAS $cur -> $target"
-      if ! "$ROOT/scripts/rollback.sh" "$lt" "$target" </dev/null; then
+      if "$ROOT/scripts/rollback.sh" "$lt" "$target" </dev/null; then
+        state="$state $fn:$target"
+      else
         echo "FAILED $fn:$ALIAS: scripts/rollback.sh $lt $target" >&2
         failed=1
+        state="$state $fn:FAILED"
       fi
     done 3< "$dir/aliases.tsv"
   fi
@@ -135,14 +179,19 @@ cmd_restore() {
     if ! cur_etag="$(console_etag)"; then
       echo "FAILED console: cannot read index.html" >&2
       failed=1
+      state="$state console:FAILED"
     elif [ "$cur_etag" = "$(cat "$dir/console/etag")" ]; then
       echo "unchanged console index.html"
-    elif aws s3 cp --only-show-errors "$dir/console/index.html" "s3://$CONSOLE_BUCKET/index.html" \
-      --cache-control no-cache --content-type text/html && invalidate "$CONSOLE_DISTRIBUTION_ID"; then
-      echo "restored console index.html (ETag $(cat "$dir/console/etag"))"
     else
-      echo "FAILED console: index.html not restored" >&2
-      failed=1
+      dists="$dists $CONSOLE_DISTRIBUTION_ID"
+      if restore_console "$dir"; then
+        echo "restored console index.html (ETag $(cat "$dir/console/etag"))"
+        state="$state console:restored"
+      else
+        echo "FAILED console: index.html not restored" >&2
+        failed=1
+        state="$state console:FAILED"
+      fi
     fi
   fi
   if [ -f "$dir/site/listing" ]; then
@@ -151,15 +200,41 @@ cmd_restore() {
     elif [ -z "$SITE_DISTRIBUTION_ID" ]; then
       echo "FAILED site: SITE_DISTRIBUTION_ID is not set" >&2
       failed=1
-    elif aws s3 sync --only-show-errors "$dir/site/files" "s3://$SITE_BUCKET" --delete --exclude index.html \
-      --cache-control 'public,max-age=3600' \
-      && aws s3 cp --only-show-errors "$dir/site/files/index.html" "s3://$SITE_BUCKET/index.html" \
-        --cache-control no-cache --content-type text/html \
-      && invalidate "$SITE_DISTRIBUTION_ID"; then
-      echo "restored site bucket"
+      state="$state site:FAILED"
     else
-      echo "FAILED site: bucket not restored" >&2
-      failed=1
+      dists="$dists $SITE_DISTRIBUTION_ID"
+      if restore_site "$dir"; then
+        echo "restored site bucket ($(wc -l < "$dir/site/listing" | tr -d ' ') object(s), listing verified)"
+        state="$state site:restored"
+      else
+        echo "FAILED site: bucket not restored" >&2
+        failed=1
+        state="$state site:FAILED"
+      fi
+    fi
+  fi
+  if [ -n "$dists" ]; then
+    note "rollback in progress:${state:- nothing moved}; CloudFront invalidations next ($dists)"
+    for d in $dists; do
+      if inv="$(create_invalidation "$d")"; then
+        echo "  invalidation $inv on $d created"
+        pending="$pending $d:$inv"
+      else
+        echo "FAILED invalidation on $d: not created, so its edges keep serving the deployed files until they expire" >&2
+        failed=1
+      fi
+    done
+    if [ "$SKIP_WAIT" = true ]; then
+      [ -z "$pending" ] || echo "  not waiting for$pending (the run was cancelled; GitHub stops it within minutes): aws cloudfront get-invalidation --distribution-id <dist> --id <id>"
+    else
+      for d in $pending; do
+        if aws cloudfront wait invalidation-completed --distribution-id "${d%%:*}" --id "${d#*:}"; then
+          echo "  invalidation ${d#*:} on ${d%%:*} completed"
+        else
+          echo "FAILED invalidation ${d#*:} on ${d%%:*}: not completed in time, edges may still serve the deployed files" >&2
+          failed=1
+        fi
+      done
     fi
   fi
   if [ "$failed" = 1 ]; then
@@ -170,14 +245,26 @@ cmd_restore() {
 }
 
 cmd_summary() {
-  local dir="${1:?usage: summary <dir>}" lt fn v cur
+  local dir="${1:?usage: summary <dir>}" lt fn v cur fv how
   [ -s "$dir/aliases.tsv" ] || return 0
   echo "| Lambda (alias $ALIAS) | before this run | now | roll back with |"
   echo "|---|---|---|---|"
   while IFS="$(printf '\t')" read -r lt fn v <&3; do
     [ -n "$lt" ] || continue
     cur="$(alias_version "$fn" 2>/dev/null </dev/null || echo '?')"
-    echo "| \`$fn\` | $v | $cur | \`scripts/rollback.sh $lt $v\` (or Run workflow: rollback_target=$lt, rollback_version=$v) |"
+    # shellcheck disable=SC2016  # the literal alias target $LATEST
+    if [ "$v" = '$LATEST' ]; then
+      # Not a version rollback.sh accepts: the code $LATEST ran was frozen into a version by the deploy.
+      fv="$(freeze_version "$fn" 2>/dev/null </dev/null || true)"
+      if [ -n "$fv" ]; then
+        how="\`scripts/rollback.sh $lt $fv\` (or Run workflow: rollback_target=$lt, rollback_version=$fv); $fv is the pre-deploy freeze of the code \$LATEST ran"
+      else
+        how="none: it was on \$LATEST and no pre-deploy freeze version exists"
+      fi
+    else
+      how="\`scripts/rollback.sh $lt $v\` (or Run workflow: rollback_target=$lt, rollback_version=$v)"
+    fi
+    echo "| \`$fn\` | $v | $cur | $how |"
   done 3< "$dir/aliases.tsv"
 }
 

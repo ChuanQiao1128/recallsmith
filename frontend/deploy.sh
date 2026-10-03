@@ -5,9 +5,10 @@
 # Old hashed assets are kept on purpose, so tabs opened before a deploy can still load their chunks.
 # Pruning is manual; see `frontend/README.md` → Deployment.
 #
-#   AWS_PROFILE=devcards-deploy ./deploy.sh        DRY_RUN=1 ./deploy.sh (build + print commands)
+#   AWS_PROFILE=devcards-deploy ./deploy.sh        DRY_RUN=1 ./deploy.sh (build + print commands, no AWS call)
 #   Sentry: VITE_SENTRY_DSN from the environment, else the SSM String parameter named by CONSOLE_SENTRY_DSN_PARAM
-#   (default /developercards/prod/console-sentry-dsn); blank means the build reports nothing.
+#   (default /developercards/prod/console-sentry-dsn; a DRY_RUN reads it only when CONSOLE_SENTRY_DSN_PARAM is set
+#   explicitly); blank means the build reports nothing.
 #   PREBUILT=1 ./deploy.sh   ship dist/ as it is (CD: built without AWS credentials, sha256-verified); no build, but
 #                            dist must carry the DSN resolved as above (scripts/check-bundle-dsn.sh)
 #
@@ -25,6 +26,13 @@ DIST_ID="${CONSOLE_DISTRIBUTION_ID:-E85FKUMZZWQWX}"     # d12pfy1rhi3ekm.cloudfr
 REGION="${AWS_REGION:-ap-southeast-2}"
 CONSOLE_URL="${CONSOLE_URL:-https://console.developercards.app}"
 "$HERE/../scripts/deploy-preflight.sh" frontend/deploy.sh
+# A dry run calls no AWS at all, like every other deploy script's: no SSM lookup of the DSN (devcards-deploy needs the
+# owner's MFA, and a headless lookup would fail into a DSN-less build without saying why). VITE_SENTRY_DSN, or an
+# explicitly set CONSOLE_SENTRY_DSN_PARAM, still brings one in.
+if [ "${DRY_RUN:-0}" = 1 ] && [ -z "${VITE_SENTRY_DSN:-}" ] && [ -z "${CONSOLE_SENTRY_DSN_PARAM+set}" ]; then
+  export CONSOLE_SENTRY_DSN_PARAM=''
+  echo "DRY_RUN: no SSM lookup for the Sentry DSN (set VITE_SENTRY_DSN or CONSOLE_SENTRY_DSN_PARAM to build with one)"
+fi
 # Sets VITE_SENTRY_DSN (or leaves it blank) and VITE_BUILD_ID for the build; never fails and never prints the DSN.
 source scripts/resolve-sentry-dsn.sh
 

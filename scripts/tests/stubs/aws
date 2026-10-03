@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """A fake `aws` CLI for scripts/tests/cd-scripts.test.sh. No network, no credentials: every call is appended to
 $STUB_LOG as one JSON line (argv plus the AWS_PROFILE / credential variables it saw), Lambda and SSM state lives in
-the JSON file $STUB_STATE, and S3 buckets are directories under $STUB_S3 (ETag = quoted md5 of the bytes).
+the JSON file $STUB_STATE, and S3 buckets are directories under $STUB_S3 (ETag = quoted md5 of the bytes,
+LastModified = the file's mtime). `s3 sync` follows the real CLI's rules: an upload when the size differs or the local
+file is newer than the object, a download when the size differs or the local file is newer, and a download sets the
+local mtime to the object's LastModified. `s3 cp` always copies.
+Failure switches in the state file: fail_all, fail_env_update (the error quotes the environment, as Lambda's 4 KB
+error does), fail_code_update [function names], invoke_denied, fail_invalidation, fail_invalidation_wait.
 Only the calls the deploy, rollback, restore-point and smoke scripts make are implemented; anything else exits 2."""
 
 import base64
@@ -24,7 +29,8 @@ with open(os.environ["STUB_LOG"], "a") as log:
         "has_key": bool(os.environ.get("AWS_ACCESS_KEY_ID") or os.environ.get("AWS_SESSION_TOKEN")),
     }) + "\n")
 
-FLAGS = {"--delete", "--only-show-errors", "--quiet", "--no-progress", "--with-decryption", "--no-cli-pager"}
+FLAGS = {"--delete", "--only-show-errors", "--quiet", "--no-progress", "--with-decryption", "--no-cli-pager",
+         "--recursive"}
 
 
 def fail(msg, code=254):
@@ -121,12 +127,21 @@ if service == "lambda":
             fail(f"stub: unexpected query {query}", 2)
     elif cmd == "update-function-configuration":
         if "--environment" in args:
-            fn["latest"]["env"] = json.loads(opt("--environment"))["Variables"]
+            raw = opt("--environment")
+            if raw.startswith("file://"):
+                raw = open(raw[len("file://"):]).read()
+            if state.get("fail_env_update"):
+                fail("An error occurred (InvalidParameterValueException) when calling the UpdateFunctionConfiguration "
+                     "operation: Lambda was unable to configure your environment variables because the environment "
+                     "variables you have provided exceeded the 4KB limit. String measured: " + raw)
+            fn["latest"]["env"] = json.loads(raw)["Variables"]
         if "--runtime" in args:
             fn["latest"]["runtime"] = opt("--runtime")
         save()
         print("InProgress")
     elif cmd == "update-function-code":
+        if name in state.get("fail_code_update", []):
+            fail(f"An error occurred (ServiceException) when calling the UpdateFunctionCode operation: stub fails {name}")
         path = opt("--zip-file")
         assert path.startswith("fileb://"), path
         fn["latest"]["sha"] = b64sha(path[len("fileb://"):])
@@ -143,6 +158,10 @@ if service == "lambda":
         print("\t".join(k for k, v in sorted(fn["versions"].items(), key=lambda kv: int(kv[0]))
                         if v.get("description", "").startswith(prefix)))
     elif cmd == "invoke":
+        if state.get("invoke_denied"):
+            fail("An error occurred (AccessDeniedException) when calling the Invoke operation: User: "
+                 "arn:aws:sts::622994489535:assumed-role/devcards-deployer/deploy is not authorized to perform: "
+                 f"lambda:InvokeFunction on resource: {name}")
         outfile = positionals()[0]
         with open(outfile, "w") as f:
             json.dump(state.get("invoke", {}).get(name, {}), f)
@@ -192,21 +211,46 @@ elif service in ("s3", "s3api"):
 
     src, dst = positionals()[:2]
     excludes = opts("--exclude")
+
+    def rel_files(root):
+        out = set()
+        for d, _, files in os.walk(root):
+            for f in files:
+                out.add(os.path.relpath(os.path.join(d, f), root))
+        return out
+
+    def excluded(rel):
+        return any(fnmatch.fnmatch(rel, pat) for pat in excludes)
+
+    def upload(local, obj):  # an S3 PUT: LastModified = now (the file's new mtime)
+        os.makedirs(os.path.dirname(obj), exist_ok=True)
+        shutil.copyfile(local, obj)
+
+    def download(obj, local):  # the CLI sets the local mtime to the object's LastModified
+        os.makedirs(os.path.dirname(os.path.abspath(local)) or ".", exist_ok=True)
+        shutil.copyfile(obj, local)
+        st = os.stat(obj)
+        os.utime(local, ns=(st.st_atime_ns, st.st_mtime_ns))
+
     if cmd == "cp":
         if dst.startswith("s3://"):
             b, k = split(dst)
             target = os.path.join(S3_ROOT, b, k)
-            os.makedirs(os.path.dirname(target), exist_ok=True)
-            shutil.copyfile(src, target)
+            if "--recursive" in args:
+                for r in sorted(rel_files(src)):
+                    if not excluded(r):
+                        upload(os.path.join(src, r), os.path.join(target, r))
+            else:
+                upload(src, target)
         else:
             b, k = split(src)
             source = os.path.join(S3_ROOT, b, k)
             if not os.path.isfile(source):
                 fail("fatal error: An error occurred (404) when calling the HeadObject operation: Key not found")
-            os.makedirs(os.path.dirname(os.path.abspath(dst)) or ".", exist_ok=True)
-            shutil.copyfile(source, dst)
+            download(source, dst)
     elif cmd == "sync":
-        if dst.startswith("s3://"):
+        to_s3 = dst.startswith("s3://")
+        if to_s3:
             b, k = split(dst)
             target_root = os.path.join(S3_ROOT, b, k)
             source_root = src
@@ -216,22 +260,18 @@ elif service in ("s3", "s3api"):
             target_root = dst
         os.makedirs(target_root, exist_ok=True)
         os.makedirs(source_root, exist_ok=True)
-
-        def rel_files(root):
-            out = set()
-            for d, _, files in os.walk(root):
-                for f in files:
-                    out.add(os.path.relpath(os.path.join(d, f), root))
-            return out
-
-        def excluded(rel):
-            return any(fnmatch.fnmatch(rel, pat) for pat in excludes)
-
         wanted = {r for r in rel_files(source_root) if not excluded(r)}
         for r in sorted(wanted):
-            t = os.path.join(target_root, r)
-            os.makedirs(os.path.dirname(t), exist_ok=True)
-            shutil.copyfile(os.path.join(source_root, r), t)
+            sp, tp = os.path.join(source_root, r), os.path.join(target_root, r)
+            if os.path.isfile(tp):
+                s_st, t_st = os.stat(sp), os.stat(tp)
+                local_mtime, s3_mtime = (s_st.st_mtime_ns, t_st.st_mtime_ns) if to_s3 else (t_st.st_mtime_ns, s_st.st_mtime_ns)
+                if s_st.st_size == t_st.st_size and not local_mtime > s3_mtime:
+                    continue  # same size and the local file is not newer: the real CLI skips it too
+            if to_s3:
+                upload(sp, tp)
+            else:
+                download(sp, tp)
         if "--delete" in args:
             for r in rel_files(target_root):
                 if r not in wanted and not excluded(r):
@@ -242,10 +282,14 @@ elif service in ("s3", "s3api"):
 # ---------------------------------------------------------------- cloudfront / sts
 elif service == "cloudfront":
     if cmd == "create-invalidation":
+        if state.get("fail_invalidation"):
+            fail("An error occurred (AccessDenied) when calling the CreateInvalidation operation: stub")
         state["invalidations"] = state.get("invalidations", 0) + 1
         save()
         print(f"INV{state['invalidations']}")
     elif cmd == "wait":
+        if state.get("fail_invalidation_wait"):
+            fail("Waiter InvalidationCompleted failed: Max attempts exceeded", 255)
         sys.exit(0)
     else:
         fail(f"stub: unexpected cloudfront {cmd}", 2)
