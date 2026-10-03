@@ -81,7 +81,8 @@ function normalizeCard(c: Card): Card {
 function ensureStableUid(input?: string): string {
   const v = (input ?? '').trim();
   if (v) return v;
-  return `card_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  // crypto, not Math.random (CodeQL js/insecure-randomness); same card_<ts>_<rand> shape, rand = 8 lowercase hex.
+  return `card_${Date.now()}_${crypto.randomUUID().replace(/-/g, '').slice(0, 8)}`;
 }
 
 // ---------------------- decks ----------------------
