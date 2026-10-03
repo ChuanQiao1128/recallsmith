@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# Every action is pinned to a full commit SHA, with the release it was cut from as the trailing
+# comment: a tag can be moved to other code, a commit cannot. .github/dependabot.yml bumps the pins
+# and their comments together, weekly, in one PR. Never rename a job's `name:` — the main ruleset
+# requires these checks by that exact string, and a rename leaves every PR waiting on a check that
+# never reports.
+
 jobs:
   mobile:
     name: mobile (typecheck + vitest + expo export)
@@ -16,13 +22,30 @@ jobs:
       run:
         working-directory: mobile
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '20'
           cache: npm
           cache-dependency-path: mobile/package-lock.json
       - run: npm ci
+      # Dependency advisories as a gate, the frontend job's way: the shipped tree
+      # only (`--omit=dev`), failing on high and critical. Unlike frontend this one
+      # could not start at zero. On 2026-10-03 the tree carried 71 high/critical
+      # advisories in 20 packages, and every fix changes package-lock.json, which
+      # reaches users only through an App Store binary or an OTA update — a mobile
+      # change of its own. All but nanoid are absent from the exported bundle, and
+      # nanoid's call sites cannot reach the advisories (see each entry's reason).
+      #
+      # So they are listed in npm-audit-allowlist.json, one entry per advisory with
+      # its reason and an expiry date. A high or critical advisory that is not
+      # listed fails here, and so does every entry from its expiry date on, so the
+      # list cannot quietly become permanent. `|| true` because npm audit exits 1
+      # whenever it finds anything at all; the script decides, and treats a report
+      # it cannot read (a registry error, say) as a failure, never as a pass.
+      - run: |
+          npm audit --omit=dev --json > "$RUNNER_TEMP/npm-audit.json" || true
+          python3 ../infra/scripts/check-npm-audit.py --allowlist npm-audit-allowlist.json --audit-json "$RUNNER_TEMP/npm-audit.json"
       # `tsc --noEmit`, and unlike the frontend job that IS a real check here:
       # mobile/tsconfig.json extends expo/tsconfig.base and has no `include`,
       # so tsc falls back to "every .ts/.tsx under the project root" — 315
@@ -49,8 +72,8 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '20'
           cache: npm
@@ -117,8 +140,8 @@ jobs:
     # separately — appending it would mean a red smoke test hides which of the
     # five existing gates were even reached.
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '20'
           cache: npm
@@ -150,7 +173,7 @@ jobs:
       # discovered to be empty on the day it is needed. `trace:
       # 'retain-on-failure'` and `screenshot: 'only-on-failure'` both write
       # here. Open one with `npx playwright show-trace <the zip>`.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
           name: playwright-traces
@@ -164,8 +187,8 @@ jobs:
       run:
         working-directory: src_C
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
         with:
           # The SDK comes from src_C/global.json (10.0.100, rollForward latestFeature, which this
           # action reads as "latest 10.0"), so CI and a laptop resolve the same SDK line and a
@@ -185,14 +208,14 @@ jobs:
     name: python (uv lock + pytest)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           # Full history so check-gate-freshness.py can find the merge base with the base branch.
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.12'
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
       - name: bash -n the Python Lambda deploy script
         run: bash -n services/deploy-python-lambda.sh
       - name: uv lock --check && pytest in every Python package
@@ -208,6 +231,32 @@ jobs:
             echo "::endgroup::"
           done
           [ "$found" = 1 ] || { echo "no Python package found" >&2; exit 1; }
+      # The same packages, audited for known vulnerabilities in what they ship: the
+      # locked runtime dependencies (`--no-dev`; evals' optional `embeddings` extra is
+      # a local-only tool and stays out). `--no-emit-local` drops evals' path
+      # dependencies on services/ai-qa and tools/ingest, which are audited as packages
+      # of their own. `--disable-pip` with the lock's hashes means nothing is
+      # downloaded or installed: the pinned list is checked as it stands against the
+      # PyPI advisory data. `--strict` makes a dependency that cannot be audited a
+      # failure rather than a skip. pip-audit has no severity filter, so ANY known
+      # vulnerability fails here, which is stricter than the npm gates; on 2026-10-03
+      # all seven packages were clean. pip-audit itself is pinned so a new release
+      # cannot change the verdict without a commit. Every package is audited before
+      # the step fails, so one red run names them all.
+      - name: pip-audit the runtime dependencies of every Python package
+        shell: bash
+        run: |
+          set -euo pipefail
+          failed=""
+          for d in services/*/ tools/ingest/ evals/; do
+            [ -f "${d}pyproject.toml" ] || continue
+            echo "::group::pip-audit ${d}"
+            (cd "$d" && uv export --frozen --no-dev --no-emit-project --no-emit-local --format requirements-txt --quiet \
+              | uvx pip-audit@2.10.1 -r /dev/stdin --disable-pip --require-hashes --strict --progress-spinner off) \
+              || failed="${failed} ${d}"
+            echo "::endgroup::"
+          done
+          [ -z "$failed" ] || { echo "::error::pip-audit failed for:${failed}"; exit 1; }
       - name: unit tests for infra/scripts (stdlib unittest)
         run: python3 -m unittest discover -s infra/scripts/tests -v
       # A change to the ai-qa prod env or any file under services/ai-qa/src/ai_qa/, with AI_QA_ENABLED
@@ -238,8 +287,8 @@ jobs:
     name: infra (terraform fmt/validate + agent routes + deploy scripts)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         with:
           # versions.tf asks for >= 1.10; pinned so a new terraform release cannot change fmt output.
           terraform_version: 1.16.3
@@ -265,6 +314,7 @@ jobs:
           bash -n src_C/deploy.sh
           bash -n frontend/deploy.sh
           bash -n services/lambda-release.sh
+          bash -n infra/scripts/operator-cutover.sh
           bash -n src_C/scripts/merge-env.sh
       # Pure jq, no aws, no network (jq ships on ubuntu-latest).
       - run: bash src_C/scripts/merge-env.test.sh
@@ -276,13 +326,15 @@ jobs:
       run:
         working-directory: tools/mcp-server
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '24'
           cache: npm
           cache-dependency-path: tools/mcp-server/package-lock.json
       - run: npm ci
+      # The frontend job's gate: shipped tree only, fails on high and critical.
+      - run: npm audit --omit=dev --audit-level=high
       - run: npm run build
       - run: npm test
 
@@ -293,10 +345,12 @@ jobs:
       run:
         working-directory: integrations/n8n
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '24'
+      # No npm audit here: there is no package.json. lib/ imports only node: built-ins,
+      # so there is no dependency tree to audit.
       - run: node --test lib/
 
   author-runner:
@@ -306,12 +360,15 @@ jobs:
       run:
         working-directory: tools/author-runner
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: tools/author-runner/package-lock.json
       - run: npm ci
+      # The frontend job's gate. The runner has no runtime dependencies today, so this
+      # passes vacuously; it is here so the first one is audited from the day it lands.
+      - run: npm audit --omit=dev --audit-level=high
       - run: npm run build
       - run: npm test

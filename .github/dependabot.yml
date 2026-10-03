@@ -1,0 +1,27 @@
+# Version updates for the GitHub Actions in .github/workflows/, which are pinned to full commit SHAs
+# with the release as a trailing comment. Dependabot moves the SHA and the comment together, so the
+# pins stay current without going back to mutable tags. Weekly, and every action in one grouped PR,
+# so CI runs once against the whole set instead of once per action.
+#
+# Nothing here for npm, pip/uv or NuGet, on purpose: Dependabot security updates are enabled for the
+# whole repository in its settings, and they open fix PRs for advisories in those ecosystems without
+# any config. Version updates for them would mean a stream of non-security bumps, including mobile
+# dependencies that only ship with an App Store binary or an OTA update.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+        update-types: [minor, patch]
+    # Major versions change inputs and runtimes (setup-dotnet v6, checkout v6 ...); they are upgraded by hand,
+    # one PR each, so a red CI names the action that broke it.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    commit-message:
+      prefix: ci
