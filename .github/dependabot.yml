@@ -17,5 +17,11 @@ updates:
       github-actions:
         patterns:
           - "*"
+        update-types: [minor, patch]
+    # Major versions change inputs and runtimes (setup-dotnet v6, checkout v6 ...); they are upgraded by hand,
+    # one PR each, so a red CI names the action that broke it.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     commit-message:
       prefix: ci
