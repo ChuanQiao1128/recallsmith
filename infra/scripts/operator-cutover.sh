@@ -17,9 +17,32 @@ ADMIN_GROUP=admins
 DIRECT_POLICIES=(arn:aws:iam::aws:policy/AmazonEC2FullAccess arn:aws:iam::aws:policy/AmazonS3FullAccess)
 export AWS_REGION="${AWS_REGION:-ap-southeast-2}"
 
+ROLLBACK="aws iam add-user-to-group --profile devcards-admin --user-name $USER_NAME --group-name $ADMIN_GROUP"
+
 # stdin from /dev/null: an expired MFA session fails here instead of waiting for a code nobody will type.
 whoami_as() { aws sts get-caller-identity --profile "$1" --query Arn --output text </dev/null 2>/dev/null; }
-must_be_denied() { if "$@" >/dev/null 2>&1 </dev/null; then echo "FAIL expected AccessDenied: $*" >&2; return 1; fi; echo "ok denied: ${*:1:4}"; }
+# Passes only on an actual AccessDenied. IAM is eventually consistent, so an "allowed" answer is retried for
+# up to 30 s; any other error (network, throttling, expired credentials) is a failure, never a pass.
+must_be_denied() {
+  local out
+  for _ in 1 2 3 4 5 6; do
+    if out="$("$@" 2>&1 </dev/null)"; then sleep 5; continue; fi
+    if grep -qE 'AccessDenied|is not authorized' <<<"$out"; then echo "ok denied: ${*:1:4}"; return 0; fi
+    echo "FAIL unexpected error from: ${*:1:4}: ${out:0:200}" >&2; return 1
+  done
+  echo "FAIL still allowed after 30 s: ${*:1:4}" >&2; return 1
+}
+verify() {
+  local p failed=0
+  must_be_denied aws iam list-users --profile dev || failed=1
+  must_be_denied aws s3api list-buckets --profile dev || failed=1
+  for p in devcards-ro devcards-deploy devcards-admin; do
+    if whoami_as "$p" >/dev/null; then echo "ok $p still assumes"; else echo "FAIL $p cannot assume its role" >&2; failed=1; fi
+  done
+  if [ "$failed" != 0 ]; then echo "VERIFY FAILED. Rollback: $ROLLBACK" >&2; exit 1; fi
+  echo "DONE: the static key can assume devcards-agent-readonly and devcards-deployer, and devcards-admin-mfa only with MFA."
+  echo "     (IAMUserChangePassword stays attached: the user's console login profile requires a password reset.)"
+}
 
 echo "== preflight"
 for p in devcards-ro devcards-deploy; do
@@ -42,7 +65,7 @@ todo=()
 grep -q "$BASE_POLICY" <<<"$attached" || todo+=("attach $BASE_POLICY")
 for p in "${DIRECT_POLICIES[@]}"; do grep -q "$p" <<<"$attached" && todo+=("detach $p"); done
 [ "$in_group" = 0 ] || todo+=("remove $USER_NAME from $ADMIN_GROUP")
-if [ "${#todo[@]}" = 0 ]; then echo "already cut over: nothing to do"; exit 0; fi
+if [ "${#todo[@]}" = 0 ]; then echo "already cut over: nothing to change, verifying"; verify; exit 0; fi
 if [ "${CONFIRM:-0}" != 1 ]; then
   printf 'would: %s\n' "${todo[@]}"
   echo "preflight only. Re-run with CONFIRM=1 to make the change."
@@ -50,16 +73,12 @@ if [ "${CONFIRM:-0}" != 1 ]; then
 fi
 
 echo "== cutover"
+echo "ROLLBACK (if anything below goes wrong): $ROLLBACK"
 grep -q "$BASE_POLICY" <<<"$attached" || aws iam attach-user-policy --profile devcards-admin --user-name "$USER_NAME" --policy-arn "$BASE_POLICY"
 for p in "${DIRECT_POLICIES[@]}"; do
   if grep -q "$p" <<<"$attached"; then aws iam detach-user-policy --profile devcards-admin --user-name "$USER_NAME" --policy-arn "$p"; fi
 done
 [ "$in_group" = 0 ] || aws iam remove-user-from-group --profile devcards-admin --user-name "$USER_NAME" --group-name "$ADMIN_GROUP"
 
-echo "== verify (IAM is eventually consistent; allow ~10 s)"
-sleep 10
-must_be_denied aws iam list-users --profile dev
-must_be_denied aws s3api list-buckets --profile dev
-for p in devcards-ro devcards-deploy devcards-admin; do whoami_as "$p" >/dev/null && echo "ok $p still assumes"; done
-echo "DONE: the static key can now only assume devcards-agent-readonly / devcards-deployer, and devcards-admin-mfa with MFA."
-echo "ROLLBACK: aws iam add-user-to-group --profile devcards-admin --user-name $USER_NAME --group-name $ADMIN_GROUP"
+echo "== verify"
+verify

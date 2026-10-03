@@ -5,8 +5,8 @@
 #   devcards-agent-readonly  no MFA   AWS ReadOnlyAccess minus secrets and user data (explicit denies below)
 #   devcards-deployer        no MFA   update/publish/re-alias the listed functions, sync two static sites,
 #                                     read /developercards SSM (deploy.sh injects it), pre-migration snapshot
-#   devcards-admin-mfa       MFA      AdministratorAccess; Terraform and break-glass. The MFA code is the
-#                                     owner's approval step for production infrastructure changes.
+#   devcards-admin-mfa       MFA      AdministratorAccess, 1-hour sessions; Terraform and break-glass. The MFA
+#                                     code is the owner's approval step for production infrastructure changes.
 
 locals {
   lambda_arn  = "arn:aws:lambda:${var.region}:${var.account_id}:function"
@@ -109,6 +109,55 @@ data "aws_iam_policy_document" "agent_readonly_deny" {
     actions   = ["ecr:GetAuthorizationToken", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ec2:GetPasswordData"]
     resources = ["*"]
   }
+  statement {
+    sid    = "NoLearnerIpLogs" # the API access-log format records $context.identity.sourceIp and userAgent
+    effect = "Deny"
+    actions = [
+      "logs:GetLogEvents", "logs:FilterLogEvents", "logs:StartQuery", "logs:StartLiveTail", "logs:Unmask",
+      "logs:GetLogRecord",
+    ]
+    resources = [
+      "arn:aws:logs:${var.region}:${var.account_id}:log-group:/aws/apigateway/*",
+      "arn:aws:logs:${var.region}:${var.account_id}:log-group:/aws/apigateway/*:*",
+    ]
+  }
+  statement {
+    sid    = "NoOwnerContactData" # alert e-mail endpoint and account contact
+    effect = "Deny"
+    actions = [
+      "sns:ListSubscriptions", "sns:ListSubscriptionsByTopic", "sns:GetSubscriptionAttributes",
+      "account:GetContactInformation", "account:GetAlternateContact",
+    ]
+    resources = ["*"]
+  }
+  # Nothing below exists in the account today (review of PR #736 counted 0 of each). Denied now so a
+  # resource added later does not quietly become readable by agents.
+  statement {
+    sid    = "NoLatentSecretOrPiiReads"
+    effect = "Deny"
+    actions = [
+      "cognito-idp:DescribeUserPoolClient", "cognito-idp:DescribeIdentityProvider", "cognito-idp:AdminGetDevice",
+      "cognito-identity:DescribeIdentity", "cognito-identity:LookupDeveloperIdentity", "cognito-sync:ListRecords",
+      "ec2:DescribeInstanceAttribute", "ec2:DescribeLaunchTemplateVersions", "ec2:GetLaunchTemplateData",
+      "ec2:GetConsoleOutput", "ec2:GetConsoleScreenshot", "autoscaling:DescribeLaunchConfigurations",
+      "cloudformation:GetTemplate", "ecs:DescribeTaskDefinition", "batch:DescribeJobDefinitions",
+      "apprunner:DescribeService", "codebuild:BatchGetProjects", "codebuild:BatchGetBuilds",
+      "amplify:GetApp", "amplify:ListApps", "amplify:GetBranch", "elasticbeanstalk:DescribeConfigurationSettings",
+      "appsync:ListApiKeys", "appconfig:GetConfiguration", "appconfig:GetHostedConfigurationVersion",
+      "dynamodb:PartiQLSelect", "dynamodb:GetRecords", "kinesis:GetRecords",
+      "states:DescribeExecution", "states:GetExecutionHistory",
+      "es:ESHttpGet", "dax:GetItem", "dax:BatchGetItem", "dax:Query", "dax:Scan", "cassandra:Select",
+      "s3-object-lambda:GetObject",
+      "ses:ListSuppressedDestinations", "ses:GetSuppressedDestination", "ses:ListContacts", "ses:GetContact",
+      "ses:GetMessageInsights",
+      "sns:GetEndpointAttributes", "sns:ListEndpointsByPlatformApplication", "sns:ListPhoneNumbersOptedOut",
+      "mobiletargeting:GetEndpoint", "mobiletargeting:GetUserEndpoints",
+      "ssm:GetCommandInvocation", "ssm:ListCommandInvocations", "ssm:GetAutomationExecution",
+      "cloudfront-keyvaluestore:GetKey", "cloudfront-keyvaluestore:ListKeys",
+      "pi:GetDimensionKeyDetails", "pi:DescribeDimensionKeys", "athena:GetQueryResults",
+    ]
+    resources = ["*"]
+  }
 }
 
 resource "aws_iam_role_policy" "agent_readonly_deny" {
@@ -167,8 +216,13 @@ data "aws_iam_policy_document" "deployer" {
   }
   statement {
     sid       = "PreMigrationSnapshot" # infra/scripts/rds-snapshot.sh
-    actions   = ["rds:CreateDBSnapshot", "rds:AddTagsToResource"]
+    actions   = ["rds:CreateDBSnapshot"]
     resources = [local.rds_db_arn, local.rds_snap]
+  }
+  statement {
+    sid       = "TagOwnSnapshotsOnly" # never the DB instance itself
+    actions   = ["rds:AddTagsToResource"]
+    resources = [local.rds_snap]
   }
   statement {
     sid       = "WatchSnapshot"

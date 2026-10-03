@@ -15,8 +15,10 @@ variable "operator_user_arns" {
 
 
 variable "admin_session_seconds" {
-  type    = number
-  default = 43200 # one MFA code per working day; the CLI caches the role session in ~/.aws/cli/cache
+  type = number
+  # One hour (review of PR #736): the CLI caches the role session in ~/.aws/cli/cache, readable by every process
+  # running as the same macOS user, agents included. A short session keeps that window small.
+  default = 3600
 }
 
 # Functions the deployer may update, publish and re-alias (src_C/deploy.sh, services/deploy-python-lambda.sh).
