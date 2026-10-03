@@ -13,6 +13,10 @@
 #   DRY_RUN=1 ./deploy.sh                       # package only, print what would be uploaded/injected
 #   INJECT_ENV=0 ENV=prod ./deploy.sh           # code-only deploy, environment left untouched
 #   ONLY=vpc ./deploy.sh | ONLY=worker ./deploy.sh
+#   LAMBDA_RUNTIME=dotnet10 (default)           # the Lambda runtime set before publish-version; it must
+#                                               # match the zip's target framework (net10.0)
+#
+# Needs the .NET 10 SDK on PATH (package_lambda_zip.sh stops with instructions otherwise).
 #
 # Database migrations are NOT run here: they go through POST /api/v1/admin/db/migrate (super_admin,
 # src_C/Vpc/Db/Migrate.cs) — the console's Migrate button, or scripts/release with a refresh token.
@@ -28,6 +32,7 @@ SSM_OPTIONAL_ENV="${SSM_OPTIONAL_ENV%]},\"REVENUECAT_SECRET_API_KEY\"]"
 export AWS_PROFILE="${AWS_PROFILE:-devcards-deploy}"
 REGION="${AWS_REGION:-ap-southeast-2}"
 ARCH="${LAMBDA_ARCH:-linux-arm64}"          # both functions are arm64 (aws lambda get-function-configuration)
+LAMBDA_RUNTIME="${LAMBDA_RUNTIME:-dotnet10}"
 VPC_FN="${VPC_FN:-core-vpc}"; WORKER_FN="${WORKER_FN:-worker-lambda}"
 ONLY="${ONLY:-both}"
 ENV="${ENV:-prod}"
@@ -58,8 +63,14 @@ deploy_one() {
   local fn="$1" zip="$2" local_sha; local_sha="$(sha_b64 "$zip")"
   if [ "${DRY_RUN:-0}" = 1 ]; then
     echo "DRY: aws lambda update-function-code --function-name $fn --zip-file fileb://$zip (sha256 $local_sha)"
-    echo "DRY: $fn env overlay keys: $(jq -r 'keys | join(",")' <<<"$3")"
-    echo "DRY: $fn secret keys from $SSM_PATH: $(jq -r 'join(",")' <<<"$4")"
+    if [ "$INJECT_ENV" = 1 ]; then
+      echo "DRY: $fn env overlay keys: $(jq -r 'keys | join(",")' <<<"$3")"
+      echo "DRY: $fn secret keys from $SSM_PATH: $(jq -r 'join(",")' <<<"$4")"
+    else
+      echo "DRY: $fn environment left as is (INJECT_ENV=0)"
+    fi
+    echo "DRY: aws lambda update-function-configuration --function-name $fn --runtime $LAMBDA_RUNTIME, then aws lambda wait function-updated (only if Runtime is not already $LAMBDA_RUNTIME; checked after either way)"
+    echo "DRY: aws lambda publish-version --function-name $fn, then update-alias ${PUBLISH_ALIAS:-prod} to it (CodeSha256 and Runtime verified on the alias, ROLLBACK line printed)"
     return 0
   fi
   echo "== $fn <- $zip"
@@ -88,23 +99,44 @@ deploy_one() {
   [ "$remote_sha" = "$local_sha" ] || { echo "$fn CodeSha256 mismatch: remote=$remote_sha local=$local_sha" >&2; exit 1; }
   echo "OK $fn CodeSha256=$remote_sha"
 
+  # Runtime, on both the INJECT_ENV=1 and =0 paths, after the code and before publish-version: the
+  # zip targets net10.0, so the version about to be published must say dotnet10 (net10.0 assemblies
+  # cannot load on the .NET 8 runtime). Between the code update and this step $LATEST is net10 code on
+  # the old runtime; nothing user-visible runs $LATEST, since API Gateway invokes core-vpc through its
+  # alias and the worker's SQS event source mapping targets the worker alias (infra/modules/worker/
+  # function.tf). A published version keeps the runtime it was published with, so the ROLLBACK line
+  # below (alias back to the previous version) also brings back dotnet8 together with the old code.
+  local rt
+  rt="$(aws lambda get-function-configuration --region "$REGION" --function-name "$fn" --query 'Runtime' --output text)"
+  if [ "$rt" != "$LAMBDA_RUNTIME" ]; then
+    echo "$fn Runtime $rt -> $LAMBDA_RUNTIME"
+    aws lambda update-function-configuration --region "$REGION" --function-name "$fn" --runtime "$LAMBDA_RUNTIME" --query '[FunctionName,Runtime,LastUpdateStatus]' --output text
+    aws lambda wait function-updated --region "$REGION" --function-name "$fn"
+    rt="$(aws lambda get-function-configuration --region "$REGION" --function-name "$fn" --query 'Runtime' --output text)"
+  fi
+  [ "$rt" = "$LAMBDA_RUNTIME" ] || { echo "$fn Runtime=$rt, expected $LAMBDA_RUNTIME" >&2; exit 1; }
+  echo "OK $fn Runtime=$rt"
+
   # update-function-code only moves $LATEST. API Gateway invokes core-vpc through the `prod`
   # ALIAS (integration URI …:function:core-vpc:prod), so without publishing a version and moving
   # the alias the API keeps running the old build — found 2026-09-21 when the first Wave C deploy
   # left version 44 (2026-08-18) serving traffic, the console's migrate ran the OLD migration set
-  # and the MCQ import hit SERVER_NOT_READY_MCQ. The worker's SQS trigger targets $LATEST, but its
-  # alias is moved too so both functions read the same.
+  # and the MCQ import hit SERVER_NOT_READY_MCQ. The worker's SQS event source mapping targets its
+  # alias too (infra/modules/worker/function.tf), so the worker needs the same publish and move.
   local alias="${PUBLISH_ALIAS:-prod}"
   if aws lambda get-alias --region "$REGION" --function-name "$fn" --name "$alias" >/dev/null 2>&1; then
-    local ver alias_sha prev_ver
+    local ver alias_sha alias_rt prev_ver
     # Read before the move so the ROLLBACK line the RUNBOOK refers to names the version that was serving.
     prev_ver="$(aws lambda get-alias --region "$REGION" --function-name "$fn" --name "$alias" --query 'FunctionVersion' --output text)"
     ver="$(aws lambda publish-version --region "$REGION" --function-name "$fn" --description "deploy.sh $(date -u +%Y-%m-%dT%H:%M:%SZ) $(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo nogit)" --query 'Version' --output text)"
     aws lambda update-alias --region "$REGION" --function-name "$fn" --name "$alias" --function-version "$ver" --query '[Name,FunctionVersion]' --output text
+    # Printed as soon as the alias has moved, so a failed check below still leaves the way back on screen.
+    echo "ROLLBACK: aws lambda update-alias --region $REGION --function-name $fn --name $alias --function-version $prev_ver"
     alias_sha="$(aws lambda get-function-configuration --region "$REGION" --function-name "$fn:$alias" --query 'CodeSha256' --output text)"
     [ "$alias_sha" = "$local_sha" ] || { echo "$fn:$alias CodeSha256 mismatch after alias move: $alias_sha" >&2; exit 1; }
-    echo "OK $fn:$alias -> version $ver (CodeSha256 verified)"
-    echo "ROLLBACK: aws lambda update-alias --region $REGION --function-name $fn --name $alias --function-version $prev_ver"
+    alias_rt="$(aws lambda get-function-configuration --region "$REGION" --function-name "$fn:$alias" --query 'Runtime' --output text)"
+    [ "$alias_rt" = "$LAMBDA_RUNTIME" ] || { echo "$fn:$alias Runtime=$alias_rt after alias move, expected $LAMBDA_RUNTIME" >&2; exit 1; }
+    echo "OK $fn:$alias -> version $ver (CodeSha256 and Runtime=$alias_rt verified)"
   else
     echo "note: $fn has no alias '$alias'; only \$LATEST updated"
   fi
