@@ -294,7 +294,7 @@ if [ "$RC" = 0 ] && [ "$(calls '"get-parameter"')" -ge 1 ] && has "$T/out" "VITE
 # ===================================================================================================== secrets
 echo "# secrets in src_C/deploy.sh: masked in GitHub Actions, never on a command line, never in an error"
 reset_state
-setstate 's["ssm"]["analytics-salt"] = "salt-line-one-0123456789\nsalt-line-two-0123456789"; s["ssm"]["migrate-secret"] = "mig%25ret-0123456789abcdef"; s["functions"]["core-vpc"]["latest"]["env"] = {"KEEP": "1", "PGUSER": "live-pguser-value", "STRAY_SECRET": "stray-secret-value-0123"}'
+setstate 's["ssm"]["analytics-salt"] = "salt-line-one-0123456789\nsalt-line-two-0123456789"; s["ssm"]["migrate-secret"] = "mig%25ret-0123456789abcdef"; s["functions"]["core-vpc"]["latest"]["env"] = {"KEEP": "1", "PGUSER": "live-pguser-value", "STRAY_SECRET": "stray-secret-value-0123", "CONTENT_BUCKET": "core-vpc-like-name", "EXPECT_ENV_PRODUCTION": "production"}'
 run PREBUILT=1 GITHUB_ACTIONS=true "$MIRROR/src_C/deploy.sh"
 check "secrets: deploy in GitHub Actions succeeds (rc=$RC)" [ "$RC" = 0 ]
 check "secrets: every decrypted SSM value is registered with ::add-mask::" has "$T/out" "::add-mask::$LONG"
@@ -303,6 +303,7 @@ if has "$T/out" "::add-mask::salt-line-one-0123456789" && has "$T/out" "::add-ma
 check "secrets: '%' is escaped for the runner (%25)" has "$T/out" "::add-mask::mig%2525ret-0123456789abcdef"
 check "secrets: a live env value outside the committed file is masked (stray secret)" has "$T/out" "::add-mask::stray-secret-value-0123"
 if hasnt "$T/out" "::add-mask::1" && hasnt "$T/out" "::add-mask::live-pguser-value"; then ok "secrets: committed keys and values under 8 characters are not masked"; else bad "secrets: committed keys and values under 8 characters are not masked"; fi
+if hasnt "$T/out" "::add-mask::core-vpc-like-name" && hasnt "$T/out" "::add-mask::production"; then ok "secrets: uncommitted non-secret keys (a bucket name, an environment name) are not masked"; else bad "secrets: uncommitted non-secret keys (a bucket name, an environment name) are not masked"; fi
 check "secrets: no secret value on any aws command line (environment passed as file://)" hasnt "$LOG" "$LONG"
 check "secrets: ... update-function-configuration got --environment file://" has "$LOG" '"--environment", "file://'
 check "secrets: the environment file is gone afterwards" [ -z "$(find "$T/tmp" -name env.json)" ]

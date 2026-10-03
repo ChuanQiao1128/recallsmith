@@ -141,10 +141,11 @@ deploy_one() {
   if [ "$INJECT_ENV" = 1 ]; then
     local current secrets merged
     current="$(aws lambda get-function-configuration --region "$REGION" --function-name "$fn" --query 'Environment.Variables' --output json)"
-    # The live environment holds the injected secrets and maybe stray ones: mask every value whose key is not a
-    # committed non-secret (the env file's keys). Under 8 characters is no credential, and masking "1" would star out
-    # every 1 in the log.
-    mask_json_values "$(jq -c --argjson file "$3" 'if type == "object" then with_entries(select(.key as $k | $file | has($k) | not)) else {} end' <<<"$current")" 8
+    # The live environment holds the injected secrets (masked above as SSM values) and maybe stray ones: also mask
+    # every value outside the committed env file whose KEY names a secret. Not every uncommitted key: CONTENT_BUCKET is
+    # "core-vpc" and RC_WEBHOOK_EXPECT_ENV_PRODUCTION is "production", and masking those starred the function name and
+    # the environment name out of every CD log line (first CD run, 2026-10-04). Under 8 characters is no credential.
+    mask_json_values "$(jq -c --argjson file "$3" 'if type == "object" then with_entries(select((.key as $k | $file | has($k) | not) and (.key | test("SECRET|PASSW|AUTH|TOKEN|KEY|SALT|PRIVATE|CREDENTIAL|SIGNATURE|DSN|SUBS"; "i")))) else {} end' <<<"$current")" 8
     secrets="$(pick_keys "$SECRETS_ALL" "$4")"
     # An optional secret (a -previous rotation leaf, a per-route secret) whose leaf is gone leaves the env too.
     current="$(drop_absent_optional "$current" "$secrets")"
