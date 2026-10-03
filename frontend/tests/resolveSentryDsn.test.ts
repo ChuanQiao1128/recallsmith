@@ -94,6 +94,8 @@ const SCENARIOS: Record<string, Record<string, string>> = {
   fromSsm: { FAKE_AWS_VALUE: DSN, EXPECTED: DSN },
   blankEnvFallsBackToSsm: { VITE_SENTRY_DSN: '   ', FAKE_AWS_VALUE: DSN, EXPECTED: DSN },
   customParam: { CONSOLE_SENTRY_DSN_PARAM: '/example/other-dsn', FAKE_AWS_VALUE: DSN, EXPECTED: DSN },
+  emptyParamSkipsSsm: { CONSOLE_SENTRY_DSN_PARAM: '', FAKE_AWS_VALUE: DSN },
+  emptyParamKeepsEnv: { CONSOLE_SENTRY_DSN_PARAM: '', VITE_SENTRY_DSN: DSN, EXPECTED: DSN },
   ssmFails: {},
   malformedFromSsm: { FAKE_AWS_VALUE: 'https://publickey@example.invalid/not-a-project' },
   malformedFromEnv: { VITE_SENTRY_DSN: 'http://publickey@example.invalid/1' },
@@ -129,6 +131,18 @@ describe('resolve-sentry-dsn.sh', () => {
     expectSet(r);
     expect(r.awsLog).toContain('--name /example/other-dsn ');
     expect(r.awsLog).not.toContain('/developercards/prod/console-sentry-dsn');
+  });
+
+  it('never calls aws when CONSOLE_SENTRY_DSN_PARAM is set to the empty string (CD build job)', () => {
+    // CD builds the console in a job with no AWS credentials; the DSN comes from a
+    // repository variable, and an empty parameter name means "do not ask SSM".
+    const skipped = run(SCENARIOS.emptyParamSkipsSsm);
+    expectUnset(skipped);
+    expect(skipped.awsLog).toBe('');
+
+    const fromEnv = run(SCENARIOS.emptyParamKeepsEnv);
+    expectSet(fromEnv);
+    expect(fromEnv.awsLog).toBe('');
   });
 
   it('leaves the DSN unset and exits 0 when SSM fails', () => {

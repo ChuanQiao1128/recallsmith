@@ -12,6 +12,15 @@
 #
 #   DRY_RUN=1 services/deploy-python-lambda.sh webhook-dispatcher   # build + print, never calls aws
 #   AWS_PROFILE=devcards-deploy services/deploy-python-lambda.sh webhook-dispatcher   # supervisor only
+#   PREBUILT=1 services/deploy-python-lambda.sh webhook-dispatcher  # ship build/<svc>.zip as it is: no tests, no
+#                                                                    # build, no uv (CD: built by `DRY_RUN=1` in a job
+#                                                                    # without AWS credentials, sha256-verified)
+#
+# Production deploys run in CD (.github/workflows/cd.yml, infra/RUNBOOK.md §12). From a laptop (not DRY_RUN, not in
+# GitHub Actions) ../scripts/deploy-preflight.sh first requires a clean tree, HEAD = origin/main and green CI on it;
+# BREAK_GLASS=1 overrides that with a loud warning (the per-service check below still refuses uncommitted changes under
+# services/<svc>). AWS_PROFILE defaults to devcards-deploy (MFA) only when the environment carries no credentials of its
+# own (CD's OIDC session does).
 #
 # No secret is ever injected: each Python function reads its SSM parameters at runtime.
 # This script never reads SSM and never prints an environment value (key names only).
@@ -20,7 +29,7 @@ set +x
 
 usage() {
   echo "usage: $(basename "$0") <webhook-dispatcher|ai-qa|source-watcher|notifier|synthetic-check>" >&2
-  echo "  env: ENV (prod), AWS_REGION (ap-southeast-2), AWS_PROFILE (devcards-deploy), PUBLISH_ALIAS (prod), UV, DRY_RUN=1" >&2
+  echo "  env: ENV (prod), AWS_REGION (ap-southeast-2), AWS_PROFILE (devcards-deploy unless credentials are set), PUBLISH_ALIAS (prod), UV, DRY_RUN=1, PREBUILT=1" >&2
   exit 2
 }
 
@@ -39,11 +48,16 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 ENV="${ENV:-prod}"
 REGION="${AWS_REGION:-ap-southeast-2}"
-export AWS_PROFILE="${AWS_PROFILE:-devcards-deploy}"
+# Credentials already in the environment (CD's OIDC session, `aws configure export-credentials`) win over a profile
+# default: CD has no devcards-deploy profile, and naming one would fail every aws call.
+[ -n "${AWS_PROFILE:-}${AWS_ACCESS_KEY_ID:-}${AWS_SESSION_TOKEN:-}${AWS_WEB_IDENTITY_TOKEN_FILE:-}" ] || export AWS_PROFILE=devcards-deploy
 PUBLISH_ALIAS="${PUBLISH_ALIAS:-prod}"
+PREBUILT="${PREBUILT:-0}"
 UV="${UV:-uv}"
-if ! command -v "$UV" >/dev/null 2>&1; then UV="$HOME/.local/bin/uv"; fi
-command -v "$UV" >/dev/null 2>&1 || { echo "uv is required (set UV=/path/to/uv)" >&2; exit 1; }
+if [ "$PREBUILT" != 1 ]; then
+  if ! command -v "$UV" >/dev/null 2>&1; then UV="$HOME/.local/bin/uv"; fi
+  command -v "$UV" >/dev/null 2>&1 || { echo "uv is required (set UV=/path/to/uv)" >&2; exit 1; }
+fi
 for tool in jq zip openssl; do
   command -v "$tool" >/dev/null 2>&1 || { echo "$tool is required" >&2; exit 1; }
 done
@@ -62,6 +76,7 @@ jq -e 'type == "object" and all(.[]; type == "string")' "$ENV_FILE" >/dev/null 2
 file_env="$(jq -c . "$ENV_FILE")"
 
 # --- preflight --------------------------------------------------------------------------------
+"$ROOT/scripts/deploy-preflight.sh" services/deploy-python-lambda.sh
 dirty="$(git -C "$ROOT" status --porcelain -- "services/$SERVICE" 2>/dev/null || echo "not a git checkout")"
 if [ -n "$dirty" ]; then
   if [ "${DRY_RUN:-0}" = 1 ]; then
@@ -73,24 +88,32 @@ if [ -n "$dirty" ]; then
   fi
 fi
 
-# The tests never call AWS or a model; the credentials are removed anyway.
-(cd "$SVC_DIR" && env -u AWS_PROFILE -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN \
-  -u AWS_BEARER_TOKEN_BEDROCK -u ANTHROPIC_API_KEY \
-  AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_EC2_METADATA_DISABLED=true \
-  "$UV" run --frozen --python 3.12 pytest -q) || { echo "tests failed; nothing was built" >&2; exit 1; }
+if [ "$PREBUILT" = 1 ]; then
+  # CD's deploy job: the build job ran this script with DRY_RUN=1 (tests, hash-verified build) without AWS
+  # credentials, and the deploy job checked the zip against the build's SHA256SUMS. Rebuilding here would ship bytes
+  # nobody verified.
+  [ -s "$ZIP" ] || { echo "PREBUILT=1 but $ZIP is missing; nothing deployed" >&2; exit 1; }
+  echo "PREBUILT=1: deploying $ZIP as built"
+else
+  # The tests never call AWS or a model; the credentials are removed anyway.
+  (cd "$SVC_DIR" && env -u AWS_PROFILE -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN \
+    -u AWS_BEARER_TOKEN_BEDROCK -u ANTHROPIC_API_KEY \
+    AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_EC2_METADATA_DISABLED=true \
+    "$UV" run --frozen --python 3.12 pytest -q) || { echo "tests failed; nothing was built" >&2; exit 1; }
 
-# --- build ------------------------------------------------------------------------------------
-rm -rf "$BUILD"
-mkdir -p "$BUILD/pkg"
-# --no-emit-project: without it the file starts with `-e .` (the project itself, not a dependency).
-# The export keeps uv.lock's sha256 hashes and the install refuses any artifact that does not match.
-"$UV" export --project "$SVC_DIR" --frozen --no-dev --no-emit-project --quiet > "$BUILD/requirements.txt"
-"$UV" pip install --quiet --require-hashes --target "$BUILD/pkg" --python-version 3.12 \
-  --python-platform aarch64-manylinux2014 --only-binary :all: -r "$BUILD/requirements.txt"
-mkdir -p "$BUILD/pkg"   # uv does not create the target when there is nothing to install
-rm -f "$BUILD/pkg/.lock"   # uv's install lock file, not package content
-(cd "$SVC_DIR/src" && tar --exclude '__pycache__' --exclude '*.pyc' -cf - "$PKG") | (cd "$BUILD/pkg" && tar -xf -)
-(cd "$BUILD/pkg" && zip -qr -X "../$SERVICE.zip" .)
+  # --- build ------------------------------------------------------------------------------------
+  rm -rf "$BUILD"
+  mkdir -p "$BUILD/pkg"
+  # --no-emit-project: without it the file starts with `-e .` (the project itself, not a dependency).
+  # The export keeps uv.lock's sha256 hashes and the install refuses any artifact that does not match.
+  "$UV" export --project "$SVC_DIR" --frozen --no-dev --no-emit-project --quiet > "$BUILD/requirements.txt"
+  "$UV" pip install --quiet --require-hashes --target "$BUILD/pkg" --python-version 3.12 \
+    --python-platform aarch64-manylinux2014 --only-binary :all: -r "$BUILD/requirements.txt"
+  mkdir -p "$BUILD/pkg"   # uv does not create the target when there is nothing to install
+  rm -f "$BUILD/pkg/.lock"   # uv's install lock file, not package content
+  (cd "$SVC_DIR/src" && tar --exclude '__pycache__' --exclude '*.pyc' -cf - "$PKG") | (cd "$BUILD/pkg" && tar -xf -)
+  (cd "$BUILD/pkg" && zip -qr -X "../$SERVICE.zip" .)
+fi
 
 zip_bytes="$(wc -c < "$ZIP" | tr -d ' ')"
 if [ "$zip_bytes" -gt "$MAX_ZIP_BYTES" ]; then

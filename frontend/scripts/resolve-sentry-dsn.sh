@@ -7,7 +7,9 @@
 #   2. otherwise reads the SSM parameter /developercards/prod/console-sentry-dsn
 #      (name overridable with CONSOLE_SENTRY_DSN_PARAM) as a String parameter,
 #      read without decryption: String, not SecureString, because a DSN is public
-#      once shipped in a bundle;
+#      once shipped in a bundle. CONSOLE_SENTRY_DSN_PARAM set to the empty string
+#      skips SSM altogether (CD's build job, which has no AWS credentials and
+#      takes the DSN from the repository variable CONSOLE_SENTRY_DSN);
 #   3. drops a value that does not look like a DSN, with a warning naming where
 #      it came from;
 #   4. exports VITE_SENTRY_DSN (empty means: Sentry disabled in this build) and
@@ -23,9 +25,14 @@ __rsd_value="${VITE_SENTRY_DSN:-}"
 __rsd_from="VITE_SENTRY_DSN from the environment"
 
 if [[ "$__rsd_value" =~ ^[[:space:]]*$ ]]; then
-  __rsd_param="${CONSOLE_SENTRY_DSN_PARAM:-/developercards/prod/console-sentry-dsn}"
-  __rsd_from="SSM parameter $__rsd_param"
-  __rsd_value="$(aws ssm get-parameter --name "$__rsd_param" --query Parameter.Value --output text --region "${REGION:-${AWS_REGION:-ap-southeast-2}}" 2>/dev/null || true)"
+  # `-` not `:-`: an empty CONSOLE_SENTRY_DSN_PARAM means "no SSM lookup", an unset one means the default name.
+  __rsd_param="${CONSOLE_SENTRY_DSN_PARAM-/developercards/prod/console-sentry-dsn}"
+  if [ -n "$__rsd_param" ]; then
+    __rsd_from="SSM parameter $__rsd_param"
+    __rsd_value="$(aws ssm get-parameter --name "$__rsd_param" --query Parameter.Value --output text --region "${REGION:-${AWS_REGION:-ap-southeast-2}}" 2>/dev/null || true)"
+  else
+    __rsd_value=""
+  fi
   unset __rsd_param
 fi
 
