@@ -117,10 +117,11 @@ export function AdminUsersPage() {
         const holders = holdersRes.data ?? [];
         setState({ loading: false, error: null, holders });
 
-        // keep selection if possible
+        // Keep the selection, with what the server now says about it. A sub that holds no deck
+        // permission any more is absent from the holders, so it stays selected with an empty grant
+        // rather than keeping its old one (which "Reset draft" would otherwise restore).
         if (selected) {
-          const nextSelected = holders.find(h => h.sub === selected.sub) ?? null;
-          if (nextSelected) setSelected(nextSelected);
+          setSelected(holders.find(h => h.sub === selected.sub) ?? { sub: selected.sub, deckPermissions: [] });
         }
       }
 
@@ -248,8 +249,9 @@ export function AdminUsersPage() {
     if (holdersRes.success) {
       const holders = holdersRes.data ?? [];
       setState(prev => ({ ...prev, holders }));
-      const updatedSelected = holders.find(h => h.sub === selected.sub) ?? null;
-      if (updatedSelected) setSelected(updatedSelected);
+      // After an empty grant the sub is no longer among the holders: keep it selected with no decks,
+      // not with the grants that were just revoked.
+      setSelected(holders.find(h => h.sub === selected.sub) ?? { sub: selected.sub, deckPermissions: [] });
     }
   }
 

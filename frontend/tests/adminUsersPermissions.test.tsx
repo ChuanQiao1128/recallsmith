@@ -180,6 +180,55 @@ describe('taking every deck away', () => {
   });
 });
 
+describe('after every deck is taken away', () => {
+  // core-vpc returns no row for a sub with no grant, so the re-read holders no
+  // longer contain it. The editor stays open on that sub, and "Reset draft"
+  // must rebuild from nothing: rebuilding from the grants just revoked would
+  // show them ticked again, and a second Save would re-grant them.
+  function noneChecked(): boolean {
+    return screen.queryAllByRole('checkbox', { checked: true }).length === 0;
+  }
+
+  it('Reset draft after an empty save restores no deck', async () => {
+    api.saveAdminDeckPermissionsBulk.mockResolvedValue(ok({ saved: 0, replace: true }));
+
+    await mountConsole();
+    await manage(ALICE_SUB);
+    await userEvent.click(readBox('d-one'));
+
+    api.listAdminPermissionHolders.mockResolvedValue(ok([bob()]));
+    await userEvent.click(screen.getByRole('button', { name: SAVE_BUTTON }));
+    expect(await screen.findByText('Saved. (0 deck(s) now assigned)')).not.toBeNull();
+    await screen.findByText('1 account(s)');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Reset draft' }));
+
+    expect(noneChecked()).toBe(true);
+    await userEvent.click(screen.getByRole('button', { name: SAVE_BUTTON }));
+    await waitFor(() => expect(api.saveAdminDeckPermissionsBulk).toHaveBeenCalledTimes(2));
+    expect(api.saveAdminDeckPermissionsBulk).toHaveBeenLastCalledWith({
+      adminSub: ALICE_SUB,
+      mode: 'replace',
+      permissions: [],
+    });
+  });
+
+  it('Refresh drops the grants of a sub that no longer holds any', async () => {
+    await mountConsole();
+    await manage(ALICE_SUB);
+    expect(isChecked('d-one', 'Write')).toBe(true);
+
+    // Revoked elsewhere (another tab, or the API) while this editor was open.
+    api.listAdminPermissionHolders.mockResolvedValue(ok([bob()]));
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await screen.findByText('1 account(s)');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Reset draft' }));
+
+    expect(noneChecked()).toBe(true);
+  });
+});
+
 describe('when the save fails', () => {
   it('says why, claims nothing, and gives the button back', async () => {
     api.saveAdminDeckPermissionsBulk.mockResolvedValue(
