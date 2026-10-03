@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""A fake `gh api` for scripts/tests/cd-scripts.test.sh: answers from JSON fixtures in $STUB_GH_DIR and applies
+--jq with the real jq (gh's --jq prints raw strings, like jq -r). A path with no fixture fails like an API error.
+  repos/<r>/actions/workflows/ci.yml/runs?head_sha=<sha>...  ci-runs-<sha>.json, else ci-runs.json with every
+                                                             "@SHA@" replaced by <sha> (the default: green CI)
+  repos/<r>/actions/runs/<id>/jobs...                        jobs-<id>.json
+  repos/<r>/actions/runs/<id>                                run-<id>.json
+  repos/<r>/actions/jobs/<id>                                job-<id>.json
+  repos/<r>/deployments?environment=...                      deployments.json
+  repos/<r>/deployments/<id>/statuses...                     statuses-<id>.json"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+
+args = sys.argv[1:]
+with open(os.environ["STUB_LOG"], "a") as log:
+    log.write(json.dumps({"gh": args}) + "\n")
+if not args or args[0] != "api":
+    sys.exit("stub gh: only `gh api` is implemented")
+jq = None
+path = None
+i = 1
+while i < len(args):
+    if args[i] == "--jq":
+        jq = args[i + 1]
+        i += 2
+    elif args[i].startswith("--"):
+        i += 1
+    else:
+        path = args[i]
+        i += 1
+d = os.environ["STUB_GH_DIR"]
+path = path or ""
+substitute = None
+m = re.search(r"/actions/workflows/ci\.yml/runs\?.*head_sha=([0-9a-f]+)", path)
+if m:
+    name = f"ci-runs-{m.group(1)}.json"
+    if not os.path.exists(os.path.join(d, name)):
+        name, substitute = "ci-runs.json", m.group(1)
+elif re.search(r"/actions/runs/(\d+)/jobs", path):
+    name = "jobs-" + re.search(r"/actions/runs/(\d+)/jobs", path).group(1) + ".json"
+elif re.search(r"/actions/runs/(\d+)$", path):
+    name = "run-" + re.search(r"/actions/runs/(\d+)$", path).group(1) + ".json"
+elif re.search(r"/actions/jobs/(\d+)$", path):
+    name = "job-" + re.search(r"/actions/jobs/(\d+)$", path).group(1) + ".json"
+elif re.search(r"/deployments\?environment=", path):
+    name = "deployments.json"
+elif re.search(r"/deployments/(\d+)/statuses", path):
+    name = "statuses-" + re.search(r"/deployments/(\d+)/statuses", path).group(1) + ".json"
+else:
+    sys.exit(f"stub gh: no fixture for {path}")
+fixture = os.path.join(d, name)
+if not os.path.exists(fixture):
+    sys.stderr.write(f"gh: HTTP 404 ({path})\n")
+    sys.exit(1)
+if substitute:
+    tmp = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+    tmp.write(open(fixture).read().replace("@SHA@", substitute))
+    tmp.close()
+    fixture = tmp.name
+if jq is None:
+    sys.stdout.write(open(fixture).read())
+    sys.exit(0)
+sys.exit(subprocess.run(["jq", "-r", jq, fixture]).returncode)

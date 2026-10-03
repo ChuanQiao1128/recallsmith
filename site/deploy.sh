@@ -5,10 +5,17 @@
 #   AWS_PROFILE=devcards-deploy SITE_DISTRIBUTION_ID=<terraform output -raw site_distribution_id> ./deploy.sh
 #   DRY_RUN=1 ./deploy.sh        (prints the commands, touches nothing)
 #
-# Supervisor-only (E00 §0): workers run this with DRY_RUN=1 only.
+# Supervisor-only (E00 §0): workers run this with DRY_RUN=1 only. Production deploys of site/ run in CD
+# (.github/workflows/cd.yml, infra/RUNBOOK.md §12). From a laptop (not DRY_RUN, not in GitHub Actions)
+# ../scripts/deploy-preflight.sh first requires a clean tree, HEAD = origin/main and green CI on it; BREAK_GLASS=1
+# overrides that with a loud warning. AWS_PROFILE defaults to devcards-deploy (MFA) only when the environment carries
+# no credentials of its own (CD's OIDC session does).
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"; cd "$HERE"
-export AWS_PROFILE="${AWS_PROFILE:-devcards-deploy}"
+"$HERE/../scripts/deploy-preflight.sh" site/deploy.sh
+# Credentials already in the environment (CD's OIDC session, `aws configure export-credentials`) win over a profile
+# default: CD has no devcards-deploy profile, and naming one would fail every aws call.
+[ -n "${AWS_PROFILE:-}${AWS_ACCESS_KEY_ID:-}${AWS_SESSION_TOKEN:-}${AWS_WEB_IDENTITY_TOKEN_FILE:-}" ] || export AWS_PROFILE=devcards-deploy
 BUCKET="${SITE_BUCKET:-developercards-site-622994489535}"
 DIST_ID="${SITE_DISTRIBUTION_ID:-}"
 SITE_URL="${SITE_URL:-https://developercards.app}"

@@ -15,8 +15,15 @@
 #   ONLY=vpc ./deploy.sh | ONLY=worker ./deploy.sh
 #   LAMBDA_RUNTIME=dotnet10 (default)           # the Lambda runtime set before publish-version; it must
 #                                               # match the zip's target framework (net10.0)
+#   PREBUILT=1 ./deploy.sh                      # ship dist/vpc.zip + dist/worker.zip as they are (CD: built without
+#                                               # AWS credentials and sha256-verified); no packaging, no SDK needed
 #
-# Needs the .NET 10 SDK on PATH (package_lambda_zip.sh stops with instructions otherwise).
+# Needs the .NET 10 SDK on PATH (package_lambda_zip.sh stops with instructions otherwise), except with PREBUILT=1.
+#
+# Production deploys run in CD (.github/workflows/cd.yml, infra/RUNBOOK.md §12). From a laptop (not DRY_RUN, not in
+# GitHub Actions) ../scripts/deploy-preflight.sh first requires a clean tree, HEAD = origin/main and green CI on it;
+# BREAK_GLASS=1 overrides that with a loud warning. AWS_PROFILE defaults to devcards-deploy (MFA) only when the
+# environment carries no credentials of its own (CD's OIDC session does).
 #
 # Database migrations are NOT run here: they go through POST /api/v1/admin/db/migrate (super_admin,
 # src_C/Vpc/Db/Migrate.cs) — the console's Migrate button, or scripts/release with a refresh token.
@@ -29,7 +36,9 @@ source "$HERE/scripts/merge-env.sh"
 # deploy also removes a stale REVENUECAT_SECRET_API_KEY that the R25 G04 mapping may have left on core-vpc.
 SSM_NOT_ENV="${SSM_NOT_ENV%]},\"revenuecat-secret-api-key\"]"
 SSM_OPTIONAL_ENV="${SSM_OPTIONAL_ENV%]},\"REVENUECAT_SECRET_API_KEY\"]"
-export AWS_PROFILE="${AWS_PROFILE:-devcards-deploy}"
+# Credentials already in the environment (CD's OIDC session, `aws configure export-credentials`) win over a profile
+# default: CD has no devcards-deploy profile, and naming one would fail every aws call.
+[ -n "${AWS_PROFILE:-}${AWS_ACCESS_KEY_ID:-}${AWS_SESSION_TOKEN:-}${AWS_WEB_IDENTITY_TOKEN_FILE:-}" ] || export AWS_PROFILE=devcards-deploy
 REGION="${AWS_REGION:-ap-southeast-2}"
 ARCH="${LAMBDA_ARCH:-linux-arm64}"          # both functions are arm64 (aws lambda get-function-configuration)
 LAMBDA_RUNTIME="${LAMBDA_RUNTIME:-dotnet10}"
@@ -43,16 +52,69 @@ SSM_PATH="/developercards/$ENV"
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }
 file_env="$(jq -c . "$ENV_FILE")"          # a missing or invalid ENV_FILE is a hard error
 
-./package_lambda_zip.sh "$ARCH"
-ls -la dist/vpc.zip dist/worker.zip
+"$HERE/../scripts/deploy-preflight.sh" src_C/deploy.sh
+
+if [ "${PREBUILT:-0}" = 1 ]; then
+  # CD's deploy job: the build job packaged these (same script, same ARCH) without AWS credentials and the deploy job
+  # checked them against the build's SHA256SUMS. Rebuilding here would ship bytes nobody verified.
+  zips=""
+  [ "$ONLY" = worker ] || zips="dist/vpc.zip"
+  [ "$ONLY" = vpc ] || zips="${zips:+$zips }dist/worker.zip"
+  for z in $zips; do
+    [ -s "$z" ] || { echo "PREBUILT=1 but $HERE/$z is missing; nothing deployed" >&2; exit 1; }
+  done
+  echo "PREBUILT=1: deploying $zips as built"
+  # shellcheck disable=SC2086
+  ls -la $zips
+else
+  ./package_lambda_zip.sh "$ARCH"
+  ls -la dist/vpc.zip dist/worker.zip
+fi
 
 sha_b64() { openssl dgst -sha256 -binary "$1" | openssl base64 -A; }   # Lambda's CodeSha256 is base64(sha256)
+
+# mask_json_values <json object or array> [min-length] — inside GitHub Actions only, register every value (each line of
+# a multi-line one) with ::add-mask::, so the runner prints *** for it in every later line of this public repository's
+# CD log. '%' is escaped as the runner unescapes it. Outside GitHub Actions it prints nothing at all (the command line
+# would show the value on a terminal). Values shorter than min-length (default 1) are skipped.
+mask_json_values() {
+  [ "${GITHUB_ACTIONS:-}" = true ] || return 0
+  local line
+  jq -r --argjson min "${2:-1}" '.[] | tostring | select(length >= $min)' <<<"$1" | while IFS= read -r line; do
+    line="${line%$'\r'}"
+    [ -n "$line" ] || continue
+    printf '::add-mask::%s\n' "${line//%/%25}"
+  done
+}
+
+# set_environment <fn> <merged env json> — update-function-configuration with the environment in a 0600 file, never on
+# the command line (where `ps` shows it). On failure only the AWS error code is printed: Lambda's message for an
+# environment over 4 KB quotes the whole environment, every secret value included.
+set_environment() {
+  local fn="$1" tmp code
+  tmp="$(mktemp -d)"
+  ( umask 077 && jq -cn --argjson v "$2" '{Variables: $v}' > "$tmp/env.json" ) || { rm -rf "$tmp"; echo "$fn: cannot write the environment file" >&2; return 1; }
+  if aws lambda update-function-configuration --region "$REGION" --function-name "$fn" --environment "file://$tmp/env.json" \
+    --query 'LastUpdateStatus' --output text 2>"$tmp/err"; then
+    rm -rf "$tmp"
+    return 0
+  fi
+  code="$(grep -oE 'An error occurred \([A-Za-z0-9.]+\)' "$tmp/err" | head -n 1 | sed -E 's/.*\((.*)\)/\1/' || true)"
+  rm -rf "$tmp"
+  echo "$fn: update-function-configuration (environment) failed: ${code:-unknown error}. The AWS message is not printed: it can quote every environment value, secrets included." >&2
+  return 1
+}
 
 # The decrypted SSM values, fetched once per run (not per function) and only for a real injecting
 # deploy: a DRY_RUN or an INJECT_ENV=0 run never touches AWS here.
 SECRETS_ALL=""
 if [ "${DRY_RUN:-0}" != 1 ] && [ "$INJECT_ENV" = 1 ]; then
-  SECRETS_ALL="$(ssm_to_env "$(aws ssm get-parameters-by-path --region "$REGION" --path "$SSM_PATH" --with-decryption --output json)")"
+  SSM_RAW="$(aws ssm get-parameters-by-path --region "$REGION" --path "$SSM_PATH" --with-decryption --output json)"
+  # Every decrypted value is a secret from here on (CD logs of this repository are public): masked before anything
+  # can echo it, the leaves that never become an env var included.
+  mask_json_values "$(jq -c '[.Parameters[]?.Value]' <<<"$SSM_RAW")"
+  SECRETS_ALL="$(ssm_to_env "$SSM_RAW")"
+  unset SSM_RAW
   # An internal-secret leaf still at its Terraform placeholder is never deployed (R18C L2): it is dropped with a
   # warning here, so drop_absent_optional below also removes a stale copy from the live environment.
   SECRETS_ALL="$(drop_placeholder_secrets "$SECRETS_ALL")"
@@ -79,11 +141,15 @@ deploy_one() {
   if [ "$INJECT_ENV" = 1 ]; then
     local current secrets merged
     current="$(aws lambda get-function-configuration --region "$REGION" --function-name "$fn" --query 'Environment.Variables' --output json)"
+    # The live environment holds the injected secrets and maybe stray ones: mask every value whose key is not a
+    # committed non-secret (the env file's keys). Under 8 characters is no credential, and masking "1" would star out
+    # every 1 in the log.
+    mask_json_values "$(jq -c --argjson file "$3" 'if type == "object" then with_entries(select(.key as $k | $file | has($k) | not)) else {} end' <<<"$current")" 8
     secrets="$(pick_keys "$SECRETS_ALL" "$4")"
     # An optional secret (a -previous rotation leaf, a per-route secret) whose leaf is gone leaves the env too.
     current="$(drop_absent_optional "$current" "$secrets")"
     merged="$(merge_env "$current" "$3" "$secrets")"
-    aws lambda update-function-configuration --region "$REGION" --function-name "$fn" --environment "$(jq -cn --argjson v "$merged" '{Variables: $v}')" --query 'LastUpdateStatus' --output text
+    set_environment "$fn" "$merged" || exit 1
     aws lambda wait function-updated --region "$REGION" --function-name "$fn"
     echo "OK $fn environment: $(jq -r 'keys | length' <<<"$merged") keys"
   else

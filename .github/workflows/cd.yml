@@ -1,0 +1,484 @@
+name: CD
+
+# Continuous delivery to production (enterprise audit 2026-10-03 SDLC-03 "no CD, prod deployed from a laptop";
+# owner's choice C: GitHub OIDC behind an approval, no deploy credential on the laptop). infra/RUNBOOK.md §12 is the
+# operator's guide: what deploys when, how to approve, the automatic and the manual rollback, break-glass.
+#
+#   plan    no AWS. Runs main's own scripts (never the pushed commit's). Refuses a commit that is not on main (a tag
+#           named main looks like a push to main here). Which targets changed since the last successful full
+#           deployment to production (GitHub Deployments API, scripts/cd/plan.sh); main's tip instead of the commit CI
+#           ran for when the tip is newer and green. Nothing to deploy: the run ends here, with no approval request.
+#   build   no AWS. Lambda zips (.NET 10 SDK, src_C/deploy.sh DRY_RUN=1), console bundle, Python zips
+#           (services/deploy-python-lambda.sh DRY_RUN=1, tests included), a SHA256SUMS manifest; artifact kept 30 days.
+#   deploy  environment `production`: waits for the owner's approval, refuses a stale plan (a re-run of an old run's
+#           failed job after a newer deployment), verifies the artifact, then assumes
+#           arn:aws:iam::622994489535:role/developercards-gha-prod through GitHub OIDC (the role trusts only
+#           repo:ChuanQiao1128/recallsmith:environment:production). Smokes production as a baseline, records a restore
+#           point, deploys each target with the existing scripts in PREBUILT mode, smokes production again, and on any
+#           new failure restores everything that moved. Smoke and rollback are steps of this job on purpose: a second
+#           job naming `production` would wait for a second approval.
+#   rollback  environment `production` (approval too): workflow_dispatch with rollback_target + rollback_version
+#           moves one Lambda's prod alias back (scripts/rollback.sh).
+#
+# Not here: Terraform (stays local behind the owner's MFA), mobile OTA updates and binaries (owner-driven), the
+# edge-public Lambda, database migrations (the console's Migrate button), staging (there is none yet).
+#
+# Every action is pinned to a full commit SHA with its release as the trailing comment, like ci.yml.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: >-
+          Deploy from main: "changed" (since the last full CD deployment), "all", or a list of
+          backend ai-qa notifier source-watcher synthetic-check webhook-dispatcher console site
+        type: string
+        default: changed
+      rollback_target:
+        description: Manual rollback instead of a deploy (needs rollback_version)
+        type: choice
+        options: [none, vpc, worker, ai-qa, notifier, source-watcher, synthetic-check, webhook-dispatcher]
+        default: none
+      rollback_version:
+        description: The published Lambda version to move the prod alias back to (see a deploy's job summary)
+        type: string
+        default: ''
+
+# Read-only by default; only the deploy and rollback jobs can mint an OIDC token.
+permissions:
+  contents: read
+
+# One production lane. A deploy in flight (including one waiting for approval) is never cancelled; GitHub keeps at most
+# one run queued behind it, and a newly queued run replaces (cancels) the pending one whatever commit either carries:
+# CI runs finish out of order, and a CI re-run of an old commit arrives last. Nothing is lost: the plan measures changes
+# from the last successful deployment, and deploys main's tip (not the commit CI ran for) when the tip's CI is green;
+# when it is not green yet, the plan says which merged commits wait for their own run. Whole runs queue (not just the
+# deploy job), so each plan sees the outcome of the deploy before it. A run that cannot deploy (CI failed, a pull
+# request, a fork: the plan job's `if` skips it; a dispatch from another branch: the plan refuses it) gets a group of
+# its own, so it never takes the queued slot from a real deploy. Keep the condition = the plan job's `if` plus the
+# main-only dispatch (scripts/tests/cd-scripts.test.sh checks it).
+concurrency:
+  group: >-
+    ${{ ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+    (github.event.workflow_run.conclusion == 'success' &&
+    github.event.workflow_run.event == 'push' &&
+    github.event.workflow_run.head_branch == 'main' &&
+    github.event.workflow_run.path == '.github/workflows/ci.yml' &&
+    github.event.workflow_run.head_repository.full_name == github.repository))
+    && 'production' || format('cd-skipped-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-southeast-2
+
+jobs:
+  plan:
+    name: plan
+    # A push to main whose CI succeeded, from this repository's ci.yml (never a pull request or a fork), or a manual run.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.path == '.github/workflows/ci.yml' &&
+      github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      deployments: read
+      # The CI verdict and the deployment records are read back through the Actions API (runs and jobs).
+      actions: read
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+      deploy: ${{ steps.plan.outputs.deploy }}
+      sha: ${{ steps.plan.outputs.sha }}
+      base: ${{ steps.plan.outputs.base }}
+      last_success: ${{ steps.plan.outputs.last_success }}
+      targets: ${{ steps.plan.outputs.targets }}
+      scope: ${{ steps.plan.outputs.scope }}
+      has_backend: ${{ steps.plan.outputs.has_backend }}
+      has_console: ${{ steps.plan.outputs.has_console }}
+      has_site: ${{ steps.plan.outputs.has_site }}
+      python: ${{ steps.plan.outputs.python }}
+      rollback_target: ${{ steps.plan.outputs.rollback_target }}
+      rollback_version: ${{ steps.plan.outputs.rollback_version }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # github.sha: main's tip for workflow_run (GitHub sets it, the pushed commit cannot), the dispatched head for
+          # a dispatch. So the plan runs main's scripts, never those of the commit CI ran for, which is only diffed.
+          # Full history of every branch (refs/remotes/origin/*) and tag, no blobs: the plan only diffs trees.
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+      # Inline, from this file (always the default branch's for workflow_run), before any script runs: workflow_run
+      # reports a tag push as head_branch = the tag's name, so a tag named `main` passes the `if` above. Only a commit
+      # on the main branch (an ancestor of, or equal to, refs/remotes/origin/main; fully qualified because a tag named
+      # main makes `main` ambiguous) goes on. plan.sh checks it again for every event.
+      - name: the commit CI ran for must be on the main branch
+        if: github.event_name == 'workflow_run'
+        env:
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          if ! git merge-base --is-ancestor "$RUN_SHA" refs/remotes/origin/main; then
+            echo "::error::commit $RUN_SHA is not on the main branch (a push of a tag or another ref named main?): nothing is deployed"
+            exit 1
+          fi
+          echo "commit $RUN_SHA is on main ($(git rev-parse refs/remotes/origin/main))"
+      - id: plan
+        name: decide what to deploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOY_REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          DISPATCH_SHA: ${{ github.sha }}
+          IN_TARGETS: ${{ inputs.targets }}
+          IN_ROLLBACK_TARGET: ${{ inputs.rollback_target }}
+          IN_ROLLBACK_VERSION: ${{ inputs.rollback_version }}
+        run: |
+          set -euo pipefail
+          scripts/cd/plan.sh decide | tee -a "$GITHUB_OUTPUT"
+
+  build:
+    name: build (no AWS credentials)
+    needs: plan
+    if: needs.plan.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      manifest_sha256: ${{ steps.stage.outputs.manifest_sha256 }}
+    env:
+      SHA: ${{ needs.plan.outputs.sha }}
+      TARGETS: ${{ needs.plan.outputs.targets }}
+      PYTHON_SERVICES: ${{ needs.plan.outputs.python }}
+      # Nothing in this job may reach AWS; no instance metadata to fall back on either.
+      AWS_EC2_METADATA_DISABLED: 'true'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+      - if: needs.plan.outputs.has_backend == 'true'
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
+        with:
+          global-json-file: src_C/global.json
+      # deploy.sh's own packaging step (package_lambda_zip.sh linux-arm64, the ARCH the functions run on); DRY_RUN
+      # never calls AWS and skips the local preflight.
+      - if: needs.plan.outputs.has_backend == 'true'
+        name: package core-vpc and worker-lambda
+        run: DRY_RUN=1 ENV=prod ./src_C/deploy.sh
+      - if: needs.plan.outputs.has_console == 'true'
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        # No dependency cache in CD (CodeQL actions/cache-poisoning): this workflow runs in the default branch's
+        # context, so a cache it saves would be restored by every other run on main. npm ci from the lockfile instead.
+        with:
+          node-version: '20'
+      # The DSN is public once shipped, so it lives in a repository variable (a copy of the SSM String
+      # /developercards/prod/console-sentry-dsn) and this job needs no AWS. CONSOLE_SENTRY_DSN_PARAM='' tells the
+      # resolver not to try SSM. The deploy job compares the bundle with SSM before it changes anything
+      # (frontend/scripts/check-bundle-dsn.sh), so a missing or stale variable stops the deploy, not Sentry.
+      - if: needs.plan.outputs.has_console == 'true'
+        name: build the console
+        working-directory: frontend
+        env:
+          VITE_SENTRY_DSN: ${{ vars.CONSOLE_SENTRY_DSN }}
+        run: |
+          set -euo pipefail
+          npm ci
+          export CONSOLE_SENTRY_DSN_PARAM=''
+          source scripts/resolve-sentry-dsn.sh
+          if [ -z "$VITE_SENTRY_DSN" ]; then
+            echo "::warning::repository variable CONSOLE_SENTRY_DSN is not set: this console has no Sentry, and the deploy stops before any change if SSM holds a DSN"
+          fi
+          npm run build
+      - if: needs.plan.outputs.python != ''
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - if: needs.plan.outputs.python != ''
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          enable-cache: false # see setup-node above: no cache written from CD
+      # The script's own DRY_RUN path: its tests, then a hash-verified (uv.lock) aarch64 build; never calls AWS.
+      - if: needs.plan.outputs.python != ''
+        name: build the Python Lambdas
+        run: |
+          set -euo pipefail
+          for svc in $PYTHON_SERVICES; do
+            echo "::group::$svc"
+            DRY_RUN=1 services/deploy-python-lambda.sh "$svc"
+            echo "::endgroup::"
+          done
+      - id: stage
+        name: stage the artifact and its SHA256SUMS
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086
+          sum="$(scripts/cd/artifact.sh stage "$RUNNER_TEMP/cd-out" $TARGETS)"
+          echo "manifest_sha256=$sum" >> "$GITHUB_OUTPUT"
+          {
+            echo "### CD build for \`$SHA\`"
+            echo
+            echo "SHA256SUMS (sha256 \`$sum\`):"
+            echo '```'
+            cat "$RUNNER_TEMP/cd-out/SHA256SUMS"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cd-build-${{ needs.plan.outputs.sha }}
+          path: ${{ runner.temp }}/cd-out
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
+
+  deploy:
+    name: deploy (production)
+    needs: [plan, build]
+    if: needs.plan.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    # Counted from the approval, not from the request. A timeout is a cancellation: GitHub then runs the
+    # `cancelled()` steps but force-stops the job about 5 minutes later. So the rollback re-assumes the role, restores
+    # every alias and bucket first, creates the CloudFront invalidations and, on a cancel, does not wait for them
+    # (scripts/cd/restore-point.sh); it prints its state as an annotation before the slow part.
+    timeout-minutes: 45
+    environment:
+      name: production
+      # Set by the last step only when everything passed. scripts/cd/plan.sh reads it back to find the last full
+      # deployment (#cd-full), so an explicit target list (#cd-partial) never becomes the next run's base.
+      url: ${{ steps.done.outputs.url }}
+    permissions:
+      contents: read
+      id-token: write
+      deployments: read
+      actions: read
+    env:
+      SHA: ${{ needs.plan.outputs.sha }}
+      TARGETS: ${{ needs.plan.outputs.targets }}
+      PYTHON_SERVICES: ${{ needs.plan.outputs.python }}
+      CONSOLE_DISTRIBUTION_ID: E85FKUMZZWQWX
+      SITE_DISTRIBUTION_ID: EML9BSZ8EXMQ1
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+      # "Re-run failed jobs" (or re-running this job alone) reuses the plan and build of the first attempt. After a
+      # newer deployment that would put old code back, so a plan is used only while it is still the latest word:
+      # before any credential, before the restore point, nothing recorded (no rollback follows).
+      - name: refuse a stale plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LAST_SUCCESS: ${{ needs.plan.outputs.last_success }}
+        run: scripts/cd/plan.sh still-current "$LAST_SUCCESS"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cd-build-${{ needs.plan.outputs.sha }}
+          path: ${{ runner.temp }}/cd-out
+      - name: verify the artifact against the build job's manifest sha256
+        env:
+          MANIFEST_SHA256: ${{ needs.build.outputs.manifest_sha256 }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086
+          scripts/cd/artifact.sh verify "$RUNNER_TEMP/cd-out" "$MANIFEST_SHA256" $TARGETS
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::622994489535:role/developercards-gha-prod
+          aws-region: ap-southeast-2
+          # CloudTrail names the run: assumed-role/developercards-gha-prod/gha-cd-<run id>-<attempt>.
+          role-session-name: gha-cd-${{ github.run_id }}-${{ github.run_attempt }}
+          role-duration-seconds: 3600
+      - name: preflight (nothing changes yet)
+        env:
+          HAS_CONSOLE: ${{ needs.plan.outputs.has_console }}
+        run: |
+          set -euo pipefail
+          echo "AWS identity: $(aws sts get-caller-identity --query Arn --output text)"
+          if [ "$HAS_CONSOLE" = true ]; then
+            bash frontend/scripts/check-bundle-dsn.sh frontend/dist
+          fi
+      # What production looked like before: the smoke after the deploy fails (and rolls back) only on a check that was
+      # passing here, so a check that was already red (maybe what this deploy fixes) does not roll every deploy back.
+      - name: smoke production before the deploy (baseline, never fails the job)
+        run: |
+          set -uo pipefail
+          if ! SMOKE_REPORT="$RUNNER_TEMP/smoke-before.tsv" scripts/smoke.sh; then
+            echo "::warning::production was not fully healthy before this deploy (baseline in the job summary): the smoke after it fails only on a check that newly fails"
+          fi
+      - id: record
+        name: record the restore point
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086
+          scripts/cd/restore-point.sh record "$RUNNER_TEMP/restore-point" $TARGETS
+      - if: needs.plan.outputs.has_backend == 'true'
+        name: deploy core-vpc and worker-lambda
+        working-directory: src_C
+        run: PREBUILT=1 ENV=prod ./deploy.sh
+      - if: needs.plan.outputs.python != ''
+        name: deploy the Python Lambdas
+        run: |
+          set -euo pipefail
+          for svc in $PYTHON_SERVICES; do
+            echo "::group::$svc"
+            PREBUILT=1 services/deploy-python-lambda.sh "$svc"
+            echo "::endgroup::"
+          done
+      - if: needs.plan.outputs.has_console == 'true'
+        name: deploy the console
+        run: PREBUILT=1 frontend/deploy.sh
+      - if: needs.plan.outputs.has_site == 'true'
+        name: deploy the site
+        run: site/deploy.sh
+      - name: smoke production
+        run: SMOKE_BASELINE="$RUNNER_TEMP/smoke-before.tsv" SMOKE_REPORT="$RUNNER_TEMP/smoke.tsv" scripts/smoke.sh
+      # A fresh session for the rollback, so a deploy that ran long cannot leave it with expired credentials. If this
+      # fails, the rollback still tries with the session it has. Neither runs when the job stopped before the restore
+      # point (a stale plan, the artifact, the credentials or the preflight): nothing in production changed then.
+      - name: refresh credentials for the rollback
+        if: (failure() || cancelled()) && steps.record.outcome != 'skipped'
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::622994489535:role/developercards-gha-prod
+          aws-region: ap-southeast-2
+          role-session-name: gha-cd-rollback-${{ github.run_id }}-${{ github.run_attempt }}
+          role-duration-seconds: 3600
+      - id: rollback
+        name: roll back everything that moved
+        if: (failure() || cancelled()) && steps.record.outcome != 'skipped'
+        env:
+          # A cancel or timeout leaves about 5 minutes: create the CloudFront invalidations, do not wait for them.
+          RESTORE_SKIP_WAIT: ${{ job.status == 'cancelled' }}
+        run: |
+          set -uo pipefail
+          scripts/cd/restore-point.sh restore "$RUNNER_TEMP/restore-point"
+          rc=$?
+          case "$rc" in
+            0)
+              echo "result=restored" >> "$GITHUB_OUTPUT"
+              echo "::error::the deploy or its smoke failed; everything that had moved is back at the restore point"
+              ;;
+            3)
+              echo "result=not needed (nothing was recorded, so nothing had changed)" >> "$GITHUB_OUTPUT"
+              echo "::error::the deploy failed before its restore point was recorded; nothing in production changed, nothing to roll back"
+              ;;
+            *)
+              echo "result=incomplete" >> "$GITHUB_OUTPUT"
+              echo "::error::the deploy or its smoke failed and the rollback is INCOMPLETE: see the FAILED lines and infra/RUNBOOK.md §12"
+              ;;
+          esac
+          exit 1
+      - name: job summary
+        if: always()
+        env:
+          SCOPE: ${{ needs.plan.outputs.scope }}
+          BASE: ${{ needs.plan.outputs.base }}
+          ROLLBACK_RESULT: ${{ steps.rollback.outputs.result }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -uo pipefail
+          smoke_table() {
+            echo "| $1 | result | detail |"
+            echo "|---|---|---|"
+            awk -F '\t' '{ printf "| %s | %s | %s |\n", $1, $2, $3 }' "$2"
+          }
+          if [ -n "$ROLLBACK_RESULT" ]; then
+            rollback="$ROLLBACK_RESULT"
+          elif [ "$JOB_STATUS" = success ]; then
+            rollback="not needed"
+          else
+            rollback="not needed: the job stopped before the restore point was recorded, so nothing in production changed"
+          fi
+          {
+            echo "### CD deploy of \`$SHA\` ($SCOPE)"
+            echo
+            echo "- targets: $TARGETS"
+            echo "- last full deployment before this run: ${BASE:-none on record}"
+            echo "- rollback: $rollback"
+            echo
+            scripts/cd/restore-point.sh summary "$RUNNER_TEMP/restore-point" 2>/dev/null || true
+            echo
+            if [ -s "$RUNNER_TEMP/smoke-before.tsv" ]; then
+              smoke_table "smoke before the deploy (baseline)" "$RUNNER_TEMP/smoke-before.tsv"
+              echo
+            fi
+            if [ -s "$RUNNER_TEMP/smoke.tsv" ]; then
+              smoke_table "smoke after the deploy" "$RUNNER_TEMP/smoke.tsv"
+              if awk -F '\t' '$2 == "TOLERATED" { found = 1 } END { exit !found }' "$RUNNER_TEMP/smoke.tsv"; then
+                echo
+                echo "TOLERATED: failing in the baseline too, so not caused by this deploy (and not rolled back)."
+              fi
+            else
+              echo "Smoke after the deploy: not run."
+            fi
+            echo
+            echo "Console or site back to an older build: revert on main (CD redeploys), or RUNBOOK §12 Manual rollback (console: \`gh run download <run id> -n cd-build-<sha>\`; site: its files at that commit)."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - id: done
+        name: mark the deployment
+        env:
+          SCOPE: ${{ needs.plan.outputs.scope }}
+        run: echo "url=https://github.com/${GITHUB_REPOSITORY}/commit/${SHA}#cd-${SCOPE}" >> "$GITHUB_OUTPUT"
+
+  rollback:
+    name: rollback (production)
+    needs: plan
+    if: needs.plan.outputs.mode == 'rollback'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+      # Never #cd-full: a rollback must not become the base of the next plan.
+      url: ${{ steps.done.outputs.url }}
+    permissions:
+      contents: read
+      id-token: write
+      deployments: read
+      actions: read
+    env:
+      ROLLBACK_TARGET: ${{ needs.plan.outputs.rollback_target }}
+      ROLLBACK_VERSION: ${{ needs.plan.outputs.rollback_version }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+      # Like the deploy job: re-running this job of an old run would move the alias back over a newer deployment.
+      - name: refuse a stale plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LAST_SUCCESS: ${{ needs.plan.outputs.last_success }}
+        run: scripts/cd/plan.sh still-current "$LAST_SUCCESS"
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::622994489535:role/developercards-gha-prod
+          aws-region: ap-southeast-2
+          role-session-name: gha-rollback-${{ github.run_id }}-${{ github.run_attempt }}
+          role-duration-seconds: 900
+      - name: move the alias back
+        run: |
+          set -euo pipefail
+          echo "AWS identity: $(aws sts get-caller-identity --query Arn --output text)"
+          scripts/rollback.sh "$ROLLBACK_TARGET" "$ROLLBACK_VERSION" | tee "$RUNNER_TEMP/rollback.txt"
+          {
+            echo "### Manual rollback: \`$ROLLBACK_TARGET\` -> version $ROLLBACK_VERSION"
+            echo '```'
+            cat "$RUNNER_TEMP/rollback.txt"
+            echo '```'
+            echo "The next CD deploy does not redeploy this function unless its files change; to put main back, run this workflow with targets set to its deploy target."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - id: done
+        run: echo "url=https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}#cd-rollback" >> "$GITHUB_OUTPUT"
