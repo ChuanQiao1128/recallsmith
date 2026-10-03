@@ -7,10 +7,6 @@ output "core_vpc_role_name" {
   value = aws_iam_role.core_vpc.name
 }
 
-output "edge_public_role_arn" {
-  value = aws_iam_role.edge_public.arn
-}
-
 output "rds_monitoring_role_arn" {
   value = aws_iam_role.rds_monitoring.arn
 }

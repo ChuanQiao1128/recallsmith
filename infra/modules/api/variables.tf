@@ -18,14 +18,6 @@ variable "core_vpc_role_arn" {
   type = string
 }
 
-variable "edge_public_function_name" {
-  type = string
-}
-
-variable "edge_public_role_arn" {
-  type = string
-}
-
 variable "subnet_ids" {
   type = list(string)
 }

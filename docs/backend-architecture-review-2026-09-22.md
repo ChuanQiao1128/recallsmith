@@ -317,4 +317,6 @@ outbox 发布器、快照导入和 Content Intelligence 接口随之删除（R26
 - src_C/Vpc/Analytics/OutboxPublisher.cs
 - src_C/Vpc/Analytics/ContentIntelligenceSnapshotImport.cs
 - src_C/Vpc/Authoring/ContentIntelligence.cs
+edge-public 已于 2026-10-04 退役（R27 EDGE），从未部署的 C# 重写 src_C/Public 随之删除（源码存档在 archive/edge-public-2025-12-28/）：
+- src_C/Public/
 -->

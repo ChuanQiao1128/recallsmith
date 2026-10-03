@@ -5,7 +5,9 @@ Usage: check-plan.py --plan PLAN_JSON [--allow ALLOW_JSON] [--expect-imports FIL
   --plan -   reads the plan JSON from stdin.
 
 An entry of resource_changes is *effective* when change.actions != ["no-op"].
-Data-source entries (mode == "data") are never effective. With --allow every
+Data-source entries (mode == "data") are never effective. A `removed` block with
+lifecycle { destroy = false } plans as ["forget"] (Terraform >= 1.7): the object
+leaves the state and stays in AWS; its action label is "forget". With --allow every
 effective entry must be listed in the allow file's "changes" with the same
 action (a string value is the action; an object is {"action": ..., "keys": [...]}
 and then the entry's changed keys must be a subset of "keys"). When
@@ -54,6 +56,8 @@ def action_label(actions):
         return "delete"
     if actions in (["delete", "create"], ["create", "delete"]):
         return "replace"
+    if actions == ["forget"]:
+        return "forget"
     return None
 
 
@@ -82,7 +86,7 @@ def main():
     violations = []
     effective = []           # (address, label, keys)
     importing_addrs = set()
-    counts = {"create": 0, "update": 0, "delete": 0, "replace": 0}
+    counts = {"create": 0, "update": 0, "delete": 0, "replace": 0, "forget": 0}
     noop_count = 0
 
     for entry in resource_changes:
@@ -130,8 +134,8 @@ def main():
             sys.exit(1)
         print("PLAN EMPTY")
         if args.summary:
-            print("SUMMARY imports=%d no-op=%d create=%d update=%d delete=%d replace=%d outputs=%d" % (
-                len(importing_addrs), noop_count, 0, 0, 0, 0, 0))
+            print("SUMMARY imports=%d no-op=%d create=%d update=%d delete=%d replace=%d outputs=%d forget=%d" % (
+                len(importing_addrs), noop_count, 0, 0, 0, 0, 0, 0))
         sys.exit(0)
 
     changes = allow.get("changes") or {}
@@ -193,9 +197,9 @@ def main():
         print("%s  %s  %s" % (address, label, ",".join(keys) if keys else "-"))
     print("PLAN OK %d" % len(effective))
     if args.summary:
-        print("SUMMARY imports=%d no-op=%d create=%d update=%d delete=%d replace=%d outputs=%d" % (
+        print("SUMMARY imports=%d no-op=%d create=%d update=%d delete=%d replace=%d outputs=%d forget=%d" % (
             len(importing_addrs), noop_count, counts["create"], counts["update"],
-            counts["delete"], counts["replace"], len(effective_outputs)))
+            counts["delete"], counts["replace"], len(effective_outputs), counts["forget"]))
     sys.exit(0)
 
 

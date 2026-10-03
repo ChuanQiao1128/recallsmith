@@ -8,9 +8,11 @@ namespace RecallSmith.Lambda.IntegrationTests;
 /// The admin-users 501 placeholders are gone (CBE-01). GET /api/v1/admin/users,
 /// GET /api/v1/admin/users/:sub and PUT /api/v1/admin/users/:sub/entitlements used to
 /// answer 501 "TODO: admin users list" from core-vpc; core-vpc now recognises those old
-/// paths only to reject them with a plain "Route not found" 404. The console instead
-/// calls edge-public at /api/v1/admin/cognito/users, which core-vpc never served and
-/// still does not.
+/// paths only to reject them with a plain "Route not found" 404. The console later
+/// called edge-public at /api/v1/admin/cognito/users; edge-public was retired on
+/// 2026-10-04 (R27 EDGE) and console accounts are managed with the AWS CLI
+/// (infra/RUNBOOK.md §14). Its gateway routes are gone, so its paths now fall through to
+/// core-vpc, which serves none of them.
 ///
 /// Every request below goes through <see cref="VpcFunction.Handler"/> with gateway
 /// authorizer claims for a super_admin — the same event shape as
@@ -68,12 +70,20 @@ public sealed class AdminUsersRouteTests
     Assert.Equal("NOT_FOUND", ErrorCode(response));
   }
 
-  [Fact]
-  public async Task CognitoUsersPath_IsNotServedByCoreVpc()
+  [Theory]
+  [InlineData("GET", "/api/v1/admin/cognito/users")]
+  [InlineData("POST", "/api/v1/admin/cognito/users")]
+  [InlineData("POST", "/api/v1/admin/cognito/users/some-user/disable")]
+  [InlineData("POST", "/api/v1/ai/explain-card")]
+  [InlineData("POST", "/api/v1/billing/verify")]
+  [InlineData("POST", "/api/v1/billing/webhook/apple")]
+  public async Task RetiredEdgePublicPaths_AreNotServedByCoreVpc(string method, string path)
   {
-    // edge-public owns /api/v1/admin/cognito/users; core-vpc has no route for it, so a
-    // super admin hitting it here gets the generic 404.
-    var response = await new VpcFunction().Handler(SuperAdminEvent("GET", "/api/v1/admin/cognito/users"));
+    // edge-public's three gateway routes (ANY /api/v1/admin/cognito/{proxy+}, /api/v1/ai/{proxy+},
+    // /api/v1/billing/{proxy+}) were deleted with it, so these requests now land on core-vpc
+    // through ANY /api/v1/admin/{proxy+} and ANY /{proxy+}. core-vpc has no route for any of
+    // them: even a super admin gets the generic 404, never a create, a disable or a 501 stub.
+    var response = await new VpcFunction().Handler(SuperAdminEvent(method, path));
 
     Assert.Equal(404, response.StatusCode);
     Assert.Equal("NOT_FOUND", ErrorCode(response));

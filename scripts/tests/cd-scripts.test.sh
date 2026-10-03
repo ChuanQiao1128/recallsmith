@@ -526,10 +526,10 @@ if [ "$RC" = 1 ] && has "$T/err" "SMOKE FAIL"; then ok "smoke: in CD, AccessDeni
 # ===================================================================================================== plan
 echo "# plan.sh"
 run "$MIRROR/scripts/cd/plan.sh" classify src_C/Vpc/Db/Migrations/046.sql src_C/env/prod.env.json src_C/scripts/merge-env.sh \
-  src_C/Tests/X.cs src_C/Public/P.cs src_C/README.md frontend/src/App.tsx frontend/tests/a.test.ts frontend/README.md \
+  src_C/Tests/X.cs src_C/README.md frontend/src/App.tsx frontend/tests/a.test.ts frontend/README.md \
   site/index.html services/ai-qa/src/ai_qa/prompts.py services/ai-qa/tests/test_x.py services/notifier/env/prod.env.json \
   services/deploy-python-lambda.sh mobile/App.tsx infra/envs/prod/main.tf docs/x.md .github/workflows/cd.yml scripts/smoke.sh
-check "plan classify: the path table" [ "$(tr '\n' ' ' < "$T/out")" = "backend backend backend - - - console - - site ai-qa - notifier - - - - - - " ]
+check "plan classify: the path table" [ "$(tr '\n' ' ' < "$T/out")" = "backend backend backend - - console - - site ai-qa - notifier - - - - - - " ]
 P="$T/planrepo"; PO="$T/planorigin.git"; mkdir -p "$P"; cp -R "$MIRROR/scripts" "$P/"
 gp() { git -C "$P" -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false "$@"; }
 git init -q --bare "$PO"

@@ -18,9 +18,11 @@
 // they are gone, and not fall back to `merge`, which would leave them in place
 // while reporting success.
 //
-// Scoping note: rows are found through the username cell and `closest('tr')`
-// rather than by index into getAllByRole. Two users are on screen, both with a
-// "Manage" button, and an index would silently follow a reordering.
+// Scoping note: rows are found through the sub cell inside the table and
+// `closest('tr')` rather than by index into getAllByRole. Two accounts are on
+// screen, both with a "Manage" button, and an index would silently follow a
+// reordering. (The editor repeats the selected sub, so the lookup is scoped to
+// the table.)
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
@@ -28,14 +30,13 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 
 import { ok, refused } from './support/apiResult';
-import { ALICE_SUB, alice, bob, decks, unstubbed } from './support/adminFixtures';
+import { ALICE_SUB, BOB_SUB, alice, bob, decks, unstubbed } from './support/adminFixtures';
 import { signInAsSuperAdmin, signOut } from './support/consoleSession';
 import { ConfirmDialogProvider } from '../src/components/ui/ConfirmDialog';
 
 const api = vi.hoisted(() => ({
-  listAdminUsers: vi.fn(),
+  listAdminPermissionHolders: vi.fn(),
   listAdminDecks: vi.fn(),
-  createAdminUser: vi.fn(),
   saveAdminDeckPermissionsBulk: vi.fn(),
   runMigrate: vi.fn(),
 }));
@@ -57,13 +58,13 @@ async function mountConsole(): Promise<void> {
       </ConfirmDialogProvider>
     </MemoryRouter>,
   );
-  await screen.findByText('2 user(s)');
+  await screen.findByText('2 account(s)');
 }
 
-/** Open the permission editor on the row whose username cell reads `username`. */
-async function manage(username: string): Promise<void> {
-  const row = screen.getByText(username).closest('tr');
-  if (!row) throw new Error(`no table row for ${username}`);
+/** Open the permission editor on the row whose sub cell reads `sub`. */
+async function manage(sub: string): Promise<void> {
+  const row = within(screen.getByRole('table')).getByText(sub).closest('tr');
+  if (!row) throw new Error(`no table row for ${sub}`);
   await userEvent.click(within(row).getByRole('button', { name: 'Manage' }));
 }
 
@@ -88,9 +89,8 @@ function isChecked(slug: string, kind: 'Read' | 'Write'): boolean {
 beforeEach(() => {
   signOut();
   signInAsSuperAdmin();
-  api.listAdminUsers.mockResolvedValue(ok([alice(), bob()]));
+  api.listAdminPermissionHolders.mockResolvedValue(ok([alice(), bob()]));
   api.listAdminDecks.mockResolvedValue(ok(decks()));
-  api.createAdminUser.mockImplementation(unstubbed('createAdminUser'));
   api.saveAdminDeckPermissionsBulk.mockImplementation(unstubbed('saveAdminDeckPermissionsBulk'));
   api.runMigrate.mockImplementation(unstubbed('runMigrate'));
 });
@@ -105,7 +105,7 @@ afterEach(() => {
 describe('the write-implies-read rule, as the operator sees it', () => {
   it('ticks Read when Write is ticked', async () => {
     await mountConsole();
-    await manage('alice_editor');
+    await manage(ALICE_SUB);
 
     expect(isChecked('d-two', 'Read')).toBe(false);
     await userEvent.click(writeBox('d-two'));
@@ -118,7 +118,7 @@ describe('the write-implies-read rule, as the operator sees it', () => {
 
   it('unticks Write when Read is taken away', async () => {
     await mountConsole();
-    await manage('alice_editor');
+    await manage(ALICE_SUB);
 
     expect(isChecked('d-one', 'Write')).toBe(true);
     await userEvent.click(readBox('d-one'));
@@ -133,7 +133,7 @@ describe('filtering the deck table', () => {
     api.saveAdminDeckPermissionsBulk.mockResolvedValue(ok({ saved: 2, replace: true }));
 
     await mountConsole();
-    await manage('alice_editor');
+    await manage(ALICE_SUB);
 
     // Grant d-two, then search for d-one so d-two leaves the screen. The
     // operator's search box is a viewport, not an editing gesture.
@@ -165,7 +165,7 @@ describe('taking every deck away', () => {
     api.saveAdminDeckPermissionsBulk.mockResolvedValue(ok({ saved: 0, replace: true }));
 
     await mountConsole();
-    await manage('alice_editor');
+    await manage(ALICE_SUB);
 
     await userEvent.click(readBox('d-one'));
     await userEvent.click(screen.getByRole('button', { name: SAVE_BUTTON }));
@@ -180,6 +180,55 @@ describe('taking every deck away', () => {
   });
 });
 
+describe('after every deck is taken away', () => {
+  // core-vpc returns no row for a sub with no grant, so the re-read holders no
+  // longer contain it. The editor stays open on that sub, and "Reset draft"
+  // must rebuild from nothing: rebuilding from the grants just revoked would
+  // show them ticked again, and a second Save would re-grant them.
+  function noneChecked(): boolean {
+    return screen.queryAllByRole('checkbox', { checked: true }).length === 0;
+  }
+
+  it('Reset draft after an empty save restores no deck', async () => {
+    api.saveAdminDeckPermissionsBulk.mockResolvedValue(ok({ saved: 0, replace: true }));
+
+    await mountConsole();
+    await manage(ALICE_SUB);
+    await userEvent.click(readBox('d-one'));
+
+    api.listAdminPermissionHolders.mockResolvedValue(ok([bob()]));
+    await userEvent.click(screen.getByRole('button', { name: SAVE_BUTTON }));
+    expect(await screen.findByText('Saved. (0 deck(s) now assigned)')).not.toBeNull();
+    await screen.findByText('1 account(s)');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Reset draft' }));
+
+    expect(noneChecked()).toBe(true);
+    await userEvent.click(screen.getByRole('button', { name: SAVE_BUTTON }));
+    await waitFor(() => expect(api.saveAdminDeckPermissionsBulk).toHaveBeenCalledTimes(2));
+    expect(api.saveAdminDeckPermissionsBulk).toHaveBeenLastCalledWith({
+      adminSub: ALICE_SUB,
+      mode: 'replace',
+      permissions: [],
+    });
+  });
+
+  it('Refresh drops the grants of a sub that no longer holds any', async () => {
+    await mountConsole();
+    await manage(ALICE_SUB);
+    expect(isChecked('d-one', 'Write')).toBe(true);
+
+    // Revoked elsewhere (another tab, or the API) while this editor was open.
+    api.listAdminPermissionHolders.mockResolvedValue(ok([bob()]));
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await screen.findByText('1 account(s)');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Reset draft' }));
+
+    expect(noneChecked()).toBe(true);
+  });
+});
+
 describe('when the save fails', () => {
   it('says why, claims nothing, and gives the button back', async () => {
     api.saveAdminDeckPermissionsBulk.mockResolvedValue(
@@ -187,7 +236,7 @@ describe('when the save fails', () => {
     );
 
     await mountConsole();
-    await manage('alice_editor');
+    await manage(ALICE_SUB);
     await userEvent.click(writeBox('d-two'));
     await userEvent.click(screen.getByRole('button', { name: SAVE_BUTTON }));
 
@@ -207,27 +256,22 @@ describe('when the save succeeds', () => {
     api.saveAdminDeckPermissionsBulk.mockResolvedValue(ok({ saved: 3, replace: true }));
 
     await mountConsole();
-    await manage('alice_editor');
+    await manage(ALICE_SUB);
     await userEvent.click(writeBox('d-two'));
     await userEvent.click(screen.getByRole('button', { name: SAVE_BUTTON }));
 
     expect(await screen.findByText('Saved. (3 deck(s) now assigned)')).not.toBeNull();
-    await waitFor(() => expect(api.listAdminUsers).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(api.listAdminPermissionHolders).toHaveBeenCalledTimes(2));
   });
 });
 
-describe('a user with no sub', () => {
-  it('is refused locally rather than saved against an undefined key', async () => {
+describe('the draft starts from the account that was opened', () => {
+  it('shows bob his own read-only grant, not alice\'s', async () => {
     await mountConsole();
-    await manage('bob_editor');
-    await userEvent.click(writeBox('d-two'));
-    await userEvent.click(screen.getByRole('button', { name: SAVE_BUTTON }));
+    await manage(BOB_SUB);
 
-    expect(
-      await screen.findByText('Selected user has no "sub" attribute. Cannot save permissions.'),
-    ).not.toBeNull();
-    // The point of the guard: a bulk replace keyed on `undefined` is a write
-    // whose target nobody can predict.
-    expect(api.saveAdminDeckPermissionsBulk).not.toHaveBeenCalled();
+    expect(isChecked('d-three', 'Read')).toBe(true);
+    expect(isChecked('d-three', 'Write')).toBe(false);
+    expect(isChecked('d-one', 'Read')).toBe(false);
   });
 });

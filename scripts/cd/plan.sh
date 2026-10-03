@@ -14,7 +14,7 @@
 #   plan.sh decide                    the plan job: reads the event from the environment, prints key=value outputs
 #
 # What deploys when (infra/RUNBOOK.md §12):
-#   backend   src_C/**, except Tests/ and Public/ (neither is in the vpc or worker zip) and *.md
+#   backend   src_C/**, except Tests/ (not in the vpc or worker zip) and *.md
 #   console   frontend/**, except tests/ and *.md
 #   site      site/** (everything there is synced to the bucket)
 #   <svc>     services/<svc>/**, except tests/ and *.md; svc in ai-qa notifier source-watcher synthetic-check
@@ -55,7 +55,7 @@ classify_path() {
   case "$p" in
     site/*) echo site; return ;;
     *.md) echo -; return ;;
-    src_C/Tests/* | src_C/Public/*) echo -; return ;;
+    src_C/Tests/*) echo -; return ;;
     src_C/*) echo backend; return ;;
     frontend/tests/*) echo -; return ;;
     frontend/*) echo console; return ;;

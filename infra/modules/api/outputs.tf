@@ -26,10 +26,6 @@ output "core_vpc_log_group_name" {
   value = aws_cloudwatch_log_group.core_vpc.name
 }
 
-output "edge_public_function_arn" {
-  value = aws_lambda_function.edge_public.arn
-}
-
 output "api_hostname" {
   value = local.api_hostname
 }

@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 //
 // A screen reader has to be able to name every control this wave touched: the
-// new-deck fields, the deck-type radio group, the new-user fields, the deck
-// search box, and the Decks / Publish Jobs switcher. getByLabelText and
+// new-deck fields, the deck-type radio group, the admin page's account fields
+// (the Cognito sub box and the account search; the new-user form went with
+// edge-public on 2026-10-04), the deck search box, and the Decks / Publish Jobs
+// switcher. getByLabelText and
 // getByRole with a name throw when the association is missing, so these cases
 // are the association, not a description of it.
 
@@ -20,9 +22,8 @@ import { signInAsSuperAdmin, signOut } from './support/consoleSession';
 import { renderAt } from './support/routerProbe';
 
 const admin = vi.hoisted(() => ({
-  listAdminUsers: vi.fn(),
+  listAdminPermissionHolders: vi.fn(),
   listAdminDecks: vi.fn(),
-  createAdminUser: vi.fn(),
   saveAdminDeckPermissionsBulk: vi.fn(),
   runMigrate: vi.fn(),
 }));
@@ -39,9 +40,8 @@ const noop = () => {};
 beforeEach(() => {
   signOut();
   signInAsSuperAdmin();
-  admin.listAdminUsers.mockResolvedValue(ok([alice()]));
+  admin.listAdminPermissionHolders.mockResolvedValue(ok([alice()]));
   admin.listAdminDecks.mockResolvedValue(ok(decks()));
-  admin.createAdminUser.mockImplementation(unstubbed('createAdminUser'));
   admin.saveAdminDeckPermissionsBulk.mockImplementation(unstubbed('saveAdminDeckPermissionsBulk'));
   admin.runMigrate.mockImplementation(unstubbed('runMigrate'));
 });
@@ -74,8 +74,8 @@ describe('NewDeckPage controls carry names', () => {
   });
 });
 
-describe('AdminUsersPage new-user form', () => {
-  it('reaches the AdminUsersPage new-user fields by their labels', async () => {
+describe('AdminUsersPage account fields', () => {
+  it('reaches the AdminUsersPage account fields by their labels', async () => {
     render(
       <MemoryRouter initialEntries={['/admin/users']}>
         <ConfirmDialogProvider>
@@ -83,11 +83,10 @@ describe('AdminUsersPage new-user form', () => {
         </ConfirmDialogProvider>
       </MemoryRouter>,
     );
-    await screen.findByText('1 user(s)');
+    await screen.findByText('1 account(s)');
 
-    expect(screen.getByLabelText('Username')).not.toBeNull();
-    expect(screen.getByLabelText('Email')).not.toBeNull();
-    expect(screen.getByLabelText('Temp password')).not.toBeNull();
+    expect(screen.getByLabelText('Cognito sub')).not.toBeNull();
+    expect(screen.getByRole('textbox', { name: 'Search accounts by sub' })).not.toBeNull();
   });
 });
 

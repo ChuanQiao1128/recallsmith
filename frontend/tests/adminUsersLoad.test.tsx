@@ -1,17 +1,21 @@
 // @vitest-environment jsdom
 //
-// "We could not read the user list" and "there are no users" are different
-// sentences, and this console has one row of table markup for both.
+// "We could not read the deck permissions" and "no account holds one" are
+// different sentences, and this console has one row of table markup for both.
 //
 // The failure mode this file exists for is an administrator opening the page,
-// seeing a clean empty table, and concluding the accounts are gone — or, on the
+// seeing a clean empty table, and concluding the grants are gone — or, on the
 // permission editor next door, that an editor has no access when in fact the
 // answer never arrived. So every failure case below asserts two things: that
-// the server's own wording is on the screen, and that "No users returned." is
-// NOT. The second half is the one that matters.
+// the server's own wording is on the screen, and that the empty-table sentence
+// is NOT. The second half is the one that matters.
+//
+// (Since edge-public was retired on 2026-10-04 the table lists the Cognito subs
+// that hold deck permissions, from core-vpc's GET /api/v1/admin/permissions; the
+// console no longer reads the Cognito pool.)
 //
 // Honest about the teeth: the business-refusal case and the network-failure
-// case share a single mutation. Replacing `usersRes.error?.message ?? '...'`
+// case share a single mutation. Replacing `holdersRes.error?.message ?? '...'`
 // with the bare fallback turns both red together, so they are not two
 // independent guards on the message. They are kept apart anyway because the two
 // shapes reach the page by different routes — a 200 carrying success:false, and
@@ -30,17 +34,16 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 
-import type { AdminUser } from '../src/api/admin';
+import type { AdminPermissionHolder } from '../src/api/admin';
 import type { ApiResult } from '../src/types/api';
 import { deferred, networkFailure, ok, refused } from './support/apiResult';
-import { alice, bob, decks, unstubbed } from './support/adminFixtures';
+import { ALICE_SUB, BOB_SUB, alice, bob, decks, unstubbed } from './support/adminFixtures';
 import { signInAsSuperAdmin, signOut } from './support/consoleSession';
 import { ConfirmDialogProvider } from '../src/components/ui/ConfirmDialog';
 
 const api = vi.hoisted(() => ({
-  listAdminUsers: vi.fn(),
+  listAdminPermissionHolders: vi.fn(),
   listAdminDecks: vi.fn(),
-  createAdminUser: vi.fn(),
   saveAdminDeckPermissionsBulk: vi.fn(),
   runMigrate: vi.fn(),
 }));
@@ -52,7 +55,7 @@ vi.mock('../src/api/admin', async importOriginal => {
 
 const { AdminUsersPage } = await import('../src/pages/AdminUsersPage');
 
-const EMPTY_ROW = 'No users returned.';
+const EMPTY_ROW = 'No account holds a deck permission.';
 
 function mount(): void {
   render(
@@ -68,8 +71,7 @@ beforeEach(() => {
   signOut();
   signInAsSuperAdmin();
   api.listAdminDecks.mockResolvedValue(ok(decks()));
-  api.listAdminUsers.mockImplementation(unstubbed('listAdminUsers'));
-  api.createAdminUser.mockImplementation(unstubbed('createAdminUser'));
+  api.listAdminPermissionHolders.mockImplementation(unstubbed('listAdminPermissionHolders'));
   api.saveAdminDeckPermissionsBulk.mockImplementation(unstubbed('saveAdminDeckPermissionsBulk'));
   api.runMigrate.mockImplementation(unstubbed('runMigrate'));
 });
@@ -81,36 +83,36 @@ afterEach(() => {
   signOut();
 });
 
-describe('while the user list is in flight', () => {
+describe('while the account list is in flight', () => {
   it('says it is loading, and shows no table until the answer arrives', async () => {
-    const pending = deferred<ApiResult<AdminUser[]>>();
-    api.listAdminUsers.mockReturnValue(pending.promise);
+    const pending = deferred<ApiResult<AdminPermissionHolder[]>>();
+    api.listAdminPermissionHolders.mockReturnValue(pending.promise);
 
     mount();
 
-    expect(await screen.findByText('Loading users...')).not.toBeNull();
+    expect(await screen.findByText('Loading accounts...')).not.toBeNull();
     expect(screen.queryByRole('table')).toBeNull();
-    expect(screen.queryByText('alice_editor')).toBeNull();
+    expect(screen.queryByText(ALICE_SUB)).toBeNull();
 
     pending.resolve(ok([alice(), bob()]));
 
-    expect(await screen.findByText('alice_editor')).not.toBeNull();
-    expect(screen.queryByText('Loading users...')).toBeNull();
+    expect(await screen.findByText(ALICE_SUB)).not.toBeNull();
+    expect(screen.queryByText('Loading accounts...')).toBeNull();
     expect(screen.queryByRole('table')).not.toBeNull();
   });
 });
 
-describe('when the server refuses the user list', () => {
+describe('when the server refuses the deck permissions', () => {
   it('shows the sentence the server chose, not an empty table', async () => {
-    api.listAdminUsers.mockResolvedValue(
-      refused<AdminUser[]>('FORBIDDEN', 'deck service says no'),
+    api.listAdminPermissionHolders.mockResolvedValue(
+      refused<AdminPermissionHolder[]>('FORBIDDEN', 'deck service says no'),
     );
 
     mount();
 
-    // The server's own wording, because the page hard-coding "Failed to load
-    // users." over the top of it hides the one piece of information that tells
-    // an operator what to do next.
+    // The server's own wording, because the page hard-coding a fallback over
+    // the top of it hides the one piece of information that tells an operator
+    // what to do next.
     expect(await screen.findByText('deck service says no')).not.toBeNull();
     expect(screen.queryByText(EMPTY_ROW)).toBeNull();
   });
@@ -118,7 +120,9 @@ describe('when the server refuses the user list', () => {
 
 describe('when the request never got an answer', () => {
   it('still says so, rather than reporting an empty console', async () => {
-    api.listAdminUsers.mockResolvedValue(networkFailure<AdminUser[]>('socket hang up'));
+    api.listAdminPermissionHolders.mockResolvedValue(
+      networkFailure<AdminPermissionHolder[]>('socket hang up'),
+    );
 
     mount();
 
@@ -127,30 +131,30 @@ describe('when the request never got an answer', () => {
   });
 });
 
-describe('when there really are no users', () => {
+describe('when no account holds a deck permission', () => {
   it('says so, with no error anywhere on the page', async () => {
-    api.listAdminUsers.mockResolvedValue(ok<AdminUser[]>([]));
+    api.listAdminPermissionHolders.mockResolvedValue(ok<AdminPermissionHolder[]>([]));
 
     mount();
 
     expect(await screen.findByText(EMPTY_ROW)).not.toBeNull();
-    expect(screen.queryByText('0 user(s)')).not.toBeNull();
-    expect(screen.queryByText('Failed to load users')).toBeNull();
+    expect(screen.queryByText('0 account(s)')).not.toBeNull();
+    expect(screen.queryByText('Failed to load deck permissions')).toBeNull();
   });
 });
 
-describe('searching the user list', () => {
+describe('searching the account list', () => {
   it('hides the rows that do not match, and counts what is left', async () => {
-    api.listAdminUsers.mockResolvedValue(ok([alice(), bob()]));
+    api.listAdminPermissionHolders.mockResolvedValue(ok([alice(), bob()]));
 
     mount();
-    expect(await screen.findByText('2 user(s)')).not.toBeNull();
-    expect(screen.queryByText('bob_editor')).not.toBeNull();
+    expect(await screen.findByText('2 account(s)')).not.toBeNull();
+    expect(screen.queryByText(BOB_SUB)).not.toBeNull();
 
-    await userEvent.type(screen.getByPlaceholderText(/Search users/), 'alice');
+    await userEvent.type(screen.getByPlaceholderText(/Search accounts/), 'a11ce');
 
-    await waitFor(() => expect(screen.queryByText('bob_editor')).toBeNull());
-    expect(screen.queryByText('alice_editor')).not.toBeNull();
-    expect(screen.queryByText('1 user(s)')).not.toBeNull();
+    await waitFor(() => expect(screen.queryByText(BOB_SUB)).toBeNull());
+    expect(screen.queryByText(ALICE_SUB)).not.toBeNull();
+    expect(screen.queryByText('1 account(s)')).not.toBeNull();
   });
 });

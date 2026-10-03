@@ -18,7 +18,7 @@ keeps a value for at most 5 minutes, so a new value reaches them without a deplo
 | --- | --- | --- | --- |
 | `PGPASSWORD` | `pg-password` | `src_C/Shared/RecallSmith.Lambda.Db/Pg.cs:30` | RDS (the app-role login password) |
 | `MIGRATE_SECRET` | `migrate-secret` | `src_C/Vpc/Db/Migrate.cs:138`, `src_C/Vpc/Db/AppRole.cs` (`x-migrate-secret` gate) | supervisor (invoke header) |
-| `INTERNAL_SHARED_SECRET` | `internal-shared-secret` | `src_C/Shared/RecallSmith.Lambda.Common/Auth.cs:509` (core-vpc verifies `/api/internal/entitlements/apply` and `/api/internal/subscriptions/upsert`) | edge-public (internal HMAC caller) only; neither Python Lambda since Z08 |
+| `INTERNAL_SHARED_SECRET` | `internal-shared-secret` | `src_C/Shared/RecallSmith.Lambda.Common/Auth.cs:509` (core-vpc verifies `/api/internal/entitlements/apply` and `/api/internal/subscriptions/upsert`) | nobody: edge-public, listed here as the internal HMAC caller, was retired on 2026-10-04 and its live configuration never carried this key; neither Python Lambda since Z08 |
 | `INTERNAL_SECRET_WEBHOOK_REPORT` | `webhook-report-secret` | `src_C/Vpc/Internal/WebhookDeliveryReport.cs:43` (core-vpc verifies the delivery report) | developercards-webhook-dispatcher (signs; reads the leaf at runtime) |
 | `INTERNAL_SECRET_AI_QA_RESULTS` | `ai-qa-results-secret` | `src_C/Vpc/Internal/AiQaResults.cs:82` (core-vpc verifies the results report) | developercards-ai-qa (signs; reads the leaf at runtime) |
 | — (never an env var; `SSM_NOT_ENV`, `SSM_NOT_ENV_PATTERN`) | `webhook-signing-secret`, per subscription `webhook-signing-secret-sub-<id>` | developercards-webhook-dispatcher, runtime (`services/webhook-dispatcher/src/webhook_dispatcher/handler.py:152`) | every webhook receiver (a `-sub-<id>` secret: that subscription's receiver only) |
@@ -91,19 +91,18 @@ Rotates `MIGRATE_SECRET` (the `x-migrate-secret` gate on the admin DB routes).
 
 ## Internal shared secret
 
-Rotates `INTERNAL_SHARED_SECRET`, the HMAC secret shared by edge-public (the caller) and core-vpc
-(which verifies `/api/internal/entitlements/apply` and `/api/internal/subscriptions/upsert` with it).
+Rotates `INTERNAL_SHARED_SECRET`, the HMAC secret core-vpc verifies `/api/internal/entitlements/apply` and
+`/api/internal/subscriptions/upsert` with. It has no caller since edge-public, the intended one, was retired
+(2026-10-04, infra/RUNBOOK.md §14); its live configuration never carried this key.
 Since Z08 the webhook dispatcher and ai-qa sign with their own route secrets (below), and their roles
 cannot read this leaf. core-vpc falls back to it on a route-secret route only when that route's own
 env var is unset.
 
 1. `aws ssm put-parameter --name /developercards/prod/internal-shared-secret --type SecureString --overwrite --value <new>`
-2. `ENV=prod ./src_C/deploy.sh` for core-vpc, and update edge-public's copy the same way, so both
-   sides sign and verify with the same value (rotate both in the maintenance window).
+2. `ENV=prod ./src_C/deploy.sh` for core-vpc.
 
 core-vpc also accepts `INTERNAL_SHARED_SECRET_PREVIOUS` (from `internal-shared-secret-previous`), so
-the route-secret procedure below works for this leaf too and removes the flag day on core's side:
-update edge-public's copy in its step 5 instead of waiting, and never skip its last deploy.
+the route-secret procedure below works for this leaf too if a caller is ever added.
 
 ## Route secrets (webhook-report-secret, ai-qa-results-secret)
 

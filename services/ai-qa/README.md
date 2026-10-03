@@ -575,8 +575,8 @@ core-vpc accepts only that secret on that route:
 | `ai-qa-results-secret` | `POST /api/internal/ai-qa/results` | this Lambda | `INTERNAL_SECRET_AI_QA_RESULTS` |
 | `webhook-report-secret` | `POST /api/internal/webhooks/deliveries/report` | webhook dispatcher | `INTERNAL_SECRET_WEBHOOK_REPORT` |
 
-Neither role can read the global `internal-shared-secret`; only edge-public and core-vpc still use
-it (docs/runbooks/secrets-rotation.md). The procedure below is the same for both leaves.
+Neither role can read the global `internal-shared-secret`; only core-vpc still uses it
+(docs/runbooks/secrets-rotation.md; edge-public, the other holder on paper, was retired on 2026-10-04). The procedure below is the same for both leaves.
 
 - **Caller side, no deploy.** The Lambda reads `<leaf>` by exact name and keeps it for at most
   5 minutes. When core answers 401/403 it resends once, signed with `<leaf>-previous` if that

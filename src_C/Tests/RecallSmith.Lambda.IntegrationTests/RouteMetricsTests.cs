@@ -150,8 +150,6 @@ public class RouteMetricsTests
   [InlineData("/api/v1/content/premium-url-dev")]
   [InlineData("/api/v1/draw-state/sync")]
   [InlineData("/api/internal/subscriptions/upsert")]
-  [InlineData("/api/v1/billing/webhook/apple")]
-  [InlineData("/api/v1/ai/explain-card")]
   [InlineData("/api/v1/admin/card-reports")]
   [InlineData("/api/v1/user/card-reports")]
   public void Route_KnownPaths_LabelThemselves(string path)
@@ -180,13 +178,21 @@ public class RouteMetricsTests
       "/api/v1/admin/users/:userSub/entitlements",
       RouteMetrics.RouteFor($"/api/v1/admin/users/{Guid.NewGuid()}/entitlements"));
 
-    Assert.Equal(
-      "/api/v1/admin/cognito/users/:username/disable",
-      RouteMetrics.RouteFor("/api/v1/admin/cognito/users/some.user%40example.com/disable"));
-
     // And the unparameterised sibling is not swallowed by the template.
     Assert.Equal("/api/v1/admin/users", RouteMetrics.RouteFor("/api/v1/admin/users"));
-    Assert.Equal("/api/v1/admin/cognito/users", RouteMetrics.RouteFor("/api/v1/admin/cognito/users"));
+  }
+
+  [Theory]
+  [InlineData("/api/v1/admin/cognito/users")]
+  [InlineData("/api/v1/admin/cognito/users/some.user%40example.com/disable")]
+  [InlineData("/api/v1/billing/webhook/apple")]
+  [InlineData("/api/v1/ai/explain-card")]
+  public void Route_RetiredEdgePublicPaths_AreUnmatched(string path)
+  {
+    // edge-public was retired on 2026-10-04 (R27 EDGE) and its labels went with it. Its paths
+    // now fall through the gateway to core-vpc, which serves none of them, so they collapse into
+    // the one bucket rather than keeping a series per retired route.
+    Assert.Equal("unmatched", RouteMetrics.RouteFor(path));
   }
 
   [Fact]
@@ -537,7 +543,8 @@ public class RouteMetricsTests
     // is flat at zero forever, which is indistinguishable from a healthy route nobody calls.
     var router = new SortedSet<string>(StringComparer.Ordinal);
 
-    foreach (var file in new[] { "Vpc/VpcFunction.cs", "Public/PublicFunction.cs" })
+    // One dispatcher since R27 EDGE: edge-public's PublicFunction was deleted with edge-public.
+    foreach (var file in new[] { "Vpc/VpcFunction.cs" })
     {
       var source = File.ReadAllText(Path.Combine(SourceRoot(), file));
 

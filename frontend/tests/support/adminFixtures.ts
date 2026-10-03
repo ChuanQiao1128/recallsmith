@@ -1,7 +1,8 @@
 // tests/support/adminFixtures.ts
 //
-// The smallest cast of users and decks the AdminUsersPage cases need, plus the
-// stub of last resort.
+// The smallest cast of accounts and decks the AdminUsersPage cases need, plus
+// the stub of last resort. Accounts are what core-vpc knows of them since
+// edge-public was retired (2026-10-04): a Cognito sub and its deck permissions.
 //
 // Everything is a factory rather than a shared const. Five files mount that
 // page and two of them tick permission boxes, so a shared object literal is one
@@ -15,24 +16,22 @@
 // NOT collected as a test: the runner's include globs only match *.test.ts and
 // *.test.tsx.
 
-import type { AdminUser, DeckSummary } from '../../src/api/admin';
+import type { AdminPermissionHolder, DeckSummary } from '../../src/api/admin';
 
 /** alice's Cognito sub. The bulk-permissions endpoint is keyed on exactly this. */
-export const ALICE_SUB = 'alice-sub-0001';
+export const ALICE_SUB = '0b5c3f8e-1d2a-4c6b-9e7f-0000000a11ce';
+
+/** bob's Cognito sub. Differs from alice's in the last group only, so a search for "a11ce" finds her alone. */
+export const BOB_SUB = '0b5c3f8e-1d2a-4c6b-9e7f-000000000b0b';
 
 /**
- * A user whose permissions can be saved: she has a `sub`, and she arrives with
- * read+write on deck 1 so that "the draft starts from what the server said" is
- * observable rather than assumed.
+ * An account whose permissions can be saved, arriving with read+write on deck
+ * 1 so that "the draft starts from what the server said" is observable rather
+ * than assumed.
  */
-export function alice(): AdminUser {
+export function alice(): AdminPermissionHolder {
   return {
-    username: 'alice_editor',
     sub: ALICE_SUB,
-    email: 'alice@example.invalid',
-    enabled: true,
-    status: 'CONFIRMED',
-    groups: ['editor'],
     deckPermissions: [
       {
         deckId: 1,
@@ -47,20 +46,22 @@ export function alice(): AdminUser {
 }
 
 /**
- * A user with no `sub`.
- *
- * Cognito users created outside this console can arrive without one, and the
- * save path refuses them rather than POSTing `adminSub: undefined` — which the
- * server would either reject or, much worse, resolve against some other row.
+ * A second account, read-only on deck 3, so a table of two rows can tell
+ * whose draft the editor opened.
  */
-export function bob(): AdminUser {
+export function bob(): AdminPermissionHolder {
   return {
-    username: 'bob_editor',
-    email: 'bob@example.invalid',
-    enabled: true,
-    status: 'CONFIRMED',
-    groups: ['editor'],
-    deckPermissions: [],
+    sub: BOB_SUB,
+    deckPermissions: [
+      {
+        deckId: 3,
+        deckSlug: 'd-three',
+        deckTitle: 'Deck Three',
+        locale: 'zh',
+        canRead: true,
+        canWrite: false,
+      },
+    ],
   };
 }
 

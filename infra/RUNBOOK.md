@@ -386,7 +386,8 @@ The result lists the producer and every consumer of the same request. Then open 
 
 Limits:
 
-- HTTP APIs do not support X-Ray, so a request trace starts at the Lambda; `edge-public` is **not** traced.
+- HTTP APIs do not support X-Ray, so a request trace starts at the Lambda. (`edge-public`, never traced, was retired
+  on 2026-10-04: §14.)
 - A function traces only from its first version published after H05: published versions freeze the tracing
   mode, so a `prod` alias on an older version still shows no traces until the next deploy.
 - core-vpc and worker-lambda run in the VPC without an X-Ray interface endpoint. Lambda's own trace daemon
@@ -622,7 +623,7 @@ per role, each with `source_profile = dev`:
 | Profile | Role | MFA | Who | Can |
 |---|---|---|---|---|
 | `devcards-ro` | `devcards-agent-readonly` | no | Claude sessions, workflow and DDW workers, investigations | AWS ReadOnlyAccess **minus** SSM/KMS decrypt, Secrets Manager, Lambda configuration (its environment holds the injected secrets), S3 object reads (tfstate, user content, CloudTrail), Cognito user records, RDS logs, SQS receive |
-| `devcards-deploy` | `devcards-deployer` | **yes** (since #740) | break-glass only: `src_C/deploy.sh`, `services/deploy-python-lambda.sh`, `frontend/deploy.sh`, `site/deploy.sh`, `scripts/rollback.sh`, `infra/scripts/rds-snapshot.sh` (all default to it) | update / publish / re-alias core-vpc, worker-lambda and the five `developercards-*` Python functions; read `/developercards` SSM through KMS-via-SSM; sync the console and site buckets and invalidate their two distributions; pre-migration DB snapshot. Not: edge-public, newsapp, IAM, `lambda:InvokeFunction` (so not `scripts/smoke.sh`: use `devcards-admin`), tfstate, content buckets |
+| `devcards-deploy` | `devcards-deployer` | **yes** (since #740) | break-glass only: `src_C/deploy.sh`, `services/deploy-python-lambda.sh`, `frontend/deploy.sh`, `site/deploy.sh`, `scripts/rollback.sh`, `infra/scripts/rds-snapshot.sh` (all default to it) | update / publish / re-alias core-vpc, worker-lambda and the five `developercards-*` Python functions; read `/developercards` SSM through KMS-via-SSM; sync the console and site buckets and invalidate their two distributions; pre-migration DB snapshot. Not: newsapp, IAM, `lambda:InvokeFunction` (so not `scripts/smoke.sh`: use `devcards-admin`), tfstate, content buckets |
 | `devcards-admin` | `devcards-admin-mfa` | **yes** | the owner; Terraform; `scripts/invoke-as-admin.sh`; break-glass | AdministratorAccess, 1-hour session |
 
 ```
@@ -751,7 +752,7 @@ environment must not have "Prevent self-review" on: the owner both merges and ap
 
 | Changed path (since the last full deployment) | Target | Deployed by |
 |---|---|---|
-| `src_C/**` except `src_C/Tests/**`, `src_C/Public/**` (neither is in a zip) and `*.md` | `backend` = core-vpc + worker-lambda | `src_C/deploy.sh` |
+| `src_C/**` except `src_C/Tests/**` (not in a zip) and `*.md` | `backend` = core-vpc + worker-lambda | `src_C/deploy.sh` |
 | `services/<svc>/**` except `tests/**` and `*.md`; svc = ai-qa, notifier, source-watcher, synthetic-check, webhook-dispatcher | `<svc>` | `services/deploy-python-lambda.sh` |
 | `frontend/**` except `frontend/tests/**` and `*.md` | `console` | `frontend/deploy.sh` |
 | `site/**` | `site` | `site/deploy.sh` |
@@ -902,7 +903,8 @@ ruleset 24415242, variable `CONSOLE_SENTRY_DSN` (read from the live console bund
 
 - **Terraform** stays local, behind the owner's MFA, with the plan allow-list (§2–§5).
 - **Mobile**: OTA updates and App Store / Play binaries stay owner-driven.
-- **edge-public** (`src_C/Public`), which the deploy role cannot touch.
+- **Console accounts**: the owner's `aws cognito-idp` commands (§14); edge-public, which served them, was retired on
+  2026-10-04.
 - **Database migrations**: the console's Migrate button or `scripts/invoke-as-admin.sh` (owner). CD takes no RDS
   snapshot because it migrates nothing; snapshot before migrating, as before.
 - **Staging**: there is none yet. The smoke runs against production right after the deploy (against a baseline taken
@@ -935,3 +937,163 @@ restore-point lag 8 min.
    shows any other drift.
 4. Keep `developercards-damaged-<date>` until the incident is closed; delete it (final snapshot) only with the owner.
 5. Write the postmortem in `docs/ops/`.
+
+## 14. Console admin accounts (after edge-public, 2026-10-04)
+
+The console no longer lists, creates, disables or deletes console accounts. That went through the `edge-public`
+Lambda (`ANY /api/v1/admin/cognito/{proxy+}`), which was retired on 2026-10-04 (R27 EDGE; owner decision, enterprise
+audit SDLC-05 / ENT-01): 8 invocations in its life, none after 2025-12-25, source never in the repo. Its source and
+review are in `archive/edge-public-2025-12-28/README.md`. The console's Users & permissions page (`/admin/users`)
+still edits deck permissions (core-vpc, keyed by the account's Cognito `sub`) and runs migrations.
+
+The owner manages accounts with the commands below, under the owner's MFA session (§10). They do what edge-public did,
+with its defaults: new accounts go into `editor` only, the email is marked verified, and Cognito sends no invitation.
+
+### Setup (once per shell)
+
+```bash
+aws sts get-caller-identity --profile devcards-admin   # type the MFA code; the session lasts 1 hour
+POOL=ap-southeast-2_4Vf8uCXKt                          # console pool, var.console_pool_id in infra/envs/prod/variables.tf
+```
+
+The profile carries `region = ap-southeast-2` (§10). The pool signs in by email (`username_attributes = ["email"]`), so
+every `--username` below is the account's email address.
+
+### List
+
+What the old page showed: the members of `super_admin` and `editor`, with email, sub, enabled and status.
+
+```bash
+for g in super_admin editor; do
+  echo "== $g"
+  aws cognito-idp list-users-in-group --profile devcards-admin --user-pool-id "$POOL" --group-name "$g" \
+    --query 'Users[].[Attributes[?Name==`email`]|[0].Value, Attributes[?Name==`sub`]|[0].Value, Enabled, UserStatus]' \
+    --output table
+done
+```
+
+Every account, including one in no group, and the groups of one account:
+
+```bash
+aws cognito-idp list-users --profile devcards-admin --user-pool-id "$POOL" \
+  --query 'Users[].[Attributes[?Name==`email`]|[0].Value, Attributes[?Name==`sub`]|[0].Value, Enabled, UserStatus]' \
+  --output table
+aws cognito-idp admin-list-groups-for-user --profile devcards-admin --user-pool-id "$POOL" --username "$EMAIL" \
+  --query 'Groups[].GroupName'
+```
+
+### Create an editor
+
+```bash
+EMAIL=new.editor@example.com
+read -rs TEMP   # the temporary password, typed without echo and kept out of shell history
+aws cognito-idp admin-create-user --profile devcards-admin --user-pool-id "$POOL" \
+  --username "$EMAIL" \
+  --user-attributes Name=email,Value="$EMAIL" Name=email_verified,Value=true \
+  --temporary-password "$TEMP" --message-action SUPPRESS
+aws cognito-idp admin-add-user-to-group --profile devcards-admin --user-pool-id "$POOL" \
+  --username "$EMAIL" --group-name editor
+aws cognito-idp admin-get-user --profile devcards-admin --user-pool-id "$POOL" --username "$EMAIL" \
+  --query 'UserAttributes[?Name==`sub`].Value' --output text   # the sub, for deck permissions
+unset TEMP
+```
+
+- The temporary password must meet the pool policy (8+ characters with upper case, lower case, a number and a symbol)
+  and expires after 7 days. Hand it over out of band. At first sign-in the editor sets a new password and an
+  authenticator app (the pool requires TOTP MFA).
+- To have Cognito generate the password and email the invitation instead, leave out `--temporary-password` and
+  `--message-action SUPPRESS` (the pool sends with the Cognito default sender, 50 emails a day).
+- `super_admin` can drop the database from the console. edge-public refused to create one; add a `super_admin` only
+  as a deliberate owner decision: `aws cognito-idp admin-add-user-to-group ... --group-name super_admin`.
+- Then give decks: console → Users & permissions → Open an account → paste the sub → tick → Save permissions.
+
+### Disable
+
+```bash
+aws cognito-idp admin-user-global-sign-out --profile devcards-admin --user-pool-id "$POOL" --username "$EMAIL"
+aws cognito-idp admin-disable-user --profile devcards-admin --user-pool-id "$POOL" --username "$EMAIL"
+```
+
+The account can no longer sign in or refresh. An ID or access token it already holds still passes the API Gateway
+JWT authorizers and core-vpc until it expires (1 hour, the SPA client's token validity): neither checks revocation.
+Undo with `aws cognito-idp admin-enable-user` (same arguments).
+
+### Delete
+
+1. Remove its deck permissions first: console → Users & permissions → open its sub → untick every deck → Save
+   permissions (an empty replace). The rows are keyed by sub and outlive the account.
+2. Disable it (above), then:
+
+```bash
+aws cognito-idp admin-delete-user --profile devcards-admin --user-pool-id "$POOL" --username "$EMAIL"
+```
+
+Irreversible: an account created again with the same email gets a new sub. (edge-public never implemented delete;
+its route answered 501.)
+
+### One-time check after the retirement
+
+List every account (above) and confirm each one is expected. Until E08 (2026-09-26) edge-public's routes had no
+authorizer and the function accepted an unsigned token's `cognito:groups` claim, so for that period anyone could
+have created an editor. Metrics show no invocation after 2025-12-25; the eight earlier ones cannot be attributed.
+
+### Retirement procedure (order)
+
+1. **Deploy the console first.** Merge the change; CD (§12) deploys `console` (the page without the Cognito calls)
+   and `backend` (core-vpc: the retired route labels left RouteMetrics) after the owner's approval. Check the live
+   console: Users & permissions shows "Console accounts are managed with the AWS CLI", and the browser's network
+   panel shows no request to `/api/v1/admin/cognito/`. Until the routes go, an old console tab still reaches
+   edge-public; after, it gets core-vpc's 404.
+2. Optional, while the function still exists: record its environment for a rollback (pool id, group lists and a
+   flag, no secret): `aws lambda get-function-configuration --profile devcards-admin --function-name edge-public
+   --query Environment.Variables`.
+3. Plan and gate as in §2/§3 with `docs/delivery/r27-issues/EDGE.plan-allow.json`: expect `PLAN OK 16`, 15 deletes
+   (six routes, the integration, three invoke permissions, the function, the role, its inline policy, the logs
+   policy and its attachment) and one `forget` (`module.api.aws_cloudwatch_log_group.edge_public`). The forget comes
+   from the `removed` block in `infra/modules/api/edge_public.tf` (`lifecycle { destroy = false }`): the log group
+   leaves the state and stays in AWS. `check-plan.py` reads `forget` since this change; an older copy stops with
+   exit 2 ("unknown action set").
+4. `terraform apply`, then the second plan must be empty (§5).
+5. Verify:
+
+```bash
+aws lambda get-function --profile devcards-admin --function-name edge-public            # ResourceNotFoundException
+aws iam get-role --profile devcards-admin --role-name edge-public-role-zezx326f         # NoSuchEntity
+aws apigatewayv2 get-routes --profile devcards-admin --api-id ktbq1sie2c \
+  --query 'Items[?contains(RouteKey, `cognito`) || contains(RouteKey, `/ai/`) || contains(RouteKey, `billing`)].RouteKey'  # []
+aws logs describe-log-groups --profile devcards-admin --log-group-name-prefix /aws/lambda/edge-public \
+  --query 'logGroups[].logGroupName'                                                    # still there
+```
+
+6. The one-time account check (above).
+
+Nothing to clean up afterwards. The log group keeps its 30-day retention; on 2026-10-04 it held 0 stored bytes (the
+events had already expired; stream names remain). Deleting it later is an owner decision, by hand.
+
+### Rollback
+
+- **Before the apply** (console deployed, edge-public still there): revert the change and let CD deploy the console;
+  the old page works again.
+- **After the apply**:
+  1. `git revert` the change. The revert brings back 16 import blocks in `infra/envs/prod/imports.tf`; 15 of their
+     objects no longer exist and Terraform refuses to import a missing object, so delete those 15 and keep only
+     `module.api.aws_cloudwatch_log_group.edge_public` (the group still exists and is adopted again, not created).
+  2. Plan, check, apply: it creates the role and its policies, the function (from `infra/bootstrap/placeholder.zip`),
+     the integration, the three invoke permissions and the six routes (the three `ANY` routes keep the console JWT
+     authorizer, which is what makes the code's unverified-token fallback unreachable).
+  3. Put the archived code back. The rebuilt zip has the same dependency versions (from the lockfile) but not the
+     original CodeSha256:
+
+```bash
+D="$(mktemp -d)"; ARCH=archive/edge-public-2025-12-28
+cp -R "$ARCH/src" "$D/" && cp "$ARCH/package.json.archived" "$D/package.json" && cp "$ARCH/package-lock.json.archived" "$D/package-lock.json"
+(cd "$D" && npm ci --omit=dev && zip -qr edge-public.zip src package.json package-lock.json node_modules)
+aws lambda update-function-code --profile devcards-admin --function-name edge-public --zip-file "fileb://$D/edge-public.zip"
+aws lambda wait function-updated --profile devcards-admin --function-name edge-public
+aws lambda update-function-configuration --profile devcards-admin --function-name edge-public --environment \
+  '{"Variables":{"COGNITO_USER_POOL_ID":"ap-southeast-2_4Vf8uCXKt","ADMIN_GROUPS":"[\"super_admin\",\"editor\"]","DEFAULT_NEW_ADMIN_GROUPS":"[\"editor\"]","COGNITO_SUPPRESS_INVITE":"true"}}'
+```
+
+  The values are the code's defaults; use the ones recorded in step 2 of the procedure if they differ. Terraform
+  ignores the function's code and environment (`ignore_changes`), so neither shows in a later plan.
+  4. The reverted console reaches edge-public again once CD has deployed it.

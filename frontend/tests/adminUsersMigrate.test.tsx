@@ -29,9 +29,8 @@ import { signInAsSuperAdmin, signOut } from './support/consoleSession';
 import { ConfirmDialogProvider } from '../src/components/ui/ConfirmDialog';
 
 const api = vi.hoisted(() => ({
-  listAdminUsers: vi.fn(),
+  listAdminPermissionHolders: vi.fn(),
   listAdminDecks: vi.fn(),
-  createAdminUser: vi.fn(),
   saveAdminDeckPermissionsBulk: vi.fn(),
   runMigrate: vi.fn(),
 }));
@@ -55,7 +54,7 @@ async function mountConsole(): Promise<void> {
       </ConfirmDialogProvider>
     </MemoryRouter>,
   );
-  await screen.findByText('1 user(s)');
+  await screen.findByText('1 account(s)');
 }
 
 /**
@@ -74,9 +73,8 @@ function dangerZoneButtons(): HTMLElement[] {
 beforeEach(() => {
   signOut();
   signInAsSuperAdmin();
-  api.listAdminUsers.mockResolvedValue(ok([alice()]));
+  api.listAdminPermissionHolders.mockResolvedValue(ok([alice()]));
   api.listAdminDecks.mockResolvedValue(ok(decks()));
-  api.createAdminUser.mockImplementation(unstubbed('createAdminUser'));
   api.saveAdminDeckPermissionsBulk.mockImplementation(unstubbed('saveAdminDeckPermissionsBulk'));
   api.runMigrate.mockImplementation(unstubbed('runMigrate'));
 });
@@ -128,16 +126,16 @@ describe('when the migration fails', () => {
 
     // Still the one call from mounting. Refreshing after a failed migration
     // would repaint the tables and make the failure look survivable.
-    expect(api.listAdminUsers).toHaveBeenCalledTimes(1);
+    expect(api.listAdminPermissionHolders).toHaveBeenCalledTimes(1);
   });
 });
 
 describe('when the migration succeeds', () => {
-  it('re-reads users and decks, because they may be different rows now', async () => {
+  it('re-reads the deck permissions and decks, because they may be different rows now', async () => {
     api.runMigrate.mockResolvedValue(ok({ appliedCount: 3 }));
 
     await mountConsole();
-    expect(api.listAdminUsers).toHaveBeenCalledTimes(1);
+    expect(api.listAdminPermissionHolders).toHaveBeenCalledTimes(1);
     expect(api.listAdminDecks).toHaveBeenCalledTimes(1);
 
     await userEvent.click(screen.getByRole('button', { name: PLAIN_BUTTON }));
@@ -146,7 +144,7 @@ describe('when the migration succeeds', () => {
     // The screen must not keep showing rows from before the schema changed
     // under it.
     await waitFor(() => {
-      expect(api.listAdminUsers).toHaveBeenCalledTimes(2);
+      expect(api.listAdminPermissionHolders).toHaveBeenCalledTimes(2);
       expect(api.listAdminDecks).toHaveBeenCalledTimes(2);
     });
   });

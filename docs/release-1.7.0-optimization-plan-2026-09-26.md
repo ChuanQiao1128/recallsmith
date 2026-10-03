@@ -1009,3 +1009,8 @@ CBE-10/AWS-20（超时链）和 CBE-20（删重复数据层）由 E14 承接，�
 ### C. 审计失败的区域
 
 无（[]）。会话记录里 playwright MCP 连接超时，github/linear/slack 等连接器需要授权，但本次审计都用不到。
+
+<!-- paths-not-on-disk
+edge-public 已于 2026-10-04 退役（R27 EDGE），从未部署的 C# 重写 src_C/Public 随之删除（源码存档在 archive/edge-public-2025-12-28/；规则：frontend/tests/docsPaths.test.ts）：
+- src_C/Public/CognitoAdmin/DeleteUser.cs
+-->

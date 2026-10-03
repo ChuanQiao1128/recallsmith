@@ -54,9 +54,10 @@ keeps true is worse than no number: it reads as verified and falsifies in one
 command. Run the commands below and read the real output.
 
 `src_C/` is the one directory name that misleads. It is the entire backend:
-`Vpc/` holds the Lambdas that sit inside the VPC and talk to PostgreSQL,
-`Public/` the ones that do not, `Worker/` an SQS consumer, `Shared/` the common
-auth and database helpers, and `Tests/` the integration test project.
+`Vpc/` holds the Lambda that sits inside the VPC and talks to PostgreSQL,
+`Worker/` an SQS consumer, `Shared/` the common auth and database helpers, and
+`Tests/` the integration test project. (`Public/`, a never-deployed rewrite of
+the retired `edge-public` Lambda, was deleted on 2026-10-04.)
 
 ## 2. Running it
 

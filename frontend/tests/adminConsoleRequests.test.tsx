@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 //
-// What actually leaves the browser when the console's migrate controls are used.
+// What actually leaves the browser when the console's migrate and permission
+// controls are used — and what no longer does: since edge-public was retired
+// (2026-10-04, R27 EDGE) nothing on this page may call its Cognito admin routes.
 //
 // Every other AdminUsersPage file mocks src/api/admin, which is the right seam
 // for "what does the operator see" but stops one call short of the thing that
@@ -34,7 +36,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { ok } from './support/apiResult';
-import { ALICE_SUB, alice, decks } from './support/adminFixtures';
+import { ALICE_SUB, decks } from './support/adminFixtures';
 import { signInAsSuperAdmin, signOut } from './support/consoleSession';
 import { ConfirmDialogProvider } from '../src/components/ui/ConfirmDialog';
 
@@ -71,7 +73,7 @@ async function mountConsole(): Promise<void> {
       </ConfirmDialogProvider>
     </MemoryRouter>,
   );
-  await screen.findByText('1 user(s)');
+  await screen.findByText('1 account(s)');
 }
 
 beforeEach(() => {
@@ -79,7 +81,6 @@ beforeEach(() => {
   signInAsSuperAdmin();
 
   httpMock.get.mockImplementation((url: string) => {
-    if (url === '/api/v1/admin/cognito/users') return Promise.resolve({ data: ok([alice()]) });
     if (url === '/api/v1/admin/permissions') {
       return Promise.resolve({
         data: ok([
@@ -163,8 +164,8 @@ describe('taking every deck permission away', () => {
     httpMock.post.mockResolvedValue({ data: ok({ saved: 0, replace: true }) });
 
     await mountConsole();
-    const row = screen.getByText('alice_editor').closest('tr');
-    if (!row) throw new Error('no table row for alice_editor');
+    const row = within(screen.getByRole('table')).getByText(ALICE_SUB).closest('tr');
+    if (!row) throw new Error('no table row for alice');
     await userEvent.click(within(row).getByRole('button', { name: 'Manage' }));
 
     await userEvent.click(screen.getByRole('checkbox', { name: 'Read permission for d-one' }));
@@ -180,5 +181,25 @@ describe('taking every deck permission away', () => {
       mode: 'replace',
       permissions: [],
     });
+  });
+});
+
+describe('the retired Cognito admin routes', () => {
+  it('are never requested: the page reads accounts from core-vpc\'s deck permissions only', async () => {
+    httpMock.post.mockResolvedValue({ data: ok({ appliedCount: 0 }) });
+
+    await mountConsole();
+    // A migrate re-reads everything the page loads, so both load paths are covered.
+    await userEvent.click(screen.getByRole('button', { name: PLAIN_BUTTON }));
+    await screen.findByText('Migration completed.');
+
+    const urls = [...httpMock.get.mock.calls, ...httpMock.post.mock.calls].map(call => String(call[0]));
+    expect(urls.length).toBeGreaterThan(0);
+    expect(urls.filter(url => url.includes('/cognito'))).toEqual([]);
+    expect(urls).toContain('/api/v1/admin/permissions');
+  });
+
+  it('are not named anywhere in the admin api module', () => {
+    expect(readFileSync(ADMIN_API_SOURCE, 'utf8')).not.toMatch(/admin\/cognito/);
   });
 });

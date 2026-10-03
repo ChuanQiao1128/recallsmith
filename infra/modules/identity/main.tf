@@ -66,59 +66,6 @@ resource "aws_iam_role_policy_attachment" "core_vpc" {
   policy_arn = each.value
 }
 
-resource "aws_iam_role" "edge_public" {
-  assume_role_policy = jsonencode({
-    Statement = [{
-      Action = "sts:AssumeRole"
-      Effect = "Allow"
-      Principal = {
-        Service = "lambda.amazonaws.com"
-      }
-    }]
-    Version = "2012-10-17"
-  })
-  force_detach_policies = false
-  max_session_duration  = 3600
-  name                  = var.edge_public_role_name
-  path                  = "/service-role/"
-}
-
-resource "aws_iam_role_policy" "edge_public_cognito" {
-  name = "edge-public-cognito"
-  role = aws_iam_role.edge_public.name
-  policy = jsonencode({
-    Statement = [{
-      Action   = ["cognito-idp:ListUsersInGroup", "cognito-idp:AdminCreateUser", "cognito-idp:AdminAddUserToGroup", "cognito-idp:AdminDisableUser", "cognito-idp:AdminDeleteUser"]
-      Effect   = "Allow"
-      Resource = "arn:aws:cognito-idp:ap-southeast-2:622994489535:userpool/ap-southeast-2_4Vf8uCXKt"
-      Sid      = "CognitoUserManagement"
-    }]
-    Version = "2012-10-17"
-  })
-}
-
-resource "aws_iam_policy" "edge_public_logs" {
-  name = "AWSLambdaBasicExecutionRole-4587d025-3600-45c8-9409-a1ead0afc685"
-  path = "/service-role/"
-  policy = jsonencode({
-    Statement = [{
-      Action   = "logs:CreateLogGroup"
-      Effect   = "Allow"
-      Resource = "arn:aws:logs:ap-southeast-2:622994489535:*"
-      }, {
-      Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
-      Effect   = "Allow"
-      Resource = ["arn:aws:logs:ap-southeast-2:622994489535:log-group:/aws/lambda/edge-public:*"]
-    }]
-    Version = "2012-10-17"
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "edge_public_logs" {
-  role       = aws_iam_role.edge_public.name
-  policy_arn = aws_iam_policy.edge_public_logs.arn
-}
-
 resource "aws_iam_role" "rds_monitoring" {
   assume_role_policy = jsonencode({
     Statement = [{
