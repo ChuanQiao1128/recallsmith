@@ -752,7 +752,7 @@ environment must not have "Prevent self-review" on: the owner both merges and ap
 
 | Changed path (since the last full deployment) | Target | Deployed by |
 |---|---|---|
-| `src_C/**` except `src_C/Tests/**`, `src_C/Public/**` (neither is in a zip) and `*.md` | `backend` = core-vpc + worker-lambda | `src_C/deploy.sh` |
+| `src_C/**` except `src_C/Tests/**` (not in a zip) and `*.md` | `backend` = core-vpc + worker-lambda | `src_C/deploy.sh` |
 | `services/<svc>/**` except `tests/**` and `*.md`; svc = ai-qa, notifier, source-watcher, synthetic-check, webhook-dispatcher | `<svc>` | `services/deploy-python-lambda.sh` |
 | `frontend/**` except `frontend/tests/**` and `*.md` | `console` | `frontend/deploy.sh` |
 | `site/**` | `site` | `site/deploy.sh` |
