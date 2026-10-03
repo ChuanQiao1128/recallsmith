@@ -51,7 +51,7 @@ class EdgePublicRetiredTest(unittest.TestCase):
     def test_no_edge_public_route_keys(self):
         gateway = tf_text("modules", "api", "gateway.tf")
         for key in ROUTE_KEYS:
-            self.assertNotRegex(gateway, r"^\s*" + key + r"\s*=", key + " route still in local.routes")
+            self.assertNotRegex(gateway, r"(?m)^\s*" + key + r"\s*=", key + " route still in local.routes")
         for prefix in ("/api/v1/ai/", "/api/v1/billing/", "/api/v1/admin/cognito/"):
             self.assertNotIn('route_key = "ANY ' + prefix, gateway)
             self.assertNotIn('route_key = "OPTIONS ' + prefix, gateway)
