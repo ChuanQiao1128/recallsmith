@@ -1132,43 +1132,59 @@ PR (change + its allow-list) -> CI, no AWS -> auto-merge -> push to main -> sele
    changes already applied alone (a typo fix in an old `_note` would make the next run check the plan against that
    old list).
 2. **CI** (`ci.yml`, no AWS, required). Job `infra`: `terraform fmt -check`, offline `init -backend=false` and
-   `validate`, and `python3 infra/scripts/tf-pipeline.py pr-check --base origin/main`: a pull request that changes a
-   plan-affecting file under `infra/` (anything but `*.md`, `infra/scripts/`, Terraform tests, `*.tfvars.example`,
-   `infra/.gitignore`) adds or changes at least one allow file; every one has the right shape and together they do
-   not contradict each other (see step 4). An allow file that lists a break-glass address passes with a warning.
-   Job `python` runs the unit tests of the pipeline's decisions (`infra/scripts/tests/test_tf_pipeline.py`). The
-   rule lives in `ci.yml` because only its nine checks gate auto-merge; a path-filtered workflow cannot be a
-   required check.
+   `validate`, and `python3 infra/scripts/tf-pipeline.py pr-check --base origin/main` on every run except a push to
+   `main` (a branch push reports a check of the same name for the same commit as its pull request, so it runs the
+   rule too): a pull request that changes a plan-affecting file under `infra/` (anything but `*.md`,
+   `infra/scripts/`, Terraform tests, `*.tfvars.example`, `infra/.gitignore`) adds or changes at least one allow
+   file; every one has the right shape and a plain path (`A-Z a-z 0-9 . _ / -`), and together they do not contradict
+   each other (see step 4). An allow file that lists a break-glass address passes with a warning. `pr-check` also
+   runs `preflight`, which fails the pull request on code the pipeline will never run: a provider other than
+   `hashicorp/aws` in `infra/envs/prod/.terraform.lock.hcl`, a provisioner, an `aws_lambda_invocation` (data,
+   ephemeral or resource), an `action` block, a `*.tf.json` file, a module from outside the repository. Merged, any
+   of these would stop every later run. Job `python` runs the unit tests of the pipeline's decisions
+   (`infra/scripts/tests/test_tf_pipeline.py`). The rule lives in `ci.yml` because only its nine checks gate
+   auto-merge; a path-filtered workflow cannot be a required check.
 3. **Auto-merge** when the nine checks pass.
 4. **select** (`terraform.yml`, no AWS). Starts on a push to `main` that changed a plan-affecting file or an allow
    file (`on.push.paths`; a RUNBOOK edit starts nothing). The commit must be on `main`; a commit older than the last
-   one the pipeline applied is refused (`tf-pipeline.py stale`, below). It picks the allow files the push added or
-   changed (`git diff <before>..<after>`): usually one; several when a release merges several changes (release/r25,
-   #711, brought P02 and F05 in one push), and then the plan must match their union (`tf-pipeline.py combine`: two
-   updates of one address allow the union of their keys, a create or replace absorbs an update of the same
-   resource, any other overlap is a conflict); none means the apply passes only if the plan is empty. An allow file
-   that lists a break-glass address or `expect_imports`, or files that conflict, stop the run here, before any
-   approval request. Its summary lists the entries: that is what the approval applies.
+   one the pipeline applied is refused (`tf-pipeline.py stale`, below); `preflight` runs again. It picks the allow
+   files the push added or changed (`git diff -z <before>..<after>`, so a non-ASCII file name is read as it is):
+   usually one; several when a release merges several changes (release/r25, #711, brought P02 and F05 in one push),
+   and then the plan must match their union (`tf-pipeline.py combine`: two updates of one address allow the union of
+   their keys, a create or replace absorbs an update of the same resource, any other overlap is a conflict); none
+   means the apply passes only if the plan is empty. An allow file that lists a break-glass address or
+   `expect_imports`, a path with a character other than `A-Z a-z 0-9 . _ / -`, or files that conflict, stop the run
+   here, before any approval request. Its summary lists the entries: that is what the approval applies.
 5. **Approval.** GitHub notifies the owner (the only required reviewer of `infra-prod`). Open the run (Actions →
    Terraform, or the e-mail / GitHub mobile notification), read the **select** summary, then **Review deployments →
    infra-prod → Approve and deploy** (or **Reject**). Rejecting applies nothing: the change stays on `main`, and the
    next run's plan shows it without its allow file and refuses (revert it, or re-run this run later).
-6. **apply (infra-prod).** Before any credential: the on-main and stale checks again, and the environment secret
-   `TF_VAR_ALERT_EMAIL` is present. Then it assumes `arn:aws:iam::622994489535:role/developercards-gha-infra` through
-   GitHub OIDC (the role trusts only `repo:ChuanQiao1128/recallsmith:environment:infra-prod`; session
+6. **apply (infra-prod).** Before any credential: the on-main, stale and preflight checks again, and the
+   environment secret `TF_VAR_ALERT_EMAIL` is present. Then it assumes
+   `arn:aws:iam::622994489535:role/developercards-gha-infra` through GitHub OIDC (the role trusts only `repo:ChuanQiao1128/recallsmith:environment:infra-prod`; session
    `gha-tf-<run id>-<attempt>`, which is how CloudTrail names it), runs `terraform init` with the real backend,
    `plan -lock-timeout=10m -out=<file>`, `show -json`, then
-   - `tf-pipeline.py guard`: refuses any effective change in `module.operators`, to a resource type the role is
-     denied (IAM users, keys, groups, MFA devices, identity providers, CloudTrail, organizations, account), to the
-     CloudTrail or state bucket, to an IAM role whose trust policy would name anything but an AWS service, and any
-     import;
+   - `tf-pipeline.py guard`: refuses any effective change in `module.operators` and any move into or out of it
+     (`moved` blocks), a change to a resource type the role is denied (IAM users, keys, groups, MFA devices, identity
+     providers, CloudTrail, organizations, account), to the CloudTrail or state bucket, an IAM role whose trust
+     policy would name anything but an AWS service, an IAM policy (inline, managed, or a policy document read at
+     apply time) that grants an IAM role or policy write (`iam:CreateRole`, `PutRolePolicy`, `AttachRolePolicy`,
+     `UpdateAssumeRolePolicy`, `CreatePolicyVersion`, ..., including through `*`, `iam:*` or `iam:Put*`), or
+     `sts:AssumeRole` / `iam:PassRole` on every resource, or uses `NotAction`; an attachment of AdministratorAccess,
+     IAMFullAccess or PowerUserAccess; configuration that runs code (provisioners, `aws_lambda_invocation`); and any
+     import. A policy whose JSON is known only at apply (it names an ARN the same plan creates) cannot be read: the
+     guard names it in a `::warning::UNCHECKED` line and lets it through (What it does not stop, below);
    - `check-plan.py --allow <the combined allow-list>` (or without `--allow` when there is none: the plan must be
      empty);
    - `terraform apply <the saved plan>`: exactly what was gated, never a fresh plan;
    - a second plan checked with `check-plan.py` and no allow file: it must print `PLAN EMPTY` (§5).
    When the first plan is already empty (an allow file with `"changes": {}`), nothing is applied and there is no
-   second plan. The job summary has the commit, the allow files, the address / action / changed-keys table, and the
-   results of the guard, the gate, the apply and the second plan.
+   second plan. If Terraform could not write the state at the end of an apply, it leaves `errored.tfstate` on the
+   runner; the job pushes it (`terraform state push`, which refuses an older serial or another lineage; never
+   `-force`), or, when the push is refused, keeps it as `s3://recallsmith-tfstate-622994489535/recovery/errored-<run
+   id>-<attempt>.tfstate` (never an artifact: the state holds values). The job summary has the commit, the allow
+   files, the address / action / changed-keys table, and the results of the guard, the gate, the apply, the second
+   plan and any state recovery.
 
 Public logs: nothing prints a plan, a value or state. Terraform runs with `-no-color` into files under
 `$RUNNER_TEMP/tf`, never uploaded and deleted at the end of the job (the plan JSON holds Lambda environments and
@@ -1188,20 +1204,27 @@ checked as an empty plan, as a drift report (addresses only). It needs an approv
 | `select`: `… is listed with conflicting actions in A and B` | two changes in one push say different things about one address | make the files agree in a follow-up PR (an allow-file-only change runs the apply again), or apply locally |
 | `select`: `lists module.operators…` / `is break-glass` | a break-glass change was merged | apply it locally with MFA (Break-glass, below) |
 | `stale`: `already applied … would put older configuration back` | a re-run of an old run after a newer apply | nothing: the newer state stands; change infra with a new PR |
-| `guard`: `REFUSED <address>: …` | the plan touches something break-glass (also drift there) | nothing was applied; Break-glass, below |
+| `PREFLIGHT …` | the code has a provider other than `hashicorp/aws`, a provisioner, an `aws_lambda_invocation`, an `action` block, a `*.tf.json` file or an outside module (CI refuses these, so it reached `main` without passing CI) | nothing ran. Remove it in a PR; anything that really needs it is break-glass |
+| `guard`: `REFUSED <address>: …` | the plan touches something break-glass (also drift there), or grants or runs more than a routine change may | nothing was applied; Break-glass, below |
+| `guard`: `::warning::UNCHECKED <address>: its policy is known only at apply` (or `inline_policy`) | the policy names an ARN this plan creates, so the guard cannot read its grants | a warning, not a stop: read that policy in the merged change before approving |
 | `PLAN VIOLATION: unlisted …`, `stale allow entry …`, `action mismatch …`, `keys not allowed …` | the plan differs from the allow file | nothing was applied. Fix the allow file (or the code) in a follow-up PR; the push runs the apply again |
 | `ERROR … \| <address> \| …` in init/plan | Terraform or AWS refused before any change | reproduce with §2 locally; fix in a PR |
-| `ERROR …` in **apply** | the apply stopped part-way (state holds what was done) | Rollback, below; the next run plans from the new state |
+| `ERROR …` in **apply** | the apply stopped part-way; the state holds what was done | a re-run does **not** finish it: its plan now lacks the applied entries, so `check-plan.py` reports them as `stale allow entry` and refuses. Finish it with a follow-up PR whose allow file lists only the remainder (the next plan shows exactly that), or locally with MFA (§3), or undo it (Rollback, below) |
+| `errored.tfstate pushed` / `… kept as s3://…/recovery/…` / `could not be pushed or kept` | the apply changed AWS but Terraform could not write the state | pushed: the state is whole; plan locally (§2) before the next change. Kept: locally with MFA, `terraform state push` that file after checking its serial against the remote state (break-glass state surgery). Neither: the state misses part of the apply; reconcile locally (imports are break-glass) |
 | second plan `PLAN VIOLATION: unexpected …` | the apply happened, but AWS and code still differ (provider normalisation, §6 drift) | look locally (§2); fix in code with its own allow file |
 | `Error acquiring the state lock` | a local break-glass apply, or a killed run, holds the lock (`-lock-timeout=10m`) | wait; a stale lock after a killed run: `terraform force-unlock <id>` locally with `devcards-admin` |
 
 ### Stale runs and re-runs
 
-GitHub re-runs a run with its original commit. If a later commit on `main` was already applied, re-running an older
+GitHub re-runs a run with its original commit. If a later commit on `main` already changed AWS, re-running an older
 run would put its older configuration back, sometimes within its own allow-list. `tf-pipeline.py stale` therefore
-refuses a commit when a successful `apply (infra-prod)` job of a later push run of `terraform.yml` on `main` exists
-(read from the Actions API: runs and jobs, which a token cannot forge), in **select** and again in **apply** before
-any credential. A re-run of the latest run (a transient error, a lock, an approval that timed out) goes ahead.
+refuses a commit when a later push run of `terraform.yml` on `main` changed AWS: its `apply (infra-prod)` job
+succeeded (an empty plan confirms main and AWS agree), or its step `apply the saved plan` ran at all, whatever the
+run's colour (a red second plan, an apply that failed part-way or was cancelled), in any attempt. It reads the newest
+100 runs and their jobs from the Actions API (which a token cannot forge), in **select** and again in **apply**
+before any credential. A re-run of the latest run goes ahead past this check; it still applies only when its plan
+matches its allow-list, so it helps after a transient error, a lock or an approval that timed out, not after an
+apply that stopped part-way (When a run stops, above).
 
 ### Queueing
 
@@ -1234,8 +1257,12 @@ rule, so `infra-prod` must exist before `terraform.yml` reaches `main`.
    `…aws_iam_role_policy.gha_infra_deny`; output `operator_role_arns` gains `gha_infra`; nothing else), apply,
    second plan `PLAN EMPTY`.
 5. Prove it end to end: Actions → Terraform → Run workflow (`main`) → approve → **plan only (infra-prod)** must say
-   `PLAN EMPTY`. That exercises OIDC, the secret, the backend and the read path. The first real change then goes
-   through the Flow above.
+   `PLAN EMPTY`. That exercises OIDC, the secret, the backend and the read path: the plan refreshes
+   `module.operators` too, including `aws_iam_openid_connect_provider.github`, which is why the role's deny names
+   write actions only (a review on 2026-10-04 found that the first draft's `iam:*OpenIDConnectProvider*` also denied
+   `GetOpenIDConnectProvider` and would have failed every plan). An `AccessDenied` on a `Get`/`List` call here means
+   the deny blocks a read: fix it in `module.operators` (break-glass) before anything else. The first real change
+   then goes through the Flow above.
 
 ### Break-glass (local, owner's MFA, §2–§5)
 
@@ -1247,6 +1274,11 @@ rule, so `infra-prod` must exist before `terraform.yml` reaches `main`.
 - **Credentials and identities**: IAM users, access keys, login profiles, groups, MFA devices, OIDC and SAML
   providers, Identity Center; and any IAM role whose trust policy names a principal other than an AWS service.
 - **Organizations, account and billing settings.**
+- **Grants that mint admin**: an IAM policy granting IAM role or policy writes, or `sts:AssumeRole` / `iam:PassRole`
+  on every resource; AdministratorAccess, IAMFullAccess or PowerUserAccess attachments. The pipeline role itself
+  cannot assume any role (`sts:AssumeRole` is denied).
+- **Code that runs during Terraform**: provisioners, `aws_lambda_invocation`, `action` blocks, providers other than
+  `hashicorp/aws`, modules from outside the repository (CI refuses these; the pipeline never runs them).
 - **Imports** of hand-made resources (`import {}` blocks, `expect_imports`) and **state surgery** (`state mv`,
   `state rm`, `force-unlock`): adopting a resource needs its live configuration read first.
 - **Long or risky applies**: anything that may run past the job's 60 minutes or the role's one-hour session (an RDS
@@ -1262,19 +1294,47 @@ updates `update` with the same keys, its deletes `create`), and let the pipeline
 revert that touches break-glass resources, or an outage that cannot wait for CI, is applied locally with MFA (§3).
 A deleted resource that held data (a bucket, a database) is not brought back by a revert: §13 for the database,
 S3 versioning for objects. The state itself is versioned (`recallsmith-tfstate-622994489535`, noncurrent versions
-kept 90 days, which the pipeline role cannot change); restoring an older state version is break-glass, with the
-owner.
+kept 90 days); the pipeline role can neither change that nor delete a version (`s3:DeleteObjectVersion` is denied
+on the bucket's objects). Restoring an older state version is break-glass, with the owner.
 
 ### What it does not stop
 
-- The role is AdministratorAccess minus the deny. An approved change can still widen access through a resource
-  policy (an S3 bucket policy, a Lambda permission, an SQS, SNS or KMS policy naming another principal); review of
-  the pull request and its allow-list are the control there. Trust policies of IAM roles are checked by the guard.
-- The owner approves the allow-list, not the plan: the plan exists only after the approval (it needs the role), and
-  it may not be printed in public logs. The gate holds the apply to that list exactly.
-- `terraform.yml`, `tf-pipeline.py` and `check-plan.py` run from the pushed commit, so a merged change to them is
-  judged by the new version. Review changes to these three files like IAM changes.
+- **Code with a role the pipeline creates.** The role is AdministratorAccess minus the deny. An approved change can
+  create a service role, give it a policy and deploy code that runs with it (a Lambda function, a Step Functions
+  state machine, a scheduled task); that code keeps running after the job. The guard refuses the direct routes
+  (escalating grants, admin attachments, provisioners, `aws_lambda_invocation`), but not a broad grant short of
+  those (`s3:*` on `*`, `secretsmanager:GetSecretValue`, `ssm:GetParameter*`), nor a policy whose JSON is known only
+  at apply (the `UNCHECKED` warning). The AWS-side fix is a permissions boundary that every role Terraform creates
+  must carry (a deny of `iam:CreateRole` / `PutRolePolicy` / `AttachRolePolicy` without it); it touches every role
+  module, so it is a separate change.
+- **Resource policies.** An approved change can widen access through a resource policy (an S3 bucket policy, a
+  Lambda permission, an SQS, SNS or KMS policy naming another principal). Trust policies of IAM roles are checked by
+  the guard; resource policies are not.
+- **The plan runs before anyone sees it.** The owner approves the allow-list, not the plan: the plan exists only after
+  the approval (it needs the role), and it may not be printed in public logs. The gate holds the apply to that list
+  exactly. Data sources read AWS at plan time; `preflight` keeps out the ones that run code (`aws_lambda_invocation`,
+  other providers).
+- **The tap approves gate code nobody reviewed.** `main` takes pull requests with no human review (ruleset: 0
+  approvals, no CODEOWNERS), and `terraform.yml`, `tf-pipeline.py`, `check-plan.py` and the lock file run from the
+  pushed commit: a merged change to them decides its own run. A change to `infra/scripts/` or to `terraform.yml`
+  alone starts no run, so it takes effect at the next Terraform change. The role's trust checks the environment, not
+  the workflow file: any workflow on `main` that names `environment: infra-prod` gets the role once the owner taps
+  approve. So before approving, check that the run is **Terraform** (`.github/workflows/terraform.yml`) and, when the
+  push touched the gate files, read their diff. Two hardenings, both break-glass and left to the owner:
+  1. Pin both GitHub roles to their workflow file: set the repository's OIDC subject template to include
+     `job_workflow_ref` (`gh api -X PUT repos/ChuanQiao1128/recallsmith/actions/oidc/customization/sub -f
+     'include_claim_keys[]=repo' -f 'include_claim_keys[]=context' -f 'include_claim_keys[]=job_workflow_ref'`) and,
+     in the same window, change the `sub` conditions of `developercards-gha-infra` and `developercards-gha-prod` to
+     `repo:ChuanQiao1128/recallsmith:environment:<env>:job_workflow_ref:ChuanQiao1128/recallsmith/.github/workflows/<terraform|cd>.yml@refs/heads/main`
+     (a `module.operators` change, local with MFA). The template changes every token of the repository at once, so
+     CD and this pipeline fail between the two steps.
+  2. Require code-owner review for `.github/workflows/**`, `infra/scripts/check-plan.py`,
+     `infra/scripts/tf-pipeline.py` and `infra/envs/prod/.terraform.lock.hcl`. Not done: GitHub does not let the
+     author approve their own pull request, and the delivery pull requests are opened under the owner's account, so
+     every such change would wait for a second person who does not exist.
 
-Tests: `infra/scripts/tests/test_tf_pipeline.py` (CI job `python`) covers the pull request rule, the allow-file
-selection, the stale check, the guard, the diagnosis and the static facts of `terraform.yml`, `ci.yml` and the role;
-`ci.yml` job `infra` runs `pr-check` on every pull request.
+Tests: `infra/scripts/tests/test_tf_pipeline.py` (CI job `python`) covers the pull request rule, preflight, the
+allow-file selection and paths (non-ASCII and glob names included), the stale check, the guard, the diagnosis, the
+workflow's step bodies run under `bash -e` with stubbed `python3`, `terraform` and `aws`, and the static facts of
+`terraform.yml`, `ci.yml` and the role (its deny blocks no refresh read); `ci.yml` job `infra` runs `pr-check` on
+every run except a push to `main`.
