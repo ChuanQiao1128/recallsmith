@@ -1,0 +1,422 @@
+name: Terraform
+
+# Routine Terraform applies to production from GitHub, behind one approval (owner, 2026-10-04: one tap, no laptop MFA
+# for routine changes). infra/RUNBOOK.md §15 is the operator's guide: flow, bootstrap, what stays break-glass, rollback.
+#
+#   pull request  no job here. ci.yml's required job `infra` runs fmt, an offline init and validate, and
+#           `tf-pipeline.py pr-check` (a change to Terraform carries its docs/delivery/**/*.plan-allow.json).
+#           It lives there because only ci.yml's nine checks gate auto-merge, and a path-filtered workflow cannot be a
+#           required check (when it does not run, its check never reports and the pull request waits forever).
+#           Pull request code never reaches a job here, so it never gets near an AWS token.
+#   select  a push to main that changed a plan-affecting file or an allow file (on.push.paths). No AWS. The commit
+#           must be on main; a commit older than the last one the pipeline applied is refused (`tf-pipeline.py
+#           stale`); `tf-pipeline.py preflight` refuses code that would run something besides the plan's AWS calls
+#           (a provider other than hashicorp/aws, provisioners, aws_lambda_invocation, ...); the allow files this
+#           push brings are picked: one per change (a release of several changes brings several, combined), or none
+#           (then the plan must turn out empty). An allow file that lists module.operators or another break-glass
+#           address, or files that contradict each other, stop here, before any approval request. Its summary lists
+#           the entries: what the owner approves.
+#   apply   environment `infra-prod`: waits for the owner's approval, the one human step. Then, before any
+#           credential, the on-main, stale and preflight checks again (re-running this job alone reuses select's
+#           outputs). Assumes developercards-gha-infra through GitHub OIDC (its trust accepts only
+#           repo:ChuanQiao1128/recallsmith:environment:infra-prod). init with the real backend, plan to a saved
+#           file, `tf-pipeline.py guard` (refuses module.operators and the other break-glass changes), check-plan.py
+#           against the allow-list, apply of that SAVED plan, then a second plan that must be PLAN EMPTY. When
+#           Terraform could not save the state after an apply (errored.tfstate), it is pushed, or kept in the state
+#           bucket under recovery/, never uploaded as an artifact.
+#   plan    workflow_dispatch from main: the same plan checked as an empty plan (a drift report). Environment
+#           `infra-prod` too, because the role trusts nothing else, so it waits for an approval as well.
+#
+# This repository and its Actions logs are public: no step prints a plan, a value or state. Terraform runs with
+# -no-color and its output goes to files under $RUNNER_TEMP/tf that are never uploaded and are deleted at the end.
+# The log shows only check-plan.py and tf-pipeline.py lines (addresses, actions, changed key names, counts) and, after
+# a Terraform error, `tf-pipeline.py diagnose` (phrase, address, AWS operation, status, error code; no message text).
+#
+# Steps run in GitHub's default shell, bash -e: a step that prints a checker's output after the checker fails keeps
+# the exit code with `rc=0; checker ... || rc=$?`, never a bare `rc=$?` on the next line (bash -e would leave the step
+# at the failing command, before the output is printed; test_tf_pipeline.py runs these bodies under bash -e).
+#
+# Every action is pinned to a full commit SHA with its release as the trailing comment, the same pins as ci.yml and
+# cd.yml.
+
+on:
+  push:
+    branches: [main]
+    # = PUSH_PATHS in infra/scripts/tf-pipeline.py (infra/scripts/tests/test_tf_pipeline.py keeps them equal).
+    # A RUNBOOK or script edit starts no run, so it never takes the one queued slot of the lane from a real change.
+    paths:
+      - 'infra/**'
+      - '!infra/**/*.md'
+      - '!infra/scripts/**'
+      - '!infra/**/tests/**'
+      - '!infra/**/*.tftest.hcl'
+      - '!infra/**/*.tfvars.example'
+      - '!infra/.gitignore'
+      - 'docs/delivery/**/*.plan-allow.json'
+  workflow_dispatch:
+
+# Read-only by default; only the two infra-prod jobs can mint an OIDC token.
+permissions:
+  contents: read
+
+# One infra lane for whole runs, never cancelled while in flight (including a run waiting for approval): an apply
+# interrupted half-way is the one outcome worse than a late one. GitHub keeps at most one run queued behind it; a newer
+# queued run replaces the pending one, whose change then reaches the next run's plan without its allow file and is
+# refused there (RUNBOOK §15 Queueing says how to recover). A dispatch from another branch gets a group of its own.
+concurrency:
+  group: ${{ github.ref == 'refs/heads/main' && 'infra-prod' || format('infra-skipped-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-southeast-2
+  TF_IN_AUTOMATION: '1'
+  TF_INPUT: '0'
+
+jobs:
+  select:
+    name: select (no AWS)
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # The stale check reads terraform.yml's runs and jobs through the Actions API.
+      actions: read
+    outputs:
+      apply: ${{ steps.select.outputs.apply }}
+      allow: ${{ steps.select.outputs.allow }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          # Full history of every branch, no blobs beyond the checkout: the range of this push and main are diffed.
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+      - name: the pushed commit must be on the main branch
+        run: |
+          set -euo pipefail
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "::error::commit $GITHUB_SHA is not on the main branch: nothing is applied"
+            exit 1
+          fi
+          echo "commit $GITHUB_SHA is on main ($(git rev-parse refs/remotes/origin/main))"
+      - name: refuse a commit older than the last one applied
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 infra/scripts/tf-pipeline.py stale --sha "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID"
+      - name: refuse code that runs more than the plan (providers, provisioners, Lambda invocations)
+        run: python3 infra/scripts/tf-pipeline.py preflight
+      - id: select
+        name: pick this push's allow files
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Terraform: \`$GITHUB_SHA\`"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          python3 infra/scripts/tf-pipeline.py select --before "$BEFORE" --after "$GITHUB_SHA" \
+            --output "$GITHUB_OUTPUT" --summary "$GITHUB_STEP_SUMMARY"
+          {
+            echo
+            echo "Approving **apply (infra-prod)** applies a plan only if it matches this list exactly"
+            echo "(check-plan.py) and touches nothing break-glass (tf-pipeline.py guard). infra/RUNBOOK.md §15."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  apply:
+    name: apply (infra-prod)
+    needs: select
+    if: needs.select.outputs.apply == 'true'
+    runs-on: ubuntu-latest
+    # Counted from the approval: init, plan, apply and the second plan take minutes. An apply that needs longer (an RDS
+    # engine upgrade, a large replacement) is break-glass (RUNBOOK §15); the role session is one hour too.
+    timeout-minutes: 60
+    environment:
+      name: infra-prod
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+    env:
+      ALLOW: ${{ needs.select.outputs.allow }}
+      # The one root variable without a default (infra/envs/prod/variables.tf, sensitive). Environment secret.
+      TF_VAR_alert_email: ${{ secrets.TF_VAR_ALERT_EMAIL }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+      # Again here, not only in select: "Re-run failed jobs" (or this job alone) reuses select's outputs, and the
+      # approval may come long after the push.
+      - name: the pushed commit must be on the main branch
+        run: |
+          set -euo pipefail
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "::error::commit $GITHUB_SHA is not on the main branch: nothing is applied"
+            exit 1
+          fi
+      - name: refuse a commit older than the last one applied
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 infra/scripts/tf-pipeline.py stale --sha "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID"
+      - name: preflight (no credentials yet)
+        run: |
+          set -euo pipefail
+          if [ -z "${TF_VAR_alert_email:-}" ]; then
+            echo "::error::environment secret TF_VAR_ALERT_EMAIL is not set on infra-prod (infra/RUNBOOK.md §15 Bootstrap)"
+            exit 1
+          fi
+          echo "::add-mask::${TF_VAR_alert_email}"
+          mkdir -p "$RUNNER_TEMP/tf"
+          python3 infra/scripts/tf-pipeline.py preflight
+          if [ -n "$ALLOW" ]; then
+            # One allow-list for check-plan.py: the union of this push's files, checked again (shape, path,
+            # break-glass, conflicts) rather than taken from select's output alone. Split into words without
+            # pathname expansion: a glob in a path must never pull in files the select summary did not show.
+            read -r -a allow_files <<< "$ALLOW"
+            python3 infra/scripts/tf-pipeline.py combine --out "$RUNNER_TEMP/tf/allow.json" "${allow_files[@]}"
+          else
+            echo "no allow file: the plan must be empty"
+          fi
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          # ci.yml's version; versions.tf asks for >= 1.10.
+          terraform_version: 1.16.3
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::622994489535:role/developercards-gha-infra
+          aws-region: ap-southeast-2
+          # CloudTrail names the run: assumed-role/developercards-gha-infra/gha-tf-<run id>-<attempt>.
+          role-session-name: gha-tf-${{ github.run_id }}-${{ github.run_attempt }}
+          role-duration-seconds: 3600
+      - id: init
+        name: terraform init (real backend; output to a file)
+        run: |
+          set -euo pipefail
+          echo "AWS identity: $(aws sts get-caller-identity --query Arn --output text)"
+          # -lockfile=readonly: the committed lock is verified, never rewritten (as in ci.yml).
+          terraform -chdir=infra/envs/prod init -input=false -no-color -lockfile=readonly > "$RUNNER_TEMP/tf/init.log" 2>&1
+          echo "init ok"
+      - id: plan
+        name: plan to a saved file (never printed)
+        run: |
+          set -euo pipefail
+          terraform -chdir=infra/envs/prod plan -input=false -no-color -lock-timeout=10m \
+            -out="$RUNNER_TEMP/tf/apply.tfplan" > "$RUNNER_TEMP/tf/plan.log" 2>&1
+          terraform -chdir=infra/envs/prod show -no-color -json "$RUNNER_TEMP/tf/apply.tfplan" \
+            > "$RUNNER_TEMP/tf/plan.json" 2>> "$RUNNER_TEMP/tf/plan.log"
+          echo "plan saved"
+      - id: guard
+        name: refuse break-glass changes (module.operators, credentials, audit trail, trust)
+        run: python3 infra/scripts/tf-pipeline.py guard --plan "$RUNNER_TEMP/tf/plan.json" --output "$GITHUB_OUTPUT"
+      - id: gate
+        name: the plan must match the allow-list (check-plan.py)
+        run: |
+          set -uo pipefail
+          rc=0
+          if [ -n "$ALLOW" ]; then
+            python3 infra/scripts/check-plan.py --plan "$RUNNER_TEMP/tf/plan.json" --allow "$RUNNER_TEMP/tf/allow.json" \
+              --summary > "$RUNNER_TEMP/tf/gate.txt" 2>&1 || rc=$?
+          else
+            python3 infra/scripts/check-plan.py --plan "$RUNNER_TEMP/tf/plan.json" --summary \
+              > "$RUNNER_TEMP/tf/gate.txt" 2>&1 || rc=$?
+          fi
+          cat "$RUNNER_TEMP/tf/gate.txt"
+          exit "$rc"
+      - id: apply
+        name: apply the saved plan
+        if: steps.guard.outputs.apply_needed == 'true'
+        run: |
+          set -euo pipefail
+          terraform -chdir=infra/envs/prod apply -input=false -no-color -lock-timeout=10m "$RUNNER_TEMP/tf/apply.tfplan" \
+            > "$RUNNER_TEMP/tf/apply.log" 2>&1
+          echo "applied"
+      - id: second
+        name: the second plan must be empty
+        if: steps.guard.outputs.apply_needed == 'true'
+        run: |
+          set -uo pipefail
+          terraform -chdir=infra/envs/prod plan -input=false -no-color -lock-timeout=10m \
+            -out="$RUNNER_TEMP/tf/second.tfplan" > "$RUNNER_TEMP/tf/second.log" 2>&1 || exit 1
+          terraform -chdir=infra/envs/prod show -no-color -json "$RUNNER_TEMP/tf/second.tfplan" \
+            > "$RUNNER_TEMP/tf/second.json" 2>> "$RUNNER_TEMP/tf/second.log" || exit 1
+          rc=0
+          python3 infra/scripts/check-plan.py --plan "$RUNNER_TEMP/tf/second.json" > "$RUNNER_TEMP/tf/second.txt" 2>&1 || rc=$?
+          cat "$RUNNER_TEMP/tf/second.txt"
+          exit "$rc"
+      # An apply that cannot write the state at the end (an S3 error, the session expiring) leaves what it did in
+      # infra/envs/prod/errored.tfstate, and the hosted runner is discarded with it. Push it (state push refuses an
+      # older serial or another lineage, never -force); failing that, keep it in the private, versioned state
+      # bucket under recovery/ for a local restore with MFA. Never an artifact: the state holds values.
+      - id: recover
+        name: save the state if Terraform could not (errored.tfstate)
+        if: always()
+        run: |
+          set -uo pipefail
+          errored=infra/envs/prod/errored.tfstate
+          if [ ! -f "$errored" ]; then
+            echo "no errored.tfstate: Terraform saved its state"
+            exit 0
+          fi
+          mkdir -p "$RUNNER_TEMP/tf"
+          rc=0
+          terraform -chdir=infra/envs/prod state push -no-color -lock-timeout=10m errored.tfstate \
+            > "$RUNNER_TEMP/tf/state-push.log" 2>&1 || rc=$?
+          if [ "$rc" = 0 ]; then
+            line="errored.tfstate pushed: the remote state now holds what the apply did"
+          else
+            key="recovery/errored-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tfstate"
+            rc=0
+            aws s3 cp "$errored" "s3://recallsmith-tfstate-622994489535/$key" --sse AES256 --only-show-errors \
+              > "$RUNNER_TEMP/tf/state-copy.log" 2>&1 || rc=$?
+            if [ "$rc" = 0 ]; then
+              line="state push refused; errored.tfstate kept as s3://recallsmith-tfstate-622994489535/$key: restore it locally with MFA (RUNBOOK §15 When a run stops)"
+            else
+              line="errored.tfstate could not be pushed or kept: the state misses part of this apply; reconcile locally with MFA (RUNBOOK §15 When a run stops)"
+            fi
+          fi
+          rm -f "$errored"
+          echo "$line" > "$RUNNER_TEMP/tf/recovery.txt"
+          echo "::error::$line"
+          exit 1
+      - name: what Terraform reported (no message text)
+        if: >-
+          failure() && (steps.init.outcome == 'failure' || steps.plan.outcome == 'failure' ||
+          steps.apply.outcome == 'failure' || steps.second.outcome == 'failure' || steps.recover.outcome == 'failure')
+        run: |
+          python3 infra/scripts/tf-pipeline.py diagnose --log "$RUNNER_TEMP/tf/init.log" "$RUNNER_TEMP/tf/plan.log" \
+            "$RUNNER_TEMP/tf/apply.log" "$RUNNER_TEMP/tf/second.log" "$RUNNER_TEMP/tf/state-push.log"
+      - name: job summary
+        if: always()
+        env:
+          GUARD: ${{ steps.guard.outcome }}
+          GATE: ${{ steps.gate.outcome }}
+          APPLY: ${{ steps.apply.outcome }}
+          SECOND: ${{ steps.second.outcome }}
+          NEEDED: ${{ steps.guard.outputs.apply_needed }}
+        run: |
+          set -uo pipefail
+          second_txt="$RUNNER_TEMP/tf/second.txt"
+          applied="not run"
+          second="not run"
+          allow_line="none (the plan had to be empty)"
+          if [ "$APPLY" = success ]; then
+            applied="applied"
+          elif [ "$APPLY" = failure ]; then
+            applied="**FAILED** part-way (the diagnose step has the errors; RUNBOOK §15 When a run stops)"
+          elif [ "$GATE" = success ] && [ "$NEEDED" = false ]; then
+            applied="not needed: the plan was empty"
+          fi
+          if grep -q '^PLAN EMPTY' "$second_txt" 2>/dev/null; then
+            second="PLAN EMPTY"
+          elif [ -s "$second_txt" ]; then
+            second="**NOT EMPTY**: $(grep -c 'PLAN VIOLATION' "$second_txt" || true) unexpected change(s), listed in the log"
+          elif [ "$SECOND" = skipped ] && [ "$NEEDED" = false ]; then
+            second="not needed (nothing applied)"
+          fi
+          if [ -n "$ALLOW" ]; then allow_line="\`${ALLOW// /\`, \`}\`"; fi
+          {
+            echo "### Terraform apply of \`$GITHUB_SHA\`"
+            echo
+            echo "- allow file: $allow_line"
+            echo "- guard (break-glass refusal): ${GUARD:-not run}; plan gate (check-plan.py): ${GATE:-not run}"
+            echo "- apply: $applied"
+            echo "- second plan: $second"
+            if [ -s "$RUNNER_TEMP/tf/recovery.txt" ]; then
+              echo "- **state**: $(cat "$RUNNER_TEMP/tf/recovery.txt")"
+            fi
+            if [ -s "$RUNNER_TEMP/tf/gate.txt" ]; then
+              echo
+              echo "| address | action | changed keys |"
+              echo "|---|---|---|"
+              awk -F '  ' 'NF == 3 { printf "| `%s` | %s | %s |\n", $1, $2, $3 }' "$RUNNER_TEMP/tf/gate.txt"
+              echo
+              { grep -E '^(PLAN |SUMMARY )' "$RUNNER_TEMP/tf/gate.txt" || true; } | sed 's/^/    /'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      # Hosted runners are discarded after the job; the plan JSON holds values (state, Lambda environments), so it
+      # goes first anyway.
+      - name: delete the plans and logs
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/tf" infra/envs/prod/.terraform infra/envs/prod/errored.tfstate
+
+  plan:
+    name: plan only (infra-prod)
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: infra-prod
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TF_VAR_alert_email: ${{ secrets.TF_VAR_ALERT_EMAIL }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+      - name: the commit must be on the main branch
+        run: |
+          set -euo pipefail
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "::error::commit $GITHUB_SHA is not on the main branch"
+            exit 1
+          fi
+      - name: preflight (no credentials yet)
+        run: |
+          set -euo pipefail
+          if [ -z "${TF_VAR_alert_email:-}" ]; then
+            echo "::error::environment secret TF_VAR_ALERT_EMAIL is not set on infra-prod (infra/RUNBOOK.md §15 Bootstrap)"
+            exit 1
+          fi
+          echo "::add-mask::${TF_VAR_alert_email}"
+          mkdir -p "$RUNNER_TEMP/tf"
+          python3 infra/scripts/tf-pipeline.py preflight
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: 1.16.3
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::622994489535:role/developercards-gha-infra
+          aws-region: ap-southeast-2
+          role-session-name: gha-tf-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          role-duration-seconds: 3600
+      - id: plan
+        name: init and plan (output to files; read-only, no state lock)
+        run: |
+          set -euo pipefail
+          terraform -chdir=infra/envs/prod init -input=false -no-color -lockfile=readonly > "$RUNNER_TEMP/tf/init.log" 2>&1
+          terraform -chdir=infra/envs/prod plan -input=false -no-color -lock=false \
+            -out="$RUNNER_TEMP/tf/drift.tfplan" > "$RUNNER_TEMP/tf/plan.log" 2>&1
+          terraform -chdir=infra/envs/prod show -no-color -json "$RUNNER_TEMP/tf/drift.tfplan" \
+            > "$RUNNER_TEMP/tf/plan.json" 2>> "$RUNNER_TEMP/tf/plan.log"
+      - name: main and AWS must agree (check-plan.py, no allow file)
+        run: |
+          set -uo pipefail
+          rc=0
+          python3 infra/scripts/check-plan.py --plan "$RUNNER_TEMP/tf/plan.json" --summary > "$RUNNER_TEMP/tf/gate.txt" 2>&1 || rc=$?
+          cat "$RUNNER_TEMP/tf/gate.txt"
+          {
+            echo "### Terraform plan only, \`$GITHUB_SHA\`"
+            echo
+            if [ "$rc" = 0 ]; then echo "PLAN EMPTY: main and AWS agree."; else echo "Drift or unapplied changes (addresses only):"; fi
+            echo
+            sed 's/^/    /' "$RUNNER_TEMP/tf/gate.txt"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+      - name: what Terraform reported (no message text)
+        if: failure() && steps.plan.outcome == 'failure'
+        run: python3 infra/scripts/tf-pipeline.py diagnose --log "$RUNNER_TEMP/tf/init.log" "$RUNNER_TEMP/tf/plan.log"
+      - name: delete the plans and logs
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/tf" infra/envs/prod/.terraform

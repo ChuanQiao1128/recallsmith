@@ -17,3 +17,7 @@ output "operator_base_policy_arn" {
 output "gha_prod_role_arn" {
   value = aws_iam_role.gha_prod.arn
 }
+
+output "gha_infra_role_arn" {
+  value = aws_iam_role.gha_infra.arn
+}

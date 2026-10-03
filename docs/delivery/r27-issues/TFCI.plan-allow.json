@@ -1,0 +1,12 @@
+{
+  "tags_only_updates": false,
+  "changes": {
+    "module.operators.aws_iam_role.gha_infra": "create",
+    "module.operators.aws_iam_role_policy_attachment.gha_infra": "create",
+    "module.operators.aws_iam_role_policy.gha_infra_deny": "create"
+  },
+  "outputs": [
+    "operator_role_arns"
+  ],
+  "_note": "R27 TFCI bootstrap, break-glass by design: module.operators is never applied by the pipeline (tf-pipeline.py select refuses this file after merge, before any approval request). The supervisor applies it locally with devcards-admin (MFA), infra/RUNBOOK.md §15 Bootstrap: expect PLAN OK 3 (three creates: role developercards-gha-infra trusting only repo:ChuanQiao1128/recallsmith:environment:infra-prod through the existing GitHub OIDC provider, its AdministratorAccess attachment, its inline deny policy) and the output operator_role_arns gaining gha_infra; nothing else. The OIDC provider, the other four roles and devcards-operator-base do not change. Then the second plan must print PLAN EMPTY."
+}

@@ -54,3 +54,24 @@ variable "github_environment" {
   type    = string
   default = "production"
 }
+
+# The GitHub Actions role for routine Terraform applies (.github/workflows/terraform.yml, RUNBOOK §15).
+variable "gha_infra_role_name" {
+  type    = string
+  default = "developercards-gha-infra"
+}
+
+variable "github_infra_environment" {
+  type    = string
+  default = "infra-prod"
+}
+
+# The CloudTrail bucket (modules/observability) and the Terraform state bucket (created by CLI, README §5): the
+# pipeline role may not change their settings, and may not touch the trail's objects.
+variable "audit_bucket_name" {
+  type = string
+}
+
+variable "state_bucket_name" {
+  type = string
+}

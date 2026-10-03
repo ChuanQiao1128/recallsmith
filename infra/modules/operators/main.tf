@@ -9,8 +9,12 @@
 #                                     break-glass path only; normal deploys go through developercards-gha-prod.
 #   developercards-gha-prod  OIDC     the same permissions plus invoking the synthetic check, for GitHub
 #                                     Actions jobs in the "production" environment (owner approval) only.
-#   devcards-admin-mfa       MFA      AdministratorAccess, 1-hour sessions; Terraform and break-glass. The MFA
-#                                     code is the owner's approval step for production infrastructure changes.
+#   devcards-admin-mfa       MFA      AdministratorAccess, 1-hour sessions; break-glass Terraform (this module,
+#                                     state surgery, imports) and everything else that needs the owner present.
+#   developercards-gha-infra OIDC     AdministratorAccess minus an explicit deny (no new credentials, no audit
+#                                     tampering, no change to the roles in this file), for the GitHub Actions
+#                                     job in the "infra-prod" environment (owner approval) only: routine
+#                                     Terraform applies (.github/workflows/terraform.yml, RUNBOOK §15).
 
 locals {
   lambda_arn  = "arn:aws:lambda:${var.region}:${var.account_id}:function"
@@ -324,4 +328,189 @@ resource "aws_iam_role_policy" "gha_prod" {
   name   = "release-listed-functions-and-sites"
   role   = aws_iam_role.gha_prod.id
   policy = data.aws_iam_policy_document.gha_prod.json
+}
+
+# ── developercards-gha-infra: GitHub Actions Terraform (.github/workflows/terraform.yml, RUNBOOK §15) ───────
+# The job "apply (infra-prod)" plans, gates the plan against the change's allow-list and applies it after the
+# owner's approval in the "infra-prod" environment (required reviewer, main only). Terraform manages IAM roles,
+# Lambda, API Gateway, RDS, S3, CloudFront, Cognito, SSM, CloudWatch and budgets, so the role starts from
+# AdministratorAccess; the explicit deny below wins over it and keeps these out of a pipeline apply:
+#   - new static or human credentials: no IAM user, access key, password, MFA device, group, OIDC or SAML
+#     provider or Identity Center user can be created or changed. The deny names write actions only, so
+#     Terraform can still read (refresh) the GitHub OIDC provider this module manages;
+#   - hopping into another role: sts:AssumeRole is denied (Terraform here assumes nothing: no assume_role in
+#     providers.tf or the backend; the job itself gets in with AssumeRoleWithWebIdentity);
+#   - audit tampering: the trail cannot be stopped or narrowed, its bucket's objects and settings cannot change,
+#     and the state bucket keeps its versioning, lifecycle, policy, access settings and every state version;
+#   - the identities in this file: the five roles and devcards-operator-base cannot be changed, so the pipeline
+#     cannot widen its own trust, drop this deny or reach the static key. Changes to module.operators therefore
+#     stay break-glass (a local apply with the owner's MFA), and the workflow refuses such a plan before apply
+#     (infra/scripts/tf-pipeline.py guard) so it never half-applies;
+#   - account, organization and billing settings.
+# What it does not stop: AdministratorAccess can still create a service role, attach a broad policy to it and run
+# code with it (a Lambda function the pipeline creates and invokes). That code outlives the job. tf-pipeline.py
+# preflight and guard refuse the direct routes (provisioners, aws_lambda_invocation, providers other than
+# hashicorp/aws, broad grants and admin attachments in a plan); the rest is the approval and RUNBOOK §15 "What it
+# does not stop". A permissions boundary on every role Terraform creates would close it on the AWS side.
+locals {
+  # Built from names, not resource references, so the deny names the role being created in the same plan too.
+  gha_infra_protected_role_arns = [
+    for name in [
+      aws_iam_role.agent_readonly.name, aws_iam_role.deployer.name, aws_iam_role.admin_mfa.name,
+      aws_iam_role.gha_prod.name, var.gha_infra_role_name,
+    ] : "arn:aws:iam::${var.account_id}:role/${name}"
+  ]
+  audit_bucket_arn = "arn:aws:s3:::${var.audit_bucket_name}"
+  state_bucket_arn = "arn:aws:s3:::${var.state_bucket_name}"
+}
+
+data "aws_iam_policy_document" "trust_github_infra" {
+  statement {
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+    principals {
+      type        = "Federated"
+      identifiers = [aws_iam_openid_connect_provider.github.arn]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+    # Exactly the infra-prod environment of this repository: no branch, pull request or other environment.
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:sub"
+      values   = ["repo:${var.github_repository}:environment:${var.github_infra_environment}"]
+    }
+  }
+}
+
+resource "aws_iam_role" "gha_infra" {
+  name                 = var.gha_infra_role_name
+  description          = "GitHub Actions Terraform, environment ${var.github_infra_environment} of ${var.github_repository} only"
+  assume_role_policy   = data.aws_iam_policy_document.trust_github_infra.json
+  max_session_duration = 3600
+}
+
+resource "aws_iam_role_policy_attachment" "gha_infra" {
+  role       = aws_iam_role.gha_infra.name
+  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
+}
+
+data "aws_iam_policy_document" "gha_infra_deny" {
+  statement {
+    sid    = "NoStaticOrHumanCredentials"
+    effect = "Deny"
+    # Write actions only, never a wildcard: "iam:*OpenIDConnectProvider*" also matched GetOpenIDConnectProvider,
+    # and every plan refreshes aws_iam_openid_connect_provider.github (test_tf_pipeline.py keeps the reads out).
+    actions = [
+      # A user plus a policy, a group, a key or a password is a standing way in.
+      "iam:CreateUser", "iam:DeleteUser", "iam:UpdateUser", "iam:TagUser", "iam:UntagUser",
+      "iam:AttachUserPolicy", "iam:DetachUserPolicy", "iam:PutUserPolicy", "iam:DeleteUserPolicy",
+      "iam:PutUserPermissionsBoundary", "iam:DeleteUserPermissionsBoundary",
+      "iam:AddUserToGroup", "iam:RemoveUserFromGroup",
+      # UpdateAccessKey: re-activating a deactivated key counts as a new one.
+      "iam:CreateAccessKey", "iam:UpdateAccessKey", "iam:DeleteAccessKey",
+      "iam:CreateLoginProfile", "iam:UpdateLoginProfile", "iam:DeleteLoginProfile",
+      # AttachGroupPolicy / PutGroupPolicy reach every user in the group.
+      "iam:CreateGroup", "iam:DeleteGroup", "iam:UpdateGroup", "iam:AttachGroupPolicy", "iam:DetachGroupPolicy",
+      "iam:PutGroupPolicy", "iam:DeleteGroupPolicy",
+      # A new device on the owner's user would satisfy the admin role's MFA condition.
+      "iam:CreateVirtualMFADevice", "iam:DeleteVirtualMFADevice", "iam:EnableMFADevice", "iam:DeactivateMFADevice",
+      "iam:ResyncMFADevice", "iam:TagMFADevice", "iam:UntagMFADevice",
+      "iam:CreateServiceSpecificCredential", "iam:UpdateServiceSpecificCredential",
+      "iam:ResetServiceSpecificCredential", "iam:DeleteServiceSpecificCredential",
+      "iam:UploadSSHPublicKey", "iam:UpdateSSHPublicKey", "iam:DeleteSSHPublicKey",
+      "iam:UploadSigningCertificate", "iam:UpdateSigningCertificate", "iam:DeleteSigningCertificate",
+      # The GitHub OIDC provider is what every GitHub role trusts.
+      "iam:CreateOpenIDConnectProvider", "iam:DeleteOpenIDConnectProvider",
+      "iam:UpdateOpenIDConnectProviderThumbprint", "iam:AddClientIDToOpenIDConnectProvider",
+      "iam:RemoveClientIDFromOpenIDConnectProvider", "iam:TagOpenIDConnectProvider",
+      "iam:UntagOpenIDConnectProvider",
+      "iam:CreateSAMLProvider", "iam:DeleteSAMLProvider", "iam:UpdateSAMLProvider", "iam:TagSAMLProvider",
+      "iam:UntagSAMLProvider",
+      "sso:*", "sso-directory:*", "identitystore:*", # IAM Identity Center users; Terraform reads none of them
+    ]
+    resources = ["*"]
+  }
+  statement {
+    sid       = "NoRoleHopping" # in-job code cannot step into a role this deny does not bind
+    effect    = "Deny"
+    actions   = ["sts:AssumeRole"]
+    resources = ["*"]
+  }
+  statement {
+    sid    = "NoAuditTampering"
+    effect = "Deny"
+    actions = [
+      "cloudtrail:StopLogging", "cloudtrail:DeleteTrail", "cloudtrail:UpdateTrail", "cloudtrail:PutEventSelectors",
+      "cloudtrail:PutInsightSelectors",
+    ]
+    resources = ["*"]
+  }
+  statement {
+    sid    = "NoAuditLogChanges" # the trail's bucket (modules/observability/retention.tf)
+    effect = "Deny"
+    actions = [
+      "s3:DeleteBucket", "s3:PutBucketPolicy", "s3:DeleteBucketPolicy", "s3:PutLifecycleConfiguration",
+      "s3:PutBucketVersioning", "s3:PutBucketAcl", "s3:PutBucketOwnershipControls", "s3:PutBucketPublicAccessBlock",
+      "s3:PutEncryptionConfiguration", "s3:PutObject", "s3:PutObjectAcl", "s3:DeleteObject", "s3:DeleteObjectVersion",
+    ]
+    resources = [local.audit_bucket_arn, "${local.audit_bucket_arn}/*"]
+  }
+  statement {
+    sid    = "KeepStateHistory"
+    effect = "Deny"
+    actions = [
+      "s3:DeleteBucket", "s3:PutBucketPolicy", "s3:DeleteBucketPolicy", "s3:PutLifecycleConfiguration",
+      "s3:PutBucketVersioning", "s3:PutBucketAcl", "s3:PutBucketOwnershipControls", "s3:PutBucketPublicAccessBlock",
+    ]
+    resources = [local.state_bucket_arn]
+  }
+  # PutObject and a plain DeleteObject stay allowed: the S3 backend writes the state and creates and removes its
+  # lock file with them (in a versioned bucket a plain delete only adds a delete marker). No version can be removed.
+  statement {
+    sid    = "KeepStateVersions"
+    effect = "Deny"
+    actions = [
+      "s3:DeleteObjectVersion", "s3:PutObjectRetention", "s3:PutObjectLegalHold", "s3:BypassGovernanceRetention",
+    ]
+    resources = ["${local.state_bucket_arn}/*"]
+  }
+  statement {
+    sid    = "NoOperatorOrCiRoleChanges"
+    effect = "Deny"
+    actions = [
+      "iam:UpdateAssumeRolePolicy", "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:AttachRolePolicy",
+      "iam:DetachRolePolicy", "iam:DeleteRole", "iam:UpdateRole", "iam:UpdateRoleDescription",
+      "iam:PutRolePermissionsBoundary", "iam:DeleteRolePermissionsBoundary", "iam:TagRole", "iam:UntagRole",
+    ]
+    resources = local.gha_infra_protected_role_arns
+  }
+  statement {
+    sid    = "NoOperatorBasePolicyChanges" # what the static key may do
+    effect = "Deny"
+    actions = [
+      "iam:CreatePolicyVersion", "iam:DeletePolicyVersion", "iam:SetDefaultPolicyVersion", "iam:DeletePolicy",
+      "iam:TagPolicy", "iam:UntagPolicy",
+    ]
+    resources = [aws_iam_policy.operator_base.arn]
+  }
+  statement {
+    sid    = "NoAccountChanges"
+    effect = "Deny"
+    actions = [
+      "organizations:*", "account:Put*", "account:Delete*", "account:Enable*", "account:Disable*",
+      "account:Accept*", "account:Start*", "aws-portal:Modify*", "billing:Put*", "billing:Update*", "payments:*",
+      "iam:CreateAccountAlias", "iam:DeleteAccountAlias", "iam:UpdateAccountPasswordPolicy",
+      "iam:DeleteAccountPasswordPolicy",
+    ]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "gha_infra_deny" {
+  name   = "deny-credentials-audit-and-operator-changes"
+  role   = aws_iam_role.gha_infra.id
+  policy = data.aws_iam_policy_document.gha_infra_deny.json
 }
