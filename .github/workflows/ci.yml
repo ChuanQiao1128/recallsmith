@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# Every action is pinned to a full commit SHA, with the release it was cut from as the trailing
+# comment: a tag can be moved to other code, a commit cannot. .github/dependabot.yml bumps the pins
+# and their comments together, weekly, in one PR. Never rename a job's `name:` — the main ruleset
+# requires these checks by that exact string, and a rename leaves every PR waiting on a check that
+# never reports.
+
 jobs:
   mobile:
     name: mobile (typecheck + vitest + expo export)
@@ -16,8 +22,8 @@ jobs:
       run:
         working-directory: mobile
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '20'
           cache: npm
@@ -49,8 +55,8 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '20'
           cache: npm
@@ -117,8 +123,8 @@ jobs:
     # separately — appending it would mean a red smoke test hides which of the
     # five existing gates were even reached.
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '20'
           cache: npm
@@ -150,7 +156,7 @@ jobs:
       # discovered to be empty on the day it is needed. `trace:
       # 'retain-on-failure'` and `screenshot: 'only-on-failure'` both write
       # here. Open one with `npx playwright show-trace <the zip>`.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
           name: playwright-traces
@@ -164,8 +170,8 @@ jobs:
       run:
         working-directory: src_C
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
         with:
           # The SDK comes from src_C/global.json (10.0.100, rollForward latestFeature, which this
           # action reads as "latest 10.0"), so CI and a laptop resolve the same SDK line and a
@@ -185,14 +191,14 @@ jobs:
     name: python (uv lock + pytest)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           # Full history so check-gate-freshness.py can find the merge base with the base branch.
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.12'
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
       - name: bash -n the Python Lambda deploy script
         run: bash -n services/deploy-python-lambda.sh
       - name: uv lock --check && pytest in every Python package
@@ -238,8 +244,8 @@ jobs:
     name: infra (terraform fmt/validate + agent routes + deploy scripts)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         with:
           # versions.tf asks for >= 1.10; pinned so a new terraform release cannot change fmt output.
           terraform_version: 1.16.3
@@ -276,8 +282,8 @@ jobs:
       run:
         working-directory: tools/mcp-server
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '24'
           cache: npm
@@ -293,8 +299,8 @@ jobs:
       run:
         working-directory: integrations/n8n
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '24'
       - run: node --test lib/
@@ -306,8 +312,8 @@ jobs:
       run:
         working-directory: tools/author-runner
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '22'
           cache: npm
