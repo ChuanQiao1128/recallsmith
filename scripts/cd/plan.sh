@@ -19,8 +19,9 @@
 #   site      site/** (everything there is synced to the bucket)
 #   <svc>     services/<svc>/**, except tests/ and *.md; svc in ai-qa notifier source-watcher synthetic-check
 #             webhook-dispatcher
-# Nothing else deploys: docs/, infra/ (Terraform stays local, MFA), mobile/ (OTA and binaries stay owner-driven),
-# tools/, .github/, scripts/ ... A merge that touches only those makes no deploy job and so no approval request.
+# Nothing else deploys: docs/, infra/ (Terraform has its own workflow, terraform.yml, RUNBOOK §15), mobile/ (OTA and
+# binaries stay owner-driven), tools/, .github/, scripts/ ... A merge that touches only those makes no deploy job and so
+# no approval request.
 #
 # Which commit: only a commit on main ever deploys. For a push, the commit CI passed must be an ancestor of (or equal
 # to) refs/remotes/origin/main: a tag named `main` reaches CD with head_branch "main" too. When main has moved on and
