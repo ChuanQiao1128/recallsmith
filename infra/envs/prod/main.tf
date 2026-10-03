@@ -50,14 +50,13 @@ import {
 module "identity" {
   source = "../../modules/identity"
 
-  env                   = "prod"
-  account_id            = var.account_id
-  region                = var.region
-  core_vpc_role_name    = "core-vpc-role-joizyiwt"
-  edge_public_role_name = "edge-public-role-zezx326f"
-  manage_cognito        = true
-  console_pool_id       = var.console_pool_id
-  mobile_pool_id        = var.mobile_pool_id
+  env                = "prod"
+  account_id         = var.account_id
+  region             = var.region
+  core_vpc_role_name = "core-vpc-role-joizyiwt"
+  manage_cognito     = true
+  console_pool_id    = var.console_pool_id
+  mobile_pool_id     = var.mobile_pool_id
 
   worker_role_name       = "developercards-worker-lambda-role"
   content_bucket_name    = "core-vpc"
@@ -136,21 +135,19 @@ module "edge" {
 module "api" {
   source = "../../modules/api"
 
-  env                       = "prod"
-  api_name                  = "developercards-api"
-  core_vpc_function_name    = "core-vpc"
-  core_vpc_alias_name       = "prod"
-  core_vpc_role_arn         = module.identity.core_vpc_role_arn
-  edge_public_function_name = "edge-public"
-  edge_public_role_arn      = module.identity.edge_public_role_arn
-  subnet_ids                = module.data.subnet_ids
-  security_group_ids        = var.core_vpc_security_group_ids
-  console_pool_endpoint     = module.identity.console_pool_endpoint
-  console_client_id         = module.identity.console_client_id
-  agent_client_ids          = [module.identity.console_dev_client_id]
-  mobile_pool_endpoint      = module.identity.mobile_pool_endpoint
-  mobile_client_id          = module.identity.mobile_client_id
-  cors_allowed_origins      = concat(var.cors_allowed_origins, ["https://console.${var.domain}"])
+  env                    = "prod"
+  api_name               = "developercards-api"
+  core_vpc_function_name = "core-vpc"
+  core_vpc_alias_name    = "prod"
+  core_vpc_role_arn      = module.identity.core_vpc_role_arn
+  subnet_ids             = module.data.subnet_ids
+  security_group_ids     = var.core_vpc_security_group_ids
+  console_pool_endpoint  = module.identity.console_pool_endpoint
+  console_client_id      = module.identity.console_client_id
+  agent_client_ids       = [module.identity.console_dev_client_id]
+  mobile_pool_endpoint   = module.identity.mobile_pool_endpoint
+  mobile_client_id       = module.identity.mobile_client_id
+  cors_allowed_origins   = concat(var.cors_allowed_origins, ["https://console.${var.domain}"])
 
   access_log_destination_arn = module.observability.api_access_log_group_arn
 

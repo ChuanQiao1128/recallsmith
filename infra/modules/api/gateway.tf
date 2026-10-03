@@ -11,39 +11,36 @@ locals {
   # auth: "console" | "agent" | "mobile" | "none".
   # R18 Y04 (ai-agent-6): "console" admits only the SPA client. "agent" admits the SPA client and the
   # agent app clients (console-dev, the local MCP server) and is attached ONLY to the exact route keys
-  # the MCP server calls (tools/mcp-server/src/api.ts, server.ts). Every other route, including all
-  # edge-public routes (Cognito admin, /api/v1/ai, billing), rejects an agent token at the gateway.
-  # core-vpc's AgentClientPolicy stays as defence in depth; keep the two lists equal.
+  # the MCP server calls (tools/mcp-server/src/api.ts, server.ts). Every other route rejects an agent
+  # token at the gateway. core-vpc's AgentClientPolicy stays as defence in depth; keep the two lists equal.
+  # R27 EDGE (2026-10-04): edge-public is retired and its three routes (ANY /api/v1/ai/{proxy+},
+  # ANY /api/v1/billing/{proxy+}, ANY /api/v1/admin/cognito/{proxy+}) and their OPTIONS routes are gone.
+  # Those paths now fall to ANY /{proxy+} and ANY /api/v1/admin/{proxy+} (console JWT, core-vpc), which
+  # answers 404; OPTIONS falls to OPTIONS /{proxy+} and OPTIONS /api/v1/admin/{proxy+}, core-vpc as before.
   routes = {
-    default            = { route_key = "$default", integration = "core_vpc", auth = "console" }
-    proxy              = { route_key = "ANY /{proxy+}", integration = "core_vpc", auth = "console" }
-    authoring          = { route_key = "ANY /api/v1/authoring/{proxy+}", integration = "core_vpc", auth = "console" }
-    admin              = { route_key = "ANY /api/v1/admin/{proxy+}", integration = "core_vpc", auth = "console" }
-    publish_jobs       = { route_key = "GET /api/v1/authoring/publish/jobs", integration = "core_vpc", auth = "console" }
-    edge_ai            = { route_key = "ANY /api/v1/ai/{proxy+}", integration = "edge_public", auth = "console" }
-    edge_billing       = { route_key = "ANY /api/v1/billing/{proxy+}", integration = "edge_public", auth = "console" }
-    edge_admin_cognito = { route_key = "ANY /api/v1/admin/cognito/{proxy+}", integration = "edge_public", auth = "console" }
-    sync               = { route_key = "ANY /api/v1/sync/{proxy+}", integration = "core_vpc", auth = "mobile" }
-    draw_state         = { route_key = "ANY /api/v1/draw-state/{proxy+}", integration = "core_vpc", auth = "mobile" }
-    user               = { route_key = "ANY /api/v1/user/{proxy+}", integration = "core_vpc", auth = "mobile" }
-    premium            = { route_key = "ANY /api/v1/premium/{proxy+}", integration = "core_vpc", auth = "mobile" }
-    me                 = { route_key = "GET /api/v1/me", integration = "core_vpc", auth = "mobile" }
-    entitlements       = { route_key = "GET /api/v1/entitlements", integration = "core_vpc", auth = "mobile" }
-    premium_url        = { route_key = "GET /api/v1/content/premium-url", integration = "core_vpc", auth = "mobile" }
-    premium_url_dev    = { route_key = "GET /api/v1/content/premium-url-dev", integration = "core_vpc", auth = "mobile" }
-    health             = { route_key = "GET /health", integration = "core_vpc", auth = "none" }
-    rc_production      = { route_key = "POST /webhooks/revenuecat/production", integration = "core_vpc", auth = "none" }
-    rc_development     = { route_key = "POST /webhooks/revenuecat/development", integration = "core_vpc", auth = "none" }
+    default         = { route_key = "$default", integration = "core_vpc", auth = "console" }
+    proxy           = { route_key = "ANY /{proxy+}", integration = "core_vpc", auth = "console" }
+    authoring       = { route_key = "ANY /api/v1/authoring/{proxy+}", integration = "core_vpc", auth = "console" }
+    admin           = { route_key = "ANY /api/v1/admin/{proxy+}", integration = "core_vpc", auth = "console" }
+    publish_jobs    = { route_key = "GET /api/v1/authoring/publish/jobs", integration = "core_vpc", auth = "console" }
+    sync            = { route_key = "ANY /api/v1/sync/{proxy+}", integration = "core_vpc", auth = "mobile" }
+    draw_state      = { route_key = "ANY /api/v1/draw-state/{proxy+}", integration = "core_vpc", auth = "mobile" }
+    user            = { route_key = "ANY /api/v1/user/{proxy+}", integration = "core_vpc", auth = "mobile" }
+    premium         = { route_key = "ANY /api/v1/premium/{proxy+}", integration = "core_vpc", auth = "mobile" }
+    me              = { route_key = "GET /api/v1/me", integration = "core_vpc", auth = "mobile" }
+    entitlements    = { route_key = "GET /api/v1/entitlements", integration = "core_vpc", auth = "mobile" }
+    premium_url     = { route_key = "GET /api/v1/content/premium-url", integration = "core_vpc", auth = "mobile" }
+    premium_url_dev = { route_key = "GET /api/v1/content/premium-url-dev", integration = "core_vpc", auth = "mobile" }
+    health          = { route_key = "GET /health", integration = "core_vpc", auth = "none" }
+    rc_production   = { route_key = "POST /webhooks/revenuecat/production", integration = "core_vpc", auth = "none" }
+    rc_development  = { route_key = "POST /webhooks/revenuecat/development", integration = "core_vpc", auth = "none" }
     # 2026-09-26 (E09 follow-up): browser CORS preflights carry no token. A JWT route such as
     # ANY /api/v1/authoring/{proxy+} matched them (longest greedy path wins over the method) and
     # answered 401, so the console could not call the API. One unauthenticated OPTIONS route per
     # console prefix; core-vpc answers OPTIONS with 200 and API Gateway adds the CORS headers.
-    options_root          = { route_key = "OPTIONS /{proxy+}", integration = "core_vpc", auth = "none" }
-    options_authoring     = { route_key = "OPTIONS /api/v1/authoring/{proxy+}", integration = "core_vpc", auth = "none" }
-    options_admin         = { route_key = "OPTIONS /api/v1/admin/{proxy+}", integration = "core_vpc", auth = "none" }
-    options_admin_cognito = { route_key = "OPTIONS /api/v1/admin/cognito/{proxy+}", integration = "core_vpc", auth = "none" }
-    options_ai            = { route_key = "OPTIONS /api/v1/ai/{proxy+}", integration = "core_vpc", auth = "none" }
-    options_billing       = { route_key = "OPTIONS /api/v1/billing/{proxy+}", integration = "core_vpc", auth = "none" }
+    options_root      = { route_key = "OPTIONS /{proxy+}", integration = "core_vpc", auth = "none" }
+    options_authoring = { route_key = "OPTIONS /api/v1/authoring/{proxy+}", integration = "core_vpc", auth = "none" }
+    options_admin     = { route_key = "OPTIONS /api/v1/admin/{proxy+}", integration = "core_vpc", auth = "none" }
     # R18 J05: server-to-server HMAC route (no JWT, no OPTIONS); the narrow key wins over proxy.
     # R18 X08: exact keys, never {proxy+}. A greedy key let /api/internal/webhooks/x/<any path>
     # reach core-vpc without the JWT, where suffix routing picked the handler; with exact keys
@@ -80,8 +77,7 @@ locals {
   }
 
   integration_ids = {
-    core_vpc    = aws_apigatewayv2_integration.core_vpc.id
-    edge_public = aws_apigatewayv2_integration.edge_public.id
+    core_vpc = aws_apigatewayv2_integration.core_vpc.id
   }
 
   authorizer_ids = {
@@ -151,16 +147,6 @@ resource "aws_apigatewayv2_integration" "core_vpc" {
   integration_method     = "POST"
   integration_type       = "AWS_PROXY"
   integration_uri        = aws_lambda_alias.core_vpc_prod.arn
-  payload_format_version = "2.0"
-  timeout_milliseconds   = 30000
-}
-
-resource "aws_apigatewayv2_integration" "edge_public" {
-  api_id                 = aws_apigatewayv2_api.http.id
-  connection_type        = "INTERNET"
-  integration_method     = "POST"
-  integration_type       = "AWS_PROXY"
-  integration_uri        = aws_lambda_function.edge_public.arn
   payload_format_version = "2.0"
   timeout_milliseconds   = 30000
 }

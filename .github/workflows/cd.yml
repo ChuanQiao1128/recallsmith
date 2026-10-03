@@ -20,8 +20,9 @@ name: CD
 #   rollback  environment `production` (approval too): workflow_dispatch with rollback_target + rollback_version
 #           moves one Lambda's prod alias back (scripts/rollback.sh).
 #
-# Not here: Terraform (stays local behind the owner's MFA), mobile OTA updates and binaries (owner-driven), the
-# edge-public Lambda, database migrations (the console's Migrate button), staging (there is none yet).
+# Not here: Terraform (stays local behind the owner's MFA), mobile OTA updates and binaries (owner-driven), console
+# accounts (the owner's aws cognito-idp commands, RUNBOOK §13; edge-public, which served them, was retired 2026-10-04),
+# database migrations (the console's Migrate button), staging (there is none yet).
 #
 # Every action is pinned to a full commit SHA with its release as the trailing comment, like ci.yml.
 

@@ -22,22 +22,6 @@ import {
   id = "arn:aws:iam::622994489535:policy/service-role/AWSLambdaVPCAccessExecutionRole-0916ae0e-b0bc-43bf-9827-cf383da694db"
 }
 import {
-  to = module.identity.aws_iam_role.edge_public
-  id = "edge-public-role-zezx326f"
-}
-import {
-  to = module.identity.aws_iam_role_policy.edge_public_cognito
-  id = "edge-public-role-zezx326f:edge-public-cognito"
-}
-import {
-  to = module.identity.aws_iam_policy.edge_public_logs
-  id = "arn:aws:iam::622994489535:policy/service-role/AWSLambdaBasicExecutionRole-4587d025-3600-45c8-9409-a1ead0afc685"
-}
-import {
-  to = module.identity.aws_iam_role_policy_attachment.edge_public_logs
-  id = "edge-public-role-zezx326f/arn:aws:iam::622994489535:policy/service-role/AWSLambdaBasicExecutionRole-4587d025-3600-45c8-9409-a1ead0afc685"
-}
-import {
   to = module.identity.aws_iam_role.rds_monitoring
   id = "rds-monitoring-role"
 }
@@ -188,10 +172,6 @@ import {
   id = "ktbq1sie2c/ftkbtwn"
 }
 import {
-  to = module.api.aws_apigatewayv2_integration.edge_public
-  id = "ktbq1sie2c/wf11obg"
-}
-import {
   to = module.api.aws_apigatewayv2_route.this["default"]
   id = "ktbq1sie2c/2zt7dan"
 }
@@ -220,18 +200,6 @@ import {
   id = "ktbq1sie2c/jsyx1bu"
 }
 import {
-  to = module.api.aws_apigatewayv2_route.this["edge_ai"]
-  id = "ktbq1sie2c/6lnq0za"
-}
-import {
-  to = module.api.aws_apigatewayv2_route.this["edge_billing"]
-  id = "ktbq1sie2c/w6hhydi"
-}
-import {
-  to = module.api.aws_apigatewayv2_route.this["edge_admin_cognito"]
-  id = "ktbq1sie2c/l803chb"
-}
-import {
   to = module.api.aws_apigatewayv2_authorizer.console
   id = "ktbq1sie2c/828ehi"
 }
@@ -246,10 +214,6 @@ import {
 import {
   to = module.api.aws_cloudwatch_log_group.core_vpc
   id = "/aws/lambda/core-vpc"
-}
-import {
-  to = module.api.aws_cloudwatch_log_group.edge_public
-  id = "/aws/lambda/edge-public"
 }
 import {
   to = module.api.aws_lambda_function.core_vpc
@@ -294,22 +258,6 @@ import {
 import {
   to = module.api.aws_lambda_permission.core_vpc["b22050a3-bad0-5ea2-a108-a21be6a9f3c0"]
   id = "core-vpc/b22050a3-bad0-5ea2-a108-a21be6a9f3c0"
-}
-import {
-  to = module.api.aws_lambda_function.edge_public
-  id = "edge-public"
-}
-import {
-  to = module.api.aws_lambda_permission.edge_public["3249e15a-5957-5b6d-b271-1c7d73f1c800"]
-  id = "edge-public/3249e15a-5957-5b6d-b271-1c7d73f1c800"
-}
-import {
-  to = module.api.aws_lambda_permission.edge_public["666d2528-5c6a-5fce-a7e9-4bbcaae132a9"]
-  id = "edge-public/666d2528-5c6a-5fce-a7e9-4bbcaae132a9"
-}
-import {
-  to = module.api.aws_lambda_permission.edge_public["70ec633b-6621-5c8b-9278-9ba3d2987025"]
-  id = "edge-public/70ec633b-6621-5c8b-9278-9ba3d2987025"
 }
 
 # worker
@@ -358,16 +306,4 @@ import {
 import {
   to = module.api.aws_apigatewayv2_route.this["options_admin"]
   id = "ktbq1sie2c/4yr2yy4"
-}
-import {
-  to = module.api.aws_apigatewayv2_route.this["options_admin_cognito"]
-  id = "ktbq1sie2c/aa1i1xd"
-}
-import {
-  to = module.api.aws_apigatewayv2_route.this["options_ai"]
-  id = "ktbq1sie2c/rkgo83o"
-}
-import {
-  to = module.api.aws_apigatewayv2_route.this["options_billing"]
-  id = "ktbq1sie2c/kxx92m0"
 }

@@ -22,7 +22,7 @@ variable "admin_session_seconds" {
 }
 
 # Functions the deployer may update, publish and re-alias (src_C/deploy.sh, services/deploy-python-lambda.sh).
-# edge-public (no source in the repo, enterprise audit SDLC-05) and the newsapp functions are deliberately absent.
+# The newsapp functions are deliberately absent; so was edge-public until it was retired (R27 EDGE, 2026-10-04).
 variable "deploy_function_names" {
   type = list(string)
 }

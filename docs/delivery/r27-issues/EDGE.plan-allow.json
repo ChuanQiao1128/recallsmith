@@ -1,0 +1,22 @@
+{
+  "tags_only_updates": false,
+  "changes": {
+    "module.api.aws_apigatewayv2_route.this[\"edge_ai\"]": "delete",
+    "module.api.aws_apigatewayv2_route.this[\"edge_billing\"]": "delete",
+    "module.api.aws_apigatewayv2_route.this[\"edge_admin_cognito\"]": "delete",
+    "module.api.aws_apigatewayv2_route.this[\"options_ai\"]": "delete",
+    "module.api.aws_apigatewayv2_route.this[\"options_billing\"]": "delete",
+    "module.api.aws_apigatewayv2_route.this[\"options_admin_cognito\"]": "delete",
+    "module.api.aws_apigatewayv2_integration.edge_public": "delete",
+    "module.api.aws_lambda_permission.edge_public[\"3249e15a-5957-5b6d-b271-1c7d73f1c800\"]": "delete",
+    "module.api.aws_lambda_permission.edge_public[\"666d2528-5c6a-5fce-a7e9-4bbcaae132a9\"]": "delete",
+    "module.api.aws_lambda_permission.edge_public[\"70ec633b-6621-5c8b-9278-9ba3d2987025\"]": "delete",
+    "module.api.aws_lambda_function.edge_public": "delete",
+    "module.api.aws_cloudwatch_log_group.edge_public": "forget",
+    "module.identity.aws_iam_role.edge_public": "delete",
+    "module.identity.aws_iam_role_policy.edge_public_cognito": "delete",
+    "module.identity.aws_iam_policy.edge_public_logs": "delete",
+    "module.identity.aws_iam_role_policy_attachment.edge_public_logs": "delete"
+  },
+  "_note": "R27 EDGE, edge-public retirement: expect PLAN OK 16 (15 delete, 1 forget, nothing else). The log group /aws/lambda/edge-public is taken out of state by the removed block in infra/modules/api/edge_public.tf (lifecycle destroy = false) and stays in AWS; Terraform >= 1.7 plans it as [\"forget\"], which check-plan.py reads as the action \"forget\" since this change (before it, the gate stopped with exit 2, unknown action set). No stage update is expected: no route_throttles key names a removed route. Apply only after the console build without the Cognito admin calls is live (infra/RUNBOOK.md, Console admin accounts)."
+}

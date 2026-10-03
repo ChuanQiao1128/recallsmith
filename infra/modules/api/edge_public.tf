@@ -1,37 +1,14 @@
-resource "aws_cloudwatch_log_group" "edge_public" {
-  name              = "/aws/lambda/${var.edge_public_function_name}"
-  retention_in_days = 30
-}
+# edge-public was retired on 2026-10-04 (R27 EDGE; owner decision, enterprise audit SDLC-05 / ENT-01): no
+# invocation in the 90 days before, its source never in this repo (archived at archive/edge-public-2025-12-28/).
+# The function, its routes, integration, invoke permissions and IAM role are deleted by the next apply.
+#
+# The log group is a record, so it is NOT deleted: this block takes it out of Terraform's state and leaves the
+# group, its streams and its 30-day retention in AWS (Terraform >= 1.7; the plan shows it as "forget"). Keep the
+# block until that apply has run; deleting it afterwards changes nothing.
+removed {
+  from = aws_cloudwatch_log_group.edge_public
 
-resource "aws_lambda_function" "edge_public" {
-  architectures = ["arm64"]
-  filename      = "${path.module}/../../bootstrap/placeholder.zip"
-  function_name = var.edge_public_function_name
-  handler       = "src/public/handler.handler"
-  memory_size   = 128
-  role          = var.edge_public_role_arn
-  runtime       = "nodejs24.x"
-  timeout       = 15
-  ephemeral_storage {
-    size = 512
-  }
-  logging_config {
-    log_format = "Text"
-    log_group  = "/aws/lambda/${var.edge_public_function_name}"
-  }
-  tracing_config {
-    mode = "PassThrough"
-  }
   lifecycle {
-    ignore_changes = [filename, source_code_hash, s3_bucket, s3_key, s3_object_version, publish, environment, description]
+    destroy = false
   }
-}
-
-resource "aws_lambda_permission" "edge_public" {
-  for_each      = local.edge_public_permissions
-  statement_id  = each.key
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.edge_public.function_name
-  principal     = "apigateway.amazonaws.com"
-  source_arn    = each.value
 }
