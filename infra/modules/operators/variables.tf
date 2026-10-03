@@ -44,3 +44,13 @@ variable "ssm_root_path" {
 variable "rds_instance_id" {
   type = string
 }
+
+variable "github_repository" {
+  type    = string
+  default = "ChuanQiao1128/recallsmith"
+}
+
+variable "github_environment" {
+  type    = string
+  default = "production"
+}

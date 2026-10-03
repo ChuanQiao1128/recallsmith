@@ -1,0 +1,25 @@
+{
+  "tags_only_updates": false,
+  "changes": {
+    "module.operators.aws_iam_openid_connect_provider.github": "create",
+    "module.operators.aws_iam_role.gha_prod": "create",
+    "module.operators.aws_iam_role_policy.gha_prod": "create",
+    "module.operators.aws_iam_role.deployer": {
+      "action": "update",
+      "keys": [
+        "assume_role_policy",
+        "description"
+      ]
+    },
+    "module.operators.aws_iam_policy.operator_base": {
+      "action": "update",
+      "keys": [
+        "policy"
+      ]
+    }
+  },
+  "outputs": [
+    "operator_role_arns"
+  ],
+  "_note": "operator_base reads as policy (known after apply) only because the deployer role is updated in the same plan; the document is unchanged, which the empty second plan confirms."
+}

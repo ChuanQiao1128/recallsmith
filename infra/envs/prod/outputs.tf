@@ -77,6 +77,7 @@ output "operator_role_arns" {
     agent_readonly = module.operators.agent_readonly_role_arn
     deployer       = module.operators.deployer_role_arn
     admin_mfa      = module.operators.admin_mfa_role_arn
+    gha_prod       = module.operators.gha_prod_role_arn
   }
 }
 output "operator_base_policy_arn" {
