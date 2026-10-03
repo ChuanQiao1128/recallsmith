@@ -616,7 +616,7 @@ per role, each with `source_profile = dev`:
 | Profile | Role | MFA | Who | Can |
 |---|---|---|---|---|
 | `devcards-ro` | `devcards-agent-readonly` | no | Claude sessions, workflow and DDW workers, investigations | AWS ReadOnlyAccess **minus** SSM/KMS decrypt, Secrets Manager, Lambda configuration (its environment holds the injected secrets), S3 object reads (tfstate, user content, CloudTrail), Cognito user records, RDS logs, SQS receive |
-| `devcards-deploy` | `devcards-deployer` | no | `src_C/deploy.sh`, `services/deploy-python-lambda.sh`, `frontend/deploy.sh`, `site/deploy.sh`, `infra/scripts/rds-snapshot.sh` (all default to it) | update / publish / re-alias core-vpc, worker-lambda and the five `developercards-*` Python functions; read `/developercards` SSM through KMS-via-SSM; sync the console and site buckets and invalidate their two distributions; pre-migration DB snapshot. Not: edge-public, newsapp, IAM, `lambda:InvokeFunction`, tfstate, content buckets |
+| `devcards-deploy` | `devcards-deployer` | **yes** (since CD, §12) | break-glass only: `src_C/deploy.sh`, `services/deploy-python-lambda.sh`, `frontend/deploy.sh`, `site/deploy.sh`, `infra/scripts/rds-snapshot.sh` (all default to it) | update / publish / re-alias core-vpc, worker-lambda and the five `developercards-*` Python functions; read `/developercards` SSM through KMS-via-SSM; sync the console and site buckets and invalidate their two distributions; pre-migration DB snapshot. Not: edge-public, newsapp, IAM, `lambda:InvokeFunction`, tfstate, content buckets |
 | `devcards-admin` | `devcards-admin-mfa` | **yes** | the owner; Terraform; `scripts/invoke-as-admin.sh`; break-glass | AdministratorAccess, 1-hour session |
 
 ```
@@ -624,13 +624,14 @@ profile                      add to ~/.aws/config
 [profile devcards-ro]        role_arn = arn:aws:iam::622994489535:role/devcards-agent-readonly
                              source_profile = dev, role_session_name = agent-readonly, region = ap-southeast-2
 [profile devcards-deploy]    role_arn = arn:aws:iam::622994489535:role/devcards-deployer
-                             source_profile = dev, role_session_name = deploy, region = ap-southeast-2
+                             source_profile = dev, mfa_serial = arn:aws:iam::622994489535:mfa/TimeAwakeAdmin
+                             duration_seconds = 3600, role_session_name = deploy-breakglass, region = ap-southeast-2
 [profile devcards-admin]     role_arn = arn:aws:iam::622994489535:role/devcards-admin-mfa
                              source_profile = dev, mfa_serial = arn:aws:iam::622994489535:mfa/TimeAwakeAdmin
                              duration_seconds = 3600, role_session_name = owner-admin, region = ap-southeast-2
 ```
 
-CloudTrail now names the actor: `assumed-role/devcards-deployer/deploy` is a deploy,
+CloudTrail now names the actor: `assumed-role/developercards-gha-prod/<run>` is a CD deploy, `assumed-role/devcards-deployer/deploy-breakglass` a local one,
 `assumed-role/devcards-agent-readonly/agent-readonly` an agent, `assumed-role/devcards-admin-mfa/owner-admin` the owner.
 
 **Terraform after the cutover.** Even `plan` needs `devcards-admin`: it reads the tfstate object and refreshes Lambda
@@ -645,13 +646,12 @@ owner's approval step for every infrastructure change; the plan allow-list (§2�
 removes the user from `admins`, and proves `dev` alone is now denied. Rollback is the printed
 `aws iam add-user-to-group --profile devcards-admin --user-name devcards-admin --group-name admins`.
 
-**What this does not stop (review of PR #736, 2026-10-03).** The roles bind whoever *chooses* a profile. Every
+**What this does not stop (review of PR #736, 2026-10-03).** The roles bind whoever *chooses* a profile, and every
 agent on the deploy Mac runs as the same macOS user that can read `~/.aws/credentials` and the CLI's role-session
-cache, so an agent that ignores the rules can still use `devcards-deploy` (no MFA), and `devcards-admin` while an
-owner session is cached. Hence the 1-hour admin session; clear `~/.aws/cli/cache` after admin work. The deployer can
-also ship code to core-vpc, whose environment holds the database password, so narrowing its SSM read by name would
-not narrow what it can reach. The real closes are a separate OS user or sandbox for agents, and MFA (or GitHub OIDC
-with a protected environment, E11) in front of the deployer.
+cache. Since #740 both roles that can change production (`devcards-deployer`, `devcards-admin-mfa`) need the owner's
+MFA, sessions last one hour, and normal deploys run in GitHub Actions (§12) with no laptop credential at all. What is
+left: while an owner session is cached, a process of the same user could use it; clear `~/.aws/cli/cache` after
+break-glass or Terraform work. The full close is a separate OS user or sandbox for agents.
 
 **Owner-only, console:** rotate the key (create the new key, update `~/.aws/credentials [dev]`, deactivate the old one,
 delete it after a week of `GetAccessKeyLastUsed` silence). Later (enterprise phase): IAM Identity Center for people and
