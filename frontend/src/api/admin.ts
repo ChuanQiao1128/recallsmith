@@ -13,15 +13,14 @@ export type AdminDeckPermission = {
   canWrite: boolean;
 };
 
-export type AdminUser = {
-  username: string;
-  sub?: string | null;
-  email?: string | null;
-  enabled?: boolean;
-  status?: string | null;
-  groups?: string[];
-  createdAt?: number;
-  deckPermissions?: AdminDeckPermission[];
+/**
+ * One console account as core-vpc knows it: the Cognito sub its deck permissions are stored under
+ * (table admin_deck_permissions). The account itself lives in the console Cognito pool, which the
+ * console no longer reads: see "Users" below.
+ */
+export type AdminPermissionHolder = {
+  sub: string;
+  deckPermissions: AdminDeckPermission[];
 };
 
 export type DeckSummary = {
@@ -79,126 +78,56 @@ export async function runMigrate(secret?: string): Promise<ApiResult<MigrateResu
 
 // ==================== Users ====================
 
-// The console's user list is served by edge-public at /api/v1/admin/cognito/users,
-// not by core-vpc (which has no admin-users route). The live edge-public is Node
-// and its source is not in this repo, so the client accepts three shapes: the
-// documented AdminUser, a { users | items } wrapper, or the raw Cognito UserType.
-// Anything else surfaces as BAD_RESPONSE rather than a silently empty table.
-const ADMIN_USERS_PATH = '/api/v1/admin/cognito/users';
+// Console accounts (list, create, disable, delete) are not managed from the console any more. They
+// used to go through edge-public's Cognito admin routes; edge-public was retired on 2026-10-04
+// (R27 EDGE) and the owner now runs the aws cognito-idp commands in infra/RUNBOOK.md §13.
+// What the console still manages is core-vpc's deck permissions, keyed by an account's Cognito sub,
+// so the accounts listed here are the subs that hold at least one deck permission.
 
-function attributeValue(raw: Record<string, unknown>, name: string): string | null {
-  const attrs = raw.Attributes;
-  if (!Array.isArray(attrs)) return null;
-  for (const a of attrs) {
-    if (a && typeof a === 'object' && (a as { Name?: unknown }).Name === name) {
-      const v = (a as { Value?: unknown }).Value;
-      return typeof v === 'string' ? v : null;
-    }
-  }
-  return null;
+type AdminPermissionRow = {
+  adminSub?: unknown;
+  deckId?: unknown;
+  deckSlug?: unknown;
+  deckTitle?: unknown;
+  locale?: unknown;
+  canRead?: unknown;
+  canWrite?: unknown;
+};
+
+function optionalString(v: unknown): string | null {
+  return typeof v === 'string' ? v : null;
 }
 
-function normalizeAdminUser(raw: unknown): AdminUser | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const o = raw as Record<string, unknown>;
-
-  const usernameRaw = o.username ?? o.Username;
-  if (typeof usernameRaw !== 'string' || usernameRaw === '') return null;
-
-  const sub = typeof o.sub === 'string' ? o.sub : attributeValue(o, 'sub');
-  const email = typeof o.email === 'string' ? o.email : attributeValue(o, 'email');
-
-  const enabledRaw = o.enabled ?? o.Enabled;
-  const enabled = typeof enabledRaw === 'boolean' ? enabledRaw : undefined;
-
-  const statusRaw = o.status ?? o.UserStatus;
-  const status = typeof statusRaw === 'string' ? statusRaw : undefined;
-
-  const groups = Array.isArray(o.groups)
-    ? o.groups.filter((g): g is string => typeof g === 'string')
-    : [];
-
-  const createdRaw = o.createdAt ?? o.UserCreateDate;
-  let createdAt: number | undefined;
-  if (typeof createdRaw === 'number' && Number.isFinite(createdRaw)) {
-    createdAt = createdRaw;
-  } else if (typeof createdRaw === 'string') {
-    const parsed = Date.parse(createdRaw);
-    if (Number.isFinite(parsed)) createdAt = parsed;
-  }
-
-  return { username: usernameRaw, sub, email, enabled, status, groups, createdAt };
-}
-
-function extractAdminUsers(data: unknown): AdminUser[] | null {
-  let arr: unknown[];
-  if (Array.isArray(data)) {
-    arr = data;
-  } else if (data && typeof data === 'object' && Array.isArray((data as { users?: unknown }).users)) {
-    arr = (data as { users: unknown[] }).users;
-  } else if (data && typeof data === 'object' && Array.isArray((data as { items?: unknown }).items)) {
-    arr = (data as { items: unknown[] }).items;
-  } else {
-    return null;
-  }
-  return arr.map(normalizeAdminUser).filter((u): u is AdminUser => u !== null);
-}
-
-export async function listAdminUsers(): Promise<ApiResult<AdminUser[]>> {
-  // users come from edge-public (Cognito admin),
-  // permissions from vpc-lambda.
-  const [usersRes, permsRes] = await Promise.all([
-    apiGet<unknown>(ADMIN_USERS_PATH),
-    apiGet<Array<{ adminSub?: string; deckId?: unknown; deckSlug?: string; deckTitle?: string; locale?: string; canRead?: boolean; canWrite?: boolean }>>('/api/v1/admin/permissions'),
-  ]);
-
-  if (!usersRes.success) return { ...usersRes, data: null };
-
-  const users = extractAdminUsers(usersRes.data);
-  if (users === null) {
-    return failResult<AdminUser[]>('Unexpected response from /api/v1/admin/cognito/users.', 'BAD_RESPONSE');
-  }
-
-  if (!permsRes.success) {
-    return { ...usersRes, data: users.map(u => ({ ...u, deckPermissions: [] })) };
-  }
-
-  const bySub = new Map<string, AdminDeckPermission[]>();
-  for (const p of permsRes.data ?? []) {
-    const sub = p.adminSub;
-    if (!sub) continue;
-
-    if (!bySub.has(sub)) bySub.set(sub, []);
-    bySub.get(sub)!.push({
-      deckId: Number(p.deckId),
-      deckSlug: p.deckSlug ?? null,
-      deckTitle: p.deckTitle ?? null,
-      locale: p.locale ?? null,
-      canRead: !!p.canRead,
-      canWrite: !!p.canWrite,
-    });
-  }
-
-  return {
-    ...usersRes,
-    data: users.map(u => ({
-      ...u,
-      deckPermissions: u.sub ? (bySub.get(u.sub) ?? []) : [],
-    })),
-  };
-}
-
-export async function createAdminUser(input: {
-  username: string;
-  email: string;
-  tempPassword: string;
-  groups: string[];
-}): Promise<ApiResult<AdminUser>> {
-  const res = await apiPost<unknown>(ADMIN_USERS_PATH, input);
+export async function listAdminPermissionHolders(): Promise<ApiResult<AdminPermissionHolder[]>> {
+  const res = await apiGet<unknown>('/api/v1/admin/permissions');
   if (!res.success) return { ...res, data: null };
+  if (!Array.isArray(res.data)) {
+    return failResult<AdminPermissionHolder[]>('Unexpected response from /api/v1/admin/permissions.', 'BAD_RESPONSE');
+  }
+
+  // core-vpc returns one row per (sub, deck), ordered by sub; a Map keeps that order.
+  const bySub = new Map<string, AdminDeckPermission[]>();
+  for (const raw of res.data as unknown[]) {
+    if (!raw || typeof raw !== 'object') continue;
+    const row = raw as AdminPermissionRow;
+    const sub = typeof row.adminSub === 'string' ? row.adminSub.trim() : '';
+    if (sub === '') continue;
+
+    const perms = bySub.get(sub) ?? [];
+    perms.push({
+      deckId: Number(row.deckId),
+      deckSlug: optionalString(row.deckSlug),
+      deckTitle: optionalString(row.deckTitle),
+      locale: optionalString(row.locale),
+      canRead: !!row.canRead,
+      canWrite: !!row.canWrite,
+    });
+    bySub.set(sub, perms);
+  }
+
   return {
     ...res,
-    data: normalizeAdminUser(res.data) ?? { username: input.username, email: input.email },
+    data: [...bySub].map(([sub, deckPermissions]) => ({ sub, deckPermissions })),
   };
 }
 

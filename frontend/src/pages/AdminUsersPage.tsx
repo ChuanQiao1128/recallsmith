@@ -1,14 +1,18 @@
 // src/pages/AdminUsersPage.tsx
+//
+// Users & permissions. Since edge-public was retired (2026-10-04, R27 EDGE) the console no longer
+// lists, creates, disables or deletes console accounts: the owner does that with the AWS CLI
+// (infra/RUNBOOK.md §13). The page keeps its route so bookmarks still land here, and keeps what
+// core-vpc serves: deck permissions, keyed by an account's Cognito sub, and database migrations.
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import {
-  createAdminUser,
   listAdminDecks,
-  listAdminUsers,
+  listAdminPermissionHolders,
   runMigrate,
   saveAdminDeckPermissionsBulk,
-  type AdminUser,
+  type AdminPermissionHolder,
   type DeckSummary,
 } from '../api/admin';
 
@@ -18,25 +22,18 @@ import { readSessionUser, isSuperAdmin } from '../auth/sessionUser';
 import { CONSOLE_NAME } from '../lib/brand';
 import { ConsoleShell } from '../components/console/ConsoleShell';
 import { consoleNav } from '../components/console/consoleNav';
-import { Badge } from '../components/ui/Badge';
 import { Callout } from '../components/ui/Callout';
 
 type PageState = {
   loading: boolean;
   error: string | null;
-  users: AdminUser[];
+  holders: AdminPermissionHolder[];
 };
 
 type DeckState = {
   loading: boolean;
   error: string | null;
   decks: DeckSummary[];
-};
-
-type FormState = {
-  submitting: boolean;
-  error: string | null;
-  ok: string | null;
 };
 
 type DbState = {
@@ -47,38 +44,16 @@ type DbState = {
 
 type PermDraft = Record<number, { canRead: boolean; canWrite: boolean }>;
 
-function describeGroups(groups: string[] | null | undefined): string {
-  const g = (groups ?? []).filter(Boolean);
-  if (g.length === 0) return '—';
-  return g.join(', ');
+// A Cognito sub is a UUID. Checked before anything is saved: core-vpc stores whatever string it is
+// given, so a mistyped sub would silently grant decks to an account that does not exist.
+const COGNITO_SUB = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+function countWritePerms(h: AdminPermissionHolder): number {
+  return h.deckPermissions.filter(p => p.canWrite).length;
 }
 
-function deriveRole(groups: string[] | null | undefined): 'super_admin' | 'editor' | 'unknown' {
-  const g = (groups ?? []).map(x => String(x).toLowerCase());
-  if (g.includes('super_admin')) return 'super_admin';
-  if (g.includes('editor') || g.some(x => x.startsWith('editor_'))) return 'editor'; // tolerates the legacy editor_en / editor_zh groups
-  return 'unknown';
-}
-
-function roleBadge(groups: string[] | null | undefined) {
-  const role = deriveRole(groups);
-  if (role === 'super_admin') return <Badge tone="info">super_admin</Badge>;
-  if (role === 'editor') return <Badge tone="success">editor</Badge>;
-  return <Badge tone="neutral">unknown</Badge>;
-}
-
-function countWritePerms(u: AdminUser): number {
-  const perms = u.deckPermissions ?? [];
-  return perms.filter(p => p.canWrite).length;
-}
-
-function countReadPerms(u: AdminUser): number {
-  const perms = u.deckPermissions ?? [];
-  return perms.filter(p => p.canRead || p.canWrite).length;
-}
-
-function safeUserLabel(u: AdminUser) {
-  return u.email ?? u.username ?? '—';
+function countReadPerms(h: AdminPermissionHolder): number {
+  return h.deckPermissions.filter(p => p.canRead || p.canWrite).length;
 }
 
 export function AdminUsersPage() {
@@ -90,7 +65,7 @@ export function AdminUsersPage() {
   const [state, setState] = useState<PageState>({
     loading: true,
     error: null,
-    users: [],
+    holders: [],
   });
 
   const [deckState, setDeckState] = useState<DeckState>({
@@ -99,20 +74,11 @@ export function AdminUsersPage() {
     decks: [],
   });
 
-  const [userSearch, setUserSearch] = useState('');
+  const [accountSearch, setAccountSearch] = useState('');
 
-  // create user form (always creates editor)
-  const [form, setForm] = useState({
-    username: '',
-    email: '',
-    tempPassword: '',
-  });
-
-  const [formState, setFormState] = useState<FormState>({
-    submitting: false,
-    error: null,
-    ok: null,
-  });
+  // "Open an account by its sub": the way to reach an account that holds no deck permission yet.
+  const [subInput, setSubInput] = useState('');
+  const [subError, setSubError] = useState<string | null>(null);
 
   // DB migrations (danger zone)
   const [dbState, setDbState] = useState<DbState>({
@@ -126,7 +92,7 @@ export function AdminUsersPage() {
   const [migrateSecret, setMigrateSecret] = useState('');
 
   // permissions editor
-  const [selected, setSelected] = useState<AdminUser | null>(null);
+  const [selected, setSelected] = useState<AdminPermissionHolder | null>(null);
   const [permDraft, setPermDraft] = useState<PermDraft>({});
   const [permSaving, setPermSaving] = useState(false);
   const [permOk, setPermOk] = useState<string | null>(null);
@@ -143,17 +109,17 @@ export function AdminUsersPage() {
         setDeckState(prev => ({ ...prev, error: null }));
       }
 
-      const [usersRes, decksRes] = await Promise.all([listAdminUsers(), listAdminDecks(false)]);
+      const [holdersRes, decksRes] = await Promise.all([listAdminPermissionHolders(), listAdminDecks(false)]);
 
-      if (!usersRes.success) {
-        setState({ loading: false, error: usersRes.error?.message ?? 'Failed to load users.', users: [] });
+      if (!holdersRes.success) {
+        setState({ loading: false, error: holdersRes.error?.message ?? 'Failed to load deck permissions.', holders: [] });
       } else {
-        const users = usersRes.data ?? [];
-        setState({ loading: false, error: null, users });
+        const holders = holdersRes.data ?? [];
+        setState({ loading: false, error: null, holders });
 
         // keep selection if possible
-        if (selected?.sub) {
-          const nextSelected = users.find(u => u.sub && u.sub === selected.sub) ?? null;
+        if (selected) {
+          const nextSelected = holders.find(h => h.sub === selected.sub) ?? null;
           if (nextSelected) setSelected(nextSelected);
         }
       }
@@ -165,7 +131,7 @@ export function AdminUsersPage() {
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Network error.';
-      setState({ loading: false, error: msg, users: [] });
+      setState({ loading: false, error: msg, holders: [] });
       setDeckState({ loading: false, error: msg, decks: [] });
     }
   }
@@ -175,16 +141,27 @@ export function AdminUsersPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function selectUser(u: AdminUser) {
-    setSelected(u);
+  function selectHolder(h: AdminPermissionHolder) {
+    setSelected(h);
     setPermOk(null);
     setPermError(null);
 
     const next: PermDraft = {};
-    for (const p of u.deckPermissions ?? []) {
+    for (const p of h.deckPermissions) {
       next[p.deckId] = { canRead: !!p.canRead, canWrite: !!p.canWrite };
     }
     setPermDraft(next);
+  }
+
+  function openBySub() {
+    const sub = subInput.trim().toLowerCase();
+    if (!COGNITO_SUB.test(sub)) {
+      setSubError('Enter the account\'s Cognito sub: a UUID such as 0b5c3f8e-1d2a-4c6b-9e7f-123456789abc, as the RUNBOOK list command prints it.');
+      return;
+    }
+    setSubError(null);
+    setSubInput('');
+    selectHolder(state.holders.find(h => h.sub === sub) ?? { sub, deckPermissions: [] });
   }
 
   function togglePerm(deckId: number, key: 'canRead' | 'canWrite') {
@@ -204,15 +181,11 @@ export function AdminUsersPage() {
     });
   }
 
-  const filteredUsers = useMemo(() => {
-    const q = userSearch.trim().toLowerCase();
-    if (!q) return state.users;
-
-    return (state.users ?? []).filter(u => {
-      const s = `${u.username ?? ''} ${u.email ?? ''} ${describeGroups(u.groups)}`.toLowerCase();
-      return s.includes(q);
-    });
-  }, [state.users, userSearch]);
+  const filteredHolders = useMemo(() => {
+    const q = accountSearch.trim().toLowerCase();
+    if (!q) return state.holders;
+    return state.holders.filter(h => h.sub.includes(q));
+  }, [state.holders, accountSearch]);
 
   const filteredDecks = useMemo(() => {
     const q = deckSearch.trim().toLowerCase();
@@ -239,61 +212,8 @@ export function AdminUsersPage() {
     return { read, write };
   }, [selected, permDraft, deckState.decks]);
 
-  async function submitCreate() {
-    const username = form.username.trim();
-    const email = form.email.trim();
-    const tempPassword = form.tempPassword;
-
-    if (!username) {
-      setFormState({ submitting: false, error: 'Username is required.', ok: null });
-      return;
-    }
-    if (!email || !email.includes('@')) {
-      setFormState({ submitting: false, error: 'Valid email is required.', ok: null });
-      return;
-    }
-    if (!tempPassword || tempPassword.length < 8) {
-      setFormState({ submitting: false, error: 'Temp password must be >= 8 chars.', ok: null });
-      return;
-    }
-
-    setFormState({ submitting: true, error: null, ok: null });
-
-    // ✅ Always create editor accounts from console
-    // If your backend still expects editor_en/editor_zh, change this to ['editor_en'] for now.
-    const groups = ['editor'];
-
-    const res = await createAdminUser({
-      username,
-      email,
-      tempPassword,
-      groups,
-    });
-
-    if (!res.success) {
-      setFormState({ submitting: false, error: res.error?.message ?? 'Create user failed.', ok: null });
-      return;
-    }
-
-    setFormState({ submitting: false, error: null, ok: `Created editor: ${username}.` });
-    setForm(prev => ({ ...prev, username: '', email: '', tempPassword: '' }));
-
-    // refresh + auto-select
-    const usersRes = await listAdminUsers();
-    if (usersRes.success) {
-      const users = usersRes.data ?? [];
-      setState(prev => ({ ...prev, users }));
-      const created = users.find(u => u.username === username || u.email === email) ?? null;
-      if (created) selectUser(created);
-    }
-  }
-
   async function savePermissions() {
     if (!selected) return;
-    if (!selected.sub) {
-      setPermError('Selected user has no "sub" attribute. Cannot save permissions.');
-      return;
-    }
     if (permSaving) return;
 
     setPermSaving(true);
@@ -323,12 +243,12 @@ export function AdminUsersPage() {
     setPermSaving(false);
     setPermOk(`Saved. (${resp.data?.saved ?? 0} deck(s) now assigned)`);
 
-    // refresh users + keep selection
-    const usersRes = await listAdminUsers();
-    if (usersRes.success) {
-      const users = usersRes.data ?? [];
-      setState(prev => ({ ...prev, users }));
-      const updatedSelected = users.find(u => u.sub && selected.sub && u.sub === selected.sub) ?? null;
+    // refresh the accounts + keep selection
+    const holdersRes = await listAdminPermissionHolders();
+    if (holdersRes.success) {
+      const holders = holdersRes.data ?? [];
+      setState(prev => ({ ...prev, holders }));
+      const updatedSelected = holders.find(h => h.sub === selected.sub) ?? null;
       if (updatedSelected) setSelected(updatedSelected);
     }
   }
@@ -389,11 +309,19 @@ export function AdminUsersPage() {
         </Callout>
       ) : null}
 
+      <Callout tone="info" title="Console accounts are managed with the AWS CLI">
+        Listing, creating, disabling and deleting console sign-ins is no longer done here: the edge-public
+        Lambda that served it was retired on 2026-10-04. The owner runs the <code>aws cognito-idp</code> commands
+        in <code>infra/RUNBOOK.md</code>, section 13 &quot;Console admin accounts&quot;. Deck permissions below still
+        work. They are keyed by an account&apos;s Cognito <code>sub</code>, which the RUNBOOK&apos;s list command
+        prints.
+      </Callout>
+
       <div className="flex items-center justify-between">
         <div>
-          <div className="text-sm font-semibold text-slate-900">Editors</div>
+          <div className="text-sm font-semibold text-slate-900">Deck permissions</div>
           <div className="text-xs text-slate-500 mt-1">
-            Create editors and assign which decks they can read/write. Cards inherit deck permission.
+            Assign which decks an editor can read/write. Cards inherit deck permission.
           </div>
         </div>
 
@@ -407,118 +335,80 @@ export function AdminUsersPage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* LEFT: Create + Users */}
+        {/* LEFT: Open by sub + accounts with permissions */}
         <div className="lg:col-span-2 space-y-4">
-          {/* Create user */}
+          {/* Open an account by its sub */}
           <div className="bg-white border border-slate-200 rounded-lg shadow-sm p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h2 className="text-sm font-semibold text-slate-900">Create editor</h2>
-                <p className="text-xs text-slate-500 mt-1">
-                  Creates a Cognito user as <span className="font-semibold">editor</span>. Then assign deck permissions on the right.
-                </p>
-              </div>
+            <h2 className="text-sm font-semibold text-slate-900">Open an account</h2>
+            <p className="text-xs text-slate-500 mt-1">
+              For an account that holds no deck permission yet, such as a new editor: paste its Cognito sub.
+            </p>
 
-              <Badge tone="success">editor</Badge>
-            </div>
-
-            {formState.error ? (
+            {subError ? (
               <div className="mt-3">
-                <Callout tone="danger" title="Create failed">
-                  {formState.error}
+                <Callout tone="danger" title="Not a Cognito sub">
+                  {subError}
                 </Callout>
               </div>
             ) : null}
 
-            {formState.ok ? (
-              <div className="mt-3">
-                <Callout tone="success" title="Success">
-                  {formState.ok}
-                </Callout>
-              </div>
-            ) : null}
-
-            <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
-              <div>
-                <label htmlFor="new-user-username" className="block text-xs font-medium text-slate-700 mb-1">Username</label>
+            <form
+              className="mt-3 flex flex-col md:flex-row md:items-end gap-3"
+              onSubmit={e => {
+                e.preventDefault();
+                openBySub();
+              }}
+            >
+              <div className="flex-1">
+                <label htmlFor="account-sub" className="block text-xs font-medium text-slate-700 mb-1">Cognito sub</label>
                 <input
-                  id="new-user-username"
-                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                  value={form.username}
-                  onChange={e => setForm(prev => ({ ...prev, username: e.target.value }))}
-                  placeholder="alice_editor"
+                  id="account-sub"
+                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-mono"
+                  value={subInput}
+                  onChange={e => setSubInput(e.target.value)}
+                  placeholder="0b5c3f8e-1d2a-4c6b-9e7f-123456789abc"
+                  autoComplete="off"
+                  spellCheck={false}
                 />
               </div>
-
-              <div>
-                <label htmlFor="new-user-email" className="block text-xs font-medium text-slate-700 mb-1">Email</label>
-                <input
-                  id="new-user-email"
-                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                  value={form.email}
-                  onChange={e => setForm(prev => ({ ...prev, email: e.target.value }))}
-                  placeholder="alice@example.com"
-                />
-              </div>
-
-              <div>
-                <label htmlFor="new-user-temp-password" className="block text-xs font-medium text-slate-700 mb-1">Temp password</label>
-                <input
-                  id="new-user-temp-password"
-                  type="password"
-                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                  value={form.tempPassword}
-                  onChange={e => setForm(prev => ({ ...prev, tempPassword: e.target.value }))}
-                  placeholder="min 8 chars"
-                />
-              </div>
-            </div>
-
-            <div className="mt-3 text-[11px] text-slate-400 leading-relaxed">
-              New users created here are <span className="font-semibold">editor</span> by default. Assign which decks they can read/write on the right.
-            </div>
-
-            <div className="mt-4">
               <button
-                type="button"
-                disabled={formState.submitting}
-                onClick={() => void submitCreate()}
+                type="submit"
                 className="inline-flex items-center px-4 py-2 rounded-md text-sm font-medium
-                           bg-indigo-600 text-white hover:bg-indigo-700 active:bg-indigo-800
-                           disabled:opacity-60 disabled:cursor-not-allowed"
+                           bg-indigo-600 text-white hover:bg-indigo-700 active:bg-indigo-800"
               >
-                {formState.submitting ? 'Creating...' : 'Create editor'}
+                Open
               </button>
-            </div>
+            </form>
           </div>
 
-          {/* Users list */}
+          {/* Accounts that hold deck permissions */}
           <div className="bg-white border border-slate-200 rounded-lg shadow-sm">
             <div className="px-4 py-3 border-b border-slate-100 flex flex-col gap-3">
               <div className="flex items-center justify-between">
                 <div>
-                  <h2 className="text-sm font-semibold text-slate-900">Users</h2>
-                  <p className="text-xs text-slate-500 mt-0.5">Select a user to manage deck permissions.</p>
+                  <h2 className="text-sm font-semibold text-slate-900">Accounts with deck permissions</h2>
+                  <p className="text-xs text-slate-500 mt-0.5">Select an account to manage its deck permissions.</p>
                 </div>
 
                 <div className="text-xs text-slate-500">
-                  {state.loading ? 'Loading…' : `${filteredUsers.length} user(s)`}
+                  {state.loading ? 'Loading…' : `${filteredHolders.length} account(s)`}
                 </div>
               </div>
 
               <input
                 className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                placeholder="Search users by username/email/groups…"
-                value={userSearch}
-                onChange={e => setUserSearch(e.target.value)}
+                placeholder="Search accounts by sub…"
+                aria-label="Search accounts by sub"
+                value={accountSearch}
+                onChange={e => setAccountSearch(e.target.value)}
               />
             </div>
 
             {state.loading ? (
-              <div className="px-4 py-6 text-slate-600">Loading users...</div>
+              <div className="px-4 py-6 text-slate-600">Loading accounts...</div>
             ) : state.error ? (
               <div className="px-4 py-6">
-                <Callout tone="danger" title="Failed to load users">
+                <Callout tone="danger" title="Failed to load deck permissions">
                   {state.error}
                 </Callout>
               </div>
@@ -527,54 +417,41 @@ export function AdminUsersPage() {
                 <table className="min-w-full text-sm">
                   <thead className="bg-slate-50 border-b border-slate-200">
                     <tr>
-                      <th className="px-4 py-2 text-left font-semibold text-slate-600">User</th>
-                      <th className="px-4 py-2 text-left font-semibold text-slate-600">Role</th>
+                      <th className="px-4 py-2 text-left font-semibold text-slate-600">Account (Cognito sub)</th>
                       <th className="px-4 py-2 text-left font-semibold text-slate-600">Deck perms</th>
-                      <th className="px-4 py-2 text-left font-semibold text-slate-600">Status</th>
                       <th className="px-4 py-2 text-left font-semibold text-slate-600">Action</th>
                     </tr>
                   </thead>
 
                   <tbody>
-                    {filteredUsers.length === 0 ? (
+                    {filteredHolders.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="px-4 py-6 text-center text-slate-500">
-                          No users returned.
+                        <td colSpan={3} className="px-4 py-6 text-center text-slate-500">
+                          No account holds a deck permission.
                         </td>
                       </tr>
                     ) : (
-                      filteredUsers.map(u => {
-                        const isActive = selected?.sub && u.sub && selected.sub === u.sub;
-                        const readCount = countReadPerms(u);
-                        const writeCount = countWritePerms(u);
+                      filteredHolders.map(h => {
+                        const isActive = selected?.sub === h.sub;
 
                         return (
                           <tr
-                            key={u.username}
+                            key={h.sub}
                             className={`border-b border-slate-100 align-top ${isActive ? 'bg-indigo-50' : 'hover:bg-slate-50'}`}
                           >
                             <td className="px-4 py-2">
-                              <div className="font-mono text-xs text-slate-800">{u.username}</div>
-                              <div className="text-xs text-slate-500">{u.email ?? '—'}</div>
-                              <div className="mt-1 text-[11px] text-slate-400">Groups: {describeGroups(u.groups)}</div>
-                            </td>
-
-                            <td className="px-4 py-2">{roleBadge(u.groups)}</td>
-
-                            <td className="px-4 py-2 text-slate-600 text-xs">
-                              <div>{readCount} read</div>
-                              <div>{writeCount} write</div>
+                              <div className="font-mono text-xs text-slate-800">{h.sub}</div>
                             </td>
 
                             <td className="px-4 py-2 text-slate-600 text-xs">
-                              {u.status ?? '—'}
-                              {u.enabled === false ? ' (disabled)' : ''}
+                              <div>{countReadPerms(h)} read</div>
+                              <div>{countWritePerms(h)} write</div>
                             </td>
 
                             <td className="px-4 py-2">
                               <button
                                 type="button"
-                                onClick={() => selectUser(u)}
+                                onClick={() => selectHolder(h)}
                                 className={`text-xs px-2 py-1 rounded border ${
                                   isActive
                                     ? 'border-indigo-300 text-indigo-700 bg-indigo-50'
@@ -661,17 +538,16 @@ export function AdminUsersPage() {
         <div className="bg-white border border-slate-200 rounded-lg shadow-sm">
           <div className="px-4 py-3 border-b border-slate-100">
             <h2 className="text-sm font-semibold text-slate-900">Deck permissions</h2>
-            <p className="text-xs text-slate-500 mt-0.5">Assign which decks this user can read/write. Write implies Read.</p>
+            <p className="text-xs text-slate-500 mt-0.5">Assign which decks this account can read/write. Write implies Read.</p>
           </div>
 
           {!selected ? (
-            <div className="px-4 py-6 text-slate-600 text-sm">Select a user from the table to manage permissions.</div>
+            <div className="px-4 py-6 text-slate-600 text-sm">Open an account by its sub, or pick one from the table, to manage its permissions.</div>
           ) : (
             <div className="p-4">
               <div className="text-xs text-slate-600">
-                <div className="font-semibold text-slate-900">{safeUserLabel(selected)}</div>
-                <div className="mt-1">{roleBadge(selected.groups)}</div>
-                <div className="mt-2">Groups: {describeGroups(selected.groups)}</div>
+                <div className="text-slate-500">Cognito sub</div>
+                <div className="font-mono font-semibold text-slate-900 break-all">{selected.sub}</div>
 
                 <div className="mt-2">
                   Current draft: <span className="font-semibold">{selectedPermCounts.read}</span> read ·{' '}
@@ -762,7 +638,7 @@ export function AdminUsersPage() {
 
                     <button
                       type="button"
-                      onClick={() => selectUser(selected)}
+                      onClick={() => selectHolder(selected)}
                       className="inline-flex items-center px-3 py-2 rounded-md text-sm font-medium
                                  border border-slate-300 text-slate-700 hover:bg-slate-50"
                     >

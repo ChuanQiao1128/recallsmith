@@ -19,7 +19,7 @@ import { signInAsSuperAdmin, signOut } from './support/consoleSession';
 import { ConfirmDialogProvider } from '../src/components/ui/ConfirmDialog';
 
 const api = vi.hoisted(() => ({
-  listAdminUsers: vi.fn(),
+  listAdminPermissionHolders: vi.fn(),
   listAdminDecks: vi.fn(),
   runMigrate: vi.fn(),
 }));
@@ -53,7 +53,7 @@ async function mountAdmin(): Promise<void> {
 beforeEach(() => {
   signOut();
   signInAsSuperAdmin();
-  api.listAdminUsers.mockResolvedValue(ok([]));
+  api.listAdminPermissionHolders.mockResolvedValue(ok([]));
   api.listAdminDecks.mockResolvedValue(ok([]));
   api.runMigrate.mockResolvedValue(ok({ appliedCount: 0 }));
 });

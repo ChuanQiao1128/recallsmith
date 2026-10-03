@@ -4,10 +4,11 @@
 //
 // AdminUsersPage's guard is a render-time early return: a session without
 // super_admin gets an "Access denied" callout and a way back, and never gets the
-// danger zone, the create form, or a single permission checkbox. That is the
+// danger zone, the open-by-sub form, or a single permission checkbox. That is the
 // whole claim this file makes, and it is narrower than "the page is gated" on
 // purpose — the load effect runs on *both* branches of the guard, so an editor's
-// visit still issues both admin requests. Asserting "no request was made" would
+// visit still issues both admin requests (deck permissions, which core-vpc
+// refuses an editor, and decks). Asserting "no request was made" would
 // go red, and would go red correctly. What a non-admin can *reach* is the part
 // that protects anyone.
 //
@@ -40,9 +41,8 @@ import { getTokens } from '../src/auth/tokenStore';
 import { ConfirmDialogProvider } from '../src/components/ui/ConfirmDialog';
 
 const api = vi.hoisted(() => ({
-  listAdminUsers: vi.fn(),
+  listAdminPermissionHolders: vi.fn(),
   listAdminDecks: vi.fn(),
-  createAdminUser: vi.fn(),
   saveAdminDeckPermissionsBulk: vi.fn(),
   runMigrate: vi.fn(),
 }));
@@ -55,7 +55,7 @@ vi.mock('../src/api/admin', async importOriginal => {
 const { AdminUsersPage } = await import('../src/pages/AdminUsersPage');
 
 const PLAIN_BUTTON = 'Run migrations';
-const CREATE_BUTTON = 'Create editor';
+const OPEN_BUTTON = 'Open';
 
 /**
  * Mount the page and let the load effect settle.
@@ -74,7 +74,7 @@ async function mountConsole(): Promise<void> {
   );
 
   await waitFor(() => {
-    expect(api.listAdminUsers).toHaveBeenCalled();
+    expect(api.listAdminPermissionHolders).toHaveBeenCalled();
     expect(api.listAdminDecks).toHaveBeenCalled();
   });
   await act(async () => {});
@@ -82,9 +82,8 @@ async function mountConsole(): Promise<void> {
 
 beforeEach(() => {
   signOut();
-  api.listAdminUsers.mockResolvedValue(ok([alice(), bob()]));
+  api.listAdminPermissionHolders.mockResolvedValue(ok([alice(), bob()]));
   api.listAdminDecks.mockResolvedValue(ok(decks()));
-  api.createAdminUser.mockImplementation(unstubbed('createAdminUser'));
   api.saveAdminDeckPermissionsBulk.mockImplementation(unstubbed('saveAdminDeckPermissionsBulk'));
   api.runMigrate.mockImplementation(unstubbed('runMigrate'));
 });
@@ -104,9 +103,9 @@ describe('an editor who reaches the admin console', () => {
     expect(screen.queryByText('Access denied')).not.toBeNull();
 
     // The migrate button first, because it is the one that touches the database.
-    // Then the account factory, then the door to the permission editor.
+    // Then the two doors to the permission editor: open-by-sub and Manage.
     expect(screen.queryByRole('button', { name: PLAIN_BUTTON })).toBeNull();
-    expect(screen.queryByRole('button', { name: CREATE_BUTTON })).toBeNull();
+    expect(screen.queryByRole('button', { name: OPEN_BUTTON })).toBeNull();
     expect(screen.queryAllByRole('button', { name: 'Manage' })).toHaveLength(0);
     expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
   });
@@ -131,9 +130,9 @@ describe('a super_admin on the same page', () => {
     expect(screen.queryByText('Access denied')).toBeNull();
 
     expect(screen.queryByRole('button', { name: PLAIN_BUTTON })).not.toBeNull();
-    expect(screen.queryByRole('button', { name: CREATE_BUTTON })).not.toBeNull();
+    expect(screen.queryByRole('button', { name: OPEN_BUTTON })).not.toBeNull();
 
-    // The permission boxes are behind picking a user, so reaching them takes
+    // The permission boxes are behind picking an account, so reaching them takes
     // the click an editor never gets to make.
     expect(screen.queryAllByRole('button', { name: 'Manage' })).toHaveLength(2);
     await userEvent.click(screen.getAllByRole('button', { name: 'Manage' })[0]);
