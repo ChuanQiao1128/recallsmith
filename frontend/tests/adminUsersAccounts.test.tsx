@@ -5,7 +5,7 @@
 //
 // edge-public, the Lambda behind the old list/create form, was retired on
 // 2026-10-04 (R27 EDGE). Console accounts are now listed, created, disabled and
-// deleted by the owner with the aws cognito-idp commands in infra/RUNBOOK.md §13.
+// deleted by the owner with the aws cognito-idp commands in infra/RUNBOOK.md §14.
 // Two things follow, and this file pins both:
 //
 // 1. The page tells the operator where account management went, and offers no

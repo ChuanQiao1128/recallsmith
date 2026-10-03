@@ -387,7 +387,7 @@ The result lists the producer and every consumer of the same request. Then open 
 Limits:
 
 - HTTP APIs do not support X-Ray, so a request trace starts at the Lambda. (`edge-public`, never traced, was retired
-  on 2026-10-04: §13.)
+  on 2026-10-04: §14.)
 - A function traces only from its first version published after H05: published versions freeze the tracing
   mode, so a `prod` alias on an older version still shows no traces until the next deploy.
 - core-vpc and worker-lambda run in the VPC without an X-Ray interface endpoint. Lambda's own trace daemon
@@ -903,7 +903,7 @@ ruleset 24415242, variable `CONSOLE_SENTRY_DSN` (read from the live console bund
 
 - **Terraform** stays local, behind the owner's MFA, with the plan allow-list (§2–§5).
 - **Mobile**: OTA updates and App Store / Play binaries stay owner-driven.
-- **Console accounts**: the owner's `aws cognito-idp` commands (§13); edge-public, which served them, was retired on
+- **Console accounts**: the owner's `aws cognito-idp` commands (§14); edge-public, which served them, was retired on
   2026-10-04.
 - **Database migrations**: the console's Migrate button or `scripts/invoke-as-admin.sh` (owner). CD takes no RDS
   snapshot because it migrates nothing; snapshot before migrating, as before.

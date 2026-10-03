@@ -11,7 +11,7 @@ namespace RecallSmith.Lambda.IntegrationTests;
 /// paths only to reject them with a plain "Route not found" 404. The console later
 /// called edge-public at /api/v1/admin/cognito/users; edge-public was retired on
 /// 2026-10-04 (R27 EDGE) and console accounts are managed with the AWS CLI
-/// (infra/RUNBOOK.md §13). Its gateway routes are gone, so its paths now fall through to
+/// (infra/RUNBOOK.md §14). Its gateway routes are gone, so its paths now fall through to
 /// core-vpc, which serves none of them.
 ///
 /// Every request below goes through <see cref="VpcFunction.Handler"/> with gateway

@@ -93,7 +93,7 @@ Rotates `MIGRATE_SECRET` (the `x-migrate-secret` gate on the admin DB routes).
 
 Rotates `INTERNAL_SHARED_SECRET`, the HMAC secret core-vpc verifies `/api/internal/entitlements/apply` and
 `/api/internal/subscriptions/upsert` with. It has no caller since edge-public, the intended one, was retired
-(2026-10-04, infra/RUNBOOK.md §13); its live configuration never carried this key.
+(2026-10-04, infra/RUNBOOK.md §14); its live configuration never carried this key.
 Since Z08 the webhook dispatcher and ai-qa sign with their own route secrets (below), and their roles
 cannot read this leaf. core-vpc falls back to it on a route-secret route only when that route's own
 env var is unset.

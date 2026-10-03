@@ -199,7 +199,7 @@ class RunbookTest(unittest.TestCase):
     """The console's create/list form is gone; the commands that replace it live in the RUNBOOK."""
 
     def test_console_admin_accounts_section(self):
-        section = runbook_section(tf_text("RUNBOOK.md"), "## 13. Console admin accounts (after edge-public, 2026-10-04)")
+        section = runbook_section(tf_text("RUNBOOK.md"), "## 14. Console admin accounts (after edge-public, 2026-10-04)")
         flat = " ".join(section.split())
         for command in ("list-users-in-group", "admin-create-user", "admin-add-user-to-group",
                         "admin-disable-user", "admin-delete-user"):
@@ -211,6 +211,24 @@ class RunbookTest(unittest.TestCase):
         self.assertIn("EDGE.plan-allow.json", flat)
         self.assertRegex(flat, r"console (build )?first", "retirement order: console before terraform apply")
         self.assertIn("Rollback", section)
+
+    def test_console_points_at_the_accounts_section_by_its_number(self):
+        """The console tells the operator which RUNBOOK section to read; that number must be unique and current.
+
+        The section was first numbered 13 and became 14 when main took 13 for the database restore, so a
+        stale or duplicated number is the failure this guards.
+        """
+        runbook = tf_text("RUNBOOK.md")
+        numbers = re.findall(r"^## (\d+)\. ", runbook, re.M)
+        self.assertEqual(sorted(set(numbers), key=int), sorted(numbers, key=int), "duplicate RUNBOOK section number")
+        found = re.findall(r"^## (\d+)\. Console admin accounts ", runbook, re.M)
+        self.assertEqual(len(found), 1, found)
+        number = found[0]
+        page = (REPO_ROOT / "frontend" / "src" / "pages" / "AdminUsersPage.tsx").read_text()
+        self.assertIn("section %s &quot;Console admin accounts&quot;" % number, page)
+        self.assertEqual(re.findall(r"section (\d+) &quot;Console admin accounts", page), [number])
+        archive = " ".join((ARCHIVE / "README.md").read_text().split())
+        self.assertIn("RUNBOOK §%s, Rollback" % number, archive)
 
     def test_pool_id_matches_terraform(self):
         variables = tf_text("envs", "prod", "variables.tf")

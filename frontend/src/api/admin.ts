@@ -80,7 +80,7 @@ export async function runMigrate(secret?: string): Promise<ApiResult<MigrateResu
 
 // Console accounts (list, create, disable, delete) are not managed from the console any more. They
 // used to go through edge-public's Cognito admin routes; edge-public was retired on 2026-10-04
-// (R27 EDGE) and the owner now runs the aws cognito-idp commands in infra/RUNBOOK.md §13.
+// (R27 EDGE) and the owner now runs the aws cognito-idp commands in infra/RUNBOOK.md §14.
 // What the console still manages is core-vpc's deck permissions, keyed by an account's Cognito sub,
 // so the accounts listed here are the subs that hold at least one deck permission.
 

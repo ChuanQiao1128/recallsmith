@@ -2,7 +2,7 @@
 //
 // Users & permissions. Since edge-public was retired (2026-10-04, R27 EDGE) the console no longer
 // lists, creates, disables or deletes console accounts: the owner does that with the AWS CLI
-// (infra/RUNBOOK.md §13). The page keeps its route so bookmarks still land here, and keeps what
+// (infra/RUNBOOK.md §14). The page keeps its route so bookmarks still land here, and keeps what
 // core-vpc serves: deck permissions, keyed by an account's Cognito sub, and database migrations.
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -314,7 +314,7 @@ export function AdminUsersPage() {
       <Callout tone="info" title="Console accounts are managed with the AWS CLI">
         Listing, creating, disabling and deleting console sign-ins is no longer done here: the edge-public
         Lambda that served it was retired on 2026-10-04. The owner runs the <code>aws cognito-idp</code> commands
-        in <code>infra/RUNBOOK.md</code>, section 13 &quot;Console admin accounts&quot;. Deck permissions below still
+        in <code>infra/RUNBOOK.md</code>, section 14 &quot;Console admin accounts&quot;. Deck permissions below still
         work. They are keyed by an account&apos;s Cognito <code>sub</code>, which the RUNBOOK&apos;s list command
         prints.
       </Callout>

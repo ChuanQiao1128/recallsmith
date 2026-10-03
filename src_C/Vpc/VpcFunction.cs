@@ -485,7 +485,7 @@ public sealed class VpcFunction
       // Admin users routes are retired (CBE-01): core-vpc no longer answers a 501 "TODO"
       // here. (The console then used edge-public's Cognito routes; edge-public was retired
       // too, R27 EDGE 2026-10-04, and console accounts are managed with the AWS CLI,
-      // infra/RUNBOOK.md §13.) It still recognises the old paths only to reject them with 404,
+      // infra/RUNBOOK.md §14.) It still recognises the old paths only to reject them with 404,
       // so legacy callers get a plain "route not found" and stay metered under their
       // bounded RouteMetrics labels rather than minting a metric per user id.
       {

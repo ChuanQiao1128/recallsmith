@@ -59,7 +59,7 @@ Roles come from `cognito:groups`: `super_admin`, or `editor` / `editor_*`.
   would have been accepted for every Cognito admin action below. The metrics above show no invocation
   after 2025-12-25, so that window carried no traffic from then on; the eight December calls cannot be
   attributed (their log events have expired: 30-day retention since E02, 0 stored bytes on 2026-10-04).
-  infra/RUNBOOK.md §13 asks the owner to list the console accounts once and confirm each is expected.
+  infra/RUNBOOK.md §14 asks the owner to list the console accounts once and confirm each is expected.
 - From E08 on, the console JWT authorizer (`cognito-jwt`: console pool issuer, SPA client audience)
   sat in front of all three routes, so verified claims were always present and the fallback was
   unreachable through the gateway.
@@ -107,7 +107,7 @@ answered 501 "TODO" and touched nothing. `verifyInternalSignature` (HMAC-SHA256 
 - Retiring removes a standing privileged identity and three routes from the production API.
 
 What replaced it: the console's Users & permissions page keeps deck permissions (core-vpc) and
-migrations, and says where account management went; infra/RUNBOOK.md §13 has the `aws cognito-idp`
+migrations, and says where account management went; infra/RUNBOOK.md §14 has the `aws cognito-idp`
 commands and the retirement and rollback procedure.
 
 ## Files
@@ -116,7 +116,7 @@ commands and the retirement and rollback procedure.
 `package.json.archived` and `package-lock.json.archived`, byte-identical to the zip's `package.json` and
 `package-lock.json`: under their real names GitHub's dependency graph would read them as a live project,
 and Dependabot security updates (enabled for the whole repository) would raise alerts and fix pull
-requests for code that no longer runs. Rename them back to rebuild (RUNBOOK §13, Rollback).
+requests for code that no longer runs. Rename them back to rebuild (RUNBOOK §14, Rollback).
 
 | SHA-256 | File in the zip |
 |---|---|
