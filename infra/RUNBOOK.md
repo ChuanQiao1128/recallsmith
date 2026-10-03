@@ -649,3 +649,31 @@ removes the user from `admins`, and proves `dev` alone is now denied. Rollback i
 delete it after a week of `GetAccessKeyLastUsed` silence). Later (enterprise phase): IAM Identity Center for people and
 GitHub OIDC for CI deploys remove the static key entirely.
 
+## 11. .NET 10 runtime for core-vpc and worker-lambda (2026-10)
+
+AWS deprecates the Lambda `dotnet8` runtime on 2026-11-10 (security patches stop); `dotnet10` is supported
+to 2028-11-14. Both C# functions move together with the code: the projects target net10.0, so a net10 zip
+and the `dotnet10` runtime have to arrive in the same published version.
+
+1. **Deploy with SDK 10.** `ENV=prod ./src_C/deploy.sh` needs the .NET 10 SDK on PATH (`src_C/global.json`
+   pins it; `package_lambda_zip.sh` stops first and prints how to set `DOTNET_ROOT`/`PATH` otherwise). To
+   check a zip by hand: `unzip -p src_C/dist/vpc.zip RecallSmith.Lambda.runtimeconfig.json` must show
+   `"tfm": "net10.0"`.
+2. **What the deploy does.** After the code update and the CodeSha256 check it sets the function's runtime to
+   `${LAMBDA_RUNTIME:-dotnet10}` (`update-function-configuration --runtime`, then `wait function-updated`),
+   on the `INJECT_ENV=1` and `INJECT_ENV=0` paths alike, and only then publishes the version and moves `prod`.
+   It prints the `ROLLBACK:` line as soon as the alias has moved, then verifies the alias's CodeSha256 and
+   `Runtime`. Between the code update and the runtime update, `$LATEST` is net10 code on dotnet8; nothing
+   user-visible runs `$LATEST` (API Gateway calls `core-vpc:prod`, the publish-jobs event source mapping
+   calls `worker-lambda:prod`).
+3. **Terraform.** `runtime = "dotnet10"` is in both modules. Deploy first: the plan then shows no runtime
+   change. Applied before the deploy, it puts the old net8 code on dotnet10 in `$LATEST` only, which serves
+   no traffic; the next `deploy.sh` replaces the code before it publishes. Do not publish a version by hand
+   in between.
+4. **Rollback.** A published version keeps the runtime it was published with, so the `ROLLBACK:` line (alias
+   back to the previous version) restores dotnet8 together with the old code. §9 still applies to core-vpc:
+   never move `prod` to version 73 or earlier. Treat a rollback to a dotnet8 version as a stopgap: that runtime
+   gets no security patches after 2026-11-10, so fix forward on dotnet10.
+5. **Next time.** CI job `infra` runs `python3 infra/scripts/check-lambda-runtimes.py`, which fails 90 days
+   before any runtime in `infra/**/*.tf` reaches its AWS deprecation date (nodejs24.x is next, 2028-04-30).
+   Update its date table from the AWS lambda-runtimes page when it fires.
