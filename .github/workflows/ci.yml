@@ -231,6 +231,32 @@ jobs:
             echo "::endgroup::"
           done
           [ "$found" = 1 ] || { echo "no Python package found" >&2; exit 1; }
+      # The same packages, audited for known vulnerabilities in what they ship: the
+      # locked runtime dependencies (`--no-dev`; evals' optional `embeddings` extra is
+      # a local-only tool and stays out). `--no-emit-local` drops evals' path
+      # dependencies on services/ai-qa and tools/ingest, which are audited as packages
+      # of their own. `--disable-pip` with the lock's hashes means nothing is
+      # downloaded or installed: the pinned list is checked as it stands against the
+      # PyPI advisory data. `--strict` makes a dependency that cannot be audited a
+      # failure rather than a skip. pip-audit has no severity filter, so ANY known
+      # vulnerability fails here, which is stricter than the npm gates; on 2026-10-03
+      # all seven packages were clean. pip-audit itself is pinned so a new release
+      # cannot change the verdict without a commit. Every package is audited before
+      # the step fails, so one red run names them all.
+      - name: pip-audit the runtime dependencies of every Python package
+        shell: bash
+        run: |
+          set -euo pipefail
+          failed=""
+          for d in services/*/ tools/ingest/ evals/; do
+            [ -f "${d}pyproject.toml" ] || continue
+            echo "::group::pip-audit ${d}"
+            (cd "$d" && uv export --frozen --no-dev --no-emit-project --no-emit-local --format requirements-txt --quiet \
+              | uvx pip-audit@2.10.1 -r /dev/stdin --disable-pip --require-hashes --strict --progress-spinner off) \
+              || failed="${failed} ${d}"
+            echo "::endgroup::"
+          done
+          [ -z "$failed" ] || { echo "::error::pip-audit failed for:${failed}"; exit 1; }
       - name: unit tests for infra/scripts (stdlib unittest)
         run: python3 -m unittest discover -s infra/scripts/tests -v
       # A change to the ai-qa prod env or any file under services/ai-qa/src/ai_qa/, with AI_QA_ENABLED
@@ -306,6 +332,8 @@ jobs:
           cache: npm
           cache-dependency-path: tools/mcp-server/package-lock.json
       - run: npm ci
+      # The frontend job's gate: shipped tree only, fails on high and critical.
+      - run: npm audit --omit=dev --audit-level=high
       - run: npm run build
       - run: npm test
 
@@ -320,6 +348,8 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '24'
+      # No npm audit here: there is no package.json. lib/ imports only node: built-ins,
+      # so there is no dependency tree to audit.
       - run: node --test lib/
 
   author-runner:
@@ -336,5 +366,8 @@ jobs:
           cache: npm
           cache-dependency-path: tools/author-runner/package-lock.json
       - run: npm ci
+      # The frontend job's gate. The runner has no runtime dependencies today, so this
+      # passes vacuously; it is here so the first one is audited from the day it lands.
+      - run: npm audit --omit=dev --audit-level=high
       - run: npm run build
       - run: npm test
