@@ -28,7 +28,7 @@ documents explain it; every number in them cites a committed file:
 | --- | --- | --- |
 | `frontend/` | React 19, TypeScript, Vite, Tailwind | Admin console: authoring decks and cards, publishing, user administration |
 | `mobile/` | React Native, Expo, TypeScript | The app people actually review cards in |
-| `src_C/` | C# / .NET 8 | Backend. `src_C` is short for "source, C#" — it is the API, not a frontend `src/` |
+| `src_C/` | C# / .NET 10 | Backend. `src_C` is short for "source, C#" — it is the API, not a frontend `src/` |
 | `pg-layer/` | Node.js | AWS Lambda layer packaging the `pg` PostgreSQL driver |
 | `docs/` | Markdown | Design notes and refactor plans |
 | `.github/` | YAML | CI workflow |
@@ -60,7 +60,9 @@ auth and database helpers, and `Tests/` the integration test project.
 
 ## 2. Running it
 
-Prerequisites come from `.github/workflows/ci.yml`: Node 20 and .NET 8.
+Prerequisites come from `.github/workflows/ci.yml`: Node 20 and the .NET 10 SDK
+(pinned by `src_C/global.json`; an SDK 8-only `dotnet` refuses to run there). The backend tests
+also need Docker, for Testcontainers.
 
 ### Admin console
 

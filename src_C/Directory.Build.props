@@ -1,0 +1,26 @@
+<Project>
+  <!-- Dependency advisories as a build gate, the NuGet spelling of the frontend job's
+       `npm audit` at audit-level high (.github/workflows/ci.yml). (No double hyphens in this
+       comment: XML forbids them, and MSBuild then refuses to load the file.)
+
+       NuGetAuditMode=all audits transitive packages too, not only the ones a csproj names. That is
+       where the first finding was: SSH.NET 2023.0.0, pulled in by Testcontainers 3.10.0, two high
+       advisories (GHSA-mggc-4xg6-vcxf, GHSA-q939-rpr3-3284) that no csproj here mentions; it went
+       with Testcontainers.PostgreSql 4.15.0 (SSH.NET 2026.0.0) in the change that added this gate.
+       (SDK 10 already defaults to `all` for net10.0 projects; it is spelled out so the gate does not
+       depend on the SDK's default.)
+
+       WarningsAsErrors makes high (NU1903) and critical (NU1904) advisories fail restore, and with it
+       `dotnet build`, `dotnet test` and package_lambda_zip.sh. Low (NU1901) and moderate (NU1902) are
+       still printed as warnings, so they stay visible without turning CI red. Appended to, never
+       replaced: the SDK adds its own entries to the same property.
+
+       A props file, not the sibling Directory.Build.targets, because these are plain properties that
+       restore reads; the targets file exists for item Removes, which need the SDK's items in place. -->
+  <PropertyGroup>
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <NuGetAuditLevel>low</NuGetAuditLevel>
+    <WarningsAsErrors>$(WarningsAsErrors);NU1903;NU1904</WarningsAsErrors>
+  </PropertyGroup>
+</Project>

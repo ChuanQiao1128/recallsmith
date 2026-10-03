@@ -43,8 +43,9 @@ public sealed class PostgresFixture : Xunit.IAsyncLifetime
   private const string User = "recallsmith";
   private const string Password = "recallsmith";
 
-  private readonly PostgreSqlContainer _container = new PostgreSqlBuilder()
-    .WithImage(Image)
+  // The image goes to the constructor: Testcontainers 4.x made the parameterless PostgreSqlBuilder()
+  // obsolete (CS0618, "will be removed"); it is the same pin, passed where the library now wants it.
+  private readonly PostgreSqlContainer _container = new PostgreSqlBuilder(Image)
     .WithDatabase(Db)
     .WithUsername(User)
     .WithPassword(Password)

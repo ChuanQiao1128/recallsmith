@@ -167,7 +167,11 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: '8.0.x'
+          # The SDK comes from src_C/global.json (10.0.100, rollForward latestFeature, which this
+          # action reads as "latest 10.0"), so CI and a laptop resolve the same SDK line and a
+          # net10.0 project can never be handed SDK 8. Path is from the repo root: `uses:` steps
+          # ignore the job's working-directory default.
+          global-json-file: src_C/global.json
       # The test project is named explicitly so this step is pinned to one
       # known project: src_C's root holds both RecallSmith.Lambda.sln and
       # RecallSmith.Lambda.csproj, so a bare `dotnet test` here depends on
@@ -251,6 +255,11 @@ jobs:
       - run: terraform -chdir=infra/modules/observability init -backend=false -input=false
       - run: terraform -chdir=infra/modules/observability test
       - run: python3 infra/scripts/check-agent-routes.py
+      # Every `runtime = "..."` under infra/ against a table of AWS Lambda deprecation dates; fails on
+      # an unknown runtime or one deprecating within 90 days. It reads today's date, so this step turns
+      # red by itself 90 days before a deprecation (dotnet8 was 38 days out when it was replaced).
+      - name: Lambda runtime deprecation check (check-lambda-runtimes.py)
+        run: python3 infra/scripts/check-lambda-runtimes.py
       - name: bash -n the deploy scripts
         run: |
           bash -n src_C/deploy.sh
