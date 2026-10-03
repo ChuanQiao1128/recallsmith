@@ -1,0 +1,44 @@
+variable "account_id" {
+  type = string
+}
+
+variable "region" {
+  type = string
+}
+
+# The IAM users allowed to assume the operator roles. Today: the one static-key user every deploy host,
+# Claude session and launchd agent signs in as. After the cutover (infra/scripts/operator-cutover.sh) that
+# user holds only devcards-operator-base, so the key alone reaches read-only and deploy, never admin.
+variable "operator_user_arns" {
+  type = list(string)
+}
+
+
+variable "admin_session_seconds" {
+  type    = number
+  default = 43200 # one MFA code per working day; the CLI caches the role session in ~/.aws/cli/cache
+}
+
+# Functions the deployer may update, publish and re-alias (src_C/deploy.sh, services/deploy-python-lambda.sh).
+# edge-public (no source in the repo, enterprise audit SDLC-05) and the newsapp functions are deliberately absent.
+variable "deploy_function_names" {
+  type = list(string)
+}
+
+# Static-site buckets the deployer syncs (frontend/deploy.sh, site/deploy.sh) and their distributions.
+variable "deploy_bucket_names" {
+  type = list(string)
+}
+
+variable "deploy_distribution_ids" {
+  type = list(string)
+}
+
+variable "ssm_root_path" {
+  type    = string
+  default = "/developercards"
+}
+
+variable "rds_instance_id" {
+  type = string
+}

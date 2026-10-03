@@ -2,13 +2,13 @@
 # deploy.sh — publish the landing page: sync site/ into the site bucket (index.html as
 # no-cache), invalidate the distribution, then read back index.html's hash from the live host.
 #
-#   AWS_PROFILE=dev SITE_DISTRIBUTION_ID=<terraform output -raw site_distribution_id> ./deploy.sh
+#   AWS_PROFILE=devcards-deploy SITE_DISTRIBUTION_ID=<terraform output -raw site_distribution_id> ./deploy.sh
 #   DRY_RUN=1 ./deploy.sh        (prints the commands, touches nothing)
 #
 # Supervisor-only (E00 §0): workers run this with DRY_RUN=1 only.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"; cd "$HERE"
-export AWS_PROFILE="${AWS_PROFILE:-dev}"
+export AWS_PROFILE="${AWS_PROFILE:-devcards-deploy}"
 BUCKET="${SITE_BUCKET:-developercards-site-622994489535}"
 DIST_ID="${SITE_DISTRIBUTION_ID:-}"
 SITE_URL="${SITE_URL:-https://developercards.app}"

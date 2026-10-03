@@ -9,7 +9,7 @@
 # two unspellable keys and every stray key survive (E00 §2.6.3). No runtime fetch, no VPC endpoint,
 # no egress — the values reach the function only as env vars written here (or by CD in E11).
 #
-#   AWS_PROFILE=dev ./deploy.sh                 # deploy both, inject env
+#   AWS_PROFILE=devcards-deploy ./deploy.sh                 # deploy both, inject env
 #   DRY_RUN=1 ./deploy.sh                       # package only, print what would be uploaded/injected
 #   INJECT_ENV=0 ENV=prod ./deploy.sh           # code-only deploy, environment left untouched
 #   ONLY=vpc ./deploy.sh | ONLY=worker ./deploy.sh
@@ -25,7 +25,7 @@ source "$HERE/scripts/merge-env.sh"
 # deploy also removes a stale REVENUECAT_SECRET_API_KEY that the R25 G04 mapping may have left on core-vpc.
 SSM_NOT_ENV="${SSM_NOT_ENV%]},\"revenuecat-secret-api-key\"]"
 SSM_OPTIONAL_ENV="${SSM_OPTIONAL_ENV%]},\"REVENUECAT_SECRET_API_KEY\"]"
-export AWS_PROFILE="${AWS_PROFILE:-dev}"
+export AWS_PROFILE="${AWS_PROFILE:-devcards-deploy}"
 REGION="${AWS_REGION:-ap-southeast-2}"
 ARCH="${LAMBDA_ARCH:-linux-arm64}"          # both functions are arm64 (aws lambda get-function-configuration)
 VPC_FN="${VPC_FN:-core-vpc}"; WORKER_FN="${WORKER_FN:-worker-lambda}"

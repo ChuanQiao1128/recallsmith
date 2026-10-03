@@ -72,3 +72,13 @@ output "cloudfront_cert_arn" {
 output "api_cert_arn" {
   value = module.edge.api_cert_arn
 }
+output "operator_role_arns" {
+  value = {
+    agent_readonly = module.operators.agent_readonly_role_arn
+    deployer       = module.operators.deployer_role_arn
+    admin_mfa      = module.operators.admin_mfa_role_arn
+  }
+}
+output "operator_base_policy_arn" {
+  value = module.operators.operator_base_policy_arn
+}
