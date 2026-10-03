@@ -284,14 +284,18 @@ jobs:
 
   # Terraform and deploy-script checks that need no AWS: fmt, an offline init (-backend=false, the
   # provider comes from the public registry) and validate, the observability module's terraform
-  # test (mocked provider), the agent-route census, bash -n on the
-  # deploy scripts, the merge-env.sh unit tests and the CD script tests (fake aws/gh/curl). Never
-  # plan or apply: both need AWS credentials, and this job has none.
+  # test (mocked provider), on a pull request the allow-list rule of the Terraform pipeline, the
+  # agent-route census, bash -n on the deploy scripts, the merge-env.sh unit tests and the CD script
+  # tests (fake aws/gh/curl). Never plan or apply: both need AWS credentials, and this job has none
+  # (terraform.yml applies after merge, behind the infra-prod approval; infra/RUNBOOK.md §15).
   infra:
     name: infra (terraform fmt/validate + agent routes + deploy scripts)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # Full history so tf-pipeline.py pr-check can find the merge base with the base branch.
+          fetch-depth: 0
       - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         with:
           # versions.tf asks for >= 1.10; pinned so a new terraform release cannot change fmt output.
@@ -307,6 +311,16 @@ jobs:
       # never committed.
       - run: terraform -chdir=infra/modules/observability init -backend=false -input=false
       - run: terraform -chdir=infra/modules/observability test
+      # A pull request that changes Terraform (a plan-affecting file under infra/) adds or changes its
+      # docs/delivery/**/*.plan-allow.json (one per change; a release brings several, which must not contradict
+      # each other), of the shape check-plan.py reads. After merge, terraform.yml checks the plan against them
+      # before it applies. The rule runs here, in a required job, because only these nine checks gate auto-merge;
+      # terraform.yml has no pull request job.
+      - name: Terraform allow-list rule (tf-pipeline.py pr-check)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: origin/${{ github.base_ref }}
+        run: python3 infra/scripts/tf-pipeline.py pr-check --base "$BASE_REF"
       - run: python3 infra/scripts/check-agent-routes.py
       # Every `runtime = "..."` under infra/ against a table of AWS Lambda deprecation dates; fails on
       # an unknown runtime or one deprecating within 90 days. It reads today's date, so this step turns
