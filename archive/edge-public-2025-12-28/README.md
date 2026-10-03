@@ -2,9 +2,16 @@
 
 This directory is a record, not code that runs. It holds the source of the Lambda function
 `edge-public` exactly as AWS last served it, so the decision to retire it can be checked later.
-Nothing builds, tests, lints or deploys it: every CI job works inside its own directory
-(`frontend/`, `mobile/`, `tools/*`, `integrations/n8n`, `src_C`, `services/*`, `infra/`), and none of
-them is `archive/`.
+Nothing builds, runs or deploys it: every CI job works inside its own directory (`frontend/`,
+`mobile/`, `tools/*`, `integrations/n8n`, `src_C`, `services/*`, `infra/`), and none of them is
+`archive/`. The one CI check that reads it is `infra/scripts/tests/test_r27_edge_public_retired.py`,
+which confirms these files are here and that the manifests keep their `.archived` names (see Files).
+
+GitHub's CodeQL default setup does analyse this directory: it covers `javascript-typescript` on pull
+requests, on pushes to `main` and weekly, and default setup has no path exclusions, so `src/**/*.js`
+here is scanned like live code. An alert on a file under `archive/` is about code that no longer runs:
+dismiss it as "Won't fix" with the comment "archived, not deployed (archive/edge-public-2025-12-28)".
+The likeliest subject is the unverified-token fallback in `src/common/auth.js`, reviewed below.
 
 ## What it was
 
@@ -41,8 +48,10 @@ Measured on 2026-10-04 with the read-only operator role:
   **0 in the 90 days before retirement**. Its log group was created on 2025-12-14.
 - Its newest log stream is `2025/12/25/[$LATEST]…`; the role's `RoleLastUsed` is 2025-12-25.
 - API Gateway per-route counts over the same 90 days: `/api/v1/ai/{proxy+}` and
-  `/api/v1/billing/{proxy+}` none; `ANY /api/v1/admin/cognito/{proxy+}` 2 requests on 2026-09-25 (UTC),
-  both answered 4xx by the gateway without invoking the function, plus 1 `OPTIONS`.
+  `/api/v1/billing/{proxy+}` none; `ANY /api/v1/admin/cognito/{proxy+}` 2 requests on 2026-09-26 (UTC,
+  08:30-08:35), both answered 4xx by the gateway without invoking the function (no
+  `IntegrationLatency` datapoint, no Lambda invocation in that window), plus 1 `OPTIONS` in the same
+  five minutes.
 - The archived files are dated 2025-12-28, three days after the last invocation, so this exact code
   may never have served a request.
 
