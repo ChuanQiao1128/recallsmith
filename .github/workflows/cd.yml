@@ -180,10 +180,10 @@ jobs:
         run: DRY_RUN=1 ENV=prod ./src_C/deploy.sh
       - if: needs.plan.outputs.has_console == 'true'
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        # No dependency cache in CD (CodeQL actions/cache-poisoning): this workflow runs in the default branch's
+        # context, so a cache it saves would be restored by every other run on main. npm ci from the lockfile instead.
         with:
           node-version: '20'
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
       # The DSN is public once shipped, so it lives in a repository variable (a copy of the SSM String
       # /developercards/prod/console-sentry-dsn) and this job needs no AWS. CONSOLE_SENTRY_DSN_PARAM='' tells the
       # resolver not to try SSM. The deploy job compares the bundle with SSM before it changes anything
@@ -208,6 +208,8 @@ jobs:
           python-version: '3.12'
       - if: needs.plan.outputs.python != ''
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          enable-cache: false # see setup-node above: no cache written from CD
       # The script's own DRY_RUN path: its tests, then a hash-verified (uv.lock) aarch64 build; never calls AWS.
       - if: needs.plan.outputs.python != ''
         name: build the Python Lambdas
