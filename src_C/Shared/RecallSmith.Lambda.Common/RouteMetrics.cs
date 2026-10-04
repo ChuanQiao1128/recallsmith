@@ -219,6 +219,8 @@ public static class RouteMetrics
 
     // R24 A01: the public anonymous funnel ingest, matched exactly by the dispatcher.
     "/api/v1/public/events",
+    // R28 ANONREPORT: the public anonymous card report route, matched exactly by the dispatcher.
+    "/api/v1/public/card-reports",
 
     // Internal machine-caller routes: the dispatcher matches these exactly (no suffix match, see
     // VpcFunction), so they are labelled by exact match too.
@@ -538,8 +540,15 @@ public static class RouteMetrics
     return JsonSerializer.Serialize(payload);
   }
 
-  /// <summary>The R24 anonymous funnel ingest: its metric line never carries the client's trace header.</summary>
-  private const string AnonymousIngestRoute = "/api/v1/public/events";
+  /// <summary>
+  /// The anonymous public routes (R24 funnel ingest, R28 card reports): their metric lines never carry the client's
+  /// trace header.
+  /// </summary>
+  private static readonly HashSet<string> AnonymousIngestRoutes = new(StringComparer.Ordinal)
+  {
+    "/api/v1/public/events",
+    "/api/v1/public/card-reports",
+  };
 
   private static void Emit(string service, LambdaRequest req, double latencyMs, int statusCode, bool isError)
   {
@@ -565,9 +574,9 @@ public static class RouteMetrics
         timestampMs: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         xrayTraceId: TraceContext.CurrentRoot(),
         // A producer's id (the Python callbacks send it); an invalid value is simply omitted. Never for the anonymous
-        // funnel ingest (R24X F05): the app's header there is its Sentry trace id, which would join a batch to a
-        // Sentry event.
-        upstreamTraceId: route == AnonymousIngestRoute
+        // funnel ingest (R24X F05) or the anonymous card report route (R28): the app's header there is its Sentry
+        // trace id, which would join a batch or a report to a Sentry event.
+        upstreamTraceId: AnonymousIngestRoutes.Contains(route)
           ? null
           : TraceContext.RootFromHeader(
             req.Headers.TryGetValue(TraceContext.UpstreamHeader, out var upstream) ? upstream : null));

@@ -438,10 +438,34 @@ same `404 CARD_NOT_FOUND` as an unknown card. *My reports* shows the question as
 |---|---|---|
 | `CARD_REPORTS_ENABLED` | `"1"` | `"0"` makes both learner routes answer `503 CARD_REPORTS_DISABLED`. The console routes keep working so the backlog can still be triaged. |
 | `CARD_REPORT_DAILY_LIMIT` | `"5"` | New reports per learner per UTC day; the next one is `429 REPORT_DAILY_LIMIT`. Re-reporting a card that already has an open report by the same learner returns that report (`duplicate: true`) and does not count. |
-| `CARD_REPORT_AI_TRIAGE` | `"0"` | `"1"` starts a one-card AI QA re-check (`scope=cards`, `requested_by_sub = card_report`) for every new report. With `AI_QA_ENABLED=0` it does nothing and records nothing. |
+| `CARD_REPORT_AI_TRIAGE` | `"0"` | `"1"` starts a one-card AI QA re-check (`scope=cards`, `requested_by_sub = card_report`) for every new signed-in report. With `AI_QA_ENABLED=0` it does nothing and records nothing. Anonymous reports never start one. |
+| `CARD_REPORT_ANON_DAILY_CAP` | unset = `100` | New anonymous reports per UTC day across all callers; the next one is `429 REPORT_DAILY_CAP` (one `card_report_anon_daily_cap` warn line per container per hour). `"0"` turns the anonymous route off (`503 CARD_REPORTS_DISABLED`) and leaves the signed-in route alone. `CARD_REPORTS_ENABLED=0` turns both off. |
 
 The mobile report button has its own flag (`features.cardReport.enabled`, default off); the server switch
-does not turn it on.
+does not turn it on. A signed-out learner sees the form only with `features.cardReport.anonymous: true` as well
+(default off; without it the sheet says "Sign in to report a problem").
+
+**Anonymous reports (R28 ANONREPORT, user-perspective review U2).** A learner who is not signed in reports through
+`POST /api/v1/public/card-reports` (exact gateway route, no authorizer, burst 5 / rate 2; core-vpc never reads a bearer
+for it). The body is `{ "deckSlug", "stableUid", "reason", "appVersion" }` and nothing else: any other key, a note
+included, is `400 VALIDATION_ERROR`, so free text cannot arrive by mistake. The app posts it without a token, a trace
+header or a Sentry header (the funnel's transport). Limits: body at most 1 KB (`413`), 30 requests per minute per
+container (`429 RATE_LIMITED`, `Retry-After: 60`), one report per card, reason and UTC day (a repeat answers the same
+`202 {"received": true}` as a new report and stores and emits nothing), and the daily cap above. Only a card of a live
+free deck (`404 CARD_NOT_FOUND` otherwise). The row is an ordinary `card_reports` row with `user_sub` and `note` null
+(`client_version` = the app version, `question` captured as for any report), so it is in the console list (marked
+"Not signed in"; `anonymous: true` in the API), in `automation/status`, in the digest line and in the `card.reported`
+webhook, and it is resolved the same way. Nobody can see it in *My reports* and account deletion never touches it
+(there is no account). Nothing identifies the sender: no account, device or install id, no IP in the table; the
+gateway access log keeps the source IP for 30 days for every route, this one included (as for the funnel,
+docs/privacy-anonymous-funnel-2026-10-02.md §6).
+
+Deploy order: code first, then `POST /api/v1/admin/db/migrate` (applies `046_card_reports_anonymous.sql`: `user_sub`
+nullable, a no-note check for anonymous rows, the per-day unique index; the migrate stops before 045 unless it carries
+`confirmDestructive=45`, so run 045 first if it is still pending). Until 046 runs the anonymous route answers `503
+NOT_READY` and nothing else changes. The gateway route comes from the Terraform pipeline
+(docs/delivery/r28-issues/ANONREPORT.plan-allow.json); without it the path falls to the console-JWT catch-all and the
+app gets 401. Turn on `features.cardReport.anonymous` after all three.
 
 **Triage.** `GET /api/v1/admin/card-reports?status=open|resolved|all&deckId=&limit=&cursor=` lists the reports
 of the decks the admin may read (super_admin: all), newest first, with the learner's note. It never returns a
@@ -450,7 +474,7 @@ user sub or an email. `POST /api/v1/admin/card-reports/<reportId>/resolve` with
 `409 ALREADY_RESOLVED`. The learner sees the resolution and its note in *My reports*.
 
 **Watching.** `GET /api/v1/admin/automation/status` → `cardReports: {open, openedLast7d}`; the Monday digest
-has a line `Card reports: N open (M new this week)`. There is no per-report email. Subscribe a webhook to
+has a line `Card reports: N open (M new this week)`. Both count anonymous reports too. There is no per-report email. Subscribe a webhook to
 `card.reported` (`{reportId, deckSlug, stableUid, reason, createdAt}`, no note, no user) for a chat ping.
 
 **The note is untrusted text.** It is capped at 500 characters, stored as is, shown only to console admins
