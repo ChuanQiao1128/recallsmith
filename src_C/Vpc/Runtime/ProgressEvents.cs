@@ -486,8 +486,11 @@ public static class ProgressEvents
           -- The TS replica in mobile/tests/unit/multiDeviceSync.sim.test.ts
           -- mirrors this exact rule. That replica can only prove the rule is
           -- consistent with itself: whether Postgres really honours it here
-          -- needs a live database, so the SQL-side proof waits on
-          -- Testcontainers.
+          -- needs a live database, and that proof is
+          -- ProgressEventsIntegrationTests.TiedEventTimes_ResolveByEventIdRegardlessOfArrayOrder,
+          -- which posts same-millisecond pairs in both array orders to the
+          -- Testcontainers Postgres (PostgresFixture) and checks that the
+          -- higher event_id stands on every card.
           order by i.user_sub, i.deck_slug, i.stable_uid, i.event_time desc, i.event_id desc
         ),
         merged as (
