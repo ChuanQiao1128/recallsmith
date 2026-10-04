@@ -94,6 +94,19 @@ class GateTest(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("::warning::", out)
 
+    def test_an_entry_warns_from_14_days_before_it_expires(self):
+        audit = report(via(TAR, "tar", "critical"), via(WS, "ws", "high"))
+        entries = [entry(TAR, "tar", "critical"), entry(WS, "ws", expires="2026-12-01")]
+        code, out = self.run_gate(audit, entries, today="2026-10-19")
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("::warning::", out)
+        code, out = self.run_gate(audit, entries, today="2026-10-20")
+        self.assertEqual(code, 0, out)
+        self.assertIn("::warning::1 allowlist entry expires within 14 days, the first on 2026-11-03 (in 14 days)", out)
+        code, out = self.run_gate(audit, [entry(TAR, "tar", "critical"), entry(WS, "ws")], today="2026-11-02")
+        self.assertEqual(code, 0, out)
+        self.assertIn("::warning::2 allowlist entries expire within 14 days, the first on 2026-11-03 (in 1 day)", out)
+
     def test_an_npm_error_report_is_unreadable_input(self):
         code, out = self.run_gate({"error": {"code": "ENOTFOUND", "summary": "registry unreachable"}}, [])
         self.assertEqual(code, 2, out)
