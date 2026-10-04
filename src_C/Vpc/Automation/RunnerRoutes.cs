@@ -247,7 +247,7 @@ public static class RunnerRoutes
           for update skip locked
           """, [Math.Min(max, watchLeft), WatchKinds]);
         var due = manual.Concat(watched).OrderBy(r => Long(r["id"])).Take(max).ToList();
-        if (watched.Count == 0 && watchLeft == 0)
+        if (watchLeft == 0)
         {
           var held = Long(await DbUtil.ExecuteScalarAsync(conn, tx,
             """
