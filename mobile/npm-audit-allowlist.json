@@ -8,7 +8,13 @@
     "fewer and moved 12 native modules (expo 54.0.30 to 54.0.37, expo-updates, expo-notifications, expo-modules-core",
     "and others), which would need a new App Store binary. The 9 left need an Expo SDK major (image-size, postcss),",
     "an aws-amplify bump that changes bundled sign-in code (fast-xml-parser), or an upstream release that does not",
-    "exist yet (node-forge, braces); each reason says which. Delete an entry when npm stops reporting it."
+    "exist yet (node-forge, braces); each reason says which. Delete an entry when npm stops reporting it.",
+    "All 9 expire on 2026-11-03 and none can leave by then without an owner decision: from that date (UTC) this check",
+    "fails, main cannot merge and CD stops (user-perspective review G8). Before 2026-10-27 the owner re-reviews the 6",
+    "build-time entries that no update can clear without a new binary (image-size, postcss, braces, node-forge) and either",
+    "gives them a new expiry tied to the Expo SDK upgrade or accepts the red check, and schedules the aws-amplify lockfile",
+    "update (its own OTA after a sign-in test on a device) that clears the 3 fast-xml-parser entries. check-npm-audit.py",
+    "warns in every run from 14 days before an entry expires."
   ],
   "evidence": [
     "2026-10-04, mobile @ origin/main ebc2c10 plus the 2026-10-04 lockfile, npm 11.6.0: npm audit --omit=dev flagged",
@@ -16,9 +22,16 @@
     "packages (below). npx expo export --platform ios --platform android --source-maps bundled 146 packages, and none",
     "of the 5 is among them. Re-check a reason with that export and the .hbc.map sources.",
     "The 2026-10-04 lockfile changed three bundled packages (nanoid 3.3.11 to 3.3.19, uuid 11.1.0 to 11.1.1, hasown",
-    "2.0.2 to 2.0.4); no package entered or left the bundle, and an unminified export differs only in nanoid's",
-    "non-secure loop guard, uuid's buffer bounds check and the Sentry debug id. expo-modules-autolinking resolve and",
-    "react-native-config output (iOS and Android) is identical before and after."
+    "2.0.2 to 2.0.4, whose bundled index.js is unchanged); no package entered or left the bundle. An unminified export",
+    "(--no-minify --no-bytecode --source-maps --clear, each run with its own TMPDIR: Metro's transform cache in",
+    "$TMPDIR/metro-cache is shared between checkouts and its key does not include the @babel/* version), compared module",
+    "by module, differs in six modules on each platform; two runs of each tree are identical. Three carry the fixes:",
+    "nanoid's non-secure loop guard and uuid's buffer bounds check (v35.js, v6.js). Three come from the @babel/* 7.28 to",
+    "7.29 update and are semantically equivalent: a moved comment in @sentry/core utils/tracing.js, whitespace inside a",
+    "template-literal expression in @react-navigation/core useNavigationBuilder.js, and in",
+    "@revenuecat/purchases-js-hybrid-mappings (react-native-purchases uses it only in Expo Go and on web) one destructured",
+    "arrow parameter compiled to a _ref variable, which renumbers the later _refN names. The Sentry debug id changes too.",
+    "expo-modules-autolinking resolve and react-native-config output (iOS and Android) is identical before and after."
   ],
   "entries": [
     {
@@ -34,7 +47,7 @@
       "package": "fast-xml-parser",
       "severity": "high",
       "title": "fast-xml-parser affected by numeric entity expansion bypassing all entity expansion limits (incomplete fix for CVE-2026-26278)",
-      "reason": "Not in the shipped app: absent from the iOS and Android Metro source maps (see evidence). aws-amplify > @aws-amplify/analytics > @aws-sdk/client-firehose, client-kinesis and client-personalize-events > @aws-sdk/core 3.621.0, which pins fast-xml-parser 4.4.1 exactly; the app imports only aws-amplify/auth. The top-level copy (4.5.7, @aws-amplify/storage) is already fixed. The fix is lockfile-only (npm update aws-amplify: 6.15.9 to 6.22.1), but it also changes bundled sign-in code (@aws-amplify/auth 6.17.1 to 6.21.1, @aws-amplify/core 6.15.0 to 6.19.2), so it is left for its own OTA after a sign-in test on a device.",
+      "reason": "Not in the shipped app: absent from the iOS and Android Metro source maps (see evidence). aws-amplify > @aws-amplify/analytics > @aws-sdk/client-firehose, client-kinesis and client-personalize-events > @aws-sdk/core 3.621.0, which pins fast-xml-parser 4.4.1 exactly; the app imports only Amplify (for Amplify.configure) from aws-amplify, and aws-amplify/auth. The top-level copy (4.5.7, @aws-amplify/storage) is already fixed. The fix is lockfile-only (npm update aws-amplify: 6.15.9 to 6.22.1), but it also changes bundled sign-in code (@aws-amplify/auth 6.17.1 to 6.21.1, @aws-amplify/core 6.15.0 to 6.19.2), so it is left for its own OTA after a sign-in test on a device.",
       "expires": "2026-11-03"
     },
     {
@@ -42,7 +55,7 @@
       "package": "fast-xml-parser",
       "severity": "high",
       "title": "fast-xml-parser affected by DoS through entity expansion in DOCTYPE (no expansion limit)",
-      "reason": "Not in the shipped app: absent from the iOS and Android Metro source maps (see evidence). aws-amplify > @aws-amplify/analytics > @aws-sdk/client-firehose, client-kinesis and client-personalize-events > @aws-sdk/core 3.621.0, which pins fast-xml-parser 4.4.1 exactly; the app imports only aws-amplify/auth. The top-level copy (4.5.7, @aws-amplify/storage) is already fixed. The fix is lockfile-only (npm update aws-amplify: 6.15.9 to 6.22.1), but it also changes bundled sign-in code (@aws-amplify/auth 6.17.1 to 6.21.1, @aws-amplify/core 6.15.0 to 6.19.2), so it is left for its own OTA after a sign-in test on a device.",
+      "reason": "Not in the shipped app: absent from the iOS and Android Metro source maps (see evidence). aws-amplify > @aws-amplify/analytics > @aws-sdk/client-firehose, client-kinesis and client-personalize-events > @aws-sdk/core 3.621.0, which pins fast-xml-parser 4.4.1 exactly; the app imports only Amplify (for Amplify.configure) from aws-amplify, and aws-amplify/auth. The top-level copy (4.5.7, @aws-amplify/storage) is already fixed. The fix is lockfile-only (npm update aws-amplify: 6.15.9 to 6.22.1), but it also changes bundled sign-in code (@aws-amplify/auth 6.17.1 to 6.21.1, @aws-amplify/core 6.15.0 to 6.19.2), so it is left for its own OTA after a sign-in test on a device.",
       "expires": "2026-11-03"
     },
     {
@@ -50,7 +63,7 @@
       "package": "fast-xml-parser",
       "severity": "critical",
       "title": "fast-xml-parser has an entity encoding bypass via regex injection in DOCTYPE entity names",
-      "reason": "Not in the shipped app: absent from the iOS and Android Metro source maps (see evidence). aws-amplify > @aws-amplify/analytics > @aws-sdk/client-firehose, client-kinesis and client-personalize-events > @aws-sdk/core 3.621.0, which pins fast-xml-parser 4.4.1 exactly; the app imports only aws-amplify/auth. The top-level copy (4.5.7, @aws-amplify/storage) is already fixed. The fix is lockfile-only (npm update aws-amplify: 6.15.9 to 6.22.1), but it also changes bundled sign-in code (@aws-amplify/auth 6.17.1 to 6.21.1, @aws-amplify/core 6.15.0 to 6.19.2), so it is left for its own OTA after a sign-in test on a device.",
+      "reason": "Not in the shipped app: absent from the iOS and Android Metro source maps (see evidence). aws-amplify > @aws-amplify/analytics > @aws-sdk/client-firehose, client-kinesis and client-personalize-events > @aws-sdk/core 3.621.0, which pins fast-xml-parser 4.4.1 exactly; the app imports only Amplify (for Amplify.configure) from aws-amplify, and aws-amplify/auth. The top-level copy (4.5.7, @aws-amplify/storage) is already fixed. The fix is lockfile-only (npm update aws-amplify: 6.15.9 to 6.22.1), but it also changes bundled sign-in code (@aws-amplify/auth 6.17.1 to 6.21.1, @aws-amplify/core 6.15.0 to 6.19.2), so it is left for its own OTA after a sign-in test on a device.",
       "expires": "2026-11-03"
     },
     {

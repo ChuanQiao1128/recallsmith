@@ -15,6 +15,8 @@ Violations (exit 1):
   - an allowlisted advisory now reported at a higher severity than the entry says;
   - an allowlist entry on or past its expiry date, whether or not npm still reports it.
 An entry npm no longer reports at high or above is a warning only: delete the entry.
+An entry that expires within EXPIRY_WARNING_DAYS (14) days is a warning too, so the date shows up in
+every run before it turns the gate red.
 Moderate and low advisories never fail the gate; their counts are printed.
 Exit codes: 0 pass, 1 violation, 2 unreadable input (no report, an npm error, a malformed allowlist).
 """
@@ -30,6 +32,7 @@ import sys
 
 SEVERITY_RANK = {"info": 0, "low": 1, "moderate": 2, "high": 3, "critical": 4}
 GATE_RANK = SEVERITY_RANK["high"]
+EXPIRY_WARNING_DAYS = 14
 GHSA_RE = re.compile(r"^GHSA(-[23456789cfghjmpqrvwx]{4}){3}$")
 ENTRY_FIELDS = ("id", "package", "severity", "reason", "expires")
 
@@ -90,11 +93,22 @@ def load_allowlist(data: object) -> dict[tuple[str, str], dict]:
 def evaluate(found: dict, allowlist: dict, today: datetime.date) -> tuple[list[str], list[str], list[str]]:
     """(violations, warnings, accepted) as printable lines."""
     violations, warnings, accepted = [], [], []
+    expiring = []
     for (ghsa, package), entry in sorted(allowlist.items()):
         if entry["expires"] <= today:
             violations.append(f"{ghsa} {package}: allowlist entry expired on {entry['expires']}; fix it or re-review it")
         elif SEVERITY_RANK[found.get((ghsa, package), {}).get("severity", "info")] < GATE_RANK:
             warnings.append(f"{ghsa} {package}: allowlisted but no longer reported as high or critical; delete the entry")
+        elif (entry["expires"] - today).days <= EXPIRY_WARNING_DAYS:
+            expiring.append(entry["expires"])
+    if expiring:
+        first, n = min(expiring), len(expiring)
+        days = (first - today).days
+        warnings.append(
+            f"{n} allowlist {'entry expires' if n == 1 else 'entries expire'} within {EXPIRY_WARNING_DAYS} days, "
+            f"the first on {first} (in {days} day{'' if days == 1 else 's'}); from that date this check fails "
+            "until each one is fixed or re-reviewed (each accepted line shows its date)"
+        )
     for (ghsa, package), adv in sorted(found.items()):
         if SEVERITY_RANK[adv["severity"]] < GATE_RANK:
             continue
