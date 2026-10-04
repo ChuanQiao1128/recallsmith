@@ -9,18 +9,32 @@
     "and others), which would need a new App Store binary. The 9 left need an Expo SDK major (image-size, postcss),",
     "an aws-amplify bump that changes bundled sign-in code (fast-xml-parser), or an upstream release that does not",
     "exist yet (node-forge, braces); each reason says which. Delete an entry when npm stops reporting it.",
-    "All 9 expire on 2026-11-03 and none can leave by then without an owner decision: from that date (UTC) this check",
-    "fails, main cannot merge and CD stops (user-perspective review G8). Before 2026-10-27 the owner re-reviews the 6",
-    "build-time entries that no update can clear without a new binary (image-size, postcss, braces, node-forge) and either",
-    "gives them a new expiry tied to the Expo SDK upgrade or accepts the red check, and schedules the aws-amplify lockfile",
-    "update (its own OTA after a sign-in test on a device) that clears the 3 fast-xml-parser entries. check-npm-audit.py",
-    "warns in every run from 14 days before an entry expires."
+    "Each entry's inBundle says whether its package is in the exported app. All 9 are false: their code runs only at",
+    "build time (Metro, @expo/cli, @expo/metro-config), or, for fast-xml-parser, sits under @aws-amplify/analytics, which",
+    "the app's aws-amplify imports never reach (it is not in the bundle either), so none of it reaches a device.",
+    "infra/scripts/check-bundle-packages.py enforces this in every run of the mobile CI job: it reads the source map of",
+    "every iOS and Android bundle file of that job's expo export (the main bundle and any split chunk), names each",
+    "bundled package directory as npm audit does (from package-lock.json, so an npm alias counts as its real package),",
+    "and fails if the package of any inBundle false entry is in either platform. A new entry must say true or false, or",
+    "both checks fail.",
+    "2026-10-04 re-review (owner decision, delegated to the supervisor): no Expo SDK upgrade before the 2.0.0 release,",
+    "so all 9 now expire on 2027-02-01 instead of 2026-11-03. The date stands for the next Expo SDK upgrade, which",
+    "moves Metro and @expo/metro-config (image-size, postcss) and may also drop micromatch (braces) or move @expo/cli's",
+    "node-forge: run npm audit --omit=dev in that change, delete every entry it clears and re-review the rest. The 3",
+    "fast-xml-parser entries need no SDK upgrade: they clear with the aws-amplify lockfile update (npm update",
+    "aws-amplify), shipped by its own OTA after a sign-in test on a device; delete them in that change.",
+    "check-npm-audit.py warns in every run from 14 days before an entry expires (from 2027-01-18). From 2027-02-01",
+    "(UTC) an entry still listed fails this check, main cannot merge and CD stops until it is fixed or re-reviewed."
   ],
   "evidence": [
     "2026-10-04, mobile @ origin/main ebc2c10 plus the 2026-10-04 lockfile, npm 11.6.0: npm audit --omit=dev flagged",
     "58 packages, most only because they depend on another one; underneath are 9 high or critical advisories in 5",
-    "packages (below). npx expo export --platform ios --platform android --source-maps bundled 146 packages, and none",
-    "of the 5 is among them. Re-check a reason with that export and the .hbc.map sources.",
+    "packages (below). npx expo export --platform ios --platform android --source-maps bundled 146 package directories",
+    "on each platform (143 packages: buffer, react-is and scheduler have two copies each), and none of the 5 is among",
+    "them; the same on origin/main 63b5275 (two dev-only lockfile bumps later). The mobile CI job repeats that export",
+    "and check on every run (check-bundle-packages.py, on the .hbc.map sources); locally, from mobile/: the same export",
+    "with --output-dir dist-ci, then python3 ../infra/scripts/check-bundle-packages.py --allowlist",
+    "npm-audit-allowlist.json --lockfile package-lock.json --export-dir dist-ci.",
     "The 2026-10-04 lockfile changed three bundled packages (nanoid 3.3.11 to 3.3.19, uuid 11.1.0 to 11.1.1, hasown",
     "2.0.2 to 2.0.4, whose bundled index.js is unchanged); no package entered or left the bundle. An unminified export",
     "(--no-minify --no-bytecode --source-maps --clear, each run with its own TMPDIR: Metro's transform cache in",
@@ -39,72 +53,81 @@
       "package": "braces",
       "severity": "high",
       "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
-      "reason": "Not in the shipped app: absent from the iOS and Android Metro source maps (see evidence). Build-time only: expo > metro-file-map > micromatch glob matching in Metro, on repo-controlled patterns. No fixed release: the advisory covers <=3.0.3 and 3.0.3 is the newest braces; it leaves the tree only when Metro stops using micromatch (npm proposes react-native 0.87.1, a major).",
-      "expires": "2026-11-03"
+      "inBundle": false,
+      "reason": "Not in the shipped app (inBundle false): absent from the iOS and Android Metro source maps, checked in every CI run by check-bundle-packages.py. Build-time only: expo > metro-file-map > micromatch glob matching in Metro, on repo-controlled patterns. No fixed release: the advisory covers <=3.0.3 and 3.0.3 is the newest braces; it leaves the tree only when Metro stops using micromatch (npm proposes react-native 0.87.1, a major).",
+      "expires": "2027-02-01"
     },
     {
       "id": "GHSA-8gc5-j5rx-235r",
       "package": "fast-xml-parser",
       "severity": "high",
       "title": "fast-xml-parser affected by numeric entity expansion bypassing all entity expansion limits (incomplete fix for CVE-2026-26278)",
-      "reason": "Not in the shipped app: absent from the iOS and Android Metro source maps (see evidence). aws-amplify > @aws-amplify/analytics > @aws-sdk/client-firehose, client-kinesis and client-personalize-events > @aws-sdk/core 3.621.0, which pins fast-xml-parser 4.4.1 exactly; the app imports only Amplify (for Amplify.configure) from aws-amplify, and aws-amplify/auth. The top-level copy (4.5.7, @aws-amplify/storage) is already fixed. The fix is lockfile-only (npm update aws-amplify: 6.15.9 to 6.22.1), but it also changes bundled sign-in code (@aws-amplify/auth 6.17.1 to 6.21.1, @aws-amplify/core 6.15.0 to 6.19.2), so it is left for its own OTA after a sign-in test on a device.",
-      "expires": "2026-11-03"
+      "inBundle": false,
+      "reason": "Not in the shipped app (inBundle false): absent from the iOS and Android Metro source maps, checked in every CI run by check-bundle-packages.py. aws-amplify > @aws-amplify/analytics > @aws-sdk/client-firehose, client-kinesis and client-personalize-events > @aws-sdk/core 3.621.0, which pins fast-xml-parser 4.4.1 exactly; the app imports only Amplify (for Amplify.configure) from aws-amplify, and aws-amplify/auth. The top-level copy (4.5.7, @aws-amplify/storage) is already fixed. The fix is lockfile-only (npm update aws-amplify: 6.15.9 to 6.22.1), but it also changes bundled sign-in code (@aws-amplify/auth 6.17.1 to 6.21.1, @aws-amplify/core 6.15.0 to 6.19.2), so it is left for its own OTA after a sign-in test on a device.",
+      "expires": "2027-02-01"
     },
     {
       "id": "GHSA-jmr7-xgp7-cmfj",
       "package": "fast-xml-parser",
       "severity": "high",
       "title": "fast-xml-parser affected by DoS through entity expansion in DOCTYPE (no expansion limit)",
-      "reason": "Not in the shipped app: absent from the iOS and Android Metro source maps (see evidence). aws-amplify > @aws-amplify/analytics > @aws-sdk/client-firehose, client-kinesis and client-personalize-events > @aws-sdk/core 3.621.0, which pins fast-xml-parser 4.4.1 exactly; the app imports only Amplify (for Amplify.configure) from aws-amplify, and aws-amplify/auth. The top-level copy (4.5.7, @aws-amplify/storage) is already fixed. The fix is lockfile-only (npm update aws-amplify: 6.15.9 to 6.22.1), but it also changes bundled sign-in code (@aws-amplify/auth 6.17.1 to 6.21.1, @aws-amplify/core 6.15.0 to 6.19.2), so it is left for its own OTA after a sign-in test on a device.",
-      "expires": "2026-11-03"
+      "inBundle": false,
+      "reason": "Not in the shipped app (inBundle false): absent from the iOS and Android Metro source maps, checked in every CI run by check-bundle-packages.py. aws-amplify > @aws-amplify/analytics > @aws-sdk/client-firehose, client-kinesis and client-personalize-events > @aws-sdk/core 3.621.0, which pins fast-xml-parser 4.4.1 exactly; the app imports only Amplify (for Amplify.configure) from aws-amplify, and aws-amplify/auth. The top-level copy (4.5.7, @aws-amplify/storage) is already fixed. The fix is lockfile-only (npm update aws-amplify: 6.15.9 to 6.22.1), but it also changes bundled sign-in code (@aws-amplify/auth 6.17.1 to 6.21.1, @aws-amplify/core 6.15.0 to 6.19.2), so it is left for its own OTA after a sign-in test on a device.",
+      "expires": "2027-02-01"
     },
     {
       "id": "GHSA-m7jm-9gc2-mpf2",
       "package": "fast-xml-parser",
       "severity": "critical",
       "title": "fast-xml-parser has an entity encoding bypass via regex injection in DOCTYPE entity names",
-      "reason": "Not in the shipped app: absent from the iOS and Android Metro source maps (see evidence). aws-amplify > @aws-amplify/analytics > @aws-sdk/client-firehose, client-kinesis and client-personalize-events > @aws-sdk/core 3.621.0, which pins fast-xml-parser 4.4.1 exactly; the app imports only Amplify (for Amplify.configure) from aws-amplify, and aws-amplify/auth. The top-level copy (4.5.7, @aws-amplify/storage) is already fixed. The fix is lockfile-only (npm update aws-amplify: 6.15.9 to 6.22.1), but it also changes bundled sign-in code (@aws-amplify/auth 6.17.1 to 6.21.1, @aws-amplify/core 6.15.0 to 6.19.2), so it is left for its own OTA after a sign-in test on a device.",
-      "expires": "2026-11-03"
+      "inBundle": false,
+      "reason": "Not in the shipped app (inBundle false): absent from the iOS and Android Metro source maps, checked in every CI run by check-bundle-packages.py. aws-amplify > @aws-amplify/analytics > @aws-sdk/client-firehose, client-kinesis and client-personalize-events > @aws-sdk/core 3.621.0, which pins fast-xml-parser 4.4.1 exactly; the app imports only Amplify (for Amplify.configure) from aws-amplify, and aws-amplify/auth. The top-level copy (4.5.7, @aws-amplify/storage) is already fixed. The fix is lockfile-only (npm update aws-amplify: 6.15.9 to 6.22.1), but it also changes bundled sign-in code (@aws-amplify/auth 6.17.1 to 6.21.1, @aws-amplify/core 6.15.0 to 6.19.2), so it is left for its own OTA after a sign-in test on a device.",
+      "expires": "2027-02-01"
     },
     {
       "id": "GHSA-5p2g-fcmc-qvqq",
       "package": "image-size",
       "severity": "high",
       "title": "image-size: JXL and HEIF parsers allow denial of service through infinite loops",
-      "reason": "Not in the shipped app: absent from the iOS and Android Metro source maps (see evidence). Build-time only: expo > metro reads the dimensions of the repo's own image assets. No lockfile fix: every metro 0.83.x (Expo SDK 54, through @expo/metro 54.2.0) requires image-size ^1.0.2, and 1.2.1, the newest 1.x, is affected (both advisories end at 2.0.2). It leaves with the Expo SDK major that moves Metro.",
-      "expires": "2026-11-03"
+      "inBundle": false,
+      "reason": "Not in the shipped app (inBundle false): absent from the iOS and Android Metro source maps, checked in every CI run by check-bundle-packages.py. Build-time only: expo > metro reads the dimensions of the repo's own image assets. No lockfile fix: every metro 0.83.x (Expo SDK 54, through @expo/metro 54.2.0) requires image-size ^1.0.2, and 1.2.1, the newest 1.x, is affected (both advisories end at 2.0.2). It leaves with the Expo SDK major that moves Metro.",
+      "expires": "2027-02-01"
     },
     {
       "id": "GHSA-w3rx-r6r6-pgpr",
       "package": "image-size",
       "severity": "high",
       "title": "image-size: ICNS parser allows denial of service through an infinite loop",
-      "reason": "Not in the shipped app: absent from the iOS and Android Metro source maps (see evidence). Build-time only: expo > metro reads the dimensions of the repo's own image assets. No lockfile fix: every metro 0.83.x (Expo SDK 54, through @expo/metro 54.2.0) requires image-size ^1.0.2, and 1.2.1, the newest 1.x, is affected (both advisories end at 2.0.2). It leaves with the Expo SDK major that moves Metro.",
-      "expires": "2026-11-03"
+      "inBundle": false,
+      "reason": "Not in the shipped app (inBundle false): absent from the iOS and Android Metro source maps, checked in every CI run by check-bundle-packages.py. Build-time only: expo > metro reads the dimensions of the repo's own image assets. No lockfile fix: every metro 0.83.x (Expo SDK 54, through @expo/metro 54.2.0) requires image-size ^1.0.2, and 1.2.1, the newest 1.x, is affected (both advisories end at 2.0.2). It leaves with the Expo SDK major that moves Metro.",
+      "expires": "2027-02-01"
     },
     {
       "id": "GHSA-86w9-cpqp-85rv",
       "package": "node-forge",
       "severity": "high",
       "title": "node-forge RSA PKCS#1 v1.5 signature verification accepts extra nested DigestAlgorithm elements",
-      "reason": "Not in the shipped app: absent from the iOS and Android Metro source maps (see evidence). Build-time only: @expo/cli dev-server certificates and @expo/code-signing-certificates; app.json sets no updates code signing. No fixed release: the advisory covers <=1.4.0 and 1.4.0 (2026-03-24) is the newest node-forge. The 2026-10-04 lockfile moved 1.3.3 to 1.4.0, which cleared the other four node-forge advisories.",
-      "expires": "2026-11-03"
+      "inBundle": false,
+      "reason": "Not in the shipped app (inBundle false): absent from the iOS and Android Metro source maps, checked in every CI run by check-bundle-packages.py. Build-time only: @expo/cli dev-server certificates and @expo/code-signing-certificates; app.json sets no updates code signing. No fixed release: the advisory covers <=1.4.0 and 1.4.0 (2026-03-24) is the newest node-forge. The 2026-10-04 lockfile moved 1.3.3 to 1.4.0, which cleared the other four node-forge advisories.",
+      "expires": "2027-02-01"
     },
     {
       "id": "GHSA-6g55-p6wh-862q",
       "package": "postcss",
       "severity": "high",
       "title": "PostCSS: Arbitrary file read and information disclosure via attacker-controlled sourceMappingURL in CSS comments",
-      "reason": "Not in the shipped app: absent from the iOS and Android Metro source maps (see evidence). Build-time only: @expo/metro-config's CSS transform; the app ships no CSS. No lockfile fix: every @expo/metro-config 54.0.x (pinned exactly by expo) requires postcss ~8.4.32, and 8.4.49, the newest 8.4.x, is affected; @expo/metro-config 57 moves to ^8.5.14. It leaves with an Expo SDK major.",
-      "expires": "2026-11-03"
+      "inBundle": false,
+      "reason": "Not in the shipped app (inBundle false): absent from the iOS and Android Metro source maps, checked in every CI run by check-bundle-packages.py. Build-time only: @expo/metro-config's CSS transform; the app ships no CSS. No lockfile fix: every @expo/metro-config 54.0.x (pinned exactly by expo) requires postcss ~8.4.32, and 8.4.49, the newest 8.4.x, is affected; @expo/metro-config 57 moves to ^8.5.14. It leaves with an Expo SDK major.",
+      "expires": "2027-02-01"
     },
     {
       "id": "GHSA-r28c-9q8g-f849",
       "package": "postcss",
       "severity": "high",
       "title": "PostCSS: Path Traversal in Previous Source Map Auto-Loading (sourceMappingURL) leads to Arbitrary .map File Disclosure",
-      "reason": "Not in the shipped app: absent from the iOS and Android Metro source maps (see evidence). Build-time only: @expo/metro-config's CSS transform; the app ships no CSS. No lockfile fix: every @expo/metro-config 54.0.x (pinned exactly by expo) requires postcss ~8.4.32, and 8.4.49, the newest 8.4.x, is affected; @expo/metro-config 57 moves to ^8.5.14. It leaves with an Expo SDK major.",
-      "expires": "2026-11-03"
+      "inBundle": false,
+      "reason": "Not in the shipped app (inBundle false): absent from the iOS and Android Metro source maps, checked in every CI run by check-bundle-packages.py. Build-time only: @expo/metro-config's CSS transform; the app ships no CSS. No lockfile fix: every @expo/metro-config 54.0.x (pinned exactly by expo) requires postcss ~8.4.32, and 8.4.49, the newest 8.4.x, is affected; @expo/metro-config 57 moves to ^8.5.14. It leaves with an Expo SDK major.",
+      "expires": "2027-02-01"
     }
   ]
 }
