@@ -62,21 +62,30 @@ export default defineConfig({
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 
   webServer: {
-    // The BUILT bundle, served by `vite preview` — not the dev server. The dev
-    // server transforms modules on demand and would hide the whole class of
-    // failure this suite exists for: a chunk that only 404s in dist/, or a
-    // define that only lands in a production build.
+    // The BUILT bundle — not the dev server. The dev server transforms modules
+    // on demand and would hide the whole class of failure this suite exists
+    // for: a chunk that only 404s in dist/, or a define that only lands in a
+    // production build.
     //
     // `--mode e2e` loads frontend/.env.e2e; see that file for why the default
     // production mode produces an unauthenticated build.
     //
-    // `--strictPort` because 5173 is not a preference. The Cognito app client
-    // registers http://localhost:5173/auth/callback as its redirect URI, so a
-    // build whose redirect_uri says 5173 while the server sits on 4173 is a
-    // different application. Without it, vite silently moves to the next free
-    // port and the first spec fails with something that looks unrelated.
+    // Served by scripts/serve-with-headers.mjs rather than `vite preview` (R29
+    // HARDEN): it answers like the console's CloudFront distribution (a path
+    // with no file gets index.html) and sends the production security headers,
+    // Content-Security-Policy included, from
+    // infra/modules/edge/security_headers.json, the file Terraform builds them
+    // from. tests/e2e/cspGuard.ts fails any test whose page the browser reports
+    // a CSP violation on, so every smoke run is also a run under the live
+    // policy.
+    //
+    // Port 5173 is not a preference, and the server exits rather than moving
+    // when it is taken (what `--strictPort` did for vite preview). The Cognito
+    // app client registers http://localhost:5173/auth/callback as its redirect
+    // URI, so a build whose redirect_uri says 5173 while the server sits on
+    // another port is a different application.
     command:
-      'npm run build -- --mode e2e && npm run preview -- --port 5173 --strictPort',
+      'npm run build -- --mode e2e && node scripts/serve-with-headers.mjs --root dist --port 5173 --target console',
     url: 'http://localhost:5173',
     reuseExistingServer: !process.env.CI,
     // The build is the slow half. A cold `tsc -b` on a CI runner with no

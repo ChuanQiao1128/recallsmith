@@ -1,0 +1,34 @@
+{
+  "_note": "R29 HARDEN: the security headers of console.developercards.app and developercards.app / www (CloudFront response headers policies in security_headers.tf). One source for three readers: Terraform (jsondecode), the console's Playwright smoke, which serves the built bundle with exactly these headers (frontend/scripts/serve-with-headers.mjs), and infra/scripts/tests/test_r29_harden.py. Every CSP source below is something the built console or site loads; infra/RUNBOOK.md section 16 says why each is there and how to change one.",
+  "strict_transport_security": {
+    "max_age_sec": 31536000,
+    "include_subdomains": true,
+    "preload": false
+  },
+  "frame_option": "DENY",
+  "referrer_policy": "strict-origin-when-cross-origin",
+  "permissions_policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+  "content_security_policy": {
+    "console": [
+      "default-src 'self'",
+      "script-src 'self'",
+      "style-src 'self'",
+      "img-src 'self' data:",
+      "font-src 'self'",
+      "connect-src 'self' https://api.developercards.app https://ap-southeast-24vf8ucxkt.auth.ap-southeast-2.amazoncognito.com https://o4511427425599488.ingest.us.sentry.io",
+      "object-src 'none'",
+      "base-uri 'none'",
+      "form-action 'self'",
+      "frame-src 'none'",
+      "frame-ancestors 'none'"
+    ],
+    "site": [
+      "default-src 'none'",
+      "style-src 'self'",
+      "img-src 'self'",
+      "base-uri 'none'",
+      "form-action 'none'",
+      "frame-ancestors 'none'"
+    ]
+  }
+}

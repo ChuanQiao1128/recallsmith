@@ -3,7 +3,8 @@
 // ---------------------------------------------------------------------------
 // THE BOUNDARY THIS SUITE DRAWS, AND WHY
 // ---------------------------------------------------------------------------
-// Real: a real Chromium, the real production bundle served by `vite preview`,
+// Real: a real Chromium, the real production bundle served with the production
+// security headers (scripts/serve-with-headers.mjs, CSP enforced),
 // real history-based routing, real code splitting, real WebCrypto, and the real
 // OAuth redirect leaving the page.
 //
@@ -44,7 +45,9 @@
 
 import { createHash } from 'node:crypto';
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test, type Page, type Route } from '@playwright/test';
+import type { Page, Route } from '@playwright/test';
+// R29 HARDEN: Playwright's test plus a fixture that fails on any CSP violation (the smoke serves the production headers).
+import { expect, test } from './cspGuard';
 
 /** Matches frontend/.env.e2e, which is what the bundle under test was built with. */
 const COGNITO_DOMAIN = 'https://auth.e2e.invalid';
@@ -344,8 +347,9 @@ test('a signed-in console renders decks and navigates into a lazily-loaded route
   const cardsChunk = scripts.filter(s => /CardListPage-.*\.js$/.test(s.url));
   expect(cardsChunk.length).toBeGreaterThan(0);
   // 200, not merely "requested". A dev server rewrites a missing asset to
-  // index.html and answers 200 with HTML; `vite preview` serving the real dist/
-  // is what makes this status meaningful.
+  // index.html and answers 200 with HTML; serving the real dist/ with a 404 for
+  // a missing file (scripts/serve-with-headers.mjs) is what makes this status
+  // meaningful.
   expect(cardsChunk.every(s => s.status === 200)).toBe(true);
 
   expect(api.seen).toContain(`/api/v1/authoring/cards/page?deckId=${DECK.id}&limit=200`);

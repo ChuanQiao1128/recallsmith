@@ -1527,3 +1527,61 @@ or rate below 1 (0 refuses everything: the 2026-09-23 incident); mutation test
   for everyone; a per-user limit (SPC-02's second half) needs code in core-vpc or a REST API with usage plans, and is
   deferred.
 
+### Security headers (SEC-05)
+
+`infra/modules/edge/security_headers.json` holds every value; `security_headers.tf` builds two CloudFront response
+headers policies from it, `developercards-prod-console-security-headers` (on `console.developercards.app`,
+E85FKUMZZWQWX, `cdn.tf`) and `developercards-prod-site-security-headers` (on `developercards.app` and
+`www.developercards.app`, EML9BSZ8EXMQ1, `site.tf`). They replace the AWS managed SecurityHeadersPolicy (X-Frame-Options
+SAMEORIGIN, no CSP). Every header overrides what S3 sends; CloudFront adds them to the SPA fallback (403/404 →
+`/index.html`) too.
+
+| Header | Value |
+|---|---|
+| Strict-Transport-Security | `max-age=31536000; includeSubDomains` (every developercards.app host is HTTPS; `.app` is HSTS-preloaded anyway) |
+| X-Content-Type-Options | `nosniff` |
+| X-Frame-Options | `DENY` (and CSP `frame-ancestors 'none'`) |
+| Referrer-Policy | `strict-origin-when-cross-origin` |
+| Permissions-Policy | `camera=(), microphone=(), geolocation=(), payment=(), usb=()` |
+| Content-Security-Policy | enforced (not report-only); below |
+
+The console's CSP, built from what the built console loads (its bundle and the live one were read on 2026-10-04):
+
+| Directive | Sources | Because |
+|---|---|---|
+| `default-src`, `script-src`, `style-src`, `font-src` | `'self'` | `index.html` has one external module script; chunks, CSS and preloads are files under `/assets/`; the font stack is the system's. No `'unsafe-inline'`: there is no inline script or style, React sets `style` props through the CSSOM (which CSP does not govern), highlight.js markup carries classes only. No `'unsafe-eval'`: nothing in the bundle evaluates strings |
+| `img-src` | `'self' data:` | the favicon is an SVG data URI in `index.html` |
+| `connect-src` | `'self' https://api.developercards.app https://ap-southeast-24vf8ucxkt.auth.ap-southeast-2.amazoncognito.com https://o4511427425599488.ingest.us.sentry.io` | the API (`VITE_API_BASE`), the console pool's hosted UI domain for `/oauth2/token` (the sign-in and sign-out redirects are navigations, which CSP does not restrict), the console DSN's Sentry ingest origin. The console reads no CDN: its manifest URL is same-origin (`/manifest/index.json`) |
+| `object-src`, `frame-src`, `frame-ancestors` | `'none'` | no plugins, no frames, never framed |
+| `base-uri` / `form-action` | `'none'` / `'self'` | no `<base>`; the console's forms are handled in script, and a native submit could only go to the console itself |
+
+The site's: `default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors
+'none'` (one HTML page and `styles.css`; no script, no inline style, nothing from another origin).
+
+Proof, 2026-10-04 (no AWS call): `frontend/scripts/serve-with-headers.mjs` serves a build with exactly these headers.
+(1) The Playwright smoke (CI job `e2e`) now runs against it, and `tests/e2e/cspGuard.ts` fails a test on any CSP
+violation the browser reports: 16 of 16 passed; with `style-src 'none'` and `connect-src` without `'self'` the same
+test failed naming both violations. (2) The production-mode bundle (real API, Cognito and Sentry hosts; a dummy DSN key)
+and the bundle live on the console that day, each served the same way with every outside request answered by
+`page.route` (nothing left the machine): sign-in redirect, callback token exchange to the Cognito domain, signed-in
+deck list from the API, an uncaught error reported to the Sentry ingest origin, all with no violation; a `fetch` to
+`https://example.com` was blocked (`connect-src`). (3) `site/` served with the site headers: the page and its
+stylesheet loaded with no violation; an injected `<style>` and an external image were blocked.
+`infra/scripts/tests/test_r29_harden.py` (CI job `python`) keeps the policy strict and tied to
+`frontend/.env.production`, and the landing page loadable under its policy.
+
+- After the apply: `curl -sI https://console.developercards.app/ | grep -i -e content-security -e x-frame` and the same
+  for `https://developercards.app/`; open the console, sign in, open a deck and a card, and check the browser console
+  for `Content Security Policy` errors.
+- Change a header: edit `security_headers.json` (and `test_r29_harden.py` when the rule changes), run
+  `npx playwright test` in `frontend/` (it serves the edited headers), and add an allow file listing
+  `module.edge.aws_cloudfront_response_headers_policy.security["console"]` (or `["site"]`) as `update` with keys
+  `security_headers_config` (CSP, HSTS, frame, referrer) or `custom_headers_config` (Permissions-Policy); the pipeline
+  applies it (§15). A new API or sign-in host (a Cognito custom domain), a console DSN from another Sentry
+  organisation, or a font or script from a CDN (better bundled) each needs a `connect-src` / `script-src` change
+  first, or the browser refuses it.
+- Rollback: revert the change in a pull request; its allow file lists the two policies as `delete` and both
+  distributions as `update` with keys `default_cache_behavior`.
+- Not covered: no CSP reporting endpoint, so a violation in production shows only in that browser's console (Sentry's
+  security endpoint would put the DSN key in a public header); the other half of SEC-05 (refresh token lifetime and
+  revocation on sign-out) changes what users see and is left to a later round.

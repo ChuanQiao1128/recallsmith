@@ -169,7 +169,7 @@ resource "aws_cloudfront_distribution" "console" {
     default_ttl                = 0
     max_ttl                    = 0
     min_ttl                    = 0
-    response_headers_policy_id = "67f7725c-6f97-4210-82d7-5512b31e9d03"
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.security["console"].id # R29 HARDEN (security_headers.tf)
     smooth_streaming           = false
     target_origin_id           = local.console_origin_id
     trusted_key_groups         = []
