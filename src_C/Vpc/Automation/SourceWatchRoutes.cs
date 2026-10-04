@@ -33,6 +33,13 @@ public static class SourceWatchRoutes
   /// <summary>A <c>waiting</c> re-check still pending after this long is given up (tick step 8).</summary>
   public const int RecheckGiveUpHours = 24;
 
+  /// <summary>
+  /// The <c>last_error</c> prefix of a queued <c>source_changed</c> item skipped because a newer change of the same page
+  /// queued an item for the same deck (R28 review F4): one queued item per page and deck, so a page that changes again
+  /// while the daily claim cap holds its first item is authored once, from its newest state.
+  /// </summary>
+  public const string SupersededError = "SUPERSEDED";
+
   private static readonly string[] Statuses = ["ok", "not_modified", "failed", "gone", "unsupported", "robots_disallowed"];
   private static readonly string[] ErrorCodes = ["TIMEOUT", "DNS", "TLS", "URL_REJECTED", "TOO_LARGE", "HTTP_4XX", "HTTP_5XX", "REDIRECT_LIMIT", "PARSE"];
   private static readonly Regex Sha256Regex = new("^[0-9a-f]{64}$", RegexOptions.Compiled);
@@ -155,7 +162,7 @@ public static class SourceWatchRoutes
 
   private sealed class ReportCounts
   {
-    public int Applied, Changed, Gone, Failed, Checks, Detections, Queued, FeedItemsQueued, Rechecks;
+    public int Applied, Changed, Gone, Failed, Checks, Detections, Queued, FeedItemsQueued, Rechecks, Superseded;
   }
 
   public static async Task<APIGatewayProxyResponse> HandleReport(LambdaRequest req, Res res)
@@ -257,6 +264,7 @@ public static class SourceWatchRoutes
       {
         tag = "source_watch", outcome = "report", watchRunId, mode = mode.Effective, observations = observations.Count, applied = counts.Applied,
         changed = counts.Changed, gone = counts.Gone, failed = counts.Failed, queued = counts.Queued, rechecks = counts.Rechecks,
+        superseded = counts.Superseded,
       });
       return Answer(res, watchRunId, counts);
     }
@@ -426,7 +434,21 @@ public static class SourceWatchRoutes
         on conflict (dedupe_key) do nothing
         returning id
         """, [url, deckId, $"missing quotes: {missingInDeck.ToString(CultureInfo.InvariantCulture)}", dedupe, o.TargetId, eventId]);
-      if (inserted is not null) queueItemIds.Add(RunnerRoutes.Long(inserted));
+      if (inserted is null) continue;
+      var itemId = RunnerRoutes.Long(inserted);
+      queueItemIds.Add(itemId);
+
+      // R28 review F4: the dedupe key carries the new hash, so a page that changes again while its earlier item still
+      // waits (the daily claim cap holds source-watch items) would queue a second item for the same page and deck, and
+      // the runner would author that page twice. The newest item replaces every older one still queued; a claimed one
+      // (a run in progress) is left alone.
+      counts.Superseded += await DbUtil.ExecuteAsync(conn, tx,
+        """
+        update authoring_queue_items
+        set status = 'skipped', last_error = $4, finished_at = now(), updated_at = now()
+        where kind = 'source_changed' and status = 'queued' and source_target_id = $1 and deck_id = $2 and id <> $3
+        """, [o.TargetId, deckId, itemId,
+          $"{SupersededError}: the page changed again; queue item {itemId.ToString(CultureInfo.InvariantCulture)} replaces this one"]);
     }
     counts.Queued += queueItemIds.Count;
 

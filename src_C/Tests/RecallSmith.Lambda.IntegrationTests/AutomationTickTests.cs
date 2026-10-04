@@ -995,6 +995,48 @@ public class AutomationTickTests
   }
 
   [Fact]
+  public async Task Tick_SourceWatchBacklogOverAWeek_RaisesWatchBacklogOncePerWeek()
+  {
+    // R28 review F4: source-watch items the daily claim cap holds are visible only in the queue, the Monday digest and a
+    // log line; once the oldest has waited more than WatchBacklogDays the tick emails the owner, once per ISO week.
+    await using var scope = new A04Kit.Scope();
+    await InScratchAsync(scope, async sql =>
+    {
+      var deckId = await DeckAsync(sql, "r28-backlog");
+      var key = $"exception:watch_backlog:{IsoWeek()}";
+      async Task<long> WatchItemAsync(string tag, int ageDays, string status = "queued") => A04Kit.Long(await sql.ScalarAsync(
+        """
+        insert into authoring_queue_items (kind, url, deck_id, title, dedupe_key, created_by, status, created_at, finished_at)
+        values ('source_changed', $1, $2, 'Source changed', $3, 'watcher', $4, now() - make_interval(days => $5),
+          case when $4 = 'queued' then null else now() end)
+        returning id
+        """, $"https://docs.example.com/{tag}", deckId, A04Kit.Tag(tag), status, ageDays));
+
+      // Within the week, an owner's old item, and an old item no longer queued: nothing.
+      await WatchItemAsync("r28-six-days", 6);
+      var manual = await QueuedItemAsync(sql, deckId, "r28-owner");
+      await sql.QueryAsync("update authoring_queue_items set created_at = now() - interval '30 days' where id = $1", manual);
+      await WatchItemAsync("r28-superseded", 20, "skipped");
+      await TickDataAsync();
+      Assert.Null(await NotificationAsync(sql, key));
+
+      // An eight-day-old source-watch item: the alert, with the held count and the cap.
+      await WatchItemAsync("r28-eight-days", 8);
+      await TickDataAsync();
+      var n = (await NotificationAsync(sql, key))!;
+      Assert.Equal(("exception", "watch_backlog"), ((string)n["kind"]!, (string)n["subkind"]!));
+      Assert.Equal("[DeveloperCards] (dry run) Action needed: 2 source-watch item(s) waiting, the oldest over 7 days", n["subject"]);
+      var body = (string)n["body_text"]!;
+      Assert.Contains($"The runners claim at most {AutomationEnv.DefaultWatchClaimsPerDay} of them a day (AUTOMATION_WATCH_CLAIMS_PER_DAY)", body);
+      Assert.Contains("skip the items you do not need in the Queue tab", body);
+
+      // Once per ISO week.
+      await TickDataAsync();
+      Assert.Single(A04Kit.Messages(scope, "source-watch item(s) waiting"));
+    });
+  }
+
+  [Fact]
   public async Task Tick_LiveOverride_BelowTwentyAutoAccepts_RaisesNothing()
   {
     await using var scope = new A04Kit.Scope();

@@ -91,14 +91,15 @@ public static class EmailTemplates
 
   /// <summary>
   /// The eleven exception subkinds of A00 §12.4, in table order, then <c>agent_note</c> (R18B K3: a finalised run with
-  /// agent notes and no decisions), <c>runner_unavailable</c> (R18D M5: the runner could not work at all) and
-  /// <c>live_override_high</c> (R18D M2: people override too many auto-accepted cards).
+  /// agent notes and no decisions), <c>runner_unavailable</c> (R18D M5: the runner could not work at all),
+  /// <c>live_override_high</c> (R18D M2: people override too many auto-accepted cards) and <c>watch_backlog</c> (R28
+  /// review F4: source-watch items the daily claim cap holds have waited over a week).
   /// </summary>
   public static readonly IReadOnlyList<string> ExceptionSubkinds =
   [
     "runner_stalled", "runner_login_expiring", "runner_run_failed", "queue_item_failed", "qa_provider_error", "ai_qa_daily_cap",
     "publish_blocked", "publish_failed", "eval_gate_missing", "watch_failing", "source_gone", "agent_note",
-    "runner_unavailable", "live_override_high",
+    "runner_unavailable", "live_override_high", "watch_backlog",
   ];
 
   /// <summary>The agent's notes as one capped line (whitespace runs collapsed), or null when there are none.</summary>
@@ -319,6 +320,14 @@ public static class EmailTemplates
         summary = $"Of {F("autoAccepted30d")} card(s) auto-accepted in 30 days, people deleted {F("deletedByPerson")} and edited {F("editedByPerson")} (override rate {F("overrideRate")}).";
         needs.Add($"- check the auto-accepted cards, and revoke the eval gate if the automation's precision dropped — {AutomationUrl(consoleBaseUrl, "tab=decisions")}");
         factKeys = ["autoAccepted30d", "deletedByPerson", "editedByPerson", "overrideRate"];
+        break;
+      case "watch_backlog":
+        subject = $"Action needed: {F("held")} source-watch item(s) waiting, the oldest over {F("days")} days";
+        summary = $"{F("held")} source-watch queue item(s) are waiting; the oldest was queued at {F("oldestQueuedAt")}. " +
+          $"The runners claim at most {F("cap")} of them a day ({AutomationEnv.WatchClaimsPerDayEnv}).";
+        needs.Add($"- skip the items you do not need in the Queue tab, or raise {AutomationEnv.WatchClaimsPerDayEnv} in " +
+          $"src_C/env/prod.env.json and deploy the backend — {AutomationUrl(consoleBaseUrl, "tab=queue")}");
+        factKeys = ["held", "oldestQueuedAt", "days", "cap"];
         break;
       case "source_gone":
         subject = $"Cited source gone: {F("url")}";

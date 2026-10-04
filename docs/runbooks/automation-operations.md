@@ -319,6 +319,9 @@ One line each: what it means → what to do.
   automation auto-accepted in the last 30 days (at least 20 cards; once per ISO week) → revoke the gate
   (Rollback step 1), open the Decisions tab (state `auto_accepted`) and read what people changed and why;
   restore live only with a new passed gate after the cause (source, skill, reviewer) is fixed.
+- `watch_backlog` (R28 review F4) — source-watch items have waited in the queue for more than 7 days (the
+  daily claim cap `AUTOMATION_WATCH_CLAIMS_PER_DAY` holds them, or no runner claims them; once per ISO week) →
+  skip the ones not needed in the Queue tab, or raise the cap ("Source-watch claim cap" below).
 - `runner_unavailable` (R18D M5, R18E N3) — the runner could not run at all (claude does not start, not
   on the subscription, MCP server does not start, usage or rate limit) and stopped; the claimed item went
   back to `queued` without using an attempt, but not at once: it is due again after 15 min, then 30 min
@@ -583,9 +586,24 @@ would work through them for hours on the owner's subscription and leave a pile o
 hours, counted over every runner (claims recorded in `automation_runs`, whatever their outcome). Default **5**
 (at most 25 draft cards a day, one review batch). The owner's own queue items (`manual`) are never counted or
 held. Items past the cap stay `queued` in the queue, visible and skippable in the console, and are claimed in id
-order as the window frees up. Values: unset, blank or not a whole number ⇒ 5; `0` ⇒ hold every source-watch
-item (only the owner's items are claimed); above 1000 ⇒ 1000. Change it by adding the key to
-`src_C/env/prod.env.json` and deploying the backend (CD, infra/RUNBOOK.md §12); it applies from the next claim.
+order as the window frees up. Values: unset, blank or not a whole number (a sign, a decimal point, letters) ⇒ 5;
+`0` ⇒ hold every source-watch item (only the owner's items are claimed); any whole number above 1000, however
+many digits, ⇒ 1000. Change it by adding the key to `src_C/env/prod.env.json` and deploying the backend (CD,
+infra/RUNBOOK.md §12); it applies from the next claim.
+
+**One queued item per page and deck** (R28 review F4). A `source_changed` item's dedupe key carries the page's new
+hash, so a page that changes again while its first item is still held would queue a second item for the same deck,
+and the runner would author the page twice. Since the review the watcher's newest item replaces every older
+`source_changed` item still `queued` for that page and deck: the older one becomes `skipped` with `last_error`
+`SUPERSEDED: the page changed again; queue item <id> replaces this one` (the Queue tab shows it). An item already
+`claimed` (a run in progress) is never touched. The source-watch report's log line counts them (`superseded`).
+Release-notes items (`feed_item`) are one per new entry and are not replaced. The backlog is therefore bounded by
+the watched pages × the decks citing them, plus new release-notes entries.
+
+**Backlog alert.** When the oldest `queued` source-watch item is more than 7 days old
+(`AutomationTick.WatchBacklogDays`), the tick raises the exception `watch_backlog` once per ISO week ("Action
+needed: N source-watch item(s) waiting, the oldest over 7 days"; held count, oldest time, the cap): skip the items
+not needed in the Queue tab, or raise the key.
 
 **What you see.** When a claim finds source-watch items due but the day's quota used, core-vpc logs one info line
 `{"tag":"automation","reason":"watch_claim_cap","runnerId","cap","claimed24h","held"}`:
@@ -602,7 +620,8 @@ events), the queue (`queued` source-watch items), the `watch_claim_cap` lines ab
 off: on the next tick, at most 50 per tick); this cap does not limit those emails, and the SES sandbox allows 200
 messages a day.
 
-**Rollback.** Revert the code; nothing is stored (the cap reads `automation_runs`).
+**Rollback.** Revert the code; nothing is stored (the cap reads `automation_runs`). Items already marked
+`SUPERSEDED` stay skipped; re-add a URL in the Queue tab if one is still wanted.
 
 ## Usage analytics and freshness (R20 V08)
 

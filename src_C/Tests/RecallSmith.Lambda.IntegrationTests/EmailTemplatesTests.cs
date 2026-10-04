@@ -64,6 +64,9 @@ public class EmailTemplatesTests
       "Action needed: authoring runner owner-mac cannot run"];
     yield return ["live_override_high", new Dictionary<string, string> { ["autoAccepted30d"] = "40", ["deletedByPerson"] = "2", ["editedByPerson"] = "1", ["overrideRate"] = "0.0750" },
       "Action needed: people overrode 0.0750 of auto-accepted cards"];
+    // R28 review F4: the daily claim cap holds source-watch items for over a week.
+    yield return ["watch_backlog", new Dictionary<string, string> { ["held"] = "41", ["oldestQueuedAt"] = "2026-10-08T05:00:00.000Z", ["days"] = "7", ["cap"] = "5" },
+      "Action needed: 41 source-watch item(s) waiting, the oldest over 7 days"];
     yield return ["queue_item_failed", new Dictionary<string, string> { ["itemId"] = "8", ["url"] = "https://docs.example.com/login", ["lastError"] = "AGENT_BLOCKED: the page needs a login" },
       "Action needed: agent blocked on queue item 8"];
     yield return ["agent_note", new Dictionary<string, string> { ["runId"] = "3f2a9c1e-0000-4000-8000-000000000001", ["itemId"] = "7", ["url"] = "https://docs.aws.amazon.com/AmazonS3/latest/userguide/synthetic-page.html", ["notes"] = "Card aws-s3-synthetic-07 looks outdated." },

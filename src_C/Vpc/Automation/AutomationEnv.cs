@@ -61,13 +61,18 @@ public static class AutomationEnv
   public static int LoginWarnDays() => PositiveInt(LoginWarnDaysEnv, DefaultLoginWarnDays);
 
   /// <summary>
-  /// <see cref="WatchClaimsPerDayEnv"/>: unset, blank or not a whole number ⇒ <see cref="DefaultWatchClaimsPerDay"/>;
-  /// <c>0</c> holds every source-watch item in the queue (none is claimed); above <see cref="MaxWatchClaimsPerDay"/> ⇒ that.
+  /// <see cref="WatchClaimsPerDayEnv"/>: unset, blank or not a whole number (a sign, a decimal point, letters) ⇒
+  /// <see cref="DefaultWatchClaimsPerDay"/>; <c>0</c> holds every source-watch item in the queue (none is claimed); any
+  /// whole number above <see cref="MaxWatchClaimsPerDay"/>, however many digits (R28 review F5), ⇒ that maximum.
   /// </summary>
-  public static int WatchClaimsPerDay() =>
-    int.TryParse(Read(WatchClaimsPerDayEnv), NumberStyles.None, CultureInfo.InvariantCulture, out var n)
+  public static int WatchClaimsPerDay()
+  {
+    var raw = Read(WatchClaimsPerDayEnv);
+    if (raw is null || !raw.All(char.IsAsciiDigit)) return DefaultWatchClaimsPerDay;
+    return int.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out var n)
       ? Math.Min(n, MaxWatchClaimsPerDay)
-      : DefaultWatchClaimsPerDay;
+      : MaxWatchClaimsPerDay;
+  }
 
   /// <summary>Trimmed; null when unset or blank.</summary>
   public static string? NotifyQueueUrl() => Read(NotifyQueueUrlEnv);

@@ -39,6 +39,13 @@ public static class AutomationTick
   public const int ErrorRunnerIdleHours = 2;
 
   /// <summary>
+  /// <c>watch_backlog</c> (R28 review F4): raised once per ISO week while the oldest queued source-watch item is older than
+  /// this, so a backlog the daily claim cap (<see cref="AutomationEnv.WatchClaimsPerDay"/>) drains too slowly is seen
+  /// outside the Monday digest and the <c>watch_claim_cap</c> log line.
+  /// </summary>
+  public const int WatchBacklogDays = 7;
+
+  /// <summary>
   /// A <c>qa_pending</c> decision untouched for this many draft-QA timeouts (other than one waiting for the daily cap)
   /// keeps failing before its enqueue can even start; it goes to a human with <c>ENQUEUE_FAILED</c> (R18C,
   /// backend-design-10), so its run can finalise.
@@ -186,6 +193,7 @@ public static class AutomationTick
     await Step("summaries", () => SummariesAsync(conn, mode.Effective, a, Spent));
     await Step("source_events", () => SourceEventsAsync(conn, mode.Effective, a, Spent));
     await Step("runner_health", () => RunnerHealthAsync(conn, a, Spent));
+    await Step("watch_backlog", () => WatchBacklogAsync(conn, a));
     await Step("eval_gate", () => EvalGateAsync(conn, mode, a));
     await Step("live_quality", () => LiveQualityAsync(conn, a));
     await Step("resend", async () => a.NotificationsResent = await Notifications.ResendAsync(conn, StepBatch));
@@ -774,6 +782,39 @@ public static class AutomationTick
   internal static bool IsStalledInError(string? state, string? lastError, long dueItems, bool ranRecently) =>
     state == "error" && lastError?.StartsWith("RUNNER_UNAVAILABLE", StringComparison.Ordinal) != true && dueItems > 0 && !ranRecently;
 
+  /// <summary>
+  /// <c>watch_backlog</c> (R28 review F4), once per ISO week: source-watch items (<see cref="RunnerRoutes.WatchKinds"/>)
+  /// still <c>queued</c> and the oldest queued more than <see cref="WatchBacklogDays"/> days ago. The claim cap holds them
+  /// (or no runner claims them); the owner skips the ones not needed or raises the cap.
+  /// </summary>
+  private static async Task WatchBacklogAsync(NpgsqlConnection conn, Actions a)
+  {
+    var row = (await DbUtil.QueryAsync(conn, null,
+      """
+      select count(*) as held, min(created_at) as oldest,
+        coalesce(min(created_at) < now() - make_interval(days => $2), false) as overdue
+      from authoring_queue_items
+      where status = 'queued' and deck_id is not null and kind = any($1)
+      """, [RunnerRoutes.WatchKinds, WatchBacklogDays]))[0];
+    if (row["overdue"] is not true) return;
+    var raised = await Notifications.RaiseExceptionAsync(conn, "watch_backlog", $"exception:watch_backlog:{IsoWeekKey()}",
+      new Dictionary<string, string>
+      {
+        ["held"] = Long(row["held"]).ToString(CultureInfo.InvariantCulture),
+        ["oldestQueuedAt"] = RunnerRoutes.Timestamp(row["oldest"]) ?? "unknown",
+        ["days"] = WatchBacklogDays.ToString(CultureInfo.InvariantCulture),
+        ["cap"] = AutomationEnv.WatchClaimsPerDay().ToString(CultureInfo.InvariantCulture),
+      });
+    if (raised?.Created == true) a.Alerts++;
+  }
+
+  /// <summary>The current ISO week as <c>2026-W41</c>: the dedupe suffix of the once-a-week exceptions.</summary>
+  private static string IsoWeekKey()
+  {
+    var now = DateTime.UtcNow;
+    return $"{ISOWeek.GetYear(now).ToString(CultureInfo.InvariantCulture)}-W{ISOWeek.GetWeekOfYear(now).ToString("00", CultureInfo.InvariantCulture)}";
+  }
+
   private static async Task EvalGateAsync(NpgsqlConnection conn, EffectiveMode mode, Actions a)
   {
     if (mode.Configured != AutomationMode.Live || mode.Effective != AutomationMode.DryRun) return;
@@ -790,9 +831,7 @@ public static class AutomationTick
   {
     var q = await StatusRoutes.LoadLiveQualityAsync(conn);
     if (!q.OverrideHigh) return;
-    var now = DateTime.UtcNow;
-    var week = $"{ISOWeek.GetYear(now).ToString(CultureInfo.InvariantCulture)}-W{ISOWeek.GetWeekOfYear(now).ToString("00", CultureInfo.InvariantCulture)}";
-    var raised = await Notifications.RaiseExceptionAsync(conn, "live_override_high", $"exception:live_override_high:{week}",
+    var raised = await Notifications.RaiseExceptionAsync(conn, "live_override_high", $"exception:live_override_high:{IsoWeekKey()}",
       new Dictionary<string, string>
       {
         ["autoAccepted30d"] = q.AutoAccepted30d.ToString(CultureInfo.InvariantCulture),
