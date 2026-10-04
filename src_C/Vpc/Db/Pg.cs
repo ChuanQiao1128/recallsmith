@@ -69,6 +69,10 @@ public static class Pg
         // Npgsql uses seconds here
         Timeout = Math.Max(1, connTimeoutMs / 1000),
         ConnectionIdleLifetime = Math.Max(1, idleTimeoutMs / 1000),
+
+        // SPC-01: the same server-side limits as the shared pool (RecallSmith.Lambda.Db.PgSessionTimeouts). The
+        // migration runner, the main user of this pool, lifts them inside each migration's transaction (Migrate.cs).
+        Options = RecallSmith.Lambda.Db.PgSessionTimeouts.Current.ConnectionOptions,
       };
 
       _dataSource = new NpgsqlDataSourceBuilder(csb.ConnectionString).Build();

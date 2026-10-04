@@ -1447,3 +1447,51 @@ allow-file selection and paths (non-ASCII and glob names included), the stale ch
 workflow's step bodies run under `bash -e` with stubbed `python3`, `terraform` and `aws`, and the static facts of
 `terraform.yml`, `ci.yml` and the role (its deny blocks no refresh read); `ci.yml` job `infra` runs `pr-check` on
 every run except a push to `main`.
+
+## 16. Hardening limits: database timeouts, route throttles, security headers (R29 HARDEN, 2026-10-04)
+
+Owner policy 2026-10-04: no new features, hardening only; nothing changes what a user sees except refusing abuse.
+Three limits from the enterprise audit (2026-10-03): SPC-01 (no `statement_timeout`), SPC-02 (routes share the stage
+default throttle) and the console's missing security headers (SEC-05, user-perspective review G11). Traffic and latency
+below are from read-only CloudWatch (`devcards-ro`) for the 30 days to 2026-10-04 08:00 UTC.
+
+### Database timeouts (SPC-01)
+
+Every application connection starts with Postgres' `statement_timeout` and `idle_in_transaction_session_timeout`, sent
+as startup options in the connection string (`Options=-c statement_timeout=… -c idle_in_transaction_session_timeout=…`)
+by both pools, `src_C/Shared/RecallSmith.Lambda.Db/Pg.cs` and `src_C/Vpc/Db/Pg.cs` (the migration runner's). The values
+live in one file, `src_C/Shared/RecallSmith.Lambda.Db/PgSessionTimeouts.cs`; each Lambda constructor names its profile
+before the first connection.
+
+| Who | statement_timeout | idle_in_transaction | Why this value |
+|---|---|---|---|
+| core-vpc (`PgSessionTimeouts.Api`, `VpcFunction`) | 20 s | 60 s | Every core-vpc call comes through API Gateway, which answers 503 after 30 s (`timeout_milliseconds = 30000`); a statement past that works for nobody. The slowest invocation in the 30 days took 7.4 s (p99.9 4.2 s, 31 209 invocations), the slowest route 9.1 s (`POST /api/internal/automation/tick`, whose own budget is 20 s; user routes ≤ 3.3 s, SLO sync latency 2 s). 20 s is that whole budget and twice the slowest route. Idle 60 s is twice the gateway timeout: it only ends a transaction whose caller already has its 503, and a dead function's locks go after a minute |
+| worker-lambda (`PgSessionTimeouts.Worker`, `WorkerFunction`) | 600 s | 600 s | The function may run 615 s (slowest job 4.6 s). Nothing a live job does is cut off; only what a dead worker left behind is ended |
+| Migration runner (`Vpc/Db/Migrate.cs`) | none | none | Each migration's transaction (and the `card_embeddings` vector block) starts with `set local statement_timeout = 0; set local idle_in_transaction_session_timeout = 0` (`Migrate.LiftTimeoutsSql`), for that transaction only. The advisory-lock wait before it keeps the 20 s: a second **Migrate** press while one runs now fails after 20 s (57014) instead of queueing behind it; press again when the first is done |
+| `set local` inside code | lower | — | The usage rollup (3 s) and the anonymous-funnel retention (2 s) already set their own; a `set local` always wins for its transaction |
+
+- Why startup options and not `ALTER ROLE … SET`: no migration, the RDS role and parameter group stay as they are, the
+  worker and core-vpc share the role but not the values, and Npgsql's reset of a pooled connection (`RESET ALL`) returns
+  to the startup value, so a `set statement_timeout` by one request cannot leak into the next (tested). A session
+  someone else opens (psql as the master, the DR drill of §13) keeps the server defaults of the instance's parameter
+  group `default.postgres17` (read 2026-10-04): no `statement_timeout`, `idle_in_transaction_session_timeout`
+  86 400 000 ms (24 h).
+- Npgsql's client-side Command Timeout (30 s default, never overridden here) is unchanged. It fires only while the
+  function is alive; the server-side limits also hold for a function that timed out, crashed or was frozen. Migration
+  statements are still bounded by those 30 s, as before.
+- What a user sees: nothing at today's latencies. A statement over 20 s now ends with `57014 canceling statement due to
+  statement timeout` (core-vpc answers 500) instead of running on behind API Gateway's 503.
+- Find one: Logs Insights on `/aws/lambda/core-vpc`, `filter @message like /57014|statement timeout|25P03/`; on the
+  database (master, read-only), `select pid, usename, state, now() - xact_start as xact_age, left(query, 60) from
+  pg_stat_activity where usename = 'developercards_app' order by xact_start nulls last`.
+- Change a value: edit `PgSessionTimeouts.cs` and the pinned values in
+  `src_C/Tests/RecallSmith.Lambda.IntegrationTests/DbSessionTimeoutsTests.cs` (`ShippedProfiles_AreTheMeasuredValues`),
+  pull request, CD deploys core-vpc and worker-lambda (§12). One slow statement that needs more is better served by a
+  `set local statement_timeout = <ms>` in its own transaction than by raising the profile.
+- Tests (Testcontainers, CI job `backend`): `DbSessionTimeoutsTests` — both pools start with 20 s / 1 min; a slow
+  query and a real handler (`GET /api/v1/entitlements`) blocked behind a lock are cancelled by the server (57014); an
+  idle transaction's session is ended by the server (`pg_stat_activity`); a session-level `SET` does not survive the
+  pool; `new WorkerFunction()` selects 10 min / 10 min and keeps a statement the app path cancels; a migration that
+  sleeps past the app limit is applied and the limit is back afterwards.
+- Rollback: revert the change; CD redeploys (§12).
+

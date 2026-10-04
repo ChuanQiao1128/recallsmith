@@ -123,6 +123,16 @@ public static class Migrate
     return rows.Select(r => Convert.ToInt32(r["version"], CultureInfo.InvariantCulture)).ToHashSet();
   }
 
+  /// <summary>
+  /// SPC-01: every application connection starts with <c>statement_timeout</c> and
+  /// <c>idle_in_transaction_session_timeout</c> (<see cref="RecallSmith.Lambda.Db.PgSessionTimeouts"/>). A migration
+  /// (an index build, a backfill) may legitimately take longer, so its transaction lifts both, for that transaction
+  /// only (<c>set local</c>: they return to the connection's limits at commit or rollback). Npgsql's client-side
+  /// Command Timeout (30 s) still applies, as it did before.
+  /// </summary>
+  internal const string LiftTimeoutsSql =
+    "set local statement_timeout = 0; set local idle_in_transaction_session_timeout = 0;";
+
   private static async Task<bool> ApplyOne(NpgsqlConnection conn, Migration m, RecallSmith.Lambda.Vpc.Authoring.AdminAuditEntry? audit)
   {
     var sql = await File.ReadAllTextAsync(m.FullPath);
@@ -130,6 +140,7 @@ public static class Migrate
     await using var tx = await conn.BeginTransactionAsync();
     try
     {
+      await ExecuteAsync(conn, tx, LiftTimeoutsSql, []);
       await ExecuteAsync(conn, tx, sql, []);
       await ExecuteAsync(
         conn,
@@ -159,6 +170,7 @@ public static class Migrate
   {
     await using (var tx = await conn.BeginTransactionAsync())
     {
+      await ExecuteAsync(conn, tx, LiftTimeoutsSql, []);
       await ExecuteAsync(conn, tx, EnsureVectorObjectsSql, []);
       await tx.CommitAsync();
     }
