@@ -301,9 +301,11 @@ TOPIC: 1.3 Data security controls
 Q:
 A team adds a bucket policy with Principal "*" to serve images publicly, but S3 rejects the PutBucketPolicy call. What is blocking it, and how do account-level and bucket-level settings interact?
 A:
-S3 Block Public Access. Every new bucket has all four settings on, and BlockPublicPolicy rejects any bucket policy that S3 classifies as public, while BlockPublicAcls and IgnorePublicAcls neutralise public ACLs and RestrictPublicBuckets cuts off cross-account access to a bucket whose policy is public. The settings exist at account level and bucket level, and S3 applies the most restrictive combination, so turning them off on one bucket achieves nothing while the account-level block stays on. The feature overrides policies and ACLs without editing them, so switching it off makes an existing public policy live again. The distractor is rewriting the policy when the block is the real cause; for public content prefer CloudFront in front of a private bucket.
+S3 Block Public Access. Every new bucket has all four settings on, and BlockPublicPolicy rejects any bucket policy that S3 classifies as public, while BlockPublicAcls and IgnorePublicAcls neutralise public ACLs and RestrictPublicBuckets cuts off public and cross-account access to a bucket whose policy is public. The settings exist at organisation, account, bucket and access point level, and S3 applies the most restrictive combination, so turning them off on one bucket achieves nothing while the account-level block stays on. The feature overrides policies and ACLs without editing them, so switching it off makes an existing public policy live again. The distractor is rewriting the policy when the block is the real cause; for public content prefer CloudFront in front of a private bucket.
 USAGE:
 When a static website served straight from S3 returns 403 on every object, check Block Public Access at both the bucket and the account before touching the policy.
+SOURCE: https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html
+Amazon S3 blocks public and cross-account access derived from any public access point or bucket policy, including non-public delegation to specific accounts.
 
 ## aws-s3-object-lock-worm | d2
 TOPIC: 1.3 Data security controls
@@ -320,9 +322,11 @@ TOPIC: 1.3 Data security controls
 Q:
 Auditors require proof of which principal decrypted each object and the ability to revoke a key for one dataset. Which S3 server-side encryption option satisfies this, and what cost issue follows?
 A:
-SSE-KMS with a customer managed key. SSE-S3 is the default and encrypts every new object with keys S3 manages, but it gives no key policy, no key lifecycle control and no CloudTrail record of key use, so it fails the audit. With SSE-KMS every upload and download calls KMS for GenerateDataKey or Decrypt, which is billed and counts against the KMS request quota; enable an S3 Bucket Key so S3 derives data keys from a bucket-level key and reduces KMS traffic. DSSE-KMS adds a second encryption layer for regulations demanding it and cannot use Bucket Keys. SSE-C means you send your own key on every request and S3 never stores it, so losing the key loses the object.
+SSE-KMS with a customer managed key. SSE-S3 is the default and encrypts every new object with keys S3 manages, but it gives no key policy, no key lifecycle control and no CloudTrail record of key use, so it fails the audit. With SSE-KMS every upload and download calls KMS for GenerateDataKey or Decrypt, which is billed and counts against the KMS request quota; enable an S3 Bucket Key so S3 derives data keys from a bucket-level key and reduces KMS traffic, but KMS CloudTrail events then log the bucket ARN instead of each object ARN, which weakens per-object audit. DSSE-KMS adds a second encryption layer for regulations demanding it and cannot use Bucket Keys. SSE-C means you send your own key on every request and S3 never stores it, so losing the key loses the object; since April 2026 it is disabled on new general purpose buckets until you enable it with PutBucketEncryption.
 USAGE:
 Keep buckets that receive S3 server access logs on SSE-S3, because switching the destination to SSE-KMS can produce log objects encrypted with a key you cannot read.
+SOURCE: https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucket-key.html
+After you enable an S3 Bucket Key, your AWS KMS CloudTrail events log your bucket ARN instead of your object ARN.
 
 ## aws-s3-presigned-urls | d1
 TOPIC: 1.2 Secure workloads
@@ -362,9 +366,11 @@ TOPIC: 1.2 Secure workloads
 Q:
 A mobile app needs sign-in with MFA and social login, and afterwards must upload files straight to S3. Which Cognito component does each job?
 A:
-A user pool is the user directory and authentication server: it handles sign-up, sign-in, MFA and federation with Google, Apple, SAML or OIDC providers, and issues OIDC JSON web tokens (ID, access and refresh) that your app or API can verify directly. It never hands out AWS credentials. An identity pool is a credentials broker: it takes a token from a user pool or another trusted provider and exchanges it through STS for temporary AWS credentials tied to an IAM role, so the app can call S3 or DynamoDB itself. It also supports unauthenticated guest identities with a limited role. The distractor is a user pool alone for S3 access, or IAM users for end customers.
+A user pool is the user directory and authentication server: it handles sign-up, sign-in, MFA and federation with Google, Apple, SAML or OIDC providers, and issues ID and access tokens as OIDC JSON web tokens that your app or API can verify directly, plus an encrypted refresh token that only the user pool can read. It never hands out AWS credentials. An identity pool is a credentials broker: it takes a token from a user pool or another trusted provider and exchanges it through STS for temporary AWS credentials tied to an IAM role, so the app can call S3 or DynamoDB itself. It also supports unauthenticated guest identities with a limited role. The distractor is a user pool alone for S3 access, or IAM users for end customers.
 USAGE:
 Configure the IAM role trust policy so only your identity pool can assume it, and give the unauthenticated role the narrowest permissions you can.
+SOURCE: https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-using-tokens-with-identity-providers.html
+Amazon Cognito refresh tokens are encrypted, opaque to user pools users and administrators, and can only be read by your user pool.
 
 ## aws-guardduty-inspector-macie-detective | d1
 TOPIC: 1.2 Secure workloads
@@ -463,9 +469,11 @@ TOPIC: 1.3 Data security controls
 Q:
 A bank must keep its encryption keys in a single-tenant HSM that its own staff administer, yet still use those keys with RDS and EBS. KMS, CloudHSM, or both?
 A:
-KMS is a managed, multi-tenant service: AWS runs a shared fleet of FIPS 140-3 Level 3 validated HSMs, integrates with most AWS services, and you govern use through key policies. CloudHSM gives you a dedicated, single-tenant cluster in your VPC where you create the users and keys, AWS cannot see the key material, and applications use PKCS#11, JCE or CNG libraries; in return you own availability, backups and scaling. When the requirement is both single-tenant hardware and native AWS service integration, use a KMS custom key store backed by your CloudHSM cluster, symmetric encryption keys only. Exam questions use FIPS 140-2 Level 3 as the CloudHSM hint, but the real discriminator is single tenancy and customer-run key management.
+KMS is a managed, multi-tenant service: AWS runs a shared fleet of FIPS 140-3 Level 3 validated HSMs, integrates with most AWS services, and you govern use through key policies. CloudHSM gives you a dedicated, single-tenant cluster in your VPC where you create the users and keys, AWS cannot see the key material, and applications use PKCS#11, JCE or CNG libraries; in return you own availability and scaling by adding HSMs, while CloudHSM still takes periodic cluster backups automatically. When the requirement is both single-tenant hardware and native AWS service integration, use a KMS custom key store backed by your CloudHSM cluster, symmetric encryption keys only. Exam questions use FIPS 140-2 Level 3 as the CloudHSM hint, but the real discriminator is single tenancy and customer-run key management.
 USAGE:
 Reach for CloudHSM only when a regulation names a dedicated HSM; the docs say custom key stores are not more secure than the standard key store, only more work.
+SOURCE: https://docs.aws.amazon.com/cloudhsm/latest/userguide/backups.html
+AWS CloudHSM makes periodic backups of the users, keys, and policies in the cluster.
 
 ## aws-ec2-imdsv2 | d3
 TOPIC: 1.2 Secure workloads
@@ -696,9 +704,11 @@ TOPIC: 2.2 HA and fault tolerance
 Q:
 When an Auto Scaling group scales in, users with long downloads in progress receive 5xx errors. Which target group setting prevents that, and what is its default?
 A:
-Deregistration delay, also called connection draining, keeps a deregistering target in the draining state so in-flight requests can finish while no new requests are sent to it. The default is 300 seconds; a target with no in-flight requests completes immediately, and a target that closes connections before the delay ends causes a 500-level error for the client. Auto Scaling waits for draining before terminating the instance. Set the value just above your longest normal request, because the full delay must elapse before termination, otherwise scale-in and deployments look slow. The distractor is the health check grace period, which protects new instances at launch, not existing ones on the way out.
+Deregistration delay, also called connection draining, keeps a deregistering target in the draining state so in-flight requests can finish while no new requests are sent to it. The default is 300 seconds; a target with no in-flight requests completes immediately, and a target that closes connections before the delay ends causes a 500-level error for the client. Auto Scaling waits for draining before terminating the instance. Set the value just above your longest normal request, because Auto Scaling waits until in-flight requests finish or the delay expires before terminating, so an oversized value lets lingering connections slow scale-in and deployments. The distractor is the health check grace period, which protects new instances at launch, not existing ones on the way out.
 USAGE:
 A five-minute default on an API with 200 millisecond responses makes every deploy and scale-in painfully slow, so tune it down to a few seconds above your slowest legitimate request.
+SOURCE: https://docs.aws.amazon.com/elasticloadbalancing/latest/application/edit-target-group-attributes.html
+If a deregistering target has no in-flight requests and no active connections, Elastic Load Balancing immediately completes the deregistration process
 
 ## aws-aurora-vs-rds | d2
 TOPIC: 3.3 High-performing databases
@@ -966,9 +976,11 @@ TOPIC: 2.2 HA and fault tolerance
 Q:
 A static site served by CloudFront from an S3 bucket must keep serving if that bucket's Region has problems. How do you make CloudFront fall back, and what exactly triggers the fallback?
 A:
-Create an origin group of a primary and a secondary origin and assign it to the cache behaviour. On a cache miss CloudFront tries the primary; if it returns a status code you listed as failover criteria (such as 500, 502, 503 or 504), or cannot be reached or times out once 503 and 504 are listed, CloudFront retries the same request against the secondary. Failover is per request, the next one goes to the primary again, and only GET, HEAD and OPTIONS qualify. For a static site, replicate the bucket with S3 Cross-Region Replication so both origins hold the same objects. The trap is expecting one origin's connection retries to do this; only an origin group reroutes.
+Create an origin group of a primary and a secondary origin and assign it to the cache behaviour. On a cache miss CloudFront tries the primary; if it returns a status code you listed as failover criteria (such as 500, 502, 503 or 504), or CloudFront cannot connect to it (when 503 is listed) or its response times out (when 504 is listed), CloudFront retries the same request against the secondary. Failover is per request, the next one goes to the primary again, and only GET, HEAD and OPTIONS qualify. For a static site, replicate the bucket with S3 Cross-Region Replication so both origins hold the same objects. The trap is expecting one origin's connection retries to do this; only an origin group reroutes.
 USAGE:
 Lower the primary origin's connection timeout and attempts for latency-sensitive content, otherwise viewers wait through every retry before the secondary is tried.
+SOURCE: https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/high_availability_origin_failover.html
+CloudFront fails to connect to the primary origin (when 503 is set as a failover code)
 
 ## aws-ecs-fargate-vs-ec2-launch | d2
 TOPIC: D2 services
@@ -1159,9 +1171,11 @@ TOPIC: 3.1 High-performing storage
 Q:
 Two EC2 instances in the same Availability Zone must both read and write a single block volume for a clustered database. Can EBS do this, and why is it not simply shared storage like EFS?
 A:
-Yes, with Multi-Attach: an io1 or io2 volume can attach to several Nitro-based instances in the same Availability Zone, each with full read and write access. It is raw block storage with no coordination, so the instances need a cluster-aware file system or an application that manages write ordering; plain XFS or ext4 mounted from both sides corrupts data. io2 supports NVMe reservations for I/O fencing, io1 does not. Multi-Attach volumes cannot be boot volumes or cross zones, and gp2, gp3, st1 and sc1 do not support it. The trap is picking Multi-Attach for ordinary shared files across many instances or zones: that job belongs to EFS, a managed NFS service which handles concurrency.
+Yes, with Multi-Attach: an io1 or io2 volume can attach to several Nitro-based instances in the same Availability Zone, each with full read and write access. It is raw block storage with no coordination, so the instances need a cluster-aware file system or an application that manages write ordering; plain XFS or ext4 mounted from both sides corrupts data. Both io1 and io2 support NVMe reservations for I/O fencing (on by default for io2 volumes created after 18 September 2023 and io1 volumes created after 1 October 2026). Multi-Attach volumes cannot be boot volumes or cross zones, and gp2, gp3, st1 and sc1 do not support it. The trap is picking Multi-Attach for ordinary shared files across many instances or zones: that job belongs to EFS, a managed NFS service which handles concurrency.
 USAGE:
 Set delete-on-termination the same way on every attached instance; the last instance terminated decides whether the shared volume is deleted.
+SOURCE: https://docs.aws.amazon.com/ebs/latest/userguide/nvme-reservations.html
+Multi-Attach enabled io1 and io2 volumes support NVMe reservations, which is a set of industry-standard storage fencing protocols.
 
 ## aws-efs-performance-and-throughput-modes | d2
 TOPIC: 3.1 High-performing storage
@@ -1733,9 +1747,11 @@ TOPIC: D2 services
 Q:
 A mobile app needs one endpoint that reads from DynamoDB and a Lambda function, pushes live updates to clients, and keeps working offline. Why is AppSync a better fit than an API Gateway REST API?
 A:
-AppSync is a managed GraphQL service: clients request exactly the fields they need and resolvers fetch them from DynamoDB, Lambda, RDS, OpenSearch or HTTP endpoints through one endpoint, avoiding the over-fetching and round trips of REST. Subscriptions fire in response to mutations over WebSockets that AppSync establishes and maintains, and Amplify DataStore clients generated from the schema give mobile apps offline sync. Caching, WAF and API keys are not differentiators: AppSync has them too. A REST API wins when you need request validation against a JSON schema, usage plans, or a plain proxy for an ordinary HTTP backend. The distractor is an API Gateway WebSocket API: it pushes both ways, but you write connection handling and data fetching yourself.
+AppSync is a managed GraphQL service: clients request exactly the fields they need and resolvers fetch them from DynamoDB, Lambda, RDS, OpenSearch or HTTP endpoints through one endpoint, avoiding the over-fetching and round trips of REST. Subscriptions fire in response to mutations over WebSockets that AppSync establishes and maintains, and sync operations on versioned DynamoDB data sources let a client that was offline fetch only the data changed since its last query. Caching, WAF and API keys are not differentiators: AppSync has them too. A REST API wins when you need request validation against a JSON schema, usage plans, or a plain proxy for an ordinary HTTP backend. The distractor is an API Gateway WebSocket API: it pushes both ways, but you write connection handling and data fetching yourself.
 USAGE:
 Do not reach for GraphQL because it is newer; if every client needs the same fixed payloads, a REST API is simpler to build, cache and secure.
+SOURCE: https://docs.aws.amazon.com/appsync/latest/devguide/conflict-detection-and-sync.html
+This feature allows clients to fetch all results from a DynamoDB table and subsequently retrieve only data altered since their last query.
 
 ## aws-s3-glacier-retrieval-tiers | d2
 TOPIC: D4 services
@@ -1899,9 +1915,11 @@ TOPIC: D4 services
 Q:
 Before committing to a three-year Savings Plan, an architect wants evidence that the fleet is not over-provisioned. Which service gives instance-level rightsizing recommendations, and what does it need?
 A:
-AWS Compute Optimizer. Once you opt in, it analyses configuration and CloudWatch utilisation metrics over the last 14 days and classifies each instance as under-provisioned, over-provisioned or optimised, with an estimated monthly saving and performance risk. It covers EC2 instances and Auto Scaling groups, EBS volumes, Lambda function memory, ECS services on Fargate, RDS and more, and can show Graviton alternatives. Memory utilisation only counts when the CloudWatch agent is installed. Rightsize first and commit second, because a Savings Plan locks in spend on whatever size you run, so committing to an oversized fleet freezes the waste. The trap is picking Trusted Advisor, which flags low-utilisation instances against fixed thresholds but does not suggest a target instance type.
+AWS Compute Optimizer. Once you opt in, it analyses configuration and CloudWatch utilisation metrics over the last 14 days and classifies each instance as under-provisioned, over-provisioned or optimised, with an estimated monthly saving and performance risk. It covers EC2 instances and Auto Scaling groups, EBS volumes, Lambda function memory, ECS services on Fargate, RDS and more, and can show Graviton alternatives. Memory utilisation only counts when the CloudWatch agent reports it, or, for instances outside Auto Scaling groups, when external metrics ingestion pulls it from Datadog, Dynatrace, Instana or New Relic. Rightsize first and commit second, because a Savings Plan locks in spend on whatever size you run, so committing to an oversized fleet freezes the waste. The trap is picking Trusted Advisor: its legacy low-utilisation check flags instances against fixed thresholds without a target type, and its newer EC2 cost check only relays Cost Optimization Hub actions, which need Compute Optimizer opted in anyway.
 USAGE:
 Compute Optimizer only produces Lambda memory recommendations for x86_64 functions, so arm64 functions still need Power Tuning.
+SOURCE: https://docs.aws.amazon.com/compute-optimizer/latest/ug/external-metrics-ingestion.html
+ingest EC2 memory utilization metrics from one of the four observability products: Datadog, Dynatrace, Instana, and New Relic.
 
 ## aws-ebs-gp3-vs-gp2-and-snapshot-archive | d2
 TOPIC: 4.1 Cost-optimized storage
