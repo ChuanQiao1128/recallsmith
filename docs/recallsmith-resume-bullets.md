@@ -164,5 +164,5 @@ Do not use it yet: the 2026-10-02 funnel was 907 → 41 → 3. When it is used, 
 - AI agent postings: use A1–A5. Code-centric automation or platform postings: use U1–U5. Business-process automation roles (n8n, Power Automate): U is the closest fit, but add no claim to make it fit.
 - One variant per application; record the variant and submission date for every application.
 - Before each submission, re-check the live-state claims: `AUTOMATION_MODE` / `AI_QA_ENABLED`, citation coverage, alarm and probe counts, test counts. If the reviewer is switched on or the eval gate passes, rewrite M4, A3 and U3 with measured results. Do not rewrite them before that.
-- The 9 allow-listed npm advisories expire on 2026-11-03. If CI goes red then, F4's "audit gates" still holds but its boundary changes.
+- The 9 allow-listed npm advisories expire on 2027-02-01 (the next Expo SDK upgrade); the 3 fast-xml-parser ones can clear earlier, with the aws-amplify update shipped by OTA. If CI goes red then, F4's "audit gates" still holds but its boundary changes.
 - A later resume may truthfully add a newly deployed capability; variants must not disagree about facts that were already fixed at the same submission date.

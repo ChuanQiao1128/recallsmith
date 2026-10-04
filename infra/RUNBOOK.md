@@ -1599,17 +1599,22 @@ stylesheet loaded with no violation; an injected `<style>` and an external image
 The mobile CI job (`mobile (typecheck + vitest + expo export)`) gates `npm audit --omit=dev` with
 `infra/scripts/check-npm-audit.py` and `mobile/npm-audit-allowlist.json`: an unlisted high or critical advisory, or an
 entry on or past its `expires` date (UTC), fails the job, and every run warns from 14 days before an entry expires.
-Every entry also says `"inBundle": true` or `false`, and both scripts refuse an entry without it. The job's
-`npx expo export --platform ios --platform android --source-maps --output-dir dist-ci` is followed by
-`infra/scripts/check-bundle-packages.py`, which reads each platform's `.hbc.map` (named in `dist-ci/metadata.json`),
-takes the package after the last `node_modules/` of every `sources` path, and fails if the package of an `inBundle`
-false entry is in either bundle; it matches by name, so a fixed copy of the same package counts too. It fails closed
-(exit 2) on a missing `metadata.json`, platform entry or map, or a map without `react-native` in it. When it fails, the
-entry's "not in the shipped app" claim is no longer true: find what pulled the package in (an app import or a
-dependency update in that change), then either remove that or re-review the advisory as shipped code (`inBundle: true`
-and a reason that says why shipping it is acceptable). Locally, from `mobile/` after `npm ci`: the same export, then
-`python3 ../infra/scripts/check-bundle-packages.py --allowlist npm-audit-allowlist.json --export-dir dist-ci` (use a
-fresh `TMPDIR` per checkout if you compare exports: Metro's transform cache under `$TMPDIR/metro-cache` is shared). The
-9 entries of 2026-10-04 expire on 2027-02-01, the date that stands for the next Expo SDK upgrade: run
-`npm audit --omit=dev` in that change, delete what it clears and re-review the rest. The 3 fast-xml-parser entries
-leave earlier, with the aws-amplify lockfile update shipped by OTA after a sign-in test on a device.
+Every entry also says `"inBundle": true` or `false`, and both scripts refuse an entry without it. The job's `npx expo
+export --platform ios --platform android --source-maps --output-dir dist-ci` is followed by
+`infra/scripts/check-bundle-packages.py`, which reads the source map of every bundle file of each platform (the main
+`.hbc` named in `dist-ci/metadata.json` plus any other `.hbc` or `.js` under `_expo/static/js/<platform>/`, such as a
+split chunk; today there is one per platform), takes the package directory after the last `node_modules/` of every
+`sources` path, names it the way npm audit does from `package-lock.json` (its `name` field, so an npm alias such as
+`node_modules/jest-snapshot-prettier` counts as `prettier`), and fails if the package of an `inBundle` false entry is
+in either platform; it matches by name, so a fixed copy of the same package counts too. It fails closed (exit 2) on a
+missing `metadata.json`, platform entry, main bundle or lockfile, a bundle file without its `.map`, a bundled package
+directory the lockfile does not list, or a main map without `react-native` in it. When it fails, the entry's "not in
+the shipped app" claim is no longer true: find what pulled the package in (an app import or a dependency update in
+that change), then either remove that or re-review the advisory as shipped code (`inBundle: true` and a reason that
+says why shipping it is acceptable). Locally, from `mobile/` after `npm ci`: the same export, then `python3
+../infra/scripts/check-bundle-packages.py --allowlist npm-audit-allowlist.json --lockfile package-lock.json
+--export-dir dist-ci` (use a fresh `TMPDIR` per checkout if you compare exports: Metro's transform cache under
+`$TMPDIR/metro-cache` is shared). The 9 entries of 2026-10-04 expire on 2027-02-01, the date that stands for the next
+Expo SDK upgrade: run `npm audit --omit=dev` in that change, delete what it clears and re-review the rest. The 3
+fast-xml-parser entries leave earlier, with the aws-amplify lockfile update shipped by OTA after a sign-in test on a
+device.

@@ -73,16 +73,20 @@ jobs:
       # entry in npm-audit-allowlist.json says whether its package is in the
       # shipped app ("inBundle"); all of today's say false, and that claim is
       # most of why they are accepted. check-bundle-packages.py lists the npm
-      # packages in each platform's .hbc.map "sources" and fails if an
-      # inBundle false entry's package is in either bundle, so an import or a
-      # dependency update that pulls one in turns this job red instead of
-      # leaving the reason quietly wrong. It fails closed: no map, no
-      # metadata.json or a map without react-native in it is an error, not a
-      # pass. The second platform and the maps took the export from 17 s to
+      # packages in the "sources" of every bundle file's map (the main .hbc and
+      # any other .hbc or .js under _expo/static/js/<platform>/, such as a
+      # split chunk), names each package directory the way npm audit does from
+      # package-lock.json (so an npm alias counts under its real name), and
+      # fails if an inBundle false entry's package is in either platform, so an
+      # import or a dependency update that pulls one in turns this job red
+      # instead of leaving the reason quietly wrong. It fails closed: a bundle
+      # file without a map, no metadata.json, a bundled directory missing from
+      # the lockfile or a main map without react-native in it is an error, not
+      # a pass. The second platform and the maps took the export from 17 s to
       # 31 s on a laptop with a cold Metro cache; the iOS-only step took about
       # 50 s here, so expect it near 90 s. The check itself takes 0.2 s.
       - run: npx expo export --platform ios --platform android --source-maps --output-dir dist-ci
-      - run: python3 ../infra/scripts/check-bundle-packages.py --allowlist npm-audit-allowlist.json --export-dir dist-ci
+      - run: python3 ../infra/scripts/check-bundle-packages.py --allowlist npm-audit-allowlist.json --lockfile package-lock.json --export-dir dist-ci
 
   frontend:
     name: frontend (vitest + build)
