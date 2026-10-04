@@ -386,7 +386,8 @@ core-vpc's log is readable with `devcards-ro`.
   (the R28 review, F1, found the first version, hourly with ≥ 10 requests and the callbacks counted, could not see
   it). Replayed read-only over 2026-09-22 12:00 – 2026-10-04 07:00 UTC from the route metrics (the probe as
   `GET /health` and the 4xx of `GET /api/v1/me`), as rolling three-hour sums: it would have fired once, at
-  2026-09-26 07:00–10:00 UTC (25 of 35 refused: the console's CORS preflights answered 401), and in no other window.
+  2026-09-26, in ALARM from 07:00 to about 11:00 UTC (at most 25 of 35 refused: the console's CORS preflights answered
+  401), and in no other window.
   After a fix it returns to OK within three hours. First, which routes and statuses (Logs Insights,
   `/aws/apigateway/developercards-api`, the three hours before the alarm):
   ```

@@ -103,8 +103,9 @@ resource "aws_cloudwatch_log_metric_filter" "core_vpc_auth_rejects" {
 # hourly window with a 10-request guard could not see a refusal of every app request (R28 review F1); three hours at
 # >= 5 does, while one stray client's retries rarely reach 5. Replayed read-only over 2026-09-22 12:00 to 2026-10-04
 # 07:00 UTC with the route metrics as a stand-in (the probe as GET /health and the 4xx of GET /api/v1/me), as rolling
-# three-hour sums: it would have fired once, 2026-09-26 07:00-10:00 UTC (25 of 35: the console's CORS preflights
-# answered 401), and in no other window. Missing data is no traffic, not an outage (the synthetic check covers that).
+# three-hour sums: it would have fired once, in ALARM 2026-09-26 07:00 to about 11:00 UTC (at most 25 of 35: the
+# console's CORS preflights answered 401), and in no other window. Missing data is no traffic, not an outage (the
+# synthetic check covers that).
 resource "aws_cloudwatch_metric_alarm" "api_4xx_rate" {
   alarm_name          = "developercards-${var.env}-api-4xx-rate"
   alarm_description   = "At least half of the app and console API requests got a 4xx in three hours (>= 5 requests and >= 5 4xx; the synthetic check, the unmatched routes and the server-to-server callbacks left out): an authorizer, CORS or client release that refuses users. Runbook: infra/RUNBOOK.md §7."
