@@ -290,6 +290,34 @@ describe('SettingsScreen', () => {
     expect(setAudiencePreferenceMock).toHaveBeenCalledWith('junior');
   });
 
+  it('Study › Study goal: a learner with no goal sets a deck and an exam date, stored under the onboarding key (U4)', async () => {
+    const { tree } = await renderSettings();
+    const textOfTestID = (id: string) => nodeText(findHostNodesByTestID(tree, 'Text', id)[0]);
+    expect(textOfTestID('settings-study-goal-deck')).toBe('Not set');
+
+    await act(async () => {
+      findPressableByTestID(tree, 'settings-study-goal-change').props.onPress();
+    });
+    await act(async () => {
+      findPressableByTestID(tree, 'settings-goal-deck-claude-ccdv-f').props.onPress();
+    });
+    await act(async () => {
+      findPressableByTestID(tree, 'settings-goal-date-2w').props.onPress();
+    });
+    await act(async () => {
+      findPressableByTestID(tree, 'settings-study-goal-save').props.onPress();
+    });
+    await flush();
+
+    const write = vi.mocked(AsyncStorage.setItem).mock.calls.find(([key]) => key === 'recallsmith:study-goal:v1');
+    expect(write).toBeDefined();
+    const saved = JSON.parse(String(write![1]));
+    expect(saved.deckSlug).toBe('claude-ccdv-f');
+    expect(saved.examDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(textOfTestID('settings-study-goal-deck')).toBe('Claude Developer (CCDV-F)');
+    expect(textOfTestID('settings-study-goal-date')).toMatch(/^Exam .+ · in 14 days$/);
+  });
+
   it('shows the four-button study setting on for an existing learner and saves the toggle', async () => {
     // The storage mock reports a learned card and no stored study prefs, so the
     // first read defaults to four buttons (existing users keep what they know).

@@ -52,6 +52,8 @@ import {
   type FeedbackPrefs,
 } from '../features/gacha/settings/feedbackPrefs';
 import { StudySection } from '../features/gacha/settings/study/StudySection';
+import { getStudyGoal, type StudyGoal } from '../features/goal/studyGoal';
+import { loadActiveDeckSlug } from '../content/activeDeck';
 import {
   getStudyPrefsSync,
   loadStudyPrefs,
@@ -132,6 +134,9 @@ export function SettingsScreen({ navigation }: Props) {
   const [studyPrefs, setStudyPrefsState] = useState<StudyPrefs>(() => getStudyPrefsSync());
   // Device-global "Share anonymous usage counts" (R24 M01), same seeding as above.
   const [privacyPrefs, setPrivacyPrefsState] = useState<PrivacyPrefs>(() => getPrivacyPrefsSync());
+  // U4: the study goal (onboarding's deck + exam date), editable here. Device-local, like onboarding.
+  const [studyGoal, setStudyGoalState] = useState<StudyGoal | null>(null);
+  const [activeDeckSlug, setActiveDeckSlugState] = useState<string | null>(null);
 
   // True once the first load has succeeded. After that, refocus/auth reloads
   // refresh the data silently instead of swapping the whole screen for a spinner
@@ -147,14 +152,20 @@ export function SettingsScreen({ navigation }: Props) {
       setLoadError(null);
     }
     try {
-      const [nextAudience, nextPrefs, nextStreak, nextFeedback, nextStudy, nextPrivacy] = await Promise.all([
+      const [nextAudience, nextPrefs, nextStreak, nextFeedback, nextStudy, nextPrivacy, nextGoal, nextActiveDeck] = await Promise.all([
         loadAudiencePreference(),
         getReminderPrefs(),
         loadStreakSnapshot(),
         loadFeedbackPrefs(),
         loadStudyPrefs(),
         loadPrivacyPrefs(),
+        // Neither read throws: a storage error reads as "no goal" / "no active deck".
+        getStudyGoal(),
+        loadActiveDeckSlug(),
       ]);
+
+      setStudyGoalState(nextGoal);
+      setActiveDeckSlugState(nextActiveDeck);
 
       setFeedbackPrefs(nextFeedback);
       setPrivacyPrefsState(nextPrivacy);
@@ -439,7 +450,11 @@ export function SettingsScreen({ navigation }: Props) {
 
           <FeedbackSection prefs={feedbackPrefs} onToggle={onToggleFeedback} />
 
-          <StudySection prefs={studyPrefs} onToggleFourButtons={onToggleFourButtons} />
+          <StudySection
+            prefs={studyPrefs}
+            onToggleFourButtons={onToggleFourButtons}
+            goal={{ value: studyGoal, fallbackDeckSlug: activeDeckSlug, onSaved: setStudyGoalState }}
+          />
 
           <PrivacySection prefs={privacyPrefs} onToggleShare={onToggleShareUsageCounts} />
 
