@@ -335,6 +335,7 @@ jobs:
           bash -n frontend/deploy.sh
           bash -n services/lambda-release.sh
           bash -n infra/scripts/operator-cutover.sh
+          bash -n infra/scripts/rotate-operator-key.sh
           bash -n src_C/scripts/merge-env.sh
           bash -n site/deploy.sh
           bash -n frontend/scripts/check-bundle-dsn.sh
