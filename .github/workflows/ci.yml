@@ -38,8 +38,8 @@ jobs:
       # could not start at zero. On 2026-10-03 the tree carried 71 high/critical
       # advisories in 20 packages, and every fix changes package-lock.json, which
       # reaches users only through an App Store binary or an OTA update — a mobile
-      # change of its own. All but nanoid are absent from the exported bundle, and
-      # nanoid's call sites cannot reach the advisories (see each entry's reason).
+      # change of its own. A lockfile-only update on 2026-10-04 left 9 in 5
+      # packages, none of them in the exported bundle (see each entry's reason).
       #
       # So they are listed in npm-audit-allowlist.json, one entry per advisory with
       # its reason and an expiry date. A high or critical advisory that is not
