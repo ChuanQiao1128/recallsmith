@@ -74,6 +74,10 @@ locals {
 
     # R24 P01: anonymous install funnel events from the app (no JWT, no OPTIONS). Exact key (X08); tight throttle below.
     public_events = { route_key = "POST /api/v1/public/events", integration = "core_vpc", auth = "none" }
+
+    # R28 ANONREPORT (user-perspective review U2): a card report from a learner who is not signed in (no JWT, no
+    # OPTIONS). Exact key (X08); tighter throttle below; core-vpc adds a body cap, a budget and a daily cap.
+    public_card_reports = { route_key = "POST /api/v1/public/card-reports", integration = "core_vpc", auth = "none" }
   }
 
   integration_ids = {
@@ -102,6 +106,7 @@ locals {
     "POST /api/v1/authoring/automation/runner/claim"     = { burst = 10, rate = 5 }
     "POST /api/v1/authoring/automation/runner/complete"  = { burst = 10, rate = 5 }
     "POST /api/v1/public/events"                         = { burst = 10, rate = 5 }
+    "POST /api/v1/public/card-reports"                   = { burst = 5, rate = 2 }
     "GET /api/v1/internal/revenuecat-deletions"          = { burst = 20, rate = 10 }
     "POST /api/v1/internal/revenuecat-deletions/report"  = { burst = 20, rate = 10 }
   }
@@ -111,7 +116,10 @@ locals {
   # Rules: every route_throttles key is a route in local.routes (an orphan key fails the stage update); every
   # auth = "none" route except the OPTIONS preflights is an exact key (X08); the R24 public events route is
   # exactly contract §3.3 (exact key, NONE on core_vpc, burst 10 / rate 5 on both stages via route_throttles).
-  route_guard_public_events = lookup(local.routes, "public_events", { route_key = "", integration = "", auth = "" })
+  # R28 ANONREPORT: every /api/v1/public/ route has a per-route throttle, and the anonymous card report route is
+  # exactly POST /api/v1/public/card-reports, NONE on core_vpc, burst 5 / rate 2.
+  route_guard_public_events       = lookup(local.routes, "public_events", { route_key = "", integration = "", auth = "" })
+  route_guard_public_card_reports = lookup(local.routes, "public_card_reports", { route_key = "", integration = "", auth = "" })
   route_guard_errors = concat(
     [for k in keys(local.route_throttles) : "route_throttles key \"${k}\" has no route in local.routes" if !contains([for r in values(local.routes) : r.route_key], k)],
     [for name, r in local.routes : "auth = \"none\" route ${name} (\"${r.route_key}\") is not an exact key" if r.auth == "none" && !startswith(r.route_key, "OPTIONS ") && length(regexall("^(GET|POST|PUT|DELETE|PATCH) /[A-Za-z0-9/_-]+$", r.route_key)) == 0],
@@ -119,6 +127,11 @@ locals {
     local.route_guard_public_events.integration == "core_vpc" ? [] : ["routes.public_events.integration must be \"core_vpc\""],
     local.route_guard_public_events.auth == "none" ? [] : ["routes.public_events.auth must be \"none\""],
     lookup(local.route_throttles, "POST /api/v1/public/events", { burst = 0, rate = 0 }) == { burst = 10, rate = 5 } ? [] : ["route_throttles[\"POST /api/v1/public/events\"] must be { burst = 10, rate = 5 }"],
+    [for name, r in local.routes : "public route ${name} (\"${r.route_key}\") has no route_throttles entry" if length(regexall("^[A-Z]+ /api/v1/public/", r.route_key)) > 0 && !contains(keys(local.route_throttles), r.route_key)],
+    local.route_guard_public_card_reports.route_key == "POST /api/v1/public/card-reports" ? [] : ["routes.public_card_reports.route_key must be \"POST /api/v1/public/card-reports\""],
+    local.route_guard_public_card_reports.integration == "core_vpc" ? [] : ["routes.public_card_reports.integration must be \"core_vpc\""],
+    local.route_guard_public_card_reports.auth == "none" ? [] : ["routes.public_card_reports.auth must be \"none\""],
+    lookup(local.route_throttles, "POST /api/v1/public/card-reports", { burst = 0, rate = 0 }) == { burst = 5, rate = 2 } ? [] : ["route_throttles[\"POST /api/v1/public/card-reports\"] must be { burst = 5, rate = 2 }"],
   )
   # tobool() of the joined messages fails validate and prints them; an empty list evaluates to true.
   route_guard_ok = length(local.route_guard_errors) == 0 ? true : tobool("ROUTE GUARD: ${join("; ", local.route_guard_errors)}")
