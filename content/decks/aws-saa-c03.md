@@ -2614,8 +2614,8 @@ A:
 Storage Gateway for the SMB share: S3 File Gateway keeps an NFS or SMB interface with a local cache and S3 behind it, billed at $0.01 per GB written, capped at $125 per gateway per month, which suits ongoing access. DataSync for the one-off copy: an agent moves data from on-premises to S3, EFS or FSx at $0.0125 per GB in Basic mode, with verification, so you pay only for bytes moved. Transfer Family for the partners: a managed SFTP, FTPS or FTP endpoint at $0.30 per hour per enabled protocol plus $0.04 per GB (AS2 bills per message instead), right for an always-on endpoint, wasteful for a one-time migration. Local access, one move, partner drop-off: gateway, DataSync, Transfer Family.
 USAGE:
 Price per hour means keep it running; price per GB means run it and stop; match the billing unit to how long the need lasts.
-SOURCE: https://aws.amazon.com/about-aws/whats-new/2016/11/aws-storage-gateway-price-reductions/
-In all regions, you will pay $0.01 per GB up to a monthly maximum of no more than $125 per gateway.
+SOURCE: https://aws.amazon.com/storagegateway/pricing/
+Up to a maximum of $125.00 per gateway per month. The first 100 GB written to AWS per account is free.
 
 ## aws-d4-storage-types-object-file-block | d1
 TOPIC: 4.1 Cost-optimized storage
