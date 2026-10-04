@@ -776,9 +776,11 @@ MFA, sessions last one hour, and normal deploys run in GitHub Actions (§12) wit
 left: while an owner session is cached, a process of the same user could use it; clear `~/.aws/cli/cache` after
 break-glass or Terraform work. The full close is a separate OS user or sandbox for agents.
 
-**Owner-only, console:** rotate the key (create the new key, update `~/.aws/credentials [dev]`, deactivate the old one,
-delete it after a week of `GetAccessKeyLastUsed` silence). Later (enterprise phase): IAM Identity Center for people and
-GitHub OIDC for CI deploys remove the static key entirely.
+**Key rotation (owner runs it, MFA):** `infra/scripts/rotate-operator-key.sh` creates a new key through the MFA admin
+role, writes it straight into `~/.aws/credentials [dev]` (backup kept, secret never printed), proves the new key and
+`devcards-ro` work, then deactivates the old key. A quiet week later: `infra/scripts/rotate-operator-key.sh
+--delete-inactive`. Rotate every 90 days. Later (enterprise phase): IAM Identity Center for people and GitHub OIDC
+for CI (done for deploys and Terraform, §12/§15) remove the static key entirely.
 
 ## 11. .NET 10 runtime for core-vpc and worker-lambda (2026-10)
 
