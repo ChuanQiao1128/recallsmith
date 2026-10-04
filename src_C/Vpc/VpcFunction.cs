@@ -74,10 +74,12 @@ public sealed class VpcFunction
     // R24 A01: the anonymous funnel ingest never resolves a bearer, so a signed-in caller is never linked to (or logged
     // with) the events it sends. Matched exactly, like the internal routes below.
     var publicEvents = RouteMatcher.Match("/api/v1/public/events", req.Path.TrimEnd('/')) is not null;
+    // R28 ANONREPORT: the anonymous card report route, the same rule (no bearer is ever read for it).
+    var publicCardReports = RouteMatcher.Match("/api/v1/public/card-reports", req.Path.TrimEnd('/')) is not null;
     AuthContext auth;
     try
     {
-      auth = publicEvents ? Anonymous() : await Auth.GetAuthContextAsync(req);
+      auth = publicEvents || publicCardReports ? Anonymous() : await Auth.GetAuthContextAsync(req);
     }
     catch
     {
@@ -117,6 +119,12 @@ public sealed class VpcFunction
       if (publicEvents)
       {
         return await Vpc.Analytics.AnonFunnel.HandleEvents(req, res);
+      }
+
+      // R28 ANONREPORT (user-perspective review U2): public, no auth, exact path; the handler takes no AuthContext.
+      if (publicCardReports)
+      {
+        return await Vpc.Reports.AnonymousCardReports.HandleCreate(req, res);
       }
 
       // RevenueCat webhooks

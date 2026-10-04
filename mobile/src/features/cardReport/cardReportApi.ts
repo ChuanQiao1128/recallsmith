@@ -8,10 +8,25 @@
 // freshToken and authStore are loaded with a guarded dynamic import() inside the function:
 // a static import would drag aws-amplify, zustand and the sync layer into every screen
 // suite that renders CardDetail, SessionCard or More (same pattern as clientCapabilities).
+//
+// R28 ANONREPORT (user-perspective review U2): a learner who is not signed in can still report,
+// when the remote flag features.cardReport.anonymous is on. That report goes to the public route
+// POST /api/v1/public/card-reports with structured fields only — deck slug, card uid, reason code
+// and app version: no note, no token, no account or device id. It is sent with the anonymous
+// funnel's plain XHR (telemetry/funnel.ts), never apiClient: no Authorization, no x-dc-trace-id
+// and no sentry-trace/baggage, so it shares no key with any other request. Sentry still records an
+// xhr breadcrumb for it (the __sentry_own_request__ flag only stops the span and the headers), so
+// sentryPolicy.scrubBreadcrumb drops every /api/v1/public/ breadcrumb and span (ANONREPORT-R1).
+// What it cannot hide: the gateway access log keeps the source IP and user agent for 30 days for
+// every route, so the sheet's copy (anonymousHint) only promises what the report itself holds.
 import { apiJson } from '../../api/apiClient';
 import { classifyError, FRIENDLY_ERROR_COPY } from '../../api/errorKind';
+import { getFeatureFlags } from '../../config/featureFlags';
+import { resolveApiBase, resolveApiFallback } from '../../config/hosts';
+import { createAnonymousXhrPost } from '../../telemetry/funnel';
 
 export const CARD_REPORTS_PATH = '/api/v1/user/card-reports';
+export const ANONYMOUS_CARD_REPORTS_PATH = '/api/v1/public/card-reports';
 export const CARD_REPORT_NOTE_MAX = 500;
 const REQUEST_TIMEOUT_MS = 15000;
 const LIST_LIMIT = 50;
@@ -33,6 +48,11 @@ export const CARD_REPORT_COPY = Object.freeze({
   entry: 'Report a problem',
   sessionEntry: 'Report',
   signedOut: 'Sign in to report a problem',
+  // Not "nothing about you": the request's IP and user agent are in the gateway access log for 30 days
+  // (docs/privacy-anonymous-funnel-2026-10-02.md §6). The copy says what the stored report holds (ANONREPORT-R2).
+  anonymousHint:
+    "You're not signed in, so the report holds only this card, the reason and the app version; we don't store who sent it. Sign in to add a note.",
+  anonymousBusy: 'Too many reports right now. Please try again later.',
   success: 'Thanks — the author will review it',
   duplicate: 'You already reported this card',
   dailyLimit: "You have reached today's report limit",
@@ -208,6 +228,49 @@ export async function listMyCardReports(): Promise<MyCardReport[]> {
   const items = unwrap(resp)?.items;
   if (!Array.isArray(items)) return [];
   return items.map(toReport).filter((item): item is MyCardReport => item !== null);
+}
+
+export type SubmitAnonymousCardReportInput = {
+  deckSlug: string;
+  stableUid: string;
+  reason: CardReportReason;
+  /** The store version (app.json expo.version), e.g. 2.0.0. */
+  appVersion: string;
+};
+
+/** features.cardReport.anonymous: a signed-out learner may send the structured report. Read once per sheet. */
+export function anonymousCardReportsEnabled(): boolean {
+  return getFeatureFlags().cardReport?.anonymous === true;
+}
+
+/**
+ * POST /api/v1/public/card-reports with exactly `{ deckSlug, stableUid, reason, appVersion }`.
+ * Resolves on 202, which the server sends for a new report and for a repeat alike; rejects with
+ * `{ status }` or `{ kind }` (see anonymousCardReportErrorMessage).
+ */
+export async function submitAnonymousCardReport(input: SubmitAnonymousCardReportInput): Promise<void> {
+  const body = {
+    deckSlug: input.deckSlug,
+    stableUid: input.stableUid,
+    reason: input.reason,
+    appVersion: input.appVersion,
+  };
+  const post = createAnonymousXhrPost({
+    createXhr: () => new XMLHttpRequest(),
+    getBases: () => [resolveApiBase(), resolveApiFallback()],
+    timeoutMs: REQUEST_TIMEOUT_MS,
+  });
+  await post(ANONYMOUS_CARD_REPORTS_PATH, body);
+}
+
+/** Fixed copy for a failed anonymous report: the server's caps are global, not this learner's. */
+export function anonymousCardReportErrorMessage(error: unknown): string {
+  const status = isRecord(error) && typeof error.status === 'number' ? error.status : null;
+  if (status === 429) return CARD_REPORT_COPY.anonymousBusy;
+  // 401/403: the public route is not live yet (the path falls to a signed-in route at the gateway).
+  if (status === 401 || status === 403) return CARD_REPORT_COPY.unavailable;
+  if (status === 413) return CARD_REPORT_COPY.rejected;
+  return cardReportErrorMessage(error);
 }
 
 /** Fixed, user-facing copy for any failure from the two calls above. */

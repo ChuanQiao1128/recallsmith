@@ -3,7 +3,8 @@
 // under /api/v1/admin/card-reports. RequireAdmin and deck-scoped on the server.
 // Every function returns an ApiResult and never throws. A report note is
 // learner-written text: it is kept as a string, capped, and only ever rendered
-// as text.
+// as text. R28 ANONREPORT: `anonymous` marks a report sent by a learner who was
+// not signed in (no note, no account behind it); it never says who sent anything.
 import type { ApiResult } from '../types/api';
 import { http } from './http';
 import { apiResultFromError, failResult } from './httpFailure';
@@ -38,6 +39,8 @@ export type CardReport = {
   clientVersion: string | null;
   createdAt: string;
   resolvedAt: string | null;
+  /** Sent from the public route by a learner who was not signed in (R28). */
+  anonymous: boolean;
 };
 
 export type CardReportsPage = { items: CardReport[]; nextCursor: string | null };
@@ -106,6 +109,7 @@ function normalizeReport(value: unknown): CardReport | null {
     clientVersion: nullableText(value.clientVersion),
     createdAt: textOf(value.createdAt),
     resolvedAt: nullableText(value.resolvedAt),
+    anonymous: value.anonymous === true,
   };
 }
 

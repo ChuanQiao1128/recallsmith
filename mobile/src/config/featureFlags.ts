@@ -26,7 +26,10 @@ export type FeatureFlags = {
   sentry: { enabled: boolean };
   // V11: default-off gate for the learner "Report a problem" entry points and My reports.
   // Read as `?.enabled === true` because older test mocks omit the key.
-  cardReport: { enabled: boolean };
+  // R28 ANONREPORT: `anonymous` (default off) lets a signed-out learner send the structured report
+  // (reason only, no note) to POST /api/v1/public/card-reports; off, the sheet asks them to sign in.
+  // Read as `?.anonymous === true`.
+  cardReport: { enabled: boolean; anonymous: boolean };
   // F02: remote kill switch for FSRS scheduling; off falls back to the ladder (scheduleNextReview).
   // Read as `?.enabled !== false` (isFsrsEnabled) because older test mocks omit the key.
   fsrs: { enabled: boolean };
@@ -49,7 +52,7 @@ export const DEFAULT_FEATURE_FLAGS: FeatureFlags = Object.freeze({
   mistakeBook: Object.freeze({ enabled: true, relatedCount: 3 }),
   cardSource: Object.freeze({ enabled: true }),
   sentry: Object.freeze({ enabled: true }),
-  cardReport: Object.freeze({ enabled: false }),
+  cardReport: Object.freeze({ enabled: false, anonymous: false }),
   fsrs: Object.freeze({ enabled: true }),
   anonFunnel: Object.freeze({ enabled: false }),
 });
@@ -75,6 +78,7 @@ function snapshotsEqual(left: FeatureFlags, right: FeatureFlags): boolean {
     && left.cardSource.enabled === right.cardSource.enabled
     && left.sentry.enabled === right.sentry.enabled
     && left.cardReport.enabled === right.cardReport.enabled
+    && left.cardReport.anonymous === right.cardReport.anonymous
     && left.fsrs.enabled === right.fsrs.enabled
     && left.anonFunnel.enabled === right.anonFunnel.enabled
   );
@@ -184,6 +188,10 @@ export function applyRemoteFeatures(config: RemoteConfig | null | undefined): Fe
         typeof cardReport?.enabled === 'boolean'
           ? cardReport.enabled
           : DEFAULT_FEATURE_FLAGS.cardReport.enabled,
+      anonymous:
+        typeof cardReport?.anonymous === 'boolean'
+          ? cardReport.anonymous
+          : DEFAULT_FEATURE_FLAGS.cardReport.anonymous,
     }),
     fsrs: Object.freeze({
       enabled:

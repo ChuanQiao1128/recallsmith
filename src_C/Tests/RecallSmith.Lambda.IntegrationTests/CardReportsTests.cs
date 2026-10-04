@@ -30,7 +30,7 @@ public sealed class CardReportsTests
   private static readonly string[] AdminItemKeys =
   [
     "reportId", "deckId", "deckSlug", "cardId", "stableUid", "question", "reason", "note", "status", "resolution", "resolutionNote",
-    "clientVersion", "createdAt", "resolvedAt",
+    "clientVersion", "createdAt", "resolvedAt", "anonymous",
   ];
 
   private readonly PostgresFixture _db;
@@ -436,6 +436,8 @@ public sealed class CardReportsTests
       item.GetProperty("deckSlug").GetString(), item.GetProperty("cardId").GetInt64(), item.GetProperty("stableUid").GetString(),
       item.GetProperty("reason").GetString(), item.GetProperty("note").GetString(), item.GetProperty("status").GetString()));
     Assert.Equal("Synthetic reported question?", item.GetProperty("question").GetString());
+    // R28: a signed-in learner's report is never marked anonymous (AnonymousCardReportsTests covers the other case).
+    Assert.All(items, i => Assert.False(i.GetProperty("anonymous").GetBoolean()));
     Assert.Equal(JsonValueKind.Null, data.GetProperty("nextCursor").ValueKind);
 
     // Keyset paging.

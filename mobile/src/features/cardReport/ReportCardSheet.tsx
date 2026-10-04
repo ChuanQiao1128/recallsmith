@@ -4,6 +4,10 @@
 // no navigation, so it is safe over SessionCard whose unmount resets the session).
 // Callers mount it only while it is open, so every open starts from a clean form.
 // The note is untrusted learner text: it is only ever sent as a JSON string field.
+//
+// R28 ANONREPORT: signed out, with features.cardReport.anonymous on, the same sheet shows the
+// reason chips without the note field and sends the structured report to the public route
+// (submitAnonymousCardReport). With the flag off it still asks the learner to sign in.
 import React, { useEffect, useRef, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
@@ -19,13 +23,18 @@ import {
   CARD_REPORT_NOTE_MAX,
   CARD_REPORT_REASONS,
   CardReportSignedOutError,
+  anonymousCardReportErrorMessage,
+  anonymousCardReportsEnabled,
   cardReportErrorMessage,
   getCardReportAuth,
+  submitAnonymousCardReport,
   submitCardReport,
   type CardReportReason,
 } from './cardReportApi';
 
 type Phase = 'checking' | 'signed_out' | 'form' | 'submitting' | 'success' | 'duplicate';
+/** Who the form sends as: the signed-in learner (note allowed), or nobody (structured fields only). */
+type Mode = 'account' | 'anonymous';
 
 type Props = {
   deckSlug: string;
@@ -36,6 +45,9 @@ type Props = {
 
 export function ReportCardSheet({ deckSlug, stableUid, onClose, visible = true }: Props) {
   const [phase, setPhase] = useState<Phase>('checking');
+  const [mode, setMode] = useState<Mode>('account');
+  // Read once per open: flags never flip mid-session (featureFlags.ts).
+  const [allowAnonymous] = useState(anonymousCardReportsEnabled);
   const [reason, setReason] = useState<CardReportReason | null>(null);
   const [note, setNote] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -48,7 +60,12 @@ export function ReportCardSheet({ deckSlug, stableUid, onClose, visible = true }
     void getCardReportAuth().then((auth) => {
       if (cancelled) return;
       if (auth.kind === 'signed_out') {
-        setPhase('signed_out');
+        if (allowAnonymous) {
+          setMode('anonymous');
+          setPhase('form');
+        } else {
+          setPhase('signed_out');
+        }
         return;
       }
       // Signed in but the token could not be read (offline): keep the form so the
@@ -59,7 +76,7 @@ export function ReportCardSheet({ deckSlug, stableUid, onClose, visible = true }
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [allowAnonymous]);
 
   const onChangeNote = (text: string) => setNote(text.slice(0, CARD_REPORT_NOTE_MAX));
 
@@ -69,6 +86,12 @@ export function ReportCardSheet({ deckSlug, stableUid, onClose, visible = true }
     setPhase('submitting');
     setError(null);
     try {
+      if (mode === 'anonymous') {
+        // The server answers a repeat exactly like a new report, so there is no duplicate state here.
+        await submitAnonymousCardReport({ deckSlug, stableUid, reason, appVersion: appJson.expo.version });
+        setPhase('success');
+        return;
+      }
       const result = await submitCardReport({
         deckSlug,
         stableUid,
@@ -79,10 +102,17 @@ export function ReportCardSheet({ deckSlug, stableUid, onClose, visible = true }
       setPhase(result.duplicate ? 'duplicate' : 'success');
     } catch (e) {
       if (e instanceof CardReportSignedOutError) {
-        setPhase('signed_out');
+        // Signed out since the sheet opened. With the anonymous route on, keep the chosen reason and
+        // offer the anonymous form (the note field goes away and is never sent); otherwise ask to sign in.
+        if (allowAnonymous) {
+          setMode('anonymous');
+          setPhase('form');
+        } else {
+          setPhase('signed_out');
+        }
         return;
       }
-      setError(cardReportErrorMessage(e));
+      setError(mode === 'anonymous' ? anonymousCardReportErrorMessage(e) : cardReportErrorMessage(e));
       setPhase('form');
     } finally {
       inFlight.current = false;
@@ -161,23 +191,35 @@ export function ReportCardSheet({ deckSlug, stableUid, onClose, visible = true }
                   );
                 })}
               </View>
-              <TextInput
-                testID="report-card-note"
-                accessibilityLabel="Note for the author (optional)"
-                accessibilityHint={`Up to ${CARD_REPORT_NOTE_MAX} characters`}
-                placeholder="Add a note (optional)"
-                placeholderTextColor={colors.inkMuted}
-                value={note}
-                onChangeText={onChangeNote}
-                maxLength={CARD_REPORT_NOTE_MAX}
-                multiline
-                editable={!submitting}
-                style={styles.note}
-                maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}
-              />
-              <Text testID="report-card-note-counter" style={styles.counter} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
-                {`${note.length}/${CARD_REPORT_NOTE_MAX}`}
-              </Text>
+              {mode === 'anonymous' ? (
+                <Text
+                  testID="report-card-anonymous-hint"
+                  style={styles.hint}
+                  maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}
+                >
+                  {CARD_REPORT_COPY.anonymousHint}
+                </Text>
+              ) : (
+                <>
+                  <TextInput
+                    testID="report-card-note"
+                    accessibilityLabel="Note for the author (optional)"
+                    accessibilityHint={`Up to ${CARD_REPORT_NOTE_MAX} characters`}
+                    placeholder="Add a note (optional)"
+                    placeholderTextColor={colors.inkMuted}
+                    value={note}
+                    onChangeText={onChangeNote}
+                    maxLength={CARD_REPORT_NOTE_MAX}
+                    multiline
+                    editable={!submitting}
+                    style={styles.note}
+                    maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}
+                  />
+                  <Text testID="report-card-note-counter" style={styles.counter} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
+                    {`${note.length}/${CARD_REPORT_NOTE_MAX}`}
+                  </Text>
+                </>
+              )}
               {error ? (
                 <Text
                   testID="report-card-error"
@@ -294,6 +336,11 @@ const styles = StyleSheet.create({
     fontSize: typography.body,
     color: colors.ink,
     textAlignVertical: 'top',
+  },
+  hint: {
+    fontSize: typography.bodySmall,
+    lineHeight: 20,
+    color: colors.inkSecondary,
   },
   counter: {
     alignSelf: 'flex-end',

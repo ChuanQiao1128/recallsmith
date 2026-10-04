@@ -19,6 +19,9 @@ namespace RecallSmith.Lambda.Vpc.Reports;
 /// model. No response carries a user sub or an email. Every route answers <c>503 NOT_READY</c> until migration 037 ran.
 /// A learner can report only a card they can see (live deck; free, or premium with an active entitlement) and reads back
 /// the question captured at report time (migration 041), never the live working copy (R20X F02, contract §10.3).
+/// A learner who is not signed in reports through <see cref="AnonymousCardReports"/> (R28, migration 046): the same
+/// table with a null <c>user_sub</c> and no note, listed here with <c>anonymous: true</c> and counted by
+/// <see cref="CountsAsync"/> and <see cref="CreatedBetweenAsync"/> like any other report.
 /// </summary>
 public static class CardReports
 {
@@ -76,7 +79,7 @@ public static class CardReports
     return new NewReport(deckSlug, stableUid, reason, note, clientVersion);
   }
 
-  private static string RequiredKey(JsonElement body, string name)
+  internal static string RequiredKey(JsonElement body, string name)
   {
     var v = body.TryGetProperty(name, out var el) && el.ValueKind == JsonValueKind.String ? el.GetString()!.Trim() : null;
     if (string.IsNullOrEmpty(v) || v.Length > MaxKeyLength)
@@ -319,7 +322,7 @@ public static class CardReports
       var rows = await DbUtil.QueryAsync(conn, null,
         $"""
         select r.id, r.deck_id, r.deck_slug, r.card_id, r.stable_uid, left(c.question, $1) as question, r.reason, r.note, r.status,
-          r.resolution, r.resolution_note, r.client_version, r.created_at, r.resolved_at
+          r.resolution, r.resolution_note, r.client_version, r.created_at, r.resolved_at, (r.user_sub is null) as anonymous
         from card_reports r left join cards c on c.id = r.card_id
         where {string.Join(" and ", where)}
         order by r.id desc
@@ -342,6 +345,8 @@ public static class CardReports
         clientVersion = r["client_version"],
         createdAt = RunnerRoutes.Timestamp(r["created_at"]),
         resolvedAt = RunnerRoutes.Timestamp(r["resolved_at"]),
+        // R28 ANONREPORT: sent from the public route by a learner who was not signed in (never who sent it).
+        anonymous = r["anonymous"] is true,
       }).ToList();
       var nextCursor = rows.Count > limit ? Drafts.EncodeCursor(RunnerRoutes.Long(page[^1]["id"])) : null;
       return res.Ok(new { items, nextCursor });
@@ -466,7 +471,7 @@ public static class CardReports
     return limit;
   }
 
-  private static APIGatewayProxyResponse Disabled(Res res) =>
+  internal static APIGatewayProxyResponse Disabled(Res res) =>
     Helpers.ErrorEnvelope(res, 503, "CARD_REPORTS_DISABLED", "Card reports are turned off");
 
   private static APIGatewayProxyResponse ReportNotFound(Res res) =>

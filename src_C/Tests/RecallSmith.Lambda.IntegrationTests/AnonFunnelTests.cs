@@ -217,6 +217,9 @@ public sealed class AnonFunnelTests : IDisposable
       AutomationTestKit.AssertError(await PostAsync(JsonSerializer.Serialize(new { platform = "ios", appVersion = "1.9", events = new[] { Ev("first_open") } })), 400, "VALIDATION_ERROR");
       AutomationTestKit.AssertError(await PostAsync(JsonSerializer.Serialize(new { platform = "ios", appVersion = "1.9.0-beta", events = new[] { Ev("first_open") } })), 400, "VALIDATION_ERROR");
       AutomationTestKit.AssertError(await PostAsync(JsonSerializer.Serialize(new { platform = "ios", appVersion = "1234567890.1234567890.1", events = new[] { Ev("first_open") } })), 400, "VALIDATION_ERROR");
+      // ANONREPORT-R3: a trailing newline and non-ASCII digits are refused ($ and \d would let them through).
+      AutomationTestKit.AssertError(await PostAsync(JsonSerializer.Serialize(new { platform = "ios", appVersion = "1.9.0\n", events = new[] { Ev("first_open") } })), 400, "VALIDATION_ERROR");
+      AutomationTestKit.AssertError(await PostAsync(JsonSerializer.Serialize(new { platform = "ios", appVersion = "\u0661.\u0669.\u0660", events = new[] { Ev("first_open") } })), 400, "VALIDATION_ERROR");
       AutomationTestKit.AssertError(await PostAsync(JsonSerializer.Serialize(new { platform = "ios", appVersion = "1.9.0", events = "first_open" })), 400, "VALIDATION_ERROR");
       AutomationTestKit.AssertError(await PostAsync(Batch(Enumerable.Range(0, 21).Select(_ => (object)Ev("first_open")).ToArray())), 400, "VALIDATION_ERROR");
       Assert.Equal(0L, await sql.CountAsync("select count(*) from anon_funnel_events"));

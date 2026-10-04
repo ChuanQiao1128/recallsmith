@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../src/api/apiClient', () => ({ apiJson: vi.fn() }));
 vi.mock('../../src/auth/freshToken', () => ({ getFreshAccessToken: vi.fn() }));
@@ -8,16 +8,25 @@ vi.mock('../../src/auth/authStore', () => ({ useAuthStore: { getState: () => aut
 import { apiJson } from '../../src/api/apiClient';
 import { FRIENDLY_ERROR_COPY } from '../../src/api/errorKind';
 import { getFreshAccessToken } from '../../src/auth/freshToken';
+import { applyRemoteFeatures } from '../../src/config/featureFlags';
+import { DEFAULT_API_BASE, FALLBACK_API_BASE } from '../../src/config/hosts';
+import type { RemoteConfig } from '../../src/config/remoteConfig';
 import {
+  ANONYMOUS_CARD_REPORTS_PATH,
   CARD_REPORT_COPY,
   CARD_REPORT_NOTE_MAX,
   CARD_REPORTS_PATH,
   CardReportSignedOutError,
+  anonymousCardReportErrorMessage,
+  anonymousCardReportsEnabled,
   cardReportErrorMessage,
   getCardReportAuth,
   listMyCardReports,
+  submitAnonymousCardReport,
   submitCardReport,
 } from '../../src/features/cardReport/cardReportApi';
+import { scrubBreadcrumb } from '../../src/telemetry/sentryPolicy';
+import { installFakeXhr } from '../setup/fakeXhr';
 
 function httpError(status: number, code: string | null = null) {
   const err: any = new Error(`HTTP ${status}`);
@@ -211,5 +220,88 @@ describe('cardReportErrorMessage', () => {
     expect(cardReportErrorMessage(httpError(404, 'CARD_NOT_FOUND'))).toBe(CARD_REPORT_COPY.notFound);
     expect(cardReportErrorMessage(httpError(500))).toBe(FRIENDLY_ERROR_COPY.server);
     expect(cardReportErrorMessage('weird')).toBe(FRIENDLY_ERROR_COPY.unknown);
+  });
+});
+
+describe('anonymous card reports (R28 ANONREPORT)', () => {
+  let xhr: ReturnType<typeof installFakeXhr>;
+
+  beforeEach(() => {
+    xhr = installFakeXhr();
+    authState.status = 'anonymous';
+    vi.mocked(getFreshAccessToken).mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    xhr.restore();
+    applyRemoteFeatures(null);
+  });
+
+  it('is off unless features.cardReport.anonymous is true', () => {
+    expect(anonymousCardReportsEnabled()).toBe(false);
+    applyRemoteFeatures({ features: { cardReport: { enabled: true } } } as unknown as RemoteConfig);
+    expect(anonymousCardReportsEnabled()).toBe(false);
+    applyRemoteFeatures({ features: { cardReport: { enabled: true, anonymous: true } } } as unknown as RemoteConfig);
+    expect(anonymousCardReportsEnabled()).toBe(true);
+  });
+
+  it('POSTs exactly the four structured fields to the public route, with no token, trace or Sentry header', async () => {
+    await submitAnonymousCardReport({ deckSlug: 'csharp-basics', stableUid: 'cs-1', reason: 'wrong_answer', appVersion: '2.0.0' });
+
+    expect(ANONYMOUS_CARD_REPORTS_PATH).toBe('/api/v1/public/card-reports');
+    expect(xhr.sent).toHaveLength(1);
+    const [request] = xhr.sent;
+    expect(request.method).toBe('POST');
+    expect(request.url).toBe(`${DEFAULT_API_BASE}/api/v1/public/card-reports`);
+    expect(request.headers).toEqual({ 'content-type': 'application/json' });
+    // Sentry's XHR instrumentation skips a request with this flag: no span, no sentry-trace/baggage.
+    expect(request.sentryOwnRequest).toBe(true);
+    // The flag does not stop Sentry's xhr breadcrumb; beforeBreadcrumb (scrubBreadcrumb) drops it (ANONREPORT-R1).
+    expect(scrubBreadcrumb({ category: 'xhr', data: { method: request.method, url: request.url, status_code: 202 } })).toBeNull();
+    expect(request.timeout).toBe(15000);
+    expect(JSON.parse(request.body)).toEqual({ deckSlug: 'csharp-basics', stableUid: 'cs-1', reason: 'wrong_answer', appVersion: '2.0.0' });
+    // Never the signed-in client, never a token lookup.
+    expect(apiJson).not.toHaveBeenCalled();
+    expect(getFreshAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing but those fields even when handed more', async () => {
+    const input = { deckSlug: 'd', stableUid: 'u', reason: 'typo', appVersion: '2.0.0', note: 'free text', userSub: 'sub-1' } as const;
+    await submitAnonymousCardReport(input as unknown as Parameters<typeof submitAnonymousCardReport>[0]);
+    expect(Object.keys(JSON.parse(xhr.sent[0].body)).sort()).toEqual(['appVersion', 'deckSlug', 'reason', 'stableUid']);
+  });
+
+  it('moves to the fallback host only after a network failure', async () => {
+    xhr.queue('offline', 202);
+    await submitAnonymousCardReport({ deckSlug: 'd', stableUid: 'u', reason: 'typo', appVersion: '2.0.0' });
+    expect(xhr.sent.map((r) => r.url)).toEqual([
+      `${DEFAULT_API_BASE}/api/v1/public/card-reports`,
+      `${FALLBACK_API_BASE}/api/v1/public/card-reports`,
+    ]);
+
+    xhr.sent.length = 0;
+    xhr.queue(429);
+    const err = await submitAnonymousCardReport({ deckSlug: 'd', stableUid: 'u', reason: 'typo', appVersion: '2.0.0' }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(xhr.sent).toHaveLength(1);
+    expect(anonymousCardReportErrorMessage(err)).toBe(CARD_REPORT_COPY.anonymousBusy);
+  });
+
+  it('maps failures to copy that never blames the learner for a global cap', () => {
+    expect(anonymousCardReportErrorMessage(httpError(429, null))).toBe('Too many reports right now. Please try again later.');
+    expect(anonymousCardReportErrorMessage(httpError(503, null))).toBe(CARD_REPORT_COPY.unavailable);
+    // The public route not live yet: the gateway's signed-in catch-all answers 401.
+    expect(anonymousCardReportErrorMessage(httpError(401, null))).toBe(CARD_REPORT_COPY.unavailable);
+    expect(anonymousCardReportErrorMessage(httpError(404, null))).toBe(CARD_REPORT_COPY.notFound);
+    expect(anonymousCardReportErrorMessage(httpError(400, null))).toBe(CARD_REPORT_COPY.rejected);
+    expect(anonymousCardReportErrorMessage(httpError(413, null))).toBe(CARD_REPORT_COPY.rejected);
+    expect(anonymousCardReportErrorMessage(Object.assign(new Error('Network request failed'), { kind: 'offline' }))).toBe(
+      FRIENDLY_ERROR_COPY.offline,
+    );
+    expect(anonymousCardReportErrorMessage(Object.assign(new Error('Request timed out'), { kind: 'timeout' }))).toBe(
+      FRIENDLY_ERROR_COPY.timeout,
+    );
   });
 });

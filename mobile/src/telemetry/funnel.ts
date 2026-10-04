@@ -22,7 +22,9 @@
 // The POST (createFunnelXhrPost) does not go through apiClient: it sets only content-type, so it
 // carries no Authorization, no x-dc-trace-id and, because the XHR is flagged as Sentry's own
 // request, no sentry-trace/baggage either. A shared trace id would let a batch be joined to the
-// signed-in requests around it in the server logs (contract §3).
+// signed-in requests around it in the server logs (contract §3). The flag does not stop Sentry's
+// xhr breadcrumb, so sentryPolicy.scrubBreadcrumb drops every /api/v1/public/ breadcrumb (R28
+// ANONREPORT-R1): a later error event never carries the time and status of a batch.
 //
 // IMPORTANT: like clientErrorReporter.ts this module imports nothing at runtime. Storage, the
 // POST, the gates, the clock and the build facts are injected from App.tsx (createAppFunnelDeps,
@@ -409,7 +411,10 @@ export type FunnelXhr = {
   onload: ((ev: never) => unknown) | null;
   onerror: ((ev: never) => unknown) | null;
   ontimeout: ((ev: never) => unknown) | null;
-  /** Sentry's XHR instrumentation skips a request with this flag: no span, no sentry-trace/baggage. */
+  /**
+   * Sentry's XHR tracing skips a request with this flag: no span, no sentry-trace/baggage. Its xhr
+   * breadcrumb ignores the flag; sentryPolicy.scrubBreadcrumb drops that one by path (ANONREPORT-R1).
+   */
   __sentry_own_request__?: boolean;
 };
 
@@ -439,13 +444,28 @@ function sendOnce(createXhr: () => FunnelXhr, url: string, payload: string, time
 /**
  * The injected `post`: tries each API base in order, moving on only after a network failure (an
  * HTTP status answers for the route). It never sends Authorization, x-dc-trace-id, sentry-trace
- * or baggage, so a batch shares no key with any other request.
+ * or baggage, so a batch shares no key with any other request (and Sentry keeps no breadcrumb of
+ * it: sentryPolicy.scrubBreadcrumb).
  */
 export function createFunnelXhrPost(opts: {
   createXhr: () => FunnelXhr;
   getBases: () => ReadonlyArray<string | null | undefined>;
   timeoutMs?: number;
 }): FunnelDeps['post'] {
+  return createAnonymousXhrPost(opts);
+}
+
+/**
+ * The same plain POST for any JSON body: the funnel's, and the anonymous card report's (R28
+ * ANONREPORT, features/cardReport/cardReportApi.ts), which must not be joinable to other requests
+ * either. Resolves on any 2xx; rejects with `{ status }` on another status and `{ kind }` on a
+ * network failure or timeout.
+ */
+export function createAnonymousXhrPost(opts: {
+  createXhr: () => FunnelXhr;
+  getBases: () => ReadonlyArray<string | null | undefined>;
+  timeoutMs?: number;
+}): (path: string, body: unknown) => Promise<unknown> {
   return async (path, body) => {
     const bases: string[] = [];
     for (const raw of opts.getBases()) {

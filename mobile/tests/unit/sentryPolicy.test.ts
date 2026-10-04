@@ -11,6 +11,7 @@ import {
   buildTracePropagationTargets,
   decideSentry,
   isSentryKilled,
+  mentionsAnonymousRoute,
   mentionsRevenueCat,
   scrubBreadcrumb,
   scrubEvent,
@@ -392,5 +393,60 @@ describe('2.0 privacy: the Cognito sub never reaches Sentry', () => {
     expect(out.tags).toEqual({ 'ota.update_id': SUB, note: '[email]', email: '[redacted]' });
     expect(JSON.stringify({ ...out, tags: undefined })).not.toContain(SUB);
     expect(JSON.stringify(out)).not.toMatch(/revenuecat/i);
+  });
+});
+
+// R28 ANONREPORT-R1: Sentry's JS XHR breadcrumb handler records the anonymous POSTs even though the XHR is flagged
+// __sentry_own_request__ (that flag only stops the span and the trace headers). A kept breadcrumb would put the
+// method, URL, status and time of an anonymous report or funnel batch next to an error event's device and session.
+describe('anonymous routes never reach Sentry', () => {
+  const REPORT_URL = `${API}/api/v1/public/card-reports`;
+  const FUNNEL_URL = `${EXECUTE_API}/api/v1/public/events`;
+
+  it('mentionsAnonymousRoute looks at url, http.url, description and message, on any API origin', () => {
+    expect(mentionsAnonymousRoute({ category: 'xhr', data: { method: 'POST', url: REPORT_URL, status_code: 202 } })).toBe(true);
+    expect(mentionsAnonymousRoute({ data: { 'http.url': FUNNEL_URL } })).toBe(true);
+    expect(mentionsAnonymousRoute({ description: `POST ${REPORT_URL}` })).toBe(true);
+    expect(mentionsAnonymousRoute({ message: `POST ${FUNNEL_URL}?x=1` })).toBe(true);
+    expect(mentionsAnonymousRoute({ data: { url: '/API/V1/PUBLIC/card-reports' } })).toBe(true);
+    // The signed-in report route and every other API path keep their breadcrumbs.
+    expect(mentionsAnonymousRoute({ data: { url: `${API}/api/v1/user/card-reports` } })).toBe(false);
+    expect(mentionsAnonymousRoute({ data: { url: `${API}/api/v1/publications` } })).toBe(false);
+    expect(mentionsAnonymousRoute({ category: 'navigation', data: { from: 'Home', to: 'Study' } })).toBe(false);
+    expect(mentionsAnonymousRoute(null)).toBe(false);
+    expect(mentionsAnonymousRoute('POST /api/v1/public/events')).toBe(false);
+  });
+
+  it('scrubBreadcrumb drops the xhr breadcrumb of an anonymous report and of a funnel batch, success or failure', () => {
+    // The exact shape @sentry/browser's _getXhrBreadcrumbHandler builds.
+    for (const url of [REPORT_URL, FUNNEL_URL]) {
+      for (const status_code of [202, 429, 0]) {
+        expect(scrubBreadcrumb({ category: 'xhr', type: 'http', data: { method: 'POST', url, status_code } } as any)).toBeNull();
+      }
+    }
+    expect(scrubBreadcrumb({ category: 'fetch', data: { url: REPORT_URL } })).toBeNull();
+    expect(scrubBreadcrumb({ category: 'http', message: `POST ${FUNNEL_URL}` })).toBeNull();
+    // A signed-in report keeps its (scrubbed) breadcrumb.
+    expect(scrubBreadcrumb({ category: 'xhr', data: { method: 'POST', url: `${API}/api/v1/user/card-reports`, status_code: 201 } })).toEqual({
+      category: 'xhr',
+      data: { method: 'POST', url: `${API}/api/v1/user/card-reports`, status_code: 201 },
+    });
+  });
+
+  it('scrubEvent drops anonymous-route breadcrumbs and spans that reached the scope another way', () => {
+    const out = scrubEvent({
+      breadcrumbs: [
+        { category: 'xhr', data: { method: 'POST', url: REPORT_URL, status_code: 202 }, timestamp: 1790000000.5 },
+        { category: 'xhr', data: { method: 'POST', url: FUNNEL_URL, status_code: 202 } },
+        { category: 'xhr', data: { method: 'GET', url: `${API}/api/v1/me`, status_code: 200 } },
+      ],
+      spans: [
+        { op: 'http.client', description: `POST ${REPORT_URL}`, data: { 'http.url': REPORT_URL } },
+        { op: 'http.client', description: `GET ${API}/api/v1/me` },
+      ],
+    }) as any;
+    expect(out.breadcrumbs).toEqual([{ category: 'xhr', data: { method: 'GET', url: `${API}/api/v1/me`, status_code: 200 } }]);
+    expect(out.spans).toEqual([{ op: 'http.client', description: `GET ${API}/api/v1/me` }]);
+    expect(JSON.stringify(out)).not.toMatch(/\/api\/v1\/public\//i);
   });
 });

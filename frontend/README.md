@@ -60,7 +60,9 @@ row links the card editor (`/decks/cards/edit?deckId=&cardId=`) and resolves in
 an inline form (resolution plus an optional note of at most 500 characters,
 `POST /api/v1/admin/card-reports/:reportId/resolve`); the row updates at once
 and rolls back if the server refuses. Learner notes are shown as plain text and
-no reporter is ever shown. Until the server's card reports migration has run,
+no reporter is ever shown. A report sent by a learner who was not signed in
+(R28 ANONREPORT, `anonymous: true` in the list) has no note and reads "Not
+signed in" under its reason; it is resolved like any other. Until the server's card reports migration has run,
 the page shows a neutral "not set up on the server yet" callout. The Automation
 overview has a "Card reports" tile (open, new in 7 days) when the status
 response carries `cardReports`.

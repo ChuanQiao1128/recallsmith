@@ -1,0 +1,9 @@
+{
+  "tags_only_updates": false,
+  "changes": {
+    "module.api.aws_apigatewayv2_route.this[\"public_card_reports\"]": "create",
+    "module.api.aws_apigatewayv2_stage.default": { "action": "update", "keys": ["route_settings"] },
+    "module.api.aws_apigatewayv2_stage.dev": { "action": "update", "keys": ["route_settings"] }
+  },
+  "_note": "R28 ANONREPORT (user-perspective review U2): expect PLAN OK 3, the P01 shape. One exact unauthenticated route POST /api/v1/public/card-reports to the core-vpc integration (no OPTIONS route) and its per-route throttle, burst 5 / rate 2, on both stages (route_settings only). No output changes. Safe in either order with the core-vpc CD deploy: until that build and migration 046 are live the path answers 404 (old build) or 503 NOT_READY (before 046), and the app keeps the anonymous form behind features.cardReport.anonymous (default off)."
+}
