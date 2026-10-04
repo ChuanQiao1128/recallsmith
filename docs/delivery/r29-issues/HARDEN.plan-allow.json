@@ -1,0 +1,8 @@
+{
+  "tags_only_updates": false,
+  "changes": {
+    "module.api.aws_apigatewayv2_stage.default": { "action": "update", "keys": ["route_settings"] },
+    "module.api.aws_apigatewayv2_stage.dev": { "action": "update", "keys": ["route_settings"] }
+  },
+  "_note": "R29 HARDEN (owner policy 2026-10-04: hardening only; enterprise audit SPC-02): expect PLAN OK 2 (2 update, nothing else, no output change). route_settings on both stages gain per-route throttles for every unauthenticated route that had none (GET /health burst 20 / rate 10; OPTIONS /{proxy+}, OPTIONS /api/v1/authoring/{proxy+}, OPTIONS /api/v1/admin/{proxy+} 40 / 20) and for the expensive routes (ANY /api/v1/authoring/{proxy+}, ANY /api/v1/admin/{proxy+}, ANY /api/v1/user/{proxy+} 40 / 20; POST /api/v1/authoring/cards/similar, POST /api/v1/authoring/drafts 20 / 10); the 17 existing entries and the stage defaults (200 / 400, dev 50 / 100) are unchanged; at least 100x the busiest minute of each route in the 30 days to 2026-10-04 (infra/RUNBOOK.md section 16). Rollback: revert, whose allow-list is the same two updates."
+}

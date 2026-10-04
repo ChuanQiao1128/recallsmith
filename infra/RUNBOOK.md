@@ -1495,3 +1495,35 @@ before the first connection.
   sleeps past the app limit is applied and the limit is back afterwards.
 - Rollback: revert the change; CD redeploys (§12).
 
+### Route throttles (SPC-02)
+
+`infra/modules/api/gateway.tf` `local.route_throttles` puts each listed route in its own token bucket on both stages
+(`route_settings`); every other route uses the stage default (`modules/api/variables.tf`: `$default` 200 rps / burst
+400, `dev` 50 / 100, unchanged). A bucket is shared by every caller of that route: the HTTP API has no per-client limit.
+R29 adds an entry for every unauthenticated route that had none and for the expensive routes; each limit is at least
+100 times the busiest minute the route had:
+
+| Route | Who calls it | 30 days | Busiest minute | burst / rate |
+|---|---|---|---|---|
+| `GET /health` | synthetic check, CD smoke (no token) | 565 | 5 | 20 / 10 |
+| `OPTIONS /{proxy+}`, `OPTIONS /api/v1/authoring/{proxy+}`, `OPTIONS /api/v1/admin/{proxy+}` | browser preflights (no token; core-vpc answers them) | 1 / 19 / 13 | 1 / 5 / 9 | 40 / 20 each |
+| `ANY /api/v1/authoring/{proxy+}` | console: card import, publish, QA runs | 42 | 11 | 40 / 20 |
+| `ANY /api/v1/admin/{proxy+}` | console: usage analytics (whole-history scans, SPC-04), embeddings, manifest rebuild, migrate | 17 | 9 | 40 / 20 |
+| `ANY /api/v1/user/{proxy+}` | app (any self-registered account): bootstrap, client errors, card reports, account deletion | 20 | 3 | 40 / 20 |
+| `POST /api/v1/authoring/cards/similar`, `POST /api/v1/authoring/drafts` | the local agent (MCP server) | 9 / 2 | 5 / 1 | 20 / 10 each |
+
+The 17 existing entries (sync and draw-state 40 / 20, the callbacks, the runner, the two public routes) are unchanged.
+The route guard (terraform validate) now also fails when an `auth = "none"` route has no entry or an entry has a burst
+or rate below 1 (0 refuses everything: the 2026-09-23 incident); mutation test
+`docs/delivery/r29-issues/HARDEN-route-guard-test.sh`.
+
+- A refusal is a `429` whose access-log line has `integrationLatency` `-`; alarm `api-429` (§7) pages at 3 in 15
+  minutes. Live values: `aws apigatewayv2 get-stage --api-id ktbq1sie2c --stage-name '$default' --query
+  '{d:DefaultRouteSettings,r:RouteSettings}'`.
+- Change a limit: edit the entry (never 0), add an allow file listing `module.api.aws_apigatewayv2_stage.default` and
+  `…stage.dev` as `update` with keys `route_settings`, and let the pipeline apply it (§15). The console's import
+  runner retries a 429 batch after 1, 2 and 4 s.
+- What it does not stop: one self-registered mobile account can still spend a whole route's bucket (20 rps of sync)
+  for everyone; a per-user limit (SPC-02's second half) needs code in core-vpc or a REST API with usage plans, and is
+  deferred.
+
