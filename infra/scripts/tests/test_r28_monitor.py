@@ -28,7 +28,7 @@ CHECK_PLAN = INFRA / "scripts" / "check-plan.py"
 # The unmatched catch-alls: console-authorized, but no app or console call lands on them (scanners, retired paths).
 CATCH_ALLS = {"ANY /{proxy+}", "$default"}
 # Unauthenticated routes that real users call: the liveness route and the app's anonymous install funnel.
-USER_FACING_UNAUTHENTICATED = {"GET /health", "POST /api/v1/public/events"}
+USER_FACING_UNAUTHENTICATED = {"GET /health", "POST /api/v1/public/events", "POST /api/v1/public/card-reports"}
 RUNNER_PREFIX = "POST /api/v1/authoring/automation/runner/"
 
 
