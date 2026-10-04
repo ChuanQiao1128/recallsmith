@@ -14,7 +14,11 @@
 // POST /api/v1/public/card-reports with structured fields only — deck slug, card uid, reason code
 // and app version: no note, no token, no account or device id. It is sent with the anonymous
 // funnel's plain XHR (telemetry/funnel.ts), never apiClient: no Authorization, no x-dc-trace-id
-// and no sentry-trace/baggage, so the report cannot be joined to any other request.
+// and no sentry-trace/baggage, so it shares no key with any other request. Sentry still records an
+// xhr breadcrumb for it (the __sentry_own_request__ flag only stops the span and the headers), so
+// sentryPolicy.scrubBreadcrumb drops every /api/v1/public/ breadcrumb and span (ANONREPORT-R1).
+// What it cannot hide: the gateway access log keeps the source IP and user agent for 30 days for
+// every route, so the sheet's copy (anonymousHint) only promises what the report itself holds.
 import { apiJson } from '../../api/apiClient';
 import { classifyError, FRIENDLY_ERROR_COPY } from '../../api/errorKind';
 import { getFeatureFlags } from '../../config/featureFlags';
@@ -44,8 +48,10 @@ export const CARD_REPORT_COPY = Object.freeze({
   entry: 'Report a problem',
   sessionEntry: 'Report',
   signedOut: 'Sign in to report a problem',
+  // Not "nothing about you": the request's IP and user agent are in the gateway access log for 30 days
+  // (docs/privacy-anonymous-funnel-2026-10-02.md §6). The copy says what the stored report holds (ANONREPORT-R2).
   anonymousHint:
-    "You're not signed in, so we send only this card, the reason and the app version — nothing about you. Sign in to add a note.",
+    "You're not signed in, so the report holds only this card, the reason and the app version; we don't store who sent it. Sign in to add a note.",
   anonymousBusy: 'Too many reports right now. Please try again later.',
   success: 'Thanks — the author will review it',
   duplicate: 'You already reported this card',

@@ -448,8 +448,11 @@ does not turn it on. A signed-out learner sees the form only with `features.card
 **Anonymous reports (R28 ANONREPORT, user-perspective review U2).** A learner who is not signed in reports through
 `POST /api/v1/public/card-reports` (exact gateway route, no authorizer, burst 5 / rate 2; core-vpc never reads a bearer
 for it). The body is `{ "deckSlug", "stableUid", "reason", "appVersion" }` and nothing else: any other key, a note
-included, is `400 VALIDATION_ERROR`, so free text cannot arrive by mistake. The app posts it without a token, a trace
-header or a Sentry header (the funnel's transport). Limits: body at most 1 KB (`413`), 30 requests per minute per
+included, is `400 VALIDATION_ERROR`, so free text cannot arrive by mistake; `appVersion` is ASCII digits `x.y.z` only
+(no trailing newline, no non-ASCII digits). The app posts it without a token, a trace header or a Sentry header (the
+funnel's transport), and its Sentry scrubber drops the xhr breadcrumb and any span of every `/api/v1/public/` request, so
+a later error event never carries the report's time or status (`mobile/src/telemetry/sentryPolicy.ts`,
+`mentionsAnonymousRoute`; ships by OTA). Limits: body at most 1 KB (`413`), 30 requests per minute per
 container (`429 RATE_LIMITED`, `Retry-After: 60`), one report per card, reason and UTC day (a repeat answers the same
 `202 {"received": true}` as a new report and stores and emits nothing), and the daily cap above. Only a card of a live
 free deck (`404 CARD_NOT_FOUND` otherwise). The row is an ordinary `card_reports` row with `user_sub` and `note` null
@@ -457,8 +460,9 @@ free deck (`404 CARD_NOT_FOUND` otherwise). The row is an ordinary `card_reports
 "Not signed in"; `anonymous: true` in the API), in `automation/status`, in the digest line and in the `card.reported`
 webhook, and it is resolved the same way. Nobody can see it in *My reports* and account deletion never touches it
 (there is no account). Nothing identifies the sender: no account, device or install id, no IP in the table; the
-gateway access log keeps the source IP for 30 days for every route, this one included (as for the funnel,
-docs/privacy-anonymous-funnel-2026-10-02.md §6).
+gateway access log keeps the source IP and user agent for 30 days for every route, this one included (as for the funnel,
+docs/privacy-anonymous-funnel-2026-10-02.md §6). That is why the sheet's hint says only what the report holds ("the
+report holds only this card, the reason and the app version; we don't store who sent it"), never "nothing about you".
 
 Deploy order: code first, then `POST /api/v1/admin/db/migrate` (applies `046_card_reports_anonymous.sql`: `user_sub`
 nullable, a no-note check for anonymous rows, the per-day unique index; the migrate stops before 045 unless it carries

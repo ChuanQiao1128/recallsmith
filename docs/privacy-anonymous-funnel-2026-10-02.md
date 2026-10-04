@@ -45,6 +45,13 @@ dispatcher does not resolve auth for this path (`src_C/Vpc/VpcFunction.cs:73-84`
 context (`src_C/Vpc/Analytics/AnonFunnel.cs:107-112`), so a signed-in caller is never linked to the events, and no
 `users` row is created.
 
+On the device (R28 ANONREPORT-R1, 2026-10-04): the funnel POST is flagged as Sentry's own request, which stops the
+span and the `sentry-trace`/`baggage` headers but not Sentry's JS xhr breadcrumb. Until the OTA that carries the fix,
+an error event sent later in the same app session could hold a breadcrumb with the method, URL, status and time of a
+funnel batch (and, with R28, of an anonymous card report). The app's `beforeBreadcrumb` and `beforeSend` scrubbers now
+drop every breadcrumb and span that names `/api/v1/public/` (`mobile/src/telemetry/sentryPolicy.ts`,
+`mentionsAnonymousRoute`); the native SDK's network breadcrumbs were already off.
+
 What the transport itself carries (not in the body, not stored by the funnel): the source IP address and the
 `User-Agent` header, which API Gateway puts in its access log (§6).
 

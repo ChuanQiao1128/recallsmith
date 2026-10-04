@@ -286,6 +286,12 @@ describe('ReportCardSheet — signed out', () => {
     expect(hosts(tree, 'report-card-note-counter')).toHaveLength(0);
     const hint = one(tree, 'report-card-anonymous-hint');
     expect(textOf(hint)).toBe(CARD_REPORT_COPY.anonymousHint);
+    // ANONREPORT-R2: the copy promises only what the stored report holds. The gateway access log still keeps the
+    // request's IP and user agent for 30 days, so it must never say "nothing about you".
+    expect(textOf(hint)).toBe(
+      "You're not signed in, so the report holds only this card, the reason and the app version; we don't store who sent it. Sign in to add a note.",
+    );
+    expect(textOf(hint)).not.toMatch(/nothing about you/i);
     expect(hint.props.maxFontSizeMultiplier).toBe(CHROME_MAX_FONT_SCALE);
     expect(one(tree, 'report-card-submit').props.disabled).toBe(true);
   });

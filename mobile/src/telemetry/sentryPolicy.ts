@@ -86,6 +86,24 @@ export function mentionsRevenueCat(item: unknown): boolean {
   return false;
 }
 
+// The anonymous routes (POST /api/v1/public/events, the funnel, and POST /api/v1/public/card-reports, R28
+// ANONREPORT) are unauthenticated on purpose and their XHRs carry no trace header (funnel.ts). Sentry's JS XHR
+// breadcrumb handler still records them (it ignores __sentry_own_request__), and a later error event would then
+// carry the method, URL, status and time of the POST next to the event's device, release and session data, which
+// is enough to join an anonymous row to that event by its timestamp. So no breadcrumb or span naming a public
+// route is ever kept (R28 ANONREPORT-R1). The native SDK's network breadcrumbs are already off (above).
+const ANONYMOUS_ROUTE_PATH = /\/api\/v1\/public\//i;
+
+/** True when a breadcrumb or span names an anonymous /api/v1/public/ request in its url, description or message. */
+export function mentionsAnonymousRoute(item: unknown): boolean {
+  if (!isRecord(item)) return false;
+  const data = isRecord(item.data) ? item.data : {};
+  for (const value of [item.description, item.message, data.url, data['http.url']]) {
+    if (typeof value === 'string' && ANONYMOUS_ROUTE_PATH.test(value)) return true;
+  }
+  return false;
+}
+
 /** Cuts everything from the first `?` or `#` (relative URLs too). */
 export function stripQuery(url: string): string {
   const cut = url.search(/[?#]/);
@@ -186,7 +204,7 @@ export function scrubEvent<T>(event: T): T {
     } else if ((key === 'breadcrumbs' || key === 'spans') && Array.isArray(value)) {
       const items: unknown[] = [];
       for (const item of value) {
-        if (mentionsRevenueCat(item)) continue;
+        if (mentionsRevenueCat(item) || mentionsAnonymousRoute(item)) continue;
         const walked = walkDataHolder(item, 2);
         if (walked !== DROP) items.push(walked);
       }
@@ -203,7 +221,7 @@ export function scrubEvent<T>(event: T): T {
 
 export function scrubBreadcrumb<T extends { category?: string; message?: string; data?: Record<string, unknown> }>(b: T): T | null {
   if (b.category === 'console') return null;
-  if (mentionsRevenueCat(b)) return null;
+  if (mentionsRevenueCat(b) || mentionsAnonymousRoute(b)) return null;
   const copy: Record<string, unknown> = { ...b };
   if (typeof b.message === 'string') copy.message = scrubString(b.message);
   if (b.data !== undefined) {

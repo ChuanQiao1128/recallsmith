@@ -25,6 +25,7 @@ import {
   submitAnonymousCardReport,
   submitCardReport,
 } from '../../src/features/cardReport/cardReportApi';
+import { scrubBreadcrumb } from '../../src/telemetry/sentryPolicy';
 import { installFakeXhr } from '../setup/fakeXhr';
 
 function httpError(status: number, code: string | null = null) {
@@ -255,6 +256,8 @@ describe('anonymous card reports (R28 ANONREPORT)', () => {
     expect(request.headers).toEqual({ 'content-type': 'application/json' });
     // Sentry's XHR instrumentation skips a request with this flag: no span, no sentry-trace/baggage.
     expect(request.sentryOwnRequest).toBe(true);
+    // The flag does not stop Sentry's xhr breadcrumb; beforeBreadcrumb (scrubBreadcrumb) drops it (ANONREPORT-R1).
+    expect(scrubBreadcrumb({ category: 'xhr', data: { method: request.method, url: request.url, status_code: 202 } })).toBeNull();
     expect(request.timeout).toBe(15000);
     expect(JSON.parse(request.body)).toEqual({ deckSlug: 'csharp-basics', stableUid: 'cs-1', reason: 'wrong_answer', appVersion: '2.0.0' });
     // Never the signed-in client, never a token lookup.
