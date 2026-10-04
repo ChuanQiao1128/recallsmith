@@ -234,17 +234,21 @@ module "worker" {
     LOG_LEVEL                   = "info"
   }
 
-  # R18H H05: the synthetic check (H00 §5.4). Create-time only; equals services/synthetic-check/env/prod.env.json (H04).
+  # R18H H05: the synthetic check (H00 §5.4). Create-time only (ignore_changes = [environment], so editing it plans
+  # nothing); equals services/synthetic-check/env/prod.env.json (H04; R28 MONITOR added the three URL keys).
   synthetic_check_function_name = "developercards-synthetic-check"
   synthetic_check_role_arn      = module.identity.synthetic_check_role_arn
   synthetic_check_environment = {
-    API_BASE              = "https://api.developercards.app"
-    CDN_BASE              = "https://cdn.developercards.app"
-    CONSOLE_BASE          = "https://console.developercards.app"
-    CHECK_TIMEOUT_SECONDS = "10"
-    CHECK_USER_AGENT      = "DeveloperCards-Synthetic/1.0 (+https://developercards.app)"
-    METRICS_NAMESPACE     = "DeveloperCards"
-    LOG_LEVEL             = "info"
+    API_BASE               = "https://api.developercards.app"
+    CDN_BASE               = "https://cdn.developercards.app"
+    CONSOLE_BASE           = "https://console.developercards.app"
+    REMOTE_CONFIG_URL      = "https://raw.githubusercontent.com/ChuanQiao1128/recallsmith-mobile-config/refs/heads/main/recallsmith-config.json"
+    COGNITO_CONSOLE_ISSUER = "https://cognito-idp.ap-southeast-2.amazonaws.com/ap-southeast-2_4Vf8uCXKt"
+    COGNITO_MOBILE_ISSUER  = "https://cognito-idp.ap-southeast-2.amazonaws.com/ap-southeast-2_04hd6iisb"
+    CHECK_TIMEOUT_SECONDS  = "10"
+    CHECK_USER_AGENT       = "DeveloperCards-Synthetic/1.0 (+https://developercards.app)"
+    METRICS_NAMESPACE      = "DeveloperCards"
+    LOG_LEVEL              = "info"
   }
 }
 
@@ -279,6 +283,9 @@ module "observability" {
   notify_dlq_name              = module.worker.notify_dlq_name
   notifier_function_name       = module.worker.notifier_function_name
   source_watcher_function_name = module.worker.source_watcher_function_name
+
+  # R28 MONITOR: the auth-reject metric filter reads core-vpc's log group, so it is created after the group.
+  core_vpc_log_group_name = module.api.core_vpc_log_group_name
 }
 
 # Enterprise audit 2026-10-03 SEC-01: operator roles that replace the shared static admin key

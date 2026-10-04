@@ -319,6 +319,9 @@ One line each: what it means → what to do.
   automation auto-accepted in the last 30 days (at least 20 cards; once per ISO week) → revoke the gate
   (Rollback step 1), open the Decisions tab (state `auto_accepted`) and read what people changed and why;
   restore live only with a new passed gate after the cause (source, skill, reviewer) is fixed.
+- `watch_backlog` (R28 review F4) — source-watch items have waited in the queue for more than 7 days (the
+  daily claim cap `AUTOMATION_WATCH_CLAIMS_PER_DAY` holds them, or no runner claims them; once per ISO week) →
+  skip the ones not needed in the Queue tab, or raise the cap ("Source-watch claim cap" below).
 - `runner_unavailable` (R18D M5, R18E N3) — the runner could not run at all (claude does not start, not
   on the subscription, MCP server does not start, usage or rate limit) and stopped; the claimed item went
   back to `queued` without using an attempt, but not at once: it is due again after 15 min, then 30 min
@@ -569,6 +572,56 @@ does not lower it: look at the watch route's events, not only the count (contrac
 needs two title-word hits to be listed.
 
 **Rollback.** Revert the code; the column and the extra `details` keys are ignored by older code.
+
+## Source-watch claim cap (R28 MONITOR, 2026-10-04)
+
+**Why.** A page the watcher finds changed (its normalised hash differs) queues one `source_changed` item for every
+deck that cites it, whether or not any quote went missing (`SourceWatchRoutes.ApplyAsync`), and a new
+release-notes item queues one `feed_item`. Pages are re-checked once a week (`check_interval_minutes` 10080, 60
+targets per hourly run), so a documentation site redesign can queue dozens of items in a few hours, and the runner
+would work through them for hours on the owner's subscription and leave a pile of drafts for review.
+
+**The cap.** core-vpc's claim route (`POST /api/v1/authoring/automation/runner/claim`) hands out at most
+`AUTOMATION_WATCH_CLAIMS_PER_DAY` source-watch items (kinds `source_changed` and `feed_item`) in any rolling 24
+hours, counted over every runner (claims recorded in `automation_runs`, whatever their outcome). Default **5**
+(at most 25 draft cards a day, one review batch). The owner's own queue items (`manual`) are never counted or
+held. Items past the cap stay `queued` in the queue, visible and skippable in the console, and are claimed in id
+order as the window frees up. Values: unset, blank or not a whole number (a sign, a decimal point, letters) ⇒ 5;
+`0` ⇒ hold every source-watch item (only the owner's items are claimed); any whole number above 1000, however
+many digits, ⇒ 1000. Change it by adding the key to `src_C/env/prod.env.json` and deploying the backend (CD,
+infra/RUNBOOK.md §12); it applies from the next claim.
+
+**One queued item per page and deck** (R28 review F4). A `source_changed` item's dedupe key carries the page's new
+hash, so a page that changes again while its first item is still held would queue a second item for the same deck,
+and the runner would author the page twice. Since the review the watcher's newest item replaces every older
+`source_changed` item still `queued` for that page and deck: the older one becomes `skipped` with `last_error`
+`SUPERSEDED: the page changed again; queue item <id> replaces this one` (the Queue tab shows it). An item already
+`claimed` (a run in progress) is never touched. The source-watch report's log line counts them (`superseded`).
+Release-notes items (`feed_item`) are one per new entry and are not replaced. The backlog is therefore bounded by
+the watched pages × the decks citing them, plus new release-notes entries.
+
+**Backlog alert.** When the oldest `queued` source-watch item is more than 7 days old
+(`AutomationTick.WatchBacklogDays`), the tick raises the exception `watch_backlog` once per ISO week ("Action
+needed: N source-watch item(s) waiting, the oldest over 7 days"; held count, oldest time, the cap): skip the items
+not needed in the Queue tab, or raise the key.
+
+**What you see.** When a claim finds source-watch items due but the day's quota used, core-vpc logs one info line
+`{"tag":"automation","reason":"watch_claim_cap","runnerId","cap","claimed24h","held"}`:
+`aws logs filter-log-events --log-group-name /aws/lambda/core-vpc --filter-pattern '{ $.reason = "watch_claim_cap" }' --start-time <epoch ms>`.
+The runner sees an empty claim and logs `no_items`; the heartbeat's `queue.due` still counts the held items. To
+drop items instead of waiting, skip them in the console queue; to drain faster, raise the key.
+
+**The first weekly re-check.** The watcher took its baselines on 2026-10-01 (`SourceWatchChecks`: 77 targets
+05:00–06:00 UTC, 168 more 22:00–00:59 UTC into 10-02), so the first re-checks run at about **2026-10-08
+05:00–07:00 UTC (18:00–20:00 NZDT)** and **2026-10-08 22:00 – 2026-10-09 01:00 UTC (10-09 11:00–14:00 NZDT)**,
+60 targets an hour. On 10-08 evening and 10-09 midday NZ time look at: the Automation page → Watch tab (changed
+events), the queue (`queued` source-watch items), the `watch_claim_cap` lines above and the Monday digest
+(2026-10-12). Each changed page also sends one `source_changed` email once its re-check is settled (with AI QA
+off: on the next tick, at most 50 per tick); this cap does not limit those emails, and the SES sandbox allows 200
+messages a day.
+
+**Rollback.** Revert the code; nothing is stored (the cap reads `automation_runs`). Items already marked
+`SUPERSEDED` stay skipped; re-add a URL in the Queue tab if one is still wanted.
 
 ## Usage analytics and freshness (R20 V08)
 

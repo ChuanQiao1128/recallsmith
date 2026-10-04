@@ -599,6 +599,56 @@ public class SourceWatchRoutesTests
   }
 
   [Fact]
+  public async Task Report_PageChangedAgain_ReplacesTheQueuedItemOfEachDeck()
+  {
+    // R28 review F4: the dedupe key carries the new hash, so before this a page that changed again while the daily claim
+    // cap held its first items queued a second item for the same page and deck, and the runner authored the page twice.
+    await A05Kit.WithScopeAsync(async scope =>
+    {
+      await InScratchAsync(async sql =>
+      {
+        var page = await CitedPageAsync(sql, "again");
+        await A05Kit.ReportDataAsync(A05Kit.Obs(page.PageId, page.Url, "ok", A05Kit.Sha("again-v2")));
+        var v2 = (await sql.QueryAsync("select id, deck_id from authoring_queue_items order by deck_id"))
+          .ToDictionary(r => A04Kit.Long(r["deck_id"]), r => A04Kit.Long(r["id"]));
+        Assert.Equal(2, v2.Count);
+        // Deck B's item is being authored (claimed): a run in progress is never touched.
+        await sql.QueryAsync(
+          """
+          update authoring_queue_items set status = 'claimed', claimed_by_runner = 'it-r28', claimed_at = now(),
+            lease_expires_at = now() + interval '1 hour', attempts = 1 where id = $1
+          """, v2[page.DeckB]);
+
+        var data = await A05Kit.ReportDataAsync(A05Kit.Obs(page.PageId, page.Url, "ok", A05Kit.Sha("again-v3")));
+        Assert.Equal(2, data.GetProperty("queued").GetInt32());
+        var v3 = (await sql.QueryAsync("select id, deck_id from authoring_queue_items where dedupe_key like $1 order by deck_id",
+          $"source_changed:{page.PageId}:{A05Kit.Sha("again-v3")}:%")).ToDictionary(r => A04Kit.Long(r["deck_id"]), r => A04Kit.Long(r["id"]));
+        Assert.Equal(2, v3.Count);
+
+        var oldA = Assert.Single(await sql.QueryAsync("select status, last_error, finished_at from authoring_queue_items where id = $1", v2[page.DeckA]));
+        Assert.Equal("skipped", oldA["status"]);
+        Assert.Equal($"SUPERSEDED: the page changed again; queue item {v3[page.DeckA]} replaces this one", oldA["last_error"]);
+        Assert.NotNull(oldA["finished_at"]);
+        Assert.Equal("claimed", await sql.ScalarAsync("select status from authoring_queue_items where id = $1", v2[page.DeckB]));
+        Assert.Equal(2, await sql.CountAsync("select count(*) from authoring_queue_items where status = 'queued' and source_target_id = $1", page.PageId));
+
+        // The same hash again queues nothing and replaces nothing.
+        await A05Kit.ReportDataAsync(A05Kit.Obs(page.PageId, page.Url, "ok", A05Kit.Sha("again-v3")));
+        Assert.Equal(2, await sql.CountAsync("select count(*) from authoring_queue_items where status = 'queued' and source_target_id = $1", page.PageId));
+
+        // The page gone: its gone items replace the queued v3 items; the claimed v2 item is still left alone.
+        await A05Kit.ReportDataAsync(A05Kit.Obs(page.PageId, page.Url, "gone"));
+        var queued = await sql.QueryAsync("select dedupe_key from authoring_queue_items where status = 'queued' and source_target_id = $1 order by deck_id", page.PageId);
+        Assert.Equal([$"source_changed:{page.PageId}:gone:{page.DeckA}", $"source_changed:{page.PageId}:gone:{page.DeckB}"],
+          queued.Select(r => (string)r["dedupe_key"]!).ToArray());
+        Assert.Equal(2, await sql.CountAsync("select count(*) from authoring_queue_items where id = any($1) and status = 'skipped' and last_error like 'SUPERSEDED:%'",
+          v3.Values.ToArray()));
+        Assert.Equal("claimed", await sql.ScalarAsync("select status from authoring_queue_items where id = $1", v2[page.DeckB]));
+      });
+    });
+  }
+
+  [Fact]
   public async Task Report_PageGone_RaisesSourceGoneOnce()
   {
     await A05Kit.WithScopeAsync(async scope =>

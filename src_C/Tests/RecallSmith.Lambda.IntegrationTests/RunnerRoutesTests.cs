@@ -536,6 +536,248 @@ public sealed class RunnerRoutesTests
     });
   }
 
+  // ---------------------------------------------------------------- claim: the source-watch daily cap (R28 MONITOR)
+
+  /// <summary>A queue item as the source watch creates it (SourceWatchRoutes: created_by 'watcher').</summary>
+  private async Task<long> NewWatchItemAsync(long deckId, string kind = "source_changed")
+  {
+    return Long(await ScalarAsync(
+      """
+      insert into authoring_queue_items (kind, url, deck_id, title, note, dedupe_key, created_by)
+      values ($1, $2, $3, 'Source changed', 'missing quotes: 0', $4, 'watcher')
+      returning id
+      """,
+      kind, $"https://docs.example.com/r28/{Guid.NewGuid():N}", deckId, $"test:r28:{Guid.NewGuid()}"));
+  }
+
+  /// <summary>Moves every earlier claim of a source-watch item out of the rolling 24-hour window.</summary>
+  private Task AgeWatchClaimsAsync(int hours = 25) => ExecAsync(
+    """
+    update automation_runs set started_at = started_at - make_interval(hours => $1)
+    where queue_item_id in (select id from authoring_queue_items where kind in ('source_changed', 'feed_item'))
+    """, hours);
+
+  private static long[] ItemIds(JsonElement data) =>
+    data.GetProperty("items").EnumerateArray().Select(i => i.GetProperty("itemId").GetInt64()).ToArray();
+
+  private static async Task WithWatchCapAsync(string? value, Func<Task> body)
+  {
+    var saved = Environment.GetEnvironmentVariable(AutomationEnv.WatchClaimsPerDayEnv);
+    try
+    {
+      Environment.SetEnvironmentVariable(AutomationEnv.WatchClaimsPerDayEnv, value);
+      await body();
+    }
+    finally
+    {
+      Environment.SetEnvironmentVariable(AutomationEnv.WatchClaimsPerDayEnv, saved);
+    }
+  }
+
+  [Fact]
+  public async Task WatchClaimsPerDay_ParsesWithASafeDefault()
+  {
+    var cases = new (string? Raw, int Want)[]
+    {
+      (null, 5), ("", 5), ("  ", 5), ("abc", 5), ("-1", 5), ("+7", 5), ("2.5", 5), ("1e3", 5), ("7 7", 5), ("٣", 5),
+      ("0", 0), ("1", 1), (" 7 ", 7), ("007", 7), ("1000", 1000), ("5000", 1000),
+      // R28 review F5: a whole number past int range is still "above the maximum", not "not a number".
+      ("99999999999", 1000), ("2147483648", 1000), ("2147483647", 1000),
+    };
+    foreach (var (raw, want) in cases)
+    {
+      await WithWatchCapAsync(raw, () =>
+      {
+        Assert.True(AutomationEnv.WatchClaimsPerDay() == want, $"{raw ?? "(unset)"} -> {AutomationEnv.WatchClaimsPerDay()}, want {want}");
+        return Task.CompletedTask;
+      });
+    }
+    Assert.Equal(5, AutomationEnv.DefaultWatchClaimsPerDay);
+  }
+
+  [Fact]
+  public async Task Claim_SourceWatchItems_AreCappedPerRolling24Hours_OwnerItemsAreNot()
+  {
+    await InScratchAsync(AutomationMode.DryRun, async () =>
+    {
+      await AgeWatchClaimsAsync();
+      await WithWatchCapAsync("2", async () =>
+      {
+        var (deckId, _) = await NewDeckAsync();
+        var w1 = await NewWatchItemAsync(deckId);
+        var w2 = await NewWatchItemAsync(deckId, "feed_item");
+        var w3 = await NewWatchItemAsync(deckId);
+        var m1 = await NewItemAsync(deckId);
+        var sub = Sub();
+        var runnerId = RunnerId();
+
+        // Two source-watch items fit the day; the third stays queued, the owner's item is claimed regardless.
+        var first = ItemIds(Data(await ClaimAsync(new { runnerId, max = 5 }, Ctx(sub))));
+        Assert.Equal([w1, w2, m1], first);
+        Assert.Equal("queued", await ScalarAsync("select status from authoring_queue_items where id = $1", w3));
+        Assert.Equal(0, Convert.ToInt32(await ScalarAsync("select attempts from authoring_queue_items where id = $1", w3), CultureInfo.InvariantCulture));
+
+        // A second runner, a minute later: the cap is the queue's, not the runner's. New owner items still flow.
+        var m2 = await NewItemAsync(deckId);
+        var second = ItemIds(Data(await ClaimAsync(new { runnerId = RunnerId(), max = 5 }, Ctx(Sub()))));
+        Assert.Equal([m2], second);
+        Assert.Equal("queued", await ScalarAsync("select status from authoring_queue_items where id = $1", w3));
+
+        // A claim that later failed or was refunded still counted: the window is about claims, not outcomes.
+        await ExecAsync("update authoring_queue_items set status = 'queued', lease_expires_at = null where id = $1", w1);
+        Assert.Empty(ItemIds(Data(await ClaimAsync(new { runnerId, max = 5 }, Ctx(sub)))));
+
+        // Once the earlier claims leave the 24-hour window, the next two drain (w1 again, then w3).
+        await AgeWatchClaimsAsync();
+        Assert.Equal([w1, w3], ItemIds(Data(await ClaimAsync(new { runnerId, max = 5 }, Ctx(sub)))));
+      });
+    });
+  }
+
+  [Fact]
+  public async Task Claim_WatchCapZero_HoldsEverySourceWatchItem_AndDefaultIsFive()
+  {
+    await InScratchAsync(AutomationMode.DryRun, async () =>
+    {
+      await AgeWatchClaimsAsync();
+      var (deckId, _) = await NewDeckAsync();
+      var watch = new List<long>();
+      for (var i = 0; i < 7; i++) watch.Add(await NewWatchItemAsync(deckId));
+      var sub = Sub();
+      var runnerId = RunnerId();
+
+      await WithWatchCapAsync("0", async () =>
+      {
+        var owner = await NewItemAsync(deckId);
+        Assert.Equal([owner], ItemIds(Data(await ClaimAsync(new { runnerId, max = 5 }, Ctx(sub)))));
+        Assert.Empty(ItemIds(Data(await ClaimAsync(new { runnerId, max = 5 }, Ctx(sub)))));
+      });
+
+      // Unset: the default 5 a day, one claim at a time as the runner does it.
+      await WithWatchCapAsync(null, async () =>
+      {
+        var claimed = new List<long>();
+        for (var i = 0; i < 7; i++) claimed.AddRange(ItemIds(Data(await ClaimAsync(new { runnerId, max = 1 }, Ctx(sub)))));
+        Assert.Equal(watch.Take(5), claimed);
+        Assert.Equal(2L, Long(await ScalarAsync("select count(*) from authoring_queue_items where id = any($1) and status = 'queued'", watch.ToArray())));
+      });
+    });
+  }
+
+  [Fact]
+  public async Task Claim_WatchCap_TwoRunnersAtOnce_ShareOneCap()
+  {
+    // R28 review F6: the cap is the queue's. Two runners claiming at the same moment, each asking for 3, get 2 source-watch
+    // items between them, the two oldest, never 2 each.
+    await InScratchAsync(AutomationMode.DryRun, async () =>
+    {
+      await WithWatchCapAsync("2", async () =>
+      {
+        for (var round = 0; round < 5; round++)
+        {
+          await AgeWatchClaimsAsync();
+          await ExecAsync("update authoring_queue_items set status = 'skipped', finished_at = now(), updated_at = now() where status = 'queued'");
+          var (deckId, _) = await NewDeckAsync();
+          var watch = new List<long>();
+          for (var i = 0; i < 6; i++) watch.Add(await NewWatchItemAsync(deckId));
+          var sub = Sub();
+
+          var responses = await Task.WhenAll(
+            Task.Run(() => ClaimAsync(new { runnerId = RunnerId(), max = 3 }, Ctx(sub))),
+            Task.Run(() => ClaimAsync(new { runnerId = RunnerId(), max = 3 }, Ctx(sub))));
+
+          var claimed = responses.SelectMany(r => ItemIds(Data(r))).Order().ToList();
+          Assert.Equal(watch.Take(2), claimed);
+          Assert.Equal(2L, Long(await ScalarAsync("select count(*) from automation_runs where queue_item_id = any($1)", watch.ToArray())));
+          Assert.Equal(4L, Long(await ScalarAsync("select count(*) from authoring_queue_items where id = any($1) and status = 'queued'", watch.ToArray())));
+        }
+      });
+    });
+  }
+
+  [Fact]
+  public async Task Claim_WatchCap_CountsUnderTheLock_SoAClaimCommittedWhileItWaitsIsCounted()
+  {
+    // R28 review F6, deterministic: this test plays another runner whose claim transaction holds the watch-cap lock and
+    // has claimed two source-watch items without committing. The claim must wait for the lock and only then count, so it
+    // sees those two once they commit and claims none (cap 2). Without the lock it would not wait and would take the other
+    // two (the row locks only make it skip the first two); with the count read before the lock it would count 0 and take
+    // them after the wait.
+    await InScratchAsync(AutomationMode.DryRun, async () =>
+    {
+      await AgeWatchClaimsAsync();
+      await WithWatchCapAsync("2", async () =>
+      {
+        var (deckId, _) = await NewDeckAsync();
+        var watch = new List<long>();
+        for (var i = 0; i < 4; i++) watch.Add(await NewWatchItemAsync(deckId));
+        var sub = Sub();
+
+        await using var other = new NpgsqlConnection(await ScratchAsync());
+        await other.OpenAsync();
+        await using var tx = await other.BeginTransactionAsync();
+        await DbUtil.ExecuteAsync(other, tx, "select pg_advisory_xact_lock($1)", [RunnerRoutes.WatchClaimLockKey]);
+        var taken = watch.Take(2).ToArray();
+        await DbUtil.ExecuteAsync(other, tx,
+          """
+          update authoring_queue_items
+          set status = 'claimed', claimed_by_runner = 'it-r28-other', claimed_at = now(), lease_expires_at = now() + interval '1 hour',
+              attempts = attempts + 1, updated_at = now()
+          where id = any($1)
+          """, [taken]);
+        foreach (var id in taken)
+        {
+          await DbUtil.ExecuteAsync(other, tx,
+            "insert into automation_runs (run_id, queue_item_id, runner_id, owner_sub, deck_id, status) values ($1, $2, 'it-r28-other', $3, $4, 'running')",
+            [Guid.NewGuid(), id, sub, deckId]);
+        }
+
+        var claim = Task.Run(() => ClaimAsync(new { runnerId = RunnerId(), max = 3 }, Ctx(sub)));
+        await Task.WhenAny(claim, Task.Delay(TimeSpan.FromSeconds(1)));
+        Assert.False(claim.IsCompleted, "the claim must wait for the watch-cap lock another runner's claim holds");
+
+        await tx.CommitAsync();
+        Assert.Empty(ItemIds(Data(await claim)));
+        Assert.Equal(2L, Long(await ScalarAsync("select count(*) from authoring_queue_items where id = any($1) and status = 'queued'", watch.Skip(2).ToArray())));
+      });
+    });
+  }
+
+  [Fact]
+  public async Task Claim_WatchCap_LogsTheDocumentedLine_OnlyWhenItHoldsItems()
+  {
+    // R28 review F6: docs/runbooks/automation-operations.md tells the owner to search core-vpc's log for
+    // { $.reason = "watch_claim_cap" }; the line's shape is pinned here.
+    await InScratchAsync(AutomationMode.DryRun, async () =>
+    {
+      await AgeWatchClaimsAsync();
+      await WithWatchCapAsync("1", async () =>
+      {
+        var (deckId, _) = await NewDeckAsync();
+        var first = await NewWatchItemAsync(deckId);
+        await NewWatchItemAsync(deckId, "feed_item");
+        await NewWatchItemAsync(deckId);
+        var runnerId = RunnerId();
+        var sub = Sub();
+
+        var within = await EmfCapture.StdoutAsync(async () =>
+          Assert.Equal([first], ItemIds(Data(await ClaimAsync(new { runnerId, max = 1 }, Ctx(sub))))));
+        Assert.DoesNotContain("watch_claim_cap", within, StringComparison.Ordinal);
+
+        var past = await EmfCapture.StdoutAsync(async () =>
+          Assert.Empty(ItemIds(Data(await ClaimAsync(new { runnerId, max = 3 }, Ctx(sub))))));
+        var line = Assert.Single(past.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+          l => l.Contains("\"watch_claim_cap\"", StringComparison.Ordinal));
+        using var doc = JsonDocument.Parse(line);
+        var root = doc.RootElement;
+        AssertKeys(root, ["ts", "level", "tag", "reason", "runnerId", "cap", "claimed24h", "held"]);
+        Assert.Equal(("info", "automation", "watch_claim_cap", runnerId), (root.GetProperty("level").GetString(), root.GetProperty("tag").GetString(),
+          root.GetProperty("reason").GetString(), root.GetProperty("runnerId").GetString()));
+        Assert.Equal((1, 1L, 2L), (root.GetProperty("cap").GetInt32(), root.GetProperty("claimed24h").GetInt64(), root.GetProperty("held").GetInt64()));
+      });
+    });
+  }
+
   // ---------------------------------------------------------------- complete
 
   [Fact]

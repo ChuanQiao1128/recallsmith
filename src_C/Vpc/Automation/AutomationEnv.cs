@@ -18,9 +18,18 @@ public static class AutomationEnv
   public const string NotifyQueueUrlEnv = "AUTOMATION_NOTIFY_QUEUE_URL";
   public const string SourceWatchSecretEnv = "INTERNAL_SECRET_SOURCE_WATCH";
   public const string NotifierSecretEnv = "INTERNAL_SECRET_NOTIFIER";
+  public const string WatchClaimsPerDayEnv = "AUTOMATION_WATCH_CLAIMS_PER_DAY";
 
   public const string DefaultSourceHosts = "docs.aws.amazon.com,aws.amazon.com,platform.claude.com,docs.claude.com,docs.anthropic.com,www.anthropic.com";
   public const int DefaultQaTimeoutMinutes = 120, DefaultRunnerStaleMinutes = 1440, DefaultLoginWarnDays = 5;
+
+  /// <summary>
+  /// R28 MONITOR (report AI-6): how many source-watch queue items (kinds <c>source_changed</c> and <c>feed_item</c>) the
+  /// runners may claim in any rolling 24 hours. 5 items is at most 25 draft cards a day (<see cref="RunnerRoutes.MaxCardsPerItem"/>),
+  /// one human review batch, so a weekly re-check that finds many changed pages drains over days instead of running the
+  /// runner for hours. Owner-created (<c>manual</c>) items are never counted or held.
+  /// </summary>
+  public const int DefaultWatchClaimsPerDay = 5, MaxWatchClaimsPerDay = 1000;
 
   /// <summary>Unset or blank ⇒ true; otherwise <see cref="Env.IsTruthy"/>.</summary>
   public static bool AutoPublish()
@@ -50,6 +59,20 @@ public static class AutomationEnv
   public static int RunnerStaleMinutes() => PositiveInt(RunnerStaleMinutesEnv, DefaultRunnerStaleMinutes);
 
   public static int LoginWarnDays() => PositiveInt(LoginWarnDaysEnv, DefaultLoginWarnDays);
+
+  /// <summary>
+  /// <see cref="WatchClaimsPerDayEnv"/>: unset, blank or not a whole number (a sign, a decimal point, letters) ⇒
+  /// <see cref="DefaultWatchClaimsPerDay"/>; <c>0</c> holds every source-watch item in the queue (none is claimed); any
+  /// whole number above <see cref="MaxWatchClaimsPerDay"/>, however many digits (R28 review F5), ⇒ that maximum.
+  /// </summary>
+  public static int WatchClaimsPerDay()
+  {
+    var raw = Read(WatchClaimsPerDayEnv);
+    if (raw is null || !raw.All(char.IsAsciiDigit)) return DefaultWatchClaimsPerDay;
+    return int.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out var n)
+      ? Math.Min(n, MaxWatchClaimsPerDay)
+      : MaxWatchClaimsPerDay;
+  }
 
   /// <summary>Trimmed; null when unset or blank.</summary>
   public static string? NotifyQueueUrl() => Read(NotifyQueueUrlEnv);

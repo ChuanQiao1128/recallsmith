@@ -1,4 +1,5 @@
-"""The five checks against the loopback fake site: pass, each failure code, no redirect, no credential."""
+"""The checks against the loopback fake site: pass, each failure code, no redirect, no credential.
+The four R28 checks' own cases are in test_r28_checks.py."""
 
 from __future__ import annotations
 
@@ -7,7 +8,7 @@ import http.server
 import socket
 import time
 
-from conftest import DECK_BODY, DECK_PATH, DECK_SHA, USER_AGENT, FakeSite, json_answer, manifest
+from conftest import DECK_BODY, DECK_PATH, DECK_SHA, USER_AGENT, FakeSite, json_answer, manifest, r28_paths
 
 from synthetic_check.checks import CHECK_NAMES, BODY_CAP, DECK_CAP, CheckResult, run_checks
 
@@ -23,13 +24,13 @@ def _failed(results: list[CheckResult]) -> list[str]:
     return [r.name for r in results if not r.ok]
 
 
-def test_all_five_checks_pass(fake_site: FakeSite) -> None:
+def test_all_checks_pass(fake_site: FakeSite) -> None:
     results = run_checks(fake_site.settings())
     by = _by_name(results)
     assert _failed(results) == []
-    assert all(r.code is None and isinstance(r.ms, int) and r.ms >= 0 for r in results)
-    assert [by[n].status for n in CHECK_NAMES] == [200, 200, 200, 200, 401]
-    assert fake_site.paths == ["/health", "/content/manifest.json", DECK_ROUTE, "/", "/api/v1/me"]
+    assert all(r.code is None and r.detail is None and isinstance(r.ms, int) and r.ms >= 0 for r in results)
+    assert [by[n].status for n in CHECK_NAMES] == [200, 200, 200, 200, 401, 401, 200, 200, 200]
+    assert fake_site.paths == ["/health", "/content/manifest.json", DECK_ROUTE, "/", "/api/v1/me", *r28_paths()]
 
 
 def test_api_health_fails_on_status(fake_site: FakeSite) -> None:
@@ -134,7 +135,7 @@ def test_cdn_deck_skips_non_public_and_non_live_entries(fake_site: FakeSite) -> 
     by = _by_name(run_checks(fake_site.settings()))
     assert by["cdn-manifest"].ok
     assert (by["cdn-deck"].status, by["cdn-deck"].code) == (None, "NO_PUBLIC_DECK")
-    assert fake_site.paths == ["/health", "/content/manifest.json", "/", "/api/v1/me"]
+    assert fake_site.paths == ["/health", "/content/manifest.json", "/", "/api/v1/me", *r28_paths()]
     fake_site.routes["/content/manifest.json"] = json_answer(200, manifest([*unsafe, {**live, "path": DECK_PATH}]))
     assert _failed(run_checks(fake_site.settings())) == []
 
@@ -160,7 +161,8 @@ def test_api_auth_guard_fails_on_200(fake_site: FakeSite) -> None:
         fake_site.routes["/api/v1/me"] = json_answer(status, {"success": True})
         results = run_checks(fake_site.settings())
         assert _failed(results) == ["api-auth-guard"]
-        assert (results[-1].status, results[-1].code) == (status, "HTTP_STATUS")
+        guard = _by_name(results)["api-auth-guard"]
+        assert (guard.status, guard.code) == (status, "HTTP_STATUS")
 
 
 def test_api_auth_guard_fails_on_5xx(fake_site: FakeSite) -> None:
@@ -168,7 +170,8 @@ def test_api_auth_guard_fails_on_5xx(fake_site: FakeSite) -> None:
         fake_site.routes["/api/v1/me"] = json_answer(status, {})
         results = run_checks(fake_site.settings())
         assert _failed(results) == ["api-auth-guard"]
-        assert (results[-1].status, results[-1].code) == (status, "HTTP_STATUS")
+        guard = _by_name(results)["api-auth-guard"]
+        assert (guard.status, guard.code) == (status, "HTTP_STATUS")
 
 
 def _sleepy(handler: http.server.BaseHTTPRequestHandler) -> None:
@@ -187,8 +190,9 @@ def test_timeout_is_timeout(fake_site: FakeSite) -> None:
     started = time.monotonic()
     results = run_checks(fake_site.settings())
     assert _failed(results) == ["api-auth-guard"]
-    assert (results[-1].status, results[-1].code) == (None, "TIMEOUT")
-    assert 900 <= results[-1].ms < 1900
+    guard = _by_name(results)["api-auth-guard"]
+    assert (guard.status, guard.code) == (None, "TIMEOUT")
+    assert 900 <= guard.ms < 1900
     assert time.monotonic() - started < 1.9
 
 
@@ -200,7 +204,7 @@ def test_redirect_is_not_followed(fake_site: FakeSite) -> None:
     assert (results[0].status, results[0].code) == (302, "HTTP_STATUS")
     assert "/moved" not in fake_site.paths
     fake_site.routes["/api/v1/me"] = (301, {"Location": fake_site.base_url + "/moved"}, b"")
-    assert run_checks(fake_site.settings())[-1].code == "HTTP_STATUS"
+    assert _by_name(run_checks(fake_site.settings()))["api-auth-guard"].code == "HTTP_STATUS"
     assert "/moved" not in fake_site.paths
 
 
@@ -211,14 +215,15 @@ def test_connection_refused_is_network(fake_site: FakeSite) -> None:
     dead = f"http://127.0.0.1:{closed_port}"
     results = run_checks(fake_site.settings(API_BASE=dead))
     by = _by_name(results)
-    assert _failed(results) == ["api-health", "api-auth-guard"]
+    assert _failed(results) == ["api-health", "api-auth-guard", "api-sync-guard"]
     assert (by["api-health"].status, by["api-health"].code) == (None, "NETWORK")
     assert (by["api-auth-guard"].status, by["api-auth-guard"].code) == (None, "NETWORK")
+    assert (by["api-sync-guard"].status, by["api-sync-guard"].code) == (None, "NETWORK")
 
 
 def test_requests_carry_user_agent_and_no_authorization(fake_site: FakeSite) -> None:
     run_checks(fake_site.settings())
-    assert len(fake_site.requests) == 5
+    assert len(fake_site.requests) == 5 + len(r28_paths())
     for captured in fake_site.requests:
         assert captured.headers.get_all("User-Agent") == [USER_AGENT]
         assert captured.headers.get("Accept")

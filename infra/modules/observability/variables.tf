@@ -39,6 +39,12 @@ variable "api_stage_name" {
 
 variable "core_vpc_function_name" { type = string }
 
+variable "core_vpc_log_group_name" {
+  type        = string
+  default     = null
+  description = "R28 MONITOR: core-vpc's log group (module.api output), read by the auth-reject metric filter; null means /aws/lambda/<core_vpc_function_name>."
+}
+
 variable "worker_function_name" { type = string }
 
 variable "publish_queue_name" { type = string }

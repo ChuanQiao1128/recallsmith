@@ -1,4 +1,9 @@
-"""The five synthetic checks (H00 §5.2), run sequentially, one GET each, never raising.
+"""The synthetic checks (H00 §5.2, R28 MONITOR), run sequentially, never raising.
+
+The first five are H00's (one GET each). R28 MONITOR adds four that need no account and no new IAM:
+`api-sync-guard` (the token-less sync route answers 401), `remote-config` (the app's remote-config
+document: fetch and schema sanity) and `cognito-console` / `cognito-mobile` (each pool's OIDC discovery
+document and JWKS, two GETs).
 
 The whole run is bounded by RUN_DEADLINE_S of wall time, well under the 60 s Lambda timeout, so the
 EMF line is always written. Each check runs in a daemon worker thread that the caller joins with the
@@ -9,7 +14,8 @@ frozen with the sandbox when the invocation returns.
 
 Every request: GET, no proxy, no redirect followed (a 3xx is HTTP_STATUS), per-request timeout
 `settings.timeout_s`, no retry, only `User-Agent` and `Accept` set (never a credential), at most
-`cap + 1` bytes read. A result carries a bounded failure code, never a URL, body or header value.
+`cap + 1` bytes read. A result carries a bounded failure code and, for the R28 checks, a bounded
+`detail` (a rule id from this file, never a URL, body, header value or a key read from a response).
 """
 
 from __future__ import annotations
@@ -30,7 +36,24 @@ from typing import Any
 
 from .settings import Settings
 
-CHECK_NAMES = ("api-health", "cdn-manifest", "cdn-deck", "console-index", "api-auth-guard")
+CHECK_NAMES = (
+    "api-health",
+    "cdn-manifest",
+    "cdn-deck",
+    "console-index",
+    "api-auth-guard",
+    "api-sync-guard",
+    "remote-config",
+    "cognito-console",
+    "cognito-mobile",
+)
+
+# Checks whose failure is not an outage of ours, so they stay out of SyntheticCheckSuccess, the handler's `ok` /
+# `failed` (the CD smoke) and the paging alarm developercards-<env>-synthetic-check-failing. remote-config is served
+# by a third party (raw.githubusercontent.com) and the app keeps its last good copy when it cannot read it; a failure
+# there must not hold that alarm in ALARM and hide a real API, CDN, console or Cognito outage behind it. It has its
+# own metric (emf.ADVISORY_METRICS) and alarm (infra alarms_r28.tf synthetic_remote_config_failing).
+ADVISORY_CHECKS = frozenset({"remote-config"})
 
 HTTP_STATUS = "HTTP_STATUS"
 TIMEOUT = "TIMEOUT"
@@ -49,10 +72,16 @@ RUN_DEADLINE_S = 40.0
 MIB = 1024 * 1024
 BODY_CAP = 1 * MIB
 DECK_CAP = 5 * MIB
+# The remote-config document (432 bytes on 2026-10-04) and the Cognito documents (about 1 KiB each).
+SMALL_DOC_CAP = 64 * 1024
 
 HEALTH_PATH = "/health"
 MANIFEST_PATH = "/content/manifest.json"
 ME_PATH = "/api/v1/me"
+# The app's sync read (mobile progressSync); ANY /api/v1/sync/{proxy+} behind the mobile JWT authorizer.
+SYNC_PATH = "/api/v1/sync/progress"
+OIDC_DISCOVERY_SUFFIX = "/.well-known/openid-configuration"
+JWKS_SUFFIX = "/.well-known/jwks.json"
 
 _SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 _PATH_SAFE = "/%-._~!$&'()*+,;=:@"
@@ -65,6 +94,7 @@ class CheckResult:
     status: int | None
     ms: int
     code: str | None
+    detail: str | None = None
 
 
 @dataclass(frozen=True)
@@ -75,12 +105,13 @@ class Response:
 
 
 class CheckFailed(Exception):
-    """One check's failure: a bounded code and the HTTP status when one was received."""
+    """One check's failure: a bounded code, the HTTP status when one was received and an optional rule id."""
 
-    def __init__(self, code: str, status: int | None = None) -> None:
+    def __init__(self, code: str, status: int | None = None, detail: str | None = None) -> None:
         super().__init__(code)
         self.code = code
         self.status = status
+        self.detail = detail
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -234,6 +265,181 @@ def check_api_auth_guard(settings: Settings, state: dict[str, Any]) -> int:
     return resp.status
 
 
+def check_api_sync_guard(settings: Settings, state: dict[str, Any]) -> int:
+    """The app's sync route without a token: a 401 shows the route is served and a JWT guard rejects the
+    request (a 403 would be core-vpc answering an unguarded route, a 429 a throttle, a 5xx an outage)."""
+    resp = http_get(settings, settings.api_base + SYNC_PATH, accept="application/json", cap=BODY_CAP)
+    if resp.status != 401:
+        raise CheckFailed(HTTP_STATUS, resp.status)
+    return resp.status
+
+
+# ── remote-config: the document mobile/App.tsx REMOTE_CONFIG_URL serves ─────────────────────────────
+# What the app reads (mobile/src/config/remoteConfig.ts, featureFlags.ts applyRemoteFeatures). The app
+# never crashes on a bad value: it silently falls back (to the last cached document, or to a flag's built-in
+# default), so a broken document changes behaviour without any error. These rules catch exactly that.
+# tests/test_remote_config_schema.py keeps REMOTE_FEATURES and REMOTE_IOS_KEYS equal to the app's readers.
+
+REMOTE_IOS_KEYS = ("minSupportedVersion", "latestVersion", "updateUrl", "appStoreId", "message")
+# The only place a gated user is sent (report G10): anything else is a mistake or a hijacked config.
+APP_STORE_URL_PREFIX = "https://apps.apple.com/"
+_VERSION = re.compile(r"[0-9]{1,4}(?:\.[0-9]{1,4}){0,2}")
+_DIGITS = re.compile(r"[0-9]{1,20}")
+
+
+def _is_bool(value: object) -> bool:
+    return isinstance(value, bool)
+
+
+def _is_count(value: object) -> bool:
+    """A non-negative integer as JSON has it (3 or 3.0; never a boolean)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return float(value).is_integer() and value >= 0
+
+
+def _is_related_count(value: object) -> bool:
+    return _is_count(value) and value <= 5  # type: ignore[operator]
+
+
+# feature -> leaf -> rule: the app ignores a value of another type and uses its built-in default instead.
+REMOTE_FEATURES: dict[str, dict[str, Callable[[object], bool]]] = {
+    "mcq": {"enabled": _is_bool, "recallFirst": _is_bool, "maxPerRun": _is_count, "answerTelemetry": _is_bool},
+    "paywall": {"hidden": _is_bool},
+    "ceremony": {"seamOfLight": _is_bool, "forceFallback": _is_bool},
+    "mistakeBook": {"enabled": _is_bool, "relatedCount": _is_related_count},
+    "cardSource": {"enabled": _is_bool},
+    "sentry": {"enabled": _is_bool},
+    "cardReport": {"enabled": _is_bool, "anonymous": _is_bool},
+    "fsrs": {"enabled": _is_bool},
+    "anonFunnel": {"enabled": _is_bool},
+}
+
+
+# Every detail a result may carry: rule ids fixed in this file, so a log line can never echo a response.
+DETAILS = frozenset(
+    [
+        "json",
+        "ios",
+        *(f"ios.{key}" for key in REMOTE_IOS_KEYS),
+        "features",
+        "features.unknown",
+        *(f"features.{name}" for name in REMOTE_FEATURES),
+        *(f"features.{name}.{leaf}" for name, leaves in REMOTE_FEATURES.items() for leaf in leaves),
+        "discovery",
+        "discovery.issuer",
+        "discovery.jwks_uri",
+        "jwks",
+        "jwks.keys",
+        "jwks.rs256",
+    ]
+)
+
+
+def remote_config_problem(doc: object) -> str | None:
+    """The first rule `doc` breaks, as a fixed rule id (never a value or a key from the document), else None."""
+    if not isinstance(doc, dict):
+        return "json"
+    ios = doc.get("ios")
+    if ios is not None:
+        if not isinstance(ios, dict):
+            return "ios"
+        # The app calls .trim() on each of these: a value that is not a string throws inside the version gate.
+        for key in REMOTE_IOS_KEYS:
+            value = ios.get(key)
+            if value is not None and not isinstance(value, str):
+                return f"ios.{key}"
+        # The version gate compares minSupportedVersion (remoteConfig.ts resolveIosUpdate, compareSemver).
+        # latestVersion is only trimmed and returned, never used to gate or shown, so it needs only to be a string.
+        floor = (ios.get("minSupportedVersion") or "").strip()
+        if floor and not _VERSION.fullmatch(floor):
+            return "ios.minSupportedVersion"
+        update_url = (ios.get("updateUrl") or "").strip()
+        if update_url and not update_url.startswith(APP_STORE_URL_PREFIX):
+            return "ios.updateUrl"
+        store_id = (ios.get("appStoreId") or "").strip()
+        if store_id and not _DIGITS.fullmatch(store_id):
+            return "ios.appStoreId"
+    features = doc.get("features")
+    if features is not None:
+        if not isinstance(features, dict):
+            return "features"
+        for name, value in features.items():
+            if value is None:
+                continue
+            rules = REMOTE_FEATURES.get(name)
+            if rules is None:
+                # A flag only a newer app reads: its value must still be an object, like every feature.
+                if not isinstance(value, dict):
+                    return "features.unknown"
+                continue
+            if not isinstance(value, dict):
+                return f"features.{name}"
+            for leaf, rule in rules.items():
+                leaf_value = value.get(leaf)
+                if leaf_value is not None and not rule(leaf_value):
+                    return f"features.{name}.{leaf}"
+    return None
+
+
+def check_remote_config(settings: Settings, state: dict[str, Any]) -> int:
+    resp = http_get(settings, settings.remote_config_url, accept="application/json", cap=SMALL_DOC_CAP)
+    _expect_200(resp)
+    try:
+        doc = _json(resp)
+    except CheckFailed as failed:
+        raise CheckFailed(BAD_BODY, resp.status, "json") from failed
+    problem = remote_config_problem(doc)
+    if problem is not None:
+        raise CheckFailed(BAD_BODY, resp.status, problem)
+    return resp.status
+
+
+# ── cognito-console / cognito-mobile: OIDC discovery and JWKS of each pool ──────────────────────────
+# The API Gateway JWT authorizers and core-vpc's verifier read these keys; a pool that cannot serve them
+# signs nobody in and verifies no token.
+
+
+def _cognito_step(detail: str, fn: Callable[[], Response]) -> tuple[Response, Any]:
+    """One GET of a Cognito document that must answer 200 with JSON; any failure carries `detail`."""
+    try:
+        resp = fn()
+        _expect_200(resp)
+        return resp, _json(resp)
+    except CheckFailed as failed:
+        raise CheckFailed(failed.code, failed.status, failed.detail or detail) from failed
+
+
+def _check_cognito(settings: Settings, issuer: str) -> int:
+    jwks_url = issuer + JWKS_SUFFIX
+    discovery, doc = _cognito_step(
+        "discovery", lambda: http_get(settings, issuer + OIDC_DISCOVERY_SUFFIX, accept="application/json", cap=SMALL_DOC_CAP)
+    )
+    if not isinstance(doc, dict) or doc.get("issuer") != issuer:
+        raise CheckFailed(BAD_BODY, discovery.status, "discovery.issuer")
+    if doc.get("jwks_uri") != jwks_url:
+        raise CheckFailed(BAD_BODY, discovery.status, "discovery.jwks_uri")
+    # The configured URL, never one read from the response.
+    jwks, keys_doc = _cognito_step("jwks", lambda: http_get(settings, jwks_url, accept="application/json", cap=SMALL_DOC_CAP))
+    keys = keys_doc.get("keys") if isinstance(keys_doc, dict) else None
+    if not isinstance(keys, list) or not keys:
+        raise CheckFailed(BAD_BODY, jwks.status, "jwks.keys")
+    if not all(isinstance(k, dict) and isinstance(k.get("kid"), str) and k.get("kid") and isinstance(k.get("kty"), str) for k in keys):
+        raise CheckFailed(BAD_BODY, jwks.status, "jwks.keys")
+    # core-vpc accepts RS256 only (JwtVerifier RequiredAlgorithm); the authorizers verify the same keys.
+    if not any(k.get("kty") == "RSA" and k.get("alg") == "RS256" and k.get("use") in (None, "sig") for k in keys):
+        raise CheckFailed(BAD_BODY, jwks.status, "jwks.rs256")
+    return jwks.status
+
+
+def check_cognito_console(settings: Settings, state: dict[str, Any]) -> int:
+    return _check_cognito(settings, settings.cognito_console_issuer)
+
+
+def check_cognito_mobile(settings: Settings, state: dict[str, Any]) -> int:
+    return _check_cognito(settings, settings.cognito_mobile_issuer)
+
+
 CheckFn = Callable[[Settings, dict[str, Any]], int]
 
 
@@ -245,6 +451,10 @@ def _check_fns() -> tuple[tuple[str, CheckFn], ...]:
         ("cdn-deck", check_cdn_deck),
         ("console-index", check_console_index),
         ("api-auth-guard", check_api_auth_guard),
+        ("api-sync-guard", check_api_sync_guard),
+        ("remote-config", check_remote_config),
+        ("cognito-console", check_cognito_console),
+        ("cognito-mobile", check_cognito_mobile),
     )
 
 
@@ -273,7 +483,7 @@ def _call_bounded(fn: CheckFn, settings: Settings, state: dict[str, Any], budget
 
 
 def run_checks(settings: Settings, deadline_s: float | None = None) -> list[CheckResult]:
-    """The five checks in CHECK_NAMES order, sequentially, within deadline_s (default RUN_DEADLINE_S)
+    """The checks in CHECK_NAMES order, sequentially, within deadline_s (default RUN_DEADLINE_S)
     of wall time; checks past the deadline are TIMEOUT without a request. Never raises."""
     if settings.config_error is not None:
         return [CheckResult(name, False, None, 0, CONFIG) for name in CHECK_NAMES]
@@ -291,7 +501,8 @@ def run_checks(settings: Settings, deadline_s: float | None = None) -> list[Chec
             results.append(CheckResult(name, True, status, _elapsed_ms(started), None))
         except CheckFailed as failed:
             code = failed.code if failed.code in CODES else ERROR
-            results.append(CheckResult(name, False, failed.status, _elapsed_ms(started), code))
+            detail = failed.detail if failed.detail in DETAILS else None
+            results.append(CheckResult(name, False, failed.status, _elapsed_ms(started), code, detail))
         except Exception:
             results.append(CheckResult(name, False, None, _elapsed_ms(started), ERROR))
     return results

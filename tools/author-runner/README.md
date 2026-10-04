@@ -151,7 +151,7 @@ Every variable is optional.
 | Variable | Default | Notes |
 |---|---|---|
 | `DC_RUNNER_ID` | the hostname, lowercased, other characters → `-`, ≤ 64 (else `mac`) | must match `^[a-z0-9][a-z0-9-]{0,63}$` |
-| `DC_RUNNER_MAX_ITEMS` | `3` | items run per run (one claim each), 1..5 |
+| `DC_RUNNER_MAX_ITEMS` | `3` | items run per run (one claim each), 1..5. Server-side, core-vpc also hands out at most `AUTOMATION_WATCH_CLAIMS_PER_DAY` (default 5) source-watch items (`source_changed`, `feed_item`) in any rolling 24 hours across all runners (R28 MONITOR; docs/runbooks/automation-operations.md, "Source-watch claim cap"); a claim past it returns only the owner's items, or none |
 | `DC_RUNNER_LEASE_MINUTES` | `90` | claim lease of one item, 15..240; must be at least `DC_RUNNER_ITEM_TIMEOUT_MINUTES` + 1 |
 | `DC_RUNNER_ITEM_TIMEOUT_MINUTES` | `45` | claude time limit per item, 5..120 |
 | `DC_RUNNER_MODEL` | `claude-opus-5-5` | `claude --model`; a full model id (no whitespace, ≤ 100 characters); a floating alias such as `opus`, `sonnet`, `haiku`, `default` or `opusplan` is refused |

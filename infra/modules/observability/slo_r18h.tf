@@ -13,15 +13,23 @@ locals {
   }
   # Q2: GET /health (hc, h5xx) is the probe's liveness call; the token-less GET /api/v1/me gets its 401 from the JWT
   # authorizer, so that route's 4xx (m4xx) are the probe's requests (and a user's expired token, which is no 5xx either).
+  # R28 MONITOR: the probe's token-less GET /api/v1/sync/progress is a 4xx of ANY /api/v1/sync/{proxy+} (s4xx), left
+  # out the same way. services/synthetic-check/tests/test_infra_contract.py keeps these routes equal to the probe's.
   slo_api_user_metrics = {
     e5xx  = { metric = "5xx", route = {} }
     total = { metric = "Count", route = {} }
     hc    = { metric = "Count", route = { Resource = "/health", Method = "GET" } }
     h5xx  = { metric = "5xx", route = { Resource = "/health", Method = "GET" } }
     m4xx  = { metric = "4xx", route = { Resource = "/api/v1/me", Method = "GET" } }
+    s4xx  = { metric = "4xx", route = { Resource = "/api/v1/sync/{proxy+}", Method = "ANY" } }
   }
-  slo_api_user_total = "total - FILL(hc, 0) - FILL(m4xx, 0)"
+  slo_api_user_total = "total - FILL(hc, 0) - FILL(m4xx, 0) - FILL(s4xx, 0)"
   slo_api_user_bad   = "FILL(e5xx, 0) - FILL(h5xx, 0)"
+
+  # The synthetic check's API requests per hour (4 runs x GET /health, /api/v1/me, /api/v1/sync/progress); the
+  # 1-hour fast-burn guard is twice this, so the probes alone never meet it and are at most half of the hour.
+  slo_probe_api_requests_per_hour = 12
+
   # The three sync routes the app calls (RouteMetrics EMF Latency, Service = core-vpc): n<i> = SampleCount, p<i> = percent <= 2000 ms.
   slo_sync_routes = [
     { route = "/api/v1/sync/push", method = "POST" },
@@ -56,7 +64,7 @@ locals {
 
 resource "aws_cloudwatch_metric_alarm" "slo_api_availability_burn_1h" {
   alarm_name          = "developercards-${var.env}-slo-api-availability-burn-1h"
-  alarm_description   = "SLO api-availability: 99.5 % of app API requests without a 5xx over a rolling 28 days; 1-hour burn rate >= 14.4 (fast-burn child, no actions; guard >= 16 requests, twice the synthetic check's 8 per hour, and >= 2 5xx)."
+  alarm_description   = "SLO api-availability: 99.5 % of app API requests without a 5xx over a rolling 28 days; 1-hour burn rate >= 14.4 (fast-burn child, no actions; guard >= ${2 * local.slo_probe_api_requests_per_hour} requests, twice the synthetic check's ${local.slo_probe_api_requests_per_hour} per hour, and >= 2 5xx)."
   comparison_operator = "GreaterThanOrEqualToThreshold"
   threshold           = 14.4
   evaluation_periods  = 1
@@ -88,7 +96,7 @@ resource "aws_cloudwatch_metric_alarm" "slo_api_availability_burn_1h" {
 
   metric_query {
     id          = "burn"
-    expression  = "IF(total >= 16 AND bad >= 2, (bad / total) / 0.005, 0)"
+    expression  = "IF(total >= ${2 * local.slo_probe_api_requests_per_hour} AND bad >= 2, (bad / total) / 0.005, 0)"
     label       = "api-availability burn rate (1 h)"
     return_data = true
   }
