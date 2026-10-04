@@ -8,6 +8,8 @@ A:
 Keep the first 30 days in S3 Standard, then use a lifecycle rule to transition objects to S3 Glacier Flexible Retrieval or Deep Archive for the retention period, and expire them after 7 years. Lifecycle rules run automatically; you do not write code or move objects yourself. Use Intelligent-Tiering instead only when the access pattern is unknown.
 USAGE:
 Age out build artefacts and logs with a lifecycle rule instead of a cleanup script: keep 30 days hot, then transition to Glacier and expire at the retention deadline.
+SOURCE: https://docs.aws.amazon.com/AmazonS3/latest/userguide/lifecycle-transition-general-considerations.html
+You might want to archive objects that you don't need to access in real time to the S3 Glacier Flexible Retrieval or S3 Glacier Deep Archive storage classes.
 
 ## aws-s3-cloudfront-oac | d2
 TOPIC: 1.2 Secure workloads
@@ -17,6 +19,8 @@ A:
 With Origin Access Control the bucket policy grants read access only to the CloudFront distribution's service principal, so every request must come through CloudFront: the edge cache, HTTPS, WAF and logging all apply, and nobody can skip them with a direct S3 URL. A public bucket leaks the origin and lets clients skip the CDN. OAC replaced the older Origin Access Identity and supports SSE-KMS objects.
 USAGE:
 A single-page app on S3 behind CloudFront with OAC needs a 403/404 to index.html custom error response for client-side routes.
+SOURCE: https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html
+Use an S3 bucket policy to allow the CloudFront service principal (cloudfront.amazonaws.com) to access the bucket.
 
 ## aws-iam-roles-vs-users | d1
 TOPIC: 1.1 Secure access
@@ -121,6 +125,8 @@ A:
 Cover the steady baseline with a Savings Plan or Reserved Instances, which discount committed usage over one or three years, and run the interruptible batch on Spot Instances, which are spare capacity at a large discount that AWS can reclaim with a two-minute warning. On-Demand is for unpredictable or short workloads. Never put a stateful single instance on Spot without a way to resume.
 USAGE:
 Buy the Savings Plan for the floor you have measured over 30 days, not the peak, and let Spot and On-Demand cover the rest.
+SOURCE: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instance-purchasing-options.html
+Spot Instances are a cost-effective choice if you can be flexible about when your applications run and if they can be interrupted.
 
 ## aws-ebs-vs-efs-vs-instance-store | d1
 TOPIC: 2.1 Loosely coupled architectures
@@ -236,6 +242,8 @@ CODE: json
 }
 USAGE:
 If a role created by automation cannot do something its policy plainly allows, check whether a permissions boundary was attached to it, since the console shows the boundary separately from the permissions policies.
+SOURCE: https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html
+Identity-based policies grant permission to the entity, and permissions boundaries limit those permissions. The effective permissions are the intersection of both policy types.
 
 ## aws-sts-assume-role-cross-account | d2
 TOPIC: 1.1 Secure access
@@ -285,6 +293,8 @@ A:
 Account A must attach a bucket policy, a resource-based policy, naming the role's ARN as Principal and allowing s3:GetObject on the objects, because an identity-based policy in account A cannot grant to a principal it does not own. The role in account B also needs an identity policy allowing s3:GetObject on the object ARN, arn:aws:s3:::bucket/*, not the bucket ARN, because s3:GetObject is an object operation and a cross-account request must be allowed in both accounts. Within one account either policy type alone is enough. Keep Object Ownership on bucket owner enforced so ACLs are disabled and account A owns every object. The distractor is an object ACL, or an IAM policy in account A naming account B's role.
 USAGE:
 If a cross-account read still fails after the bucket policy looks right, check whether the objects use SSE-KMS, because the key policy must also allow the other account and the AWS managed key cannot be shared.
+SOURCE: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic-cross-account.html
+The request is allowed only if both evaluations return a decision of Allow.
 
 ## aws-s3-block-public-access | d1
 TOPIC: 1.3 Data security controls
@@ -322,6 +332,8 @@ A:
 A presigned URL is a signed request that carries the permissions of the IAM principal who generated it, valid only until the expiry you set, so the bucket stays private and no credentials leave your backend. It works for downloads with GET and for uploads with PUT, and the client makes a plain HTTPS request. The trap is expiry: the URL dies when the signing credentials do, so one generated from an EC2 instance role or an STS session expires with that session even if you asked for longer, and only long-lived IAM user credentials reach the seven-day maximum. The exam distractor is making the bucket public, which exposes every object instead of one for a short time.
 USAGE:
 Sign URLs with a credential that outlives the URL, and remember an upload URL overwrites any existing object with the same key.
+SOURCE: https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html
+IAM role credentials – The presigned URL expires when the role session expires, even if you specify a longer expiration time.
 
 ## aws-kms-key-rotation-and-multi-region | d2
 TOPIC: 1.3 Data security controls
@@ -342,6 +354,8 @@ A:
 ACM certificates are Regional resources and cannot be copied between Regions. An ALB uses a certificate from its own Region, but CloudFront accepts only certificates in us-east-1, so request a second one there. Public certificates used with integrated services cost nothing extra and ACM renews them automatically when DNS validation is in place; imported certificates are never renewed. For export, an ordinary public certificate cannot be exported, and only one requested with export enabled, which carries a charge, or one issued by AWS Private CA gives you the private key for EC2 or on-premises servers. The distractor is exporting the existing certificate or attaching it directly to EC2, which ACM allows only through Nitro Enclaves.
 USAGE:
 Prefer DNS validation over email so renewals need no human action, and treat us-east-1 as the home for anything CloudFront will serve.
+SOURCE: https://docs.aws.amazon.com/acm/latest/userguide/acm-overview.html
+To use an ACM certificate with Amazon CloudFront, you must request or import the certificate in the US East (N. Virginia) region.
 
 ## aws-cognito-user-pool-vs-identity-pool | d2
 TOPIC: 1.2 Secure workloads
@@ -371,6 +385,8 @@ A:
 A gateway endpoint exists only for S3 and DynamoDB, works as a prefix-list route in the subnet route table at no additional charge. It cannot be used from on premises, a peered VPC or another Region. For the data centre add an interface endpoint: a PrivateLink elastic network interface with a private IP in your subnet, guarded by a security group, and reachable over VPN, Direct Connect or a peered VPC. Both accept an endpoint policy that narrows which principals and buckets are reachable without replacing IAM or bucket policies. The distractor is an interface endpoint for traffic that never leaves the VPC, or a gateway endpoint for a client outside it.
 USAGE:
 Add an S3 bucket policy condition on aws:sourceVpce once the endpoint exists, but test it first because a wrong endpoint ID locks everyone out, including the console.
+SOURCE: https://docs.aws.amazon.com/vpc/latest/privatelink/vpc-endpoints-s3.html
+However, gateway endpoints do not allow access from on-premises networks, from peered VPCs in other AWS Regions, or through a transit gateway.
 
 ## aws-vpc-peering-vs-transit-gateway | d2
 TOPIC: 3.4 Scalable network
@@ -406,6 +422,8 @@ A:
 Flow logs record metadata about IP traffic to and from network interfaces: source and destination address and port, protocol, packet and byte counts, and an ACCEPT or REJECT action. You enable them at VPC, subnet or network interface level and publish to CloudWatch Logs, S3 or Data Firehose. A REJECT record on the inbound flow proves the packets never reached the instance, which points at the security group or network ACL rather than the application. They do not capture packet payloads, they are not real time, and they skip some traffic such as Amazon DNS, instance metadata and DHCP. The distractor is Traffic Mirroring or a packet capture when the question only asks which layer blocked the connection.
 USAGE:
 If you see ACCEPT for the request and REJECT for the reply, look at the stateless network ACL, because a stateful security group would have let the response through.
+SOURCE: https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs-records-examples.html
+Conversely, network ACLs are stateless, therefore responses to allowed traffic are subject to network ACL rules.
 
 ## aws-ssm-session-manager-vs-bastion | d2
 TOPIC: 1.2 Secure workloads
@@ -415,6 +433,8 @@ A:
 Use Systems Manager Session Manager. The SSM Agent on the instance opens an outbound HTTPS connection to the Systems Manager endpoints, so the instance needs no inbound port 22, no key pair and no public IP; a bastion still leaves SSH open somewhere and keys to rotate. Who may connect, and to which nodes, is decided by IAM policies, and session activity can be sent to CloudWatch Logs or S3 while CloudTrail records the API calls. The prerequisites the exam probes: SSM Agent installed, an instance profile with the AmazonSSMManagedInstanceCore permissions, and outbound reach to the ssm, ssmmessages and ec2messages endpoints, which in a private subnet means a NAT gateway or interface VPC endpoints. The bastion host is the distractor.
 USAGE:
 When Session Manager cannot connect, the cause is almost always a missing instance profile or no route to the SSM endpoints, not a security group.
+SOURCE: https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager.html
+Session Manager provides secure node management without the need to open inbound ports, maintain bastion hosts, or manage SSH keys.
 
 ## aws-site-to-site-vpn-vs-direct-connect | d2
 TOPIC: 3.4 Scalable network
@@ -458,6 +478,8 @@ TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-meta
 curl -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/iam/security-credentials/
 USAGE:
 Set the AMI's imds-support to v2.0 or the account-level default so new instances require IMDSv2 without anyone remembering a launch flag.
+SOURCE: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html
+PUT requests are rejected if they contain an X-Forwarded-For header.
 
 ## aws-rds-encryption-and-iam-auth | d2
 TOPIC: 1.3 Data security controls
@@ -467,6 +489,8 @@ A:
 Encryption at rest is chosen only when an RDS instance is created; you cannot switch it on for a running one, nor take an encrypted snapshot of an unencrypted instance. The path is: snapshot the instance, copy the snapshot with encryption and a KMS key, restore a new instance from the encrypted copy, then repoint the application. The setting then flows into backups, snapshots and read replicas, and can never be removed. For access, enable IAM database authentication (MariaDB, MySQL and PostgreSQL): the application uses its instance profile credentials to request a token valid for 15 minutes and presents it instead of a password over SSL or TLS. The distractor is a modify-instance encryption option, which does not exist.
 USAGE:
 Because IAM tokens expire after 15 minutes, generate a fresh one for each new connection rather than caching it in a connection pool's configuration.
+SOURCE: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Overview.Encryption.html
+You can only encrypt an Amazon RDS DB instance when you create it, not after the DB instance is created.
 
 ## aws-ebs-encryption-default | d2
 TOPIC: 1.3 Data security controls
@@ -476,6 +500,8 @@ A:
 Turn on EBS encryption by default; it is a per-Region setting, so enable it in every Region you use. From then on new volumes and snapshot copies are encrypted with the default key, the AWS managed aws/ebs key unless you nominate a customer managed key, and individual volumes cannot opt out. It does nothing to existing volumes or snapshots. To fix those, snapshot the volume and either create a new encrypted volume from that snapshot or copy the snapshot with encryption enabled and restore from the copy; there is no in-place encrypt. Encryption is inherited and permanent: snapshots of encrypted volumes and volumes restored from them are encrypted for good. The trap is assuming the switch retrofits old volumes.
 USAGE:
 Copying a snapshot to a different KMS key produces a full rather than incremental copy, so budget for the extra snapshot storage.
+SOURCE: https://docs.aws.amazon.com/ebs/latest/userguide/encryption-by-default.html
+Encryption by default has no effect on existing EBS volumes or snapshots.
 
 ## aws-security-group-referencing | d1
 TOPIC: 3.4 Scalable network
@@ -507,6 +533,8 @@ A:
 Match the authoriser to the caller. IAM authorisation, set as AWS_IAM on the method, suits AWS principals that can sign requests with Signature Version 4 and hold execute-api:Invoke. A Cognito user pool authoriser suits app users who sign in and present a user pool token. A Lambda authoriser suits anything custom: it receives the bearer token or request parameters, returns an IAM policy and a principal, and its decision can be cached. Resource policies then restrict where calls may come from, such as source IP ranges, VPC endpoints or other accounts. The trap is API keys: they identify a client for usage plan throttling and quotas, and AWS states that they must not be used for authentication or authorisation.
 USAGE:
 Pair an API key with a real authoriser; a key on its own lets any holder call every API in that usage plan.
+SOURCE: https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-api-usage-plans.html
+Don't use API keys for authentication or authorization to control access to your APIs.
 
 ## aws-lambda-vpc-access | d2
 TOPIC: 1.2 Secure workloads
@@ -516,6 +544,8 @@ A:
 Attaching a function to a VPC gives it a Hyperplane network interface in the subnets and security group you pick, so it can reach RDS or ElastiCache over private IPs; the execution role needs the AWSLambdaVPCAccessExecutionRole permissions to create that interface. The cost is that the function now reaches only what the VPC can reach, and the default internet access is gone. Fix it by choosing private subnets whose route table sends 0.0.0.0/0 to a NAT gateway in a public subnet. The trap is selecting a public subnet, which does not help because the function never gets a public IP. For S3, DynamoDB and other AWS APIs, add VPC endpoints so traffic stays on the AWS network without NAT.
 USAGE:
 Reuse the same subnet and security group combination across functions so Lambda shares one network interface instead of creating more.
+SOURCE: https://docs.aws.amazon.com/lambda/latest/dg/configuration-vpc.html
+Connecting a function to a public subnet doesn't give it internet access or a public IP address.
 
 ## aws-privatelink-expose-service | d2
 TOPIC: 1.2 Secure workloads
@@ -525,6 +555,8 @@ A:
 Use AWS PrivateLink. The provider puts a Network Load Balancer in front of the service, creates a VPC endpoint service and grants permission to the consumer principals. Each consumer creates an interface endpoint in its own subnets, which places an endpoint network interface with a private IP inside the consumer VPC, and the provider accepts the connection. Traffic stays on the AWS network and only the consumer initiates it, so the provider never routes into the consumer network. Because the consumer reaches the service through DNS and a local interface rather than through routes into the provider VPC, overlapping CIDR blocks are fine, whereas VPC peering refuses matching or overlapping ranges and exposes networks rather than one service.
 USAGE:
 Make the NLB available in at least two Availability Zones, because consumers can only create endpoints in zones where the endpoint service is available.
+SOURCE: https://docs.aws.amazon.com/whitepapers/latest/building-scalable-secure-multi-vpc-network-infrastructure/aws-privatelink.html
+If the VPC is different, the consumer and service provider VPCs can have overlapping IP address ranges.
 
 ## aws-iam-access-analyzer-credential-report | d2
 TOPIC: 1.3 Data security controls
@@ -630,6 +662,8 @@ A:
 By default an Auto Scaling group uses only the Amazon EC2 status checks, which detect a stopped or terminated instance or impaired hardware; a web server answering with errors still passes them, so the group considers the instance healthy. Elastic Load Balancing health checks are ignored until you turn them on. Once enabled, an instance the target group reports as unhealthy is marked Unhealthy on the next periodic check, drained, then terminated and replaced. Set a health check grace period so a new instance is not killed before it finishes starting; the console default is 300 seconds, the CLI default is 0. The distractor is changing the target group health check interval, which alters nothing on the group side.
 USAGE:
 After enabling ELB health checks, watch the group for a few minutes: a health check path that needs authentication or returns a redirect will get every instance replaced in a loop.
+SOURCE: https://docs.aws.amazon.com/autoscaling/ec2/userguide/health-checks-overview.html
+By default, Amazon EC2 Auto Scaling ignores the results of the Elastic Load Balancing health checks.
 
 ## aws-elb-cross-zone-and-sticky-sessions | d2
 TOPIC: 3.4 Scalable network
@@ -796,6 +830,8 @@ A:
 With versioning enabled, a DELETE without a version ID removes nothing; S3 inserts a delete marker that becomes the current version, and deleting the marker brings the object back. Overwrites create new versions instead of replacing the old one. Once enabled, versioning can only be suspended, never returned to unversioned. MFA delete adds a second factor to permanently deleting a version or changing the versioning state; only the bucket owner's root account can enable it, and only through the CLI or API, not the console. The trap is believing versioning alone blocks permanent deletes: a delete that names a version ID still succeeds without MFA delete.
 USAGE:
 Every version is billed as a full object, so pair versioning with a lifecycle rule that expires noncurrent versions or the bill grows silently.
+SOURCE: https://docs.aws.amazon.com/AmazonS3/latest/userguide/MultiFactorAuthenticationDelete.html
+However, only the bucket owner (root account) can enable MFA delete.
 
 ## aws-s3-durability-availability | d1
 TOPIC: 2.2 HA and fault tolerance
@@ -816,6 +852,8 @@ A:
 Choose FIFO. Standard queues give nearly unlimited throughput but only at-least-once delivery and best-effort ordering, so consumers must be idempotent and tolerate reordering. FIFO queues keep strict order within each message group ID and give exactly-once processing: a SendMessage retry carrying the same MessageDeduplicationId within the 5 minute deduplication window is accepted but not delivered again, and content-based deduplication can derive that ID from a SHA-256 hash of the body. The cost is throughput: 300 API calls per second per action without batching, 3,000 messages per second with batching, more only in high throughput mode. Use one group per product so unrelated products still process in parallel. The trap is a standard queue with reordering logic in the consumer.
 USAGE:
 Make the deduplication ID an order or event identifier you control, because a timestamp or random UUID defeats deduplication on retries.
+SOURCE: https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/quotas-messages.html
+If you use batching, non-high throughput FIFO queues support up to 3,000 messages per second, per API action (SendMessage, ReceiveMessage, and DeleteMessage).
 
 ## aws-sqs-long-polling | d1
 TOPIC: 2.1 Loosely coupled architectures
@@ -825,6 +863,8 @@ A:
 Turn on long polling by setting ReceiveMessageWaitTimeSeconds on the queue, or WaitTimeSeconds on each ReceiveMessage request, to a value above zero, up to the maximum of 20 seconds. With the default of zero, short polling samples only a subset of SQS servers and answers immediately, so it returns empty responses even when messages exist elsewhere, and every one of those responses is a request you pay for. Long polling queries all servers and holds the connection until at least one message arrives or the wait expires, so consumers receive messages sooner and issue far fewer requests. The trap is choosing a longer visibility timeout or a delay queue, which control when a message is hidden, not how often you poll.
 USAGE:
 Pair long polling with a receive batch of up to ten messages so each round trip carries several messages instead of one.
+SOURCE: https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-short-and-long-polling.html
+Long polling – ReceiveMessage queries all servers for messages, sending a response once at least one message is available, up to the specified maximum.
 
 ## aws-sqs-message-retention-and-size | d1
 TOPIC: 2.1 Loosely coupled architectures
@@ -874,6 +914,8 @@ A:
 Retry behaviour belongs to the invoker. Asynchronous invokers such as S3 and SNS queue the event inside Lambda; on a function error Lambda tries twice more, then discards the event unless a DLQ or on-failure destination catches it. A destination (SQS, SNS, Lambda, EventBridge, S3 for failures) gets the full invocation record with the response; a DLQ carries only the event. Synchronous callers like API Gateway get the error back and choose whether to retry. Stream sources retry the batch until it succeeds or the records expire, blocking the shard; an SQS source returns messages after the visibility timeout and uses the queue's redrive policy. The async queue can deliver an event more than once, so handlers must be idempotent.
 USAGE:
 Never attach a DLQ to a function triggered by an SQS queue; configure the redrive policy on the source queue instead, or failures land nowhere useful.
+SOURCE: https://docs.aws.amazon.com/lambda/latest/dg/invocation-retries.html
+Asynchronous invocation – Lambda retries function errors twice.
 
 ## aws-lambda-concurrency-reserved-provisioned | d2
 TOPIC: 2.2 HA and fault tolerance
@@ -894,6 +936,8 @@ A:
 Set the recovery point objective (tolerable data loss) and recovery time objective (tolerable outage) from a business impact analysis before choosing. The four strategies then rise in cost as RPO and RTO fall: backup and restore, pilot light, warm standby, multi-site active/active. Pilot light fits here: data replicates continuously to a live database in the recovery Region, giving a low RPO, while application servers are provisioned but switched off, so recovery means starting and scaling them, which takes time. Warm standby keeps a scaled-down copy running and can serve traffic immediately, more than this business needs. Periodic backups alone would miss the RPO. The trap: pilot light cannot serve requests without action first, warm standby can.
 USAGE:
 Write the agreed RPO and RTO into the runbook and rehearse a failover against them, because an untested strategy is only a cost line.
+SOURCE: https://docs.aws.amazon.com/whitepapers/latest/disaster-recovery-workloads-on-aws/disaster-recovery-options-in-the-cloud.html
+The distinction is that pilot light cannot process requests without additional action taken first, whereas warm standby can handle traffic (at reduced capacity levels) immediately.
 
 ## aws-backup-service | d2
 TOPIC: 1.3 Data security controls
@@ -1030,6 +1074,8 @@ A:
 EBS snapshots are incremental, point-in-time backups held in S3 buckets you cannot access directly; only blocks changed since the previous snapshot are stored, and the data is replicated across every Availability Zone in the Region. Amazon Data Lifecycle Manager automates creation, retention and deletion of snapshots and EBS-backed AMIs on a schedule, at no additional cost, and its policies can copy backups to other Regions or accounts for disaster recovery. The first copy into a new Region is a full copy; later copies are incremental only while the previous copy still exists there with the same encryption key. The trap is assuming a snapshot alone survives a Region outage: it stays in one Region until copied.
 USAGE:
 Deleting old snapshots saves less than expected, because blocks still referenced by a newer snapshot are kept and billed.
+SOURCE: https://docs.aws.amazon.com/ebs/latest/userguide/ebs-copy-snapshot.html
+If you copy a snapshot to a new Region, a full (non-incremental) copy is created.
 
 ## aws-ec2-auto-recovery-and-status-checks | d2
 TOPIC: 2.2 HA and fault tolerance
@@ -1188,6 +1234,8 @@ A:
 Enable S3 Transfer Acceleration on the bucket and point clients at the bucket-name.s3-accelerate.amazonaws.com endpoint. Data then enters the nearest CloudFront edge location and travels to the bucket over an optimised AWS network path instead of the public internet, which is why it helps clients that are far from the bucket Region or cannot fill their available bandwidth. It is a bucket-level setting, the bucket name must not contain periods, and it adds a data transfer charge. It does not replace multipart upload: acceleration shortens the network path, multipart parallelises a single large object, and the two can be combined. The exam distractor is suggesting acceleration for clients in the same Region, where it gains little.
 USAGE:
 Run the Transfer Acceleration Speed Comparison tool from where your clients actually are before enabling it, since the gain depends entirely on distance and route quality.
+SOURCE: https://docs.aws.amazon.com/AmazonS3/latest/userguide/transfer-acceleration.html
+Transfer Acceleration takes advantage of the globally distributed edge locations in Amazon CloudFront.
 
 ## aws-s3-select-and-athena | d2
 TOPIC: 3.5 Data ingestion and transformation
@@ -1234,6 +1282,8 @@ A:
 Use a signed URL for the installer: it grants access to one file and works for clients that cannot hold cookies. Use signed cookies for the video, because one Set-Cookie response covers every segment without rewriting hundreds of URLs. Both are signed with the private key of a signer attached to the cache behaviour; prefer a trusted key group over the root-account CloudFront key pair, since key groups are managed by API and IAM and support rotation. Signing only protects the CloudFront path, so lock the S3 origin to the distribution with origin access control, otherwise the direct S3 URL sidesteps everything. The subtle trap is behaviour ordering: an earlier path pattern without a signer serves the file unsigned.
 USAGE:
 Rotate signing keys by adding the new public key to the key group first and removing the old one only after every URL or cookie signed with it has expired.
+SOURCE: https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-choosing-signed-urls-cookies.html
+You want to provide access to multiple restricted files, for example, all of the files for a video in HLS format or all of the files in the subscribers' area of website.
 
 ## aws-cloudfront-lambda-edge-vs-functions | d3
 TOPIC: 3.4 Scalable network
@@ -1280,6 +1330,8 @@ A:
 Choose Redis OSS or Valkey. Sorted sets rank every score on insert, so a ZADD plus a range query is the whole leaderboard; pub/sub is native; and replication with automatic failover plus backup and restore survive a node loss. Memcached has none of that: simple values, no replication or automatic failover, no pub/sub, no sorted sets, and no backups for node-based clusters. Its strengths are a multithreaded engine that uses every core of a large node and easy scale-out by adding or removing nodes, so it wins when the question wants the simplest object cache that can lose data without harm. The trap is picking Memcached for simplicity when the scenario names a data structure, durability or messaging.
 USAGE:
 If the cache only holds rendered fragments or query results you can regenerate, Memcached scale-out is enough; reach for Redis or Valkey when the cache holds anything you would mind losing.
+SOURCE: https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/SelectEngine.html
+Choose Memcached if the following apply for you: You need the simplest model possible.
 
 ## aws-elasticache-lazy-loading-vs-write-through | d2
 TOPIC: 3.3 High-performing databases
@@ -1500,6 +1552,8 @@ A:
 HTTP APIs suit a plain Lambda or HTTP proxy front end: they are minimal so they cost less, they have native JWT authorisers and automatic deployments, and their integration timeout is capped at 30 seconds. REST APIs are required whenever the question mentions API keys and usage plans, per client throttling, response caching, request validation, AWS WAF, resource policies, private endpoints, canary releases or X-Ray, because HTTP APIs support none of these. Neither fits a chat or live dashboard where the server must push messages: that is a WebSocket API, which holds a persistent two way connection and routes messages through $connect, $disconnect and custom routes. The trap is choosing HTTP for price when a listed requirement needs REST.
 USAGE:
 Check whether the API must be reachable only from inside a VPC before committing to an HTTP API, because only REST APIs offer the private endpoint type.
+SOURCE: https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-vs-rest.html
+Choose REST APIs if you need features such as API keys, per-client throttling, request validation, AWS WAF integration, or private API endpoints.
 
 ## aws-lambda-performance-memory-and-layers | d2
 TOPIC: 3.2 Elastic compute
@@ -1578,6 +1632,8 @@ A:
 Amazon OpenSearch Service runs managed OpenSearch clusters, a search and analytics engine built for full text search, log analytics, application monitoring and clickstream analysis, with OpenSearch Dashboards for visualisation. It is usually fed from other stores such as S3, Kinesis, DynamoDB and CloudWatch Logs. Treat it as a searchable index beside your system of record, not as the primary database. CloudWatch Logs Insights is the answer when the requirement is only to query logs already in CloudWatch Logs with no extra infrastructure, and Athena is the answer for SQL over files in S3. The trap is reaching for an OpenSearch domain, billed by instance hour, when a query on existing logs or S3 data would do.
 USAGE:
 Plan index retention from day one, because indexes grow without limit and the UltraWarm and cold storage tiers exist precisely to move old read only data off the expensive hot nodes.
+SOURCE: https://docs.aws.amazon.com/opensearch-service/latest/developerguide/what-is.html
+OpenSearch is a fully open-source search and analytics engine for use cases such as log analytics, real-time application monitoring, and clickstream analysis.
 
 ## aws-redshift-vs-athena-vs-emr | d2
 TOPIC: D3 services
@@ -1689,6 +1745,8 @@ A:
 Pick S3 Glacier Flexible Retrieval: minimum storage 90 days, with three restore tiers, Expedited in about 1 to 5 minutes, Standard in 3 to 5 hours, and Bulk in 5 to 12 hours as the cheapest option, free for this class. S3 Glacier Deep Archive costs least but carries a 180 day minimum, Standard restores of up to 12 hours, Bulk up to 48 hours, and no Expedited tier, so it suits data you can wait half a day for. If the need is millisecond access with no restore step, that is S3 Glacier Instant Retrieval, which charges a per-GB retrieval fee. The distractor is Deep Archive for any 'minutes' requirement: nothing there returns in minutes.
 USAGE:
 Expedited retrievals can be refused during periods of high demand unless you buy provisioned capacity, so do not promise minute-level restores without it.
+SOURCE: https://docs.aws.amazon.com/AmazonS3/latest/userguide/restoring-objects-retrieval-options.html
+Without provisioned capacity, Expedited retrievals might not be accepted during periods of high demand.
 
 ## aws-s3-requester-pays-and-data-transfer | d2
 TOPIC: 4.1 Cost-optimized storage
@@ -1720,6 +1778,8 @@ A:
 Diversify: run an Auto Scaling group mixed instances policy or EC2 Fleet across many instance types and Availability Zones with the price-capacity-optimized allocation strategy, so instances come from the pools least likely to be reclaimed; lowest-price carries the highest interruption risk. EC2 sends an interruption notice two minutes before stopping or terminating a Spot Instance, as an EventBridge event and in instance metadata, on a best-effort basis, and a rebalance recommendation can arrive earlier. The application must checkpoint progress to S3, EBS or DynamoDB and split jobs into small tasks so a replacement instance can resume. The distractor is Spot blocks with a defined duration: they are no longer available, so no answer can promise an uninterrupted run.
 USAGE:
 Poll the instance metadata interruption endpoint every few seconds and drain work on notice, then test with a forced interruption because the two-minute warning is best effort.
+SOURCE: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-instance-termination-notices.html
+Interruption notices are emitted on a best effort basis.
 
 ## aws-ec2-dedicated-hosts-vs-instances | d2
 TOPIC: 4.2 Cost-optimized compute
@@ -1729,6 +1789,8 @@ A:
 The licensing team needs Dedicated Hosts: a physical server allocated to your account, billed per host, that shows the number of sockets and physical cores and supports host affinity, which per-socket, per-core or per-VM licence terms require. The isolation team only needs Dedicated Instances: hardware dedicated to one account, billed per instance, with no placement visibility and only partial BYOL support (SQL Server with License Mobility, Windows VDA). Security and performance are identical, and Dedicated Instances add an hourly fee in each Region where one runs. Capacity Reservations work with Dedicated Instances but not with Dedicated Hosts. The distractor is picking Dedicated Instances for per-core licences: without core visibility the licence cannot be applied.
 USAGE:
 Dedicated Instances may still share a host with your own non-dedicated instances, so they satisfy 'not shared with other customers', not 'a whole box to myself'.
+SOURCE: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/dedicated-hosts-overview.html
+There are no performance, security, or physical differences between Dedicated Instances and instances on Dedicated Hosts.
 
 ## aws-nat-gateway-cost-vs-vpc-endpoint | d2
 TOPIC: 4.4 Cost-optimized network
@@ -1758,6 +1820,8 @@ A:
 CloudFront caches objects at edge locations, so repeat requests never reach S3, and transfer from AWS origins such as S3 or ELB into CloudFront is free; you pay for CloudFront to viewer transfer and requests. A price class other than PriceClass_All serves only from cheaper edge regions, so viewers near excluded regions may see slower responses. Origin Shield adds a regional caching layer that consolidates duplicate requests from many edge caches into as few as one origin fetch, cutting origin load and data transfer out, at an additional per-request charge. Compression with Gzip or Brotli shrinks text assets, and transfer is billed by bytes served. The trap is picking a price class to improve performance; it only lowers cost.
 USAGE:
 Enable compression and check that the origin returns a Content-Length header, because CloudFront skips compression for objects outside its size range or without that header.
+SOURCE: https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/origin-shield.html
+are consolidated with other requests for the same object, resulting in as few as one request going to your origin.
 
 ## aws-aurora-serverless-v2 | d1
 TOPIC: 3.3 High-performing databases
@@ -1778,6 +1842,8 @@ A:
 Switch the table to the DynamoDB Standard-IA table class. It charges less per GB stored but more per read and write request than the default Standard class, so it pays off when storage exceeds 50 percent of the table's throughput cost under Standard. Performance, durability and availability are identical, and features such as TTL, PITR and on-demand mode still work, though every index inherits the table's class. You can switch back, but only two class changes are allowed in a trailing 30-day period. Reserved capacity is a separate lever for provisioned Standard tables only; it is not offered for Standard-IA or on-demand tables. The trap is treating Standard-IA as a general discount for a busy table.
 USAGE:
 Compare the table's storage cost against its throughput cost in Cost Explorer before switching, because you only get two class changes per 30 days to undo a wrong call.
+SOURCE: https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/WorkingWithTables.tableclasses.html
+No more than two table class updates on your table are allowed in a 30-day trailing period.
 
 ## aws-lambda-pricing-and-graviton | d1
 TOPIC: 4.2 Cost-optimized compute
@@ -1803,6 +1869,8 @@ CODE: json
 ]
 USAGE:
 Handle SIGTERM in the container and keep stopTimeout within the two-minute window, otherwise in-flight work is killed with SIGKILL when Spot capacity is reclaimed.
+SOURCE: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-capacity-providers.html
+Fargate doesn't replace Spot capacity with on-demand capacity.
 
 ## aws-cost-explorer-budgets-cur | d1
 TOPIC: D4 services
@@ -1823,6 +1891,8 @@ A:
 Trusted Advisor checks your account against AWS best practice in six categories: cost optimisation, performance, security, fault tolerance, service limits and operational excellence. Basic and Developer plans (Developer is being discontinued) get only the service limits checks plus a few security and fault tolerance checks such as MFA on the root account. The full set, including cost checks like low-utilisation EC2 instances, underused EBS volumes, idle load balancers and unassociated Elastic IPs, needs Business Support+ or Enterprise Support, which also unlock the API and EventBridge notifications; legacy Business Support keeps them only for existing customers until it ends. The trap is picking Trusted Advisor for a cost question on a Basic plan; use Compute Optimizer or Cost Explorer there.
 USAGE:
 The low-utilisation check looks at CPU and network only, so a memory-bound instance can look idle; confirm with CloudWatch agent memory metrics before downsizing.
+SOURCE: https://docs.aws.amazon.com/awssupport/latest/user/trusted-advisor.html
+AWS Trusted Advisor checks are available to customers with an AWS Business Support+, AWS Enterprise Support, or AWS Unified Operations plan.
 
 ## aws-compute-optimizer-and-rightsizing | d1
 TOPIC: D4 services
@@ -1841,6 +1911,8 @@ A:
 First, migrate gp2 to gp3 with a no-downtime Elastic Volumes modify: gp3 costs 20 percent less per GiB and includes a flat 3,000 IOPS and 125 MiB/s baseline regardless of size, whereas gp2 gives 3 IOPS per GiB, so small gp2 volumes only reach 3,000 IOPS by burst credits. Second, delete unattached volumes, which Trusted Advisor flags as underutilised because they still cost money. Third, move long-retained snapshots to the EBS Snapshots Archive tier, up to 75 percent cheaper for snapshots kept 90 days or longer. Archived snapshots become full copies, restores can take up to 72 hours, and you must restore before creating a volume. The trap is archiving daily incrementals, which can cost more than the standard tier.
 USAGE:
 Deleting or permanently restoring an archived snapshot before 90 days still bills the remaining days, so do not archive anything you might need back next month.
+SOURCE: https://docs.aws.amazon.com/ebs/latest/userguide/general-purpose.html
+Additionally, gp3 volumes offer a 20 percent lower price per GiB than General Purpose SSD (gp2) volumes.
 
 ## aws-efs-ia-and-lifecycle | d1
 TOPIC: 4.1 Cost-optimized storage
@@ -1850,6 +1922,8 @@ A:
 Turn on EFS lifecycle management. Its policies move files not accessed in Standard for a set number of days into Infrequent Access (default 30 days) and then Archive (default 90 days), and a third policy can return a file to Standard on first access. Listing a directory does not count as access. The trap is that IA and Archive charge per read, deliver first bytes in tens of milliseconds and bill a 128 KiB minimum per file, so they suit data read a few times a quarter or year, never hot data. A One Zone file system is the alternative for data that does not need the highest availability, but it does not survive loss of its Availability Zone.
 USAGE:
 After a month, check how much data still sits in Standard; if most of it does, the workload touches files more often than assumed and IA access charges can outweigh the savings.
+SOURCE: https://docs.aws.amazon.com/efs/latest/ug/lifecycle-management-efs.html
+Metadata operations for file systems in IA or Archive storage, such as listing the contents of a directory, don't count as file access.
 
 ## aws-rds-reserved-and-stop-start | d1
 TOPIC: 4.3 Cost-optimized database
@@ -1859,6 +1933,8 @@ A:
 For the steady production database buy a reserved DB instance: a one or three year commitment that discounts the hourly instance charge for a matching engine, class and Region; storage, backups and I/O are not discounted. Stop the dev instance when idle so instance hours stop, though provisioned storage and backup storage are still billed. The trap is that RDS automatically restarts a stopped instance after seven consecutive days so it does not miss maintenance, so a database parked for a month runs and bills again. For longer gaps take a snapshot and delete it, or use Aurora Serverless with a minimum of zero ACUs, which pauses after an idle interval and resumes on the next connection.
 USAGE:
 Automate the stop and start with a scheduler rather than relying on memory, and keep in mind that each stop resets the seven day clock, not the calendar month.
+SOURCE: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_StopInstance.html
+If you don't manually start your DB instance after it is stopped for seven consecutive days, RDS automatically starts your DB instance for you.
 
 ## aws-cloudwatch-logs-metric-filters-and-insights | d2
 TOPIC: D2 services
@@ -1899,6 +1975,8 @@ A:
 Everything rides on the SSM Agent, which calls out to Systems Manager endpoints, so no inbound port or SSH key is needed; targets are chosen by tag or resource group. Run Command executes a document once across the fleet. Patch Manager uses a patch baseline to define approved patches and runs Scan or Scan and install operations, scheduled through a patch policy or a maintenance window. State Manager keeps a defined configuration applied on a schedule, and Automation runbooks orchestrate multi-step tasks such as building golden AMIs. Parameter Store holds the endpoint as a String or KMS-encrypted SecureString, free in the standard tier. The distractor is Secrets Manager for a plain endpoint, or Parameter Store for credentials that need rotation.
 USAGE:
 When an instance is missing from the managed node list, check the instance role and whether the agent can reach the Systems Manager endpoints (a VPC endpoint if there is no internet path) before touching security groups.
+SOURCE: https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-parameter-store.html
+For secrets such as database credentials, API keys, or tokens, we recommend AWS Secrets Manager
 
 ## aws-snow-family-selection | d3
 TOPIC: D4 services
@@ -1976,6 +2054,8 @@ A:
 Application Migration Service (MGN) is the lift and shift tool. An agent on each source server performs continuous block-level replication into a staging area in your account, and the servers keep running while replication happens. You launch test instances from the replicated data without pausing replication, then launch cutover instances, so the cutover window is typically minutes. Application Discovery Service comes first: its agentless collector or agent inventories servers, utilisation and network connections so you can group them into applications. Migration Hub is the single place that tracks the status of each application migration across MGN and DMS. The distractor is Database Migration Service, which moves databases rather than whole servers.
 USAGE:
 The console now brands MGN as AWS Transform MGN, and Migration Hub and Application Discovery Service are closed to new customers, but the exam still uses the classic names.
+SOURCE: https://docs.aws.amazon.com/migrationhub/latest/ug/whatishub.html
+AWS Migration Hub is no longer open to new customers as of November 7, 2025.
 
 ## aws-migration-strategies-7rs | d1
 TOPIC: 3.5 Data ingestion and transformation
@@ -1985,6 +2065,8 @@ A:
 Rank them by how much change they allow. Rehost (lift and shift) moves servers unchanged, suiting tight deadlines and large fleets. Relocate moves servers to a cloud version of the same platform, or an RDS instance to another account, with no rewrite; it is the quickest. Replatform (lift, tinker and shift) adds some optimisation, a few changes or many, without redesigning the core, such as self-managed SQL Server to RDS. Refactor redesigns core components for cloud-native features, is the most complex and costly, and AWS advises modernising after a large migration instead. Repurchase (drop and shop) swaps to SaaS to shed licences. Retain defers an application; retire decommissions it. The trap is choosing refactor when the question stresses time.
 USAGE:
 Idle or zombie servers found during discovery are retire candidates, and cutting them is the cheapest migration win.
+SOURCE: https://docs.aws.amazon.com/prescriptive-guidance/latest/large-migration-guide/migration-strategies.html
+Relocate is the quickest way to migrate and operate your workload in the cloud because it does not impact the overall architecture of your application.
 
 ## aws-cloudformation-vs-cdk-vs-elastic-beanstalk | d1
 TOPIC: D2 services
@@ -1994,6 +2076,8 @@ A:
 CloudFormation is the declarative engine: a template describes resources, a stack creates and updates them, drift detection reports changes made outside the stack, and StackSets push one template into many accounts and Regions. The CDK sits on top: you write constructs in TypeScript, Python or another supported language, it synthesises a CloudFormation template, and CloudFormation still performs the deployment, so you gain loops and reuse without a new provisioning service. Elastic Beanstalk sits higher again: you upload code and it provisions instances, load balancing, scaling and health monitoring at no charge beyond the resources, so pick it when developers should not manage infrastructure. The trap is treating the CDK as a rival to CloudFormation; it is a generator for it.
 USAGE:
 Drift detection only reports; you still have to fix the resource or update the template, and it skips properties the template never set explicitly.
+SOURCE: https://docs.aws.amazon.com/cdk/v2/guide/home.html
+Then, you deploy your CDK applications through AWS CloudFormation to provision or update your resources.
 
 ## aws-elastic-beanstalk-deployment-policies | d2
 TOPIC: 2.2 HA and fault tolerance
@@ -2014,6 +2098,8 @@ A:
 Lambda and ECS deployments in CodeDeploy are always blue/green: traffic on a Lambda alias or an ECS task set shifts to the new version according to a deployment configuration. Canary moves a first slice, waits a set number of minutes, then moves the rest; linear moves the same slice every interval; all-at-once moves everything. Attach CloudWatch alarms to the deployment group, up to ten, and enable automatic rollback: if any alarm fires the deployment stops and the last known good revision is redeployed. Only EC2 and on-premises also allow in-place deployment, which updates instances in batches under a minimum healthy hosts rule; EC2 blue/green provisions replacement instances. The trap is offering in-place for Lambda or ECS, which does not exist.
 USAGE:
 A rollback is a brand new deployment with its own ID, so scripts that key on the deployment ID must expect it.
+SOURCE: https://docs.aws.amazon.com/codedeploy/latest/userguide/welcome.html
+AWS Lambda and Amazon ECS deployments cannot use an in-place deployment type.
 
 ## aws-config-rules-remediation | d2
 TOPIC: 1.3 Data security controls
@@ -2023,6 +2109,8 @@ A:
 AWS Config. It records configuration history and evaluates resources against rules: managed rules are predefined and customisable, for example that EBS volumes are encrypted or a security group blocks a port, while custom rules run your Lambda function or a Guard policy. A failing resource is marked noncompliant. Remediation attaches a Systems Manager Automation runbook to the rule; set it to automatic and Config runs the runbook, with optional retries, whenever a resource is noncompliant. A conformance pack bundles rules and remediation into one unit deployed to an account or a whole organisation; an aggregator gives a read-only view across accounts and Regions but cannot deploy rules. The trap is CloudTrail, which logs API calls but never judges compliance.
 USAGE:
 Automatic remediation works from a periodic compliance snapshot, so it can occasionally run against a resource that was already fixed; make runbooks idempotent.
+SOURCE: https://docs.aws.amazon.com/config/latest/developerguide/remediation.html
+AWS Config applies remediation using AWS Systems Manager Automation documents.
 
 ## aws-resource-access-manager | d1
 TOPIC: 1.1 Secure access
@@ -2032,6 +2120,8 @@ A:
 Share them with AWS Resource Access Manager. The owning account creates a resource share naming the resources and the principals: the whole organisation, an OU or individual accounts. Consuming accounts then see the shared subnet or Transit Gateway in their own console as if it were native, while the owner keeps ownership and one set of permissions, so nothing is duplicated per account. Sharing inside an organisation needs no invitation once enabled; an outside account must accept one. Shareable types include subnets, Transit Gateways, Route 53 Resolver rules, License Manager configurations and prefix lists. Subnets can only be shared within the organisation, and default subnets not at all. The distractor is VPC peering, which links separate VPCs instead.
 USAGE:
 A resource share is Regional, so a Transit Gateway in one Region needs a share created in that same Region.
+SOURCE: https://docs.aws.amazon.com/ram/latest/userguide/shareable.html
+Default subnets are not shareable. You can share only subnets you create yourself.
 
 ## aws-well-architected-pillars | d1
 TOPIC: D2 services
@@ -2041,6 +2131,8 @@ A:
 The pillars are operational excellence (run and improve workloads and processes), security (protect data, systems and assets), reliability (perform the intended function correctly and consistently), performance efficiency (use computing resources efficiently as demand and technology change), cost optimisation (deliver business value at the lowest price point) and sustainability (cut energy use and total resources required). You trade pillars by business context: a development environment might trade reliability for cost, but security and operational excellence are generally not traded away. The Well-Architected Tool is a no-charge service where you answer the framework's questions for a workload and receive recommendations; custom lenses add your own questions. The trap is a five-pillar answer that forgets sustainability, or claiming the Tool changes your architecture.
 USAGE:
 Record a milestone in the Tool before each major release so the review history shows what changed and why.
+SOURCE: https://docs.aws.amazon.com/wellarchitected/latest/framework/definitions.html
+Security and operational excellence are generally not traded-off against the other pillars.
 
 ## aws-outposts-local-zones-wavelength | d2
 TOPIC: 3.4 Scalable network
@@ -2182,6 +2274,8 @@ A:
 Deploy a Route 53 Resolver inbound endpoint so on-premises resolvers can forward private hosted zone queries into the VPC, and an outbound endpoint with a forwarding rule for corp.internal so the VPC resolver sends those queries to the on-premises DNS server. Each endpoint is backed by elastic network interfaces with private IP addresses in your subnets, reachable over a private connection such as Direct Connect or Site-to-Site VPN. The default resolver at the VPC CIDR plus two is intended for resources inside the VPC; AWS states that forwarding queries to it from on-premises or other VPC DNS servers is not supported and can give unstable results. The distractor is pointing on-premises servers at that .2 address.
 USAGE:
 Give each Resolver endpoint IP addresses in at least two Availability Zones, and associate the private hosted zone with the VPC that hosts the inbound endpoint.
+SOURCE: https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver-overview-DSN-queries-to-vpc.html
+Forwarding private DNS queries to any VPC CIDR + 2 address from on-premises or other VPC DNS servers is not supported, and can cause unstable results.
 
 ## aws-s3-lifecycle-rules-minimums | d2
 TOPIC: 4.1 Cost-optimized storage
@@ -2191,6 +2285,8 @@ A:
 The day 20 step is the fault, not the day 7 step. A single lifecycle rule cannot schedule the next transition before the previous class's minimum storage duration has elapsed. Minimums include 30 days for Standard-IA and One Zone-IA, 90 days for Glacier Flexible Retrieval and 180 days for Deep Archive, so after a day 7 move to Standard-IA the Deep Archive step must be day 37 or later. Moving to Standard-IA at day 7 alone is valid; a prorated charge for the rest of the 30 day minimum applies only if the object later leaves Standard-IA before day 37, for example through a second rule. Objects under 128 KB are not transitioned by default. The distractor blames the day 7 IA step or accepts the rule unchanged.
 USAGE:
 Expiration rules do not remove incomplete multipart uploads; add an AbortIncompleteMultipartUpload action with DaysAfterInitiation so abandoned parts are cleaned up.
+SOURCE: https://docs.aws.amazon.com/AmazonS3/latest/userguide/lifecycle-transition-general-considerations.html
+You can't create a single Lifecycle rule that transitions objects from one storage class to another before the minimum storage duration period has passed.
 
 ## aws-least-privilege-pattern | d1
 TOPIC: 1.1 Secure access
