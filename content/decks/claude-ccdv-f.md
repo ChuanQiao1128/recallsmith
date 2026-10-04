@@ -8,6 +8,8 @@ A:
 A workflow is a system where LLMs and tools are orchestrated through predefined code paths: your code decides which call happens next. An agent is a system where the LLM dynamically directs its own process and tool usage, keeping control over how it accomplishes the task. The label matters because workflows give predictability and consistency for well-defined tasks, while agents trade that for flexibility on open-ended problems where the number of steps cannot be predicted. Do not call a fixed pipeline an "agent" just because it makes several model calls; that mislabels its cost and risk profile.
 USAGE:
 When a stakeholder asks for "an agent", first ask whether the steps are already known; if they are, they are asking for a workflow.
+SOURCE: https://www.anthropic.com/engineering/building-effective-agents
+Agents, on the other hand, are systems where LLMs dynamically direct their own processes and tool usage, maintaining control over how they accomplish tasks.
 
 ## ccdvf-agent-architecture-principles | d1
 TOPIC: D1 Agents & workflows
@@ -17,6 +19,8 @@ A:
 Simplicity: keep the agent's design as simple as the task allows and add complexity only when it measurably improves outcomes. Transparency: explicitly show the agent's planning steps so operators and users can see why it acted. A carefully crafted agent-computer interface (ACI): invest in thorough tool documentation and testing, because tool descriptions are the API the model actually programs against. In practice this means starting from a single augmented LLM call (model plus retrieval, tools, and memory), surfacing plans in the output, and iterating on tool descriptions before adding orchestration layers.
 USAGE:
 Before adding an orchestrator, ask whether a clearer tool description would fix the failure you are seeing.
+SOURCE: https://www.anthropic.com/engineering/building-effective-agents
+Maintain simplicity in your agent's design. Prioritize transparency by explicitly showing the agent’s planning steps.
 
 ## ccdvf-orchestrator-workers-hierarchy | d1
 TOPIC: D1 Agents & workflows
@@ -37,6 +41,8 @@ A:
 Four reasons. Context isolation: each subagent runs its own conversation, so intermediate tool calls and results stay inside it and only the final message returns to the parent. Parallelization: independent subtasks run concurrently and finish in the time of the slowest one instead of the sum. Specialized instructions: each subagent carries a tailored system prompt with expertise that would be noise in the main prompt. Tool restrictions: a subagent can be limited to specific tools, such as a doc reviewer with only Read and Grep, which reduces the risk of unintended actions. They add cost without benefit when the subtask is tiny or needs the parent's full history.
 USAGE:
 Delegate the noisy exploration; keep the decision in the parent.
+SOURCE: https://code.claude.com/docs/en/agent-sdk/subagents
+Use them to isolate context, run multiple analyses in parallel, and apply specialized instructions without adding to the main agent’s prompt.
 
 ## ccdvf-agent-sdk-what-it-is | d1
 TOPIC: D1 Agents & workflows
@@ -53,6 +59,8 @@ async for message in query(
     ...  # SystemMessage(init) -> AssistantMessage/UserMessage turns -> ResultMessage
 USAGE:
 Reach for the Agent SDK when you want a filesystem-capable coding agent on your own infrastructure without writing the loop.
+SOURCE: https://code.claude.com/docs/en/agent-sdk/overview
+The Agent SDK gives you the same tools, agent loop, and context management that power Claude Code, programmable in Python and TypeScript.
 
 ## ccdvf-agent-harness-components | d2
 TOPIC: D1 Agents & workflows
@@ -68,6 +76,8 @@ while response.stop_reason == "tool_use":
     response = client.messages.create(model=MODEL, max_tokens=4096, tools=tools, messages=messages)
 USAGE:
 Write the loop yourself only when you need control that the runner's per-turn interception cannot give you.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-runner
+Parse tool_use blocks, format tool_result responses, and handle errors with is_error.
 
 ## ccdvf-managed-agents-hosting-models | d2
 TOPIC: D1 Agents & workflows
@@ -77,6 +87,8 @@ A:
 In both models Anthropic runs the agent harness: the loop, prompt caching, compaction, the event stream, and session state live on Anthropic's control plane. What moves is tool execution. In a cloud environment, bash, file operations, and code run in an Anthropic-managed sandbox with Anthropic's egress controls. In a self-hosted environment (config type "self_hosted"), an environment worker you run polls a work queue, executes the tool calls on your infrastructure, and posts results back, so the agent's code, filesystem, and network egress never leave your environment. Tool inputs and outputs still flow to the control plane where Claude runs.
 USAGE:
 Self-hosting is a placement decision for tool execution, not a way to run the model or the loop on-prem.
+SOURCE: https://platform.claude.com/docs/en/managed-agents/self-hosted-sandboxes
+Self-hosted sandboxes keep the orchestration on Anthropic's side but move tool execution into infrastructure you control.
 
 ## ccdvf-hooks-deterministic-actions | d1
 TOPIC: D1 Agents & workflows
@@ -108,6 +120,8 @@ A:
 Prompt chaining: fixed sequential steps where each call processes the previous output, for tasks that decompose cleanly into subtasks (outline, check it, then draft). Routing: classify the input and send it to a specialized follow-up path, for distinct categories handled differently (query types; cheap versus capable model). Parallelization: sectioning splits independent subtasks to run at once, voting runs the same task several times for higher confidence. Orchestrator-workers: a central LLM decomposes work it cannot predict in advance, delegates to workers, and synthesizes. Evaluator-optimizer: one call generates and another critiques in a loop, when clear evaluation criteria exist and refinement measurably helps.
 USAGE:
 Pick the pattern from the shape of the task, then add an agent only if no pattern fits.
+SOURCE: https://www.anthropic.com/engineering/building-effective-agents
+Prompt chaining decomposes a task into a sequence of steps, where each LLM call processes the output of the previous one.
 
 ## ccdvf-tool-use-loop-anatomy | d1
 TOPIC: D1 Agents & workflows
@@ -128,6 +142,8 @@ A:
 Memory is structured note-taking persisted outside the context window: the agent writes progress, decisions, and learned facts to durable storage and reads them back just in time, so long tasks do not depend on everything staying in context. Mechanism one is the Messages API memory tool (type memory_20250818): Claude requests view, create, str_replace, insert, delete, and rename operations under a /memories prefix, and your application executes them against storage you control. Mechanism two is Claude Code subagent memory, a per-agent directory scoped to user, project, or local. In both, the model is instructed to assume interruption and record progress as it works.
 USAGE:
 An agent that plays a multi-hour game keeps its tallies in notes, not in its context.
+SOURCE: https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents
+Structured note-taking, or agentic memory, is a technique where the agent regularly writes notes persisted to memory outside of the context window.
 
 ## ccdvf-context-window-management-in-loop | d2
 TOPIC: D1 Agents & workflows
@@ -137,6 +153,8 @@ A:
 Context in a session never resets between turns: system prompt, tool definitions, history, and tool outputs all accumulate, and recall degrades as tokens grow ("context rot"). Management means keeping the smallest set of high-signal tokens. The three levers are compaction (summarize a conversation nearing the limit and restart with the summary; the lightest form is clearing tool results whose purpose is served), structured note-taking (persist notes outside the window and reload them), and sub-agent architectures (specialists explore in clean windows and return condensed summaries of roughly 1,000 to 2,000 tokens after consuming tens of thousands). The Agent SDK compacts automatically and emits a compact_boundary system message when it does.
 USAGE:
 Pruning a 50k-token tool result beats paying for a bigger context window.
+SOURCE: https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents
+Compaction is the practice of taking a conversation nearing the context window limit, summarizing its contents, and reinitiating a new context window with the summary.
 
 ## ccdvf-agentic-frameworks-tradeoff | d1
 TOPIC: D1 Agents & workflows
@@ -168,6 +186,8 @@ A:
 Agent: the model, system prompt, tools, MCP servers, and skills; created once and referenced by ID. Environment: configuration for where sessions run, either an Anthropic-managed cloud sandbox or a self-hosted sandbox on your infrastructure. Session: a running agent instance inside an environment performing a specific task, with event history and sandbox state persisted server-side. Events: the messages exchanged between your application and the agent (user turns, tool results, status updates), streamed back over server-sent events. Flow: create the agent, create the environment, start a session referencing both, then send events and stream responses, steering or interrupting mid-run. Every endpoint needs the managed-agents-2026-04-01 beta header (the SDKs set it), and as of 2026-09 the product is beta and not ZDR-eligible.
 USAGE:
 Model and system prompt live on the versioned agent: updating them creates a new agent version, while one session can override them with agent_with_overrides without versioning.
+SOURCE: https://platform.claude.com/docs/en/managed-agents/sessions
+A session is an agent instance within an environment. Each session references an agent and an environment (both created separately), and maintains conversation history across multiple interactions.
 
 ## ccdvf-agent-sdk-max-turns-budget | d2
 TOPIC: D1 Agents & workflows
@@ -184,6 +204,8 @@ async for m in query(prompt=task, options=ClaudeAgentOptions(max_turns=30, max_b
             print("capped; resume later with", m.session_id)
 USAGE:
 Set a budget on every production agent; a well-scoped task never notices it.
+SOURCE: https://code.claude.com/docs/en/agent-sdk/agent-loop
+You can cap the loop with max_turns / maxTurns, which counts tool-use turns only.
 
 ## ccdvf-agent-sdk-sessions-resume-fork | d2
 TOPIC: D1 Agents & workflows
@@ -198,6 +220,8 @@ async for m in query(prompt="Outline OAuth2 instead of JWT", options=opts):
         forked_id = m.session_id   # distinct from session_id; original untouched
 USAGE:
 Multi-user services must use resume with stored IDs; continue picks whichever session was most recent on that host.
+SOURCE: https://code.claude.com/docs/en/agent-sdk/sessions
+Continue, resume, and fork are option fields you set on query() (ClaudeAgentOptions in Python, Options in TypeScript). Continue and resume both pick up an existing session and add to it.
 
 ## ccdvf-agent-sdk-pretooluse-hook-shape | d2
 TOPIC: D1 Agents & workflows
@@ -217,6 +241,8 @@ options = ClaudeAgentOptions(
     hooks={"PreToolUse": [HookMatcher(matcher="Write|Edit", hooks=[protect_env])]})
 USAGE:
 Put updatedInput inside hookSpecificOutput; at the top level it is silently ignored.
+SOURCE: https://code.claude.com/docs/en/agent-sdk/hooks
+If a hook has a matcher pattern (like "Write|Edit"), the SDK tests it against the event’s target (for example, the tool name). Hooks without a matcher run for every event of that type.
 
 ## ccdvf-tool-runner-sdk-loop | d1
 TOPIC: D1 Agents & workflows
@@ -236,6 +262,8 @@ runner = Anthropic().beta.messages.tool_runner(
 final = runner.until_done()
 USAGE:
 Prototype with the runner; graduate to a manual loop only when interception cannot express your control flow.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-runner
+The tool runner handles the agentic loop, error wrapping, and type safety so you don't have to.
 
 ## ccdvf-managed-agents-coordinator-roster | d2
 TOPIC: D1 Agents & workflows
@@ -256,6 +284,8 @@ CODE: json
 }
 USAGE:
 Start the roster with self alone, then move reading-heavy work to a cheaper referenced agent.
+SOURCE: https://platform.claude.com/docs/en/managed-agents/multiagent-orchestration
+The coordinator can only delegate to one level of agents; referencing an agent that has its own multiagent.agents roster fails the create or update request with a validation error.
 
 ## ccdvf-workflow-vs-agent-decision | d2
 TOPIC: D1 Agents & workflows
@@ -276,6 +306,8 @@ A:
 Client SDK: direct access to the Messages API; you implement the tool loop, tool execution, context management, and hosting. Pick it for custom agent loops and fine-grained control, or when the harness must be yours. Agent SDK: a Python or TypeScript library that runs Claude Code's loop, built-in tools, permissions, hooks, and subagents for you, but you still host and deploy the process. Pick it for a coding or filesystem agent on your own infrastructure without writing the loop. Managed Agents: a hosted REST API where Anthropic runs both the loop and the per-session sandbox. Pick it for long-running or asynchronous agents when you do not want to manage sandbox or session infrastructure.
 USAGE:
 Ask two questions: who runs the loop, and who hosts the container.
+SOURCE: https://code.claude.com/docs/en/agent-sdk/overview
+The Agent SDK, the CLI, the Client SDK, and Managed Agents differ in who runs the agent, what comes built in, and how you reach it.
 
 ## ccdvf-tool-runner-vs-manual-loop | d2
 TOPIC: D1 Agents & workflows
@@ -296,6 +328,8 @@ A:
 Prompt chaining is sequential: every input goes through the same fixed steps, each call consuming the previous output, optionally with programmatic gates between steps. Use it when the task decomposes cleanly into ordered subtasks and you accept more latency for higher accuracy, such as writing an outline, checking it meets criteria, then drafting. Routing is a branch: a classification step sends each input to one of several specialized paths, so the paths never all run. Use it when inputs fall into distinct categories that need different prompts, tools, or models, such as refunds versus technical support, or easy questions to a smaller model. Chaining fixes the order; routing fixes the category.
 USAGE:
 A chain runs every step for every input; if most inputs need only one path, you wanted a router.
+SOURCE: https://www.anthropic.com/engineering/building-effective-agents
+Routing classifies an input and directs it to a specialized followup task.
 
 ## ccdvf-parallel-sectioning-vs-voting | d2
 TOPIC: D1 Agents & workflows
@@ -305,6 +339,8 @@ A:
 Sectioning breaks a task into independent subtasks run in parallel and aggregates the outputs; it buys speed and lets each call focus, such as one model instance answering the user while another screens the request for inappropriate content. Voting runs the same task several times to get diverse outputs and aggregates them for a more confident answer, such as several different prompts reviewing code for vulnerabilities and flagging it if any finds a problem. Choose sectioning when subtasks are separable; choose voting when a single judgment is uncertain and multiple perspectives raise confidence. Both are workflows: the fan-out is decided by your code, not by the model.
 USAGE:
 Sectioning splits the work; voting repeats it.
+SOURCE: https://www.anthropic.com/engineering/building-effective-agents
+Sectioning: Breaking a task into independent subtasks run in parallel. Voting: Running the same task multiple times to get diverse outputs.
 
 ## ccdvf-orchestrator-vs-parallelization | d2
 TOPIC: D1 Agents & workflows
@@ -325,6 +361,8 @@ A:
 One LLM call generates a response and a second call evaluates it and returns feedback, looping until the evaluator is satisfied or a cap is reached. Anthropic says it is effective when two things hold: there are clear evaluation criteria, and iterative refinement provides measurable value, meaning a human's feedback would demonstrably improve the output and an LLM can supply that same feedback. Literary translation with nuances a first pass misses, or multi-round search where the evaluator decides whether more searching is warranted, fit. Without clear criteria the evaluator produces vague approval or endless nitpicks, so you pay for loops that never converge; then a single well-specified call or a rubric-based test is the better design.
 USAGE:
 Write the rubric first; if you cannot, the evaluator cannot either.
+SOURCE: https://www.anthropic.com/engineering/building-effective-agents
+When to use this workflow: This workflow is particularly effective when we have clear evaluation criteria, and when iterative refinement provides measurable value.
 
 ## ccdvf-self-hosted-vs-cloud-sandbox | d2
 TOPIC: D1 Agents & workflows
@@ -345,6 +383,8 @@ A:
 A prompt instruction is advisory: the model may not follow it under pressure or injection. Allow and deny rules are declarative and cheap: a deny rule such as Bash(rm *) blocks in every permission mode, but rules match patterns, not runtime state. The canUseTool callback is consulted only for calls no earlier step resolved; tools auto-approved by allow rules or a permissive mode never reach it, so checks placed there are silently skipped. A PreToolUse hook runs first in the evaluation order on every matching call, can deny even in the most permissive mode, and can rewrite input. So: prompts for judgment, rules for static policy, canUseTool for human approval, hooks for checks that must run every time.
 USAGE:
 If the check must be unconditional, it is a hook; everything else can be skipped by configuration.
+SOURCE: https://code.claude.com/docs/en/agent-sdk/permissions
+To gate every tool call regardless of mode and rules, use a PreToolUse hook instead.
 
 ## ccdvf-messages-api-stateless | d1
 TOPIC: D2 Applications & integration
@@ -365,6 +405,8 @@ CODE: json
 }
 USAGE:
 Persist the full transcript per conversation and replay it; the model only knows what is in the request.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/working-with-messages
+The Messages API is stateless, which means that you always send the full conversational history to the API.
 
 ## ccdvf-message-content-blocks | d1
 TOPIC: D2 Applications & integration
@@ -380,6 +422,7 @@ CODE: json
 ]}
 USAGE:
 Build message content as a list of blocks from day one so adding an image or PDF later is a one-line change.
+SOURCE: https://platform.claude.com/docs/en/api/messages
 
 ## ccdvf-usage-input-token-fields | d2
 TOPIC: D2 Applications & integration
@@ -397,6 +440,8 @@ CODE: json
 }}
 USAGE:
 Price each field at its own rate (read, write, uncached) instead of multiplying input_tokens by the list price.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+Important: input_tokens does NOT represent all input tokens, only the portion after your last cache breakpoint.
 
 ## ccdvf-streaming-when-required | d1
 TOPIC: D2 Applications & integration
@@ -425,6 +470,8 @@ CODE: json
 {"type": "content_block_stop", "index": 1}
 USAGE:
 Key your accumulator by block index; a turn with several tool calls streams several tool_use blocks, each with its own index.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/streaming
+To support maximum granularity, the deltas are partial JSON strings, whereas the final tool_use.input is always an object.
 
 ## ccdvf-tool-use-block-anatomy | d1
 TOPIC: D2 Applications & integration
@@ -439,6 +486,8 @@ CODE: json
 ]}
 USAGE:
 Dispatch on name, correlate on id, and never trust that input has every field unless the tool is strict.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls
+Extract the name, id, and input from the tool_use block.
 
 ## ccdvf-image-source-types | d1
 TOPIC: D2 Applications & integration
@@ -452,6 +501,8 @@ CODE: json
 {"type": "image", "source": {"type": "file", "file_id": "file_011CNha8iCJcU1wXNR6q4V8w"}}
 USAGE:
 Pick the source by where the bytes already are; convert only when the target platform forces base64.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/working-with-messages
+You can supply images using the base64, url, or file source types. The file source type references an image uploaded through the Files API.
 
 ## ccdvf-image-token-cost-patches | d2
 TOPIC: D2 Applications & integration
@@ -461,6 +512,8 @@ A:
 Claude sees images as 28 by 28 pixel patches, so an image costs about ceil(width/28) times ceil(height/28) visual tokens regardless of compression or file size. Each model tier caps resolution: standard-tier models downscale to at most 1568 px on the long edge (about 1568 tokens), while Claude 4.7 and later high-resolution models allow 2576 px on the long edge (up to 4784 tokens), roughly three times more tokens for the same large image. Downscaling preserves aspect ratio, so the cap bounds cost; pre-resize when you do not need the extra fidelity or when returned coordinates must line up with your original.
 USAGE:
 Resize screenshots to the size Claude will use anyway; you cut latency and tokens without losing what the model sees.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/vision
+Each patch is a 28×28-pixel block of the image, referred to as a visual token. An image, therefore, costs ⌈width / 28⌉ × ⌈height / 28⌉ visual tokens.
 
 ## ccdvf-pdf-processing-model | d1
 TOPIC: D2 Applications & integration
@@ -470,6 +523,8 @@ A:
 For every PDF page the API produces both an image of the page and the extracted text, and Claude reads both, which is what lets it answer about charts and layout. Cost is therefore text tokens (typically 1,500 to 3,000 per page depending on density) plus the image tokens computed by the vision rules; there is no separate PDF fee. Use the token counting endpoint with the base64 document to measure a real file. Place the document block before the question text, and split dense documents rather than sending them whole.
 USAGE:
 Estimate PDF spend per page, not per kilobyte, and verify with count_tokens before a bulk run.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/pdf-support
+The system converts each page of the document into an image. The text from each page is extracted and provided alongside each page's image.
 
 ## ccdvf-thinking-blocks-and-signature | d1
 TOPIC: D2 Applications & integration
@@ -484,6 +539,8 @@ CODE: json
 ]}
 USAGE:
 Log that thinking blocks were present, never their signature contents; there is nothing to parse there.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/thinking
+"omitted": thinking blocks are returned with an empty thinking field. The signature field still carries the encrypted full thinking for multi-turn continuity (see Thinking encryption).
 
 ## ccdvf-redacted-thinking-block | d2
 TOPIC: D2 Applications & integration
@@ -532,6 +589,8 @@ A:
 Everything in the request counts: system prompt, tool definitions, every message including tool results, images and documents, plus the output being generated, thinking included. Caching changes what you pay for tokens, not whether they occupy the window; input_tokens, cache_read_input_tokens and cache_creation_input_tokens all count. If the input alone exceeds the window, the API returns a 400 invalid_request_error ("prompt is too long"). On Claude 4.5 and newer, input plus max_tokens may exceed the window; generation then stops with stop_reason "model_context_window_exceeded" instead of erroring.
 USAGE:
 Run count_tokens on the assembled request before sending, then trim tool output or compact instead of guessing.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/context-windows
+Cached prompt prefixes still occupy the context window: prompt caching changes what you pay for those tokens, not whether they count.
 
 ## ccdvf-sampling-params-removed | d1
 TOPIC: D2 Applications & integration
@@ -547,6 +606,8 @@ resp = client.messages.create(
 )
 USAGE:
 Treat sampling knobs as legacy; put determinism needs into structured outputs and evals, not temperature.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/thinking
+On older models, the restriction applies only while thinking is on: temperature and top_k are incompatible with thinking, and top_p is allowed at values between 0.95 and 1.
 
 ## ccdvf-streaming-event-order | d2
 TOPIC: D2 Applications & integration
@@ -566,6 +627,8 @@ CODE: json
 ]
 USAGE:
 Read stop_reason and output_tokens from the last message_delta, never from message_start.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons
+Read stop_reason from the message_delta event when streaming.
 
 ## ccdvf-tool-result-first-rule | d2
 TOPIC: D2 Applications & integration
@@ -580,6 +643,8 @@ CODE: json
 ]}
 USAGE:
 Never let prose sit in front of results; if you must comment, append it as a separate user message after the turn completes.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons
+Leaving out a tool_result, or putting one after other content, fails earlier with the standard tool_use ids were found without tool_result blocks immediately after error instead.
 
 ## ccdvf-automatic-caching-top-level | d2
 TOPIC: D2 Applications & integration
@@ -597,6 +662,8 @@ CODE: json
 }
 USAGE:
 Combine an explicit breakpoint on the system prompt with top-level caching for the transcript to cover both the stable and the growing prefix.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+The easiest way is to add "cache_control": {"type": "ephemeral"} at the top level of your request body (automatic caching).
 
 ## ccdvf-cache-prewarm-max-tokens-zero | d2
 TOPIC: D2 Applications & integration
@@ -613,6 +680,8 @@ prewarm = client.messages.create(
 assert prewarm.stop_reason == "max_tokens" and prewarm.content == []
 USAGE:
 Schedule a warm-up before peak hours and repeat it inside the TTL; with the default 5-minute cache that means every few minutes.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+Set max_tokens: 0 in your request. The API reads your prompt into the model and writes the cache at any cache_control breakpoint, then returns immediately without generating any output.
 
 ## ccdvf-image-request-limits | d1
 TOPIC: D2 Applications & integration
@@ -622,6 +691,8 @@ A:
 On the Claude API a request may hold up to 600 images (100 on models with a 200k-token context window), each at most 10 MB base64 and 8000 by 8000 px (5 MB on Amazon Bedrock and Google Cloud). Once a request contains more than 20 image blocks, counting images from earlier turns and screenshots inside tool_result blocks, a stricter per-image limit applies: keep every dimension at or below 2000 px, or keep the request to 20 or fewer image and document blocks. The whole request must also stay under the 32 MB request size limit, which large base64 payloads reach first. Numbers as of 2026-09.
 USAGE:
 Resize scans to 2000 px or less before batching, and upload recurring images once through the Files API.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/vision
+If a single API request contains more than 20 images, a stricter per-image dimension limit applies to every image in that request.
 
 ## ccdvf-pdf-request-limits | d1
 TOPIC: D2 Applications & integration
@@ -634,6 +705,8 @@ CODE: json
  "cache_control": {"type": "ephemeral"}}
 USAGE:
 Upload the daily template once, reference its file_id with a cache breakpoint, and send per-user contracts as base64.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/pdf-support
+For large PDFs, consider uploading with the Files API and referencing by file_id to keep request payloads small.
 
 ## ccdvf-files-api-lifecycle | d2
 TOPIC: D2 Applications & integration
@@ -646,6 +719,8 @@ uploaded = client.files.upload(file=("contract.pdf", open(path, "rb"), "applicat
 file_id = uploaded.id        # store server-side, keyed to your tenant and user
 USAGE:
 Authorize in your application first, then reference the file in the request; the API will not check ownership for you.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/files
+Files are scoped to the workspace they were uploaded in.
 
 ## ccdvf-thinking-display-modes | d2
 TOPIC: D2 Applications & integration
@@ -657,6 +732,8 @@ CODE: json
 {"thinking": {"type": "adaptive", "display": "summarized"}}
 USAGE:
 Set display explicitly in shared client code so a model swap cannot silently blank a reasoning panel.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/thinking
+"summarized": thinking blocks contain summarized thinking text, a readable summary of Claude's reasoning. This is the default on Claude Opus 4.6, Claude Sonnet 4.6, and earlier models.
 
 ## ccdvf-thinking-tokens-usage-field | d2
 TOPIC: D2 Applications & integration
@@ -670,6 +747,8 @@ reasoning = u.output_tokens_details.thinking_tokens if u.output_tokens_details e
 visible = u.output_tokens - reasoning
 USAGE:
 Track thinking_tokens per route to decide where lowering effort will actually save money.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+To track what a budget actually costs you, monitor the usage.output_tokens_details.thinking_tokens field in the response, which reports how many of the billed output tokens were internal reasoning.
 
 ## ccdvf-server-tool-auto-cache-breakpoint | d2
 TOPIC: D2 Applications & integration
@@ -696,6 +775,8 @@ A:
 The Messages and token counting endpoints accept requests up to 32 MB; the Message Batches API accepts 256 MB; the Files API accepts 500 MB per upload. Exceeding a limit returns 413 request_too_large, on the direct API from the edge before the request is processed. Partner platforms are lower: Amazon Bedrock 20 MB and Google Cloud 30 MB, while Claude Platform on AWS matches the direct API. Large documents therefore belong in the Files API, referenced by file_id from a small Messages request; images and PDFs usually hit these byte limits before their count limits. Numbers as of 2026-09.
 USAGE:
 Budget request bytes as well as tokens; move anything over a few megabytes to the Files API.
+SOURCE: https://platform.claude.com/docs/en/api/errors
+If you exceed these limits, you'll receive a 413 request_too_large error. On the direct Claude API, Cloudflare returns this error before the request reaches the API servers.
 
 ## ccdvf-prompt-cache-prefix-hierarchy | d2
 TOPIC: D2 Applications & integration
@@ -721,6 +802,8 @@ CODE: json
 ]}
 USAGE:
 Anything per-request (timestamps, user IDs, the question) goes after the last breakpoint, never inside the cached prefix.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+Move cache_control to block 5, the last block that stays the same across requests, and every subsequent request reads the cached prefix.
 
 ## ccdvf-thinking-block-preservation-by-model | d2
 TOPIC: D2 Applications & integration
@@ -730,6 +813,8 @@ A:
 Whether prior turns' thinking blocks stay in context is per model. Opus 4.5 and later Opus models, Sonnet 4.6 and later, and the Fable models keep all prior turns' thinking, which enables cache hits across tool use and costs context space, billed as input like any history. Earlier Opus and Sonnet models and all Haiku models through 4.5 keep only the last turn; the API strips older blocks automatically when you pass them back, unbilled. A block is readable only by the model that produced it or a newer one, so switching down drops reasoning. Keep passing every block back unchanged in both regimes; to reclaim space on keep-all models use the clear_thinking context-editing strategy rather than editing history.
 USAGE:
 Budget context on keep-all models as if thinking were ordinary transcript, because it is.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/context-windows
+Whether thinking blocks from previous assistant turns stay in the context window depends on the model.
 
 ## ccdvf-parallel-tool-results-single-message | d2
 TOPIC: D2 Applications & integration
@@ -745,6 +830,8 @@ CODE: json
 ]}
 USAGE:
 Buffer results and send them once per turn; use your own logs, not extra messages, to show progress.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/parallel-tool-use
+Whichever strategy you use, return one tool_result for each tool_use block, all together in the next user message.
 
 ## ccdvf-thinking-replay-in-tool-loop | d2
 TOPIC: D2 Applications & integration
@@ -754,6 +841,8 @@ A:
 A tool-use loop is one assistant turn, and the entire turn runs in one thinking mode. Toggling thinking mid-turn does not error; the API silently disables thinking for that request and may strip blocks, and the changed configuration also invalidates the message cache. Within the turn you must pass every thinking and redacted_thinking block back complete and unmodified alongside its tool_use block. Change thinking settings only between turns, after the assistant turn completes. On current models the API keeps or strips prior-turn thinking automatically and bills only what it shows the model, so there is nothing to prune by hand.
 USAGE:
 Decide the thinking configuration when a user turn starts and hold it until Claude returns a non-tool response.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/thinking
+The entire turn runs in a single thinking mode: you can't toggle thinking in the middle of a turn, including during the tool-use loop.
 
 ## ccdvf-stream-interruption-recovery | d2
 TOPIC: D2 Applications & integration
@@ -784,6 +873,8 @@ except json.JSONDecodeError:
               "content": json.dumps({"INVALID_JSON": raw_input})}
 USAGE:
 Turn eager streaming on per tool only where the UI benefits, and validate against the schema before executing anything.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/fine-grained-tool-streaming
+To use it, set eager_input_streaming to true on any user-defined tool where you want fine-grained streaming enabled, and enable streaming on your request.
 
 ## ccdvf-batch-async-lifecycle | d1
 TOPIC: D2 Applications & integration
@@ -813,6 +904,8 @@ CODE: json
 {"custom_id":"ticket-48210","result":{"type":"errored","error":{"type":"error","error":{"type":"invalid_request_error","message":"..."}}}}
 USAGE:
 Derive custom_id from your own primary key so a result can be written back with a single keyed update.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/batch-processing
+Use meaningful custom_id values to easily match results with requests, since order is not guaranteed.
 
 ## ccdvf-batch-result-types | d1
 TOPIC: D2 Applications & integration
@@ -822,6 +915,8 @@ A:
 succeeded: a message was created and you pay normal batch rates for it. errored: the request failed (invalid request or internal error) and no message was created, so it is not billed; read result.error to decide whether to fix the body or simply retry. canceled: you canceled the batch before this request reached the model; not billed. expired: the batch hit its 24-hour window before this request was sent; not billed, and you resubmit it. request_counts is the roll-up of these states, and the failure of one request never affects the others in the batch. Only the 940 successes cost money; the 60 others are work still to do.
 USAGE:
 Alert on the expired count: a rising trend means the queue is slower than your submission rate and the batch size or timing needs to change.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/batch-processing
+When you retrieve the results, each request has a result field indicating whether it succeeded, errored, was canceled, or expired. For errored results, additional error information is provided.
 
 ## ccdvf-batch-cancel-and-retention | d1
 TOPIC: D2 Applications & integration
@@ -831,6 +926,8 @@ A:
 A submitted batch cannot be modified. Cancel it (POST /v1/messages/batches/{id}/cancel); processing_status becomes "canceling" and later "ended", with requests that never reached the model marked canceled and unbilled, while cancellation may not take effect immediately for requests already in flight. Then submit a corrected batch. Results stay downloadable for 29 days measured from created_at, not from when processing ended; after that the batch is visible but its results are gone. To delete earlier, call DELETE /v1/messages/batches/{id} once processing has ended (cancel first if it is still running). Batch request and response data are stored for up to 29 days, which is why the Batches API is not eligible for zero data retention.
 USAGE:
 Download and persist results into your own store as soon as a batch ends rather than treating results_url as long-term storage.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/batch-processing
+No, once a batch has been submitted, it cannot be modified. If you need to make changes, you should cancel the current batch and submit a new one.
 
 ## ccdvf-files-create-once-use-many | d1
 TOPIC: D2 Applications & integration
@@ -845,6 +942,8 @@ CODE: json
 ]}
 USAGE:
 Upload reference material once at deploy time and keep the file_id in config, so request payloads stay small.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/files
+The Files API lets you upload and manage files to use with the Claude API without re-uploading content with each request.
 
 ## ccdvf-files-workspace-scope | d2
 TOPIC: D2 Applications & integration
@@ -891,6 +990,7 @@ CODE: json
 {"type": "document", "source": {"type": "file", "file_id": "file_011..."}}
 USAGE:
 Pick the source type per deployment target, since code that works on the Claude API with file_id will fail on Bedrock.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/pdf-support
 
 ## ccdvf-platform-operator-matrix | d2
 TOPIC: D2 Applications & integration
@@ -900,6 +1000,8 @@ A:
 Five surfaces exist: the Claude API (Anthropic, first-party), Claude in Amazon Bedrock (operated by AWS, Messages API at /anthropic/v1/messages), Claude Platform on AWS (operated by Anthropic on AWS infrastructure, full /v1 API billed through AWS Marketplace), Claude on Google Cloud (operated by Google, Agent Platform endpoints), and Claude in Microsoft Foundry (operated by Anthropic on Azure or on Anthropic infrastructure). Who operates the stack decides feature availability, data processor, lifecycle dates and quotas: partner-operated Bedrock and Google Cloud set their own retirement dates and lack Batches, the Files API and code execution, and Bedrock does not accept anthropic-beta headers, whereas Anthropic-operated surfaces track the Claude API. Authentication and billing follow the cloud provider in every case.
 USAGE:
 Before promising a feature to a customer on a cloud marketplace, check the Features overview availability column for that exact platform.
+SOURCE: https://platform.claude.com/docs/en/api/overview
+Feature availability varies by platform: Anthropic-operated platforms include Claude Platform on AWS and Microsoft Foundry; partner-operated platforms include Amazon Bedrock and Google Cloud.
 
 ## ccdvf-model-id-pinning-dateless | d2
 TOPIC: D2 Applications & integration
@@ -913,6 +1015,8 @@ LEGACY = "claude-haiku-4-5-20251001"  # pre-4.6: dated ID pins, alias floats
 resp = client.messages.create(model=MODEL, max_tokens=512, messages=msgs)
 USAGE:
 Keep the model ID in one configuration value with a changelog entry, so every behavior change in production maps to a deliberate commit.
+SOURCE: https://platform.claude.com/docs/en/about-claude/models/model-ids-and-versions
+Anthropic does not update the weights or configuration of an existing model ID. When an updated version is available, it ships under a new model ID.
 
 ## ccdvf-model-alias-vs-id-by-platform | d1
 TOPIC: D2 Applications & integration
@@ -922,6 +1026,8 @@ A:
 Claude API: claude-{name}-{major}[-{minor}] for 4.6 and later (claude-opus-5), and claude-{name}-{major}-{minor}-{YYYYMMDD} for earlier models, with a short alias (claude-sonnet-4-5) that resolves to the newest dated snapshot of that minor version. Bedrock prefixes anthropic. (anthropic.claude-opus-5); older Bedrock IDs add a date and -v1:0, and cross-region inference profiles add a region prefix such as us.anthropic. Google Cloud matches the Claude API format but separates dates with @ (claude-haiku-4-5@20251001). Foundry takes a deployment name, which defaults to the Claude API ID but can be anything the admin chose. Only the pre-4.6 Claude API aliases float; every other form pins.
 USAGE:
 Store the provider-specific string in per-environment config rather than transforming a Claude API ID at runtime, since the rules differ per platform.
+SOURCE: https://platform.claude.com/docs/en/about-claude/models/model-ids-and-versions
+An alias such as claude-sonnet-4-5 is a convenience pointer that resolves to the most recent dated snapshot for that minor version. A 4.6-generation ID such as claude-sonnet-4-6 is not an alias.
 
 ## ccdvf-model-lifecycle-states | d1
 TOPIC: D2 Applications & integration
@@ -931,6 +1037,8 @@ A:
 Four states: Active (fully supported, recommended), Legacy (no more updates, may be deprecated later, still fine to call), Deprecated (still functional but not recommended, with a named replacement and an assigned retirement date), and Retired (requests fail). Anthropic gives at least 60 days' notice before retiring a publicly released model and emails customers with active deployments. Those dates bind the Anthropic-operated platforms (Claude API, Claude Platform on AWS, Microsoft Foundry); Amazon Bedrock and Google Cloud set their own. To find where a deprecated model is still used, export the Console Usage page to CSV, which breaks usage down by API key and model. Neither Legacy nor Deprecated stops working next week.
 USAGE:
 Subscribe the on-call alias to deprecation emails and file a migration ticket the day one arrives, not the week before retirement.
+SOURCE: https://platform.claude.com/docs/en/about-claude/model-deprecations
+Anthropic notifies customers with active deployments for models with upcoming retirements, providing at least 60 days' notice before model retirement for publicly released models.
 
 ## ccdvf-claude-md-context-not-enforcement | d1
 TOPIC: D2 Applications & integration
@@ -951,6 +1059,8 @@ A:
 Four scopes, listed in load order from broadest to most specific: managed policy (/Library/Application Support/ClaudeCode/CLAUDE.md on macOS, /etc/claude-code/CLAUDE.md on Linux) for organization standards, deployed by IT; ~/.claude/CLAUDE.md for personal preferences across all projects; ./CLAUDE.md or ./.claude/CLAUDE.md for team instructions committed to source control; and ./CLAUDE.local.md, added to .gitignore, for personal project-specific items such as the sandbox URL. Files in the working directory and every ancestor load at launch and are concatenated rather than overriding each other, root first, so the closest file is read last; subdirectory files load on demand when Claude reads files there. Run /init to generate a starting project file.
 USAGE:
 Put the sandbox URL in CLAUDE.local.md today, because committing it to CLAUDE.md leaks it to every clone.
+SOURCE: https://code.claude.com/docs/en/memory
+CLAUDE.md files are markdown files that give Claude persistent instructions for a project, your personal workflow, or your entire organization.
 
 ## ccdvf-settings-file-scopes | d1
 TOPIC: D2 Applications & integration
@@ -960,6 +1070,8 @@ A:
 ~/.claude/settings.json (user) applies to you in every project on the machine: theme, editor mode, default model, personal permission rules. .claude/settings.json (shared project) applies to everyone working in that folder once committed: team permissions, hooks, plugins and the env values the project needs. .claude/settings.local.json (project local) applies to you in that one project; Claude Code writes standing approvals there and adds it to your global git excludes. Managed settings (managed-settings.json, MDM, or the claude.ai console) are deployed by the organization and cannot be overridden except by a few stricter security values. Files are strict JSON: a trailing comma or comment is a Settings Error at startup.
 USAGE:
 Commit .claude/settings.json with the hooks and deny rules the whole team relies on, and let each engineer keep exceptions in settings.local.json.
+SOURCE: https://code.claude.com/docs/en/settings
+Shared project settings (.claude/settings.json): settings your team checks into source control.
 
 ## ccdvf-batch-limits-numbers | d2
 TOPIC: D2 Applications & integration
@@ -975,6 +1087,8 @@ CODE: json
 ]}
 USAGE:
 Size batches well under both caps and stagger submissions so that a slow day still clears within 24 hours.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/batch-processing
+A Message Batch is limited to either 100,000 Message requests or 256 MB in size, whichever is reached first.
 
 ## ccdvf-batch-unsupported-params | d2
 TOPIC: D2 Applications & integration
@@ -990,6 +1104,8 @@ params = dict(model="claude-opus-5", max_tokens=1024, messages=msgs)
 #   params["max_tokens"] = 0
 USAGE:
 Strip stream and speed in the adapter that converts your live request objects into batch params, and add nothing that only affects latency.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/batch-processing
+A small number of parameters (stream, speed, and max_tokens: 0) are not supported.
 
 ## ccdvf-files-limits-expiration | d2
 TOPIC: D2 Applications & integration
@@ -1003,6 +1119,8 @@ curl -X POST https://api.anthropic.com/v1/files \
   -F "file=@evidence.pdf" -F "expires_in_seconds=2592000"
 USAGE:
 Set expires_in_seconds on every upload and filter list results on expires_at so expired ids never reach a request.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/files
+To have a file expire automatically, include an expires_in_seconds form field when you upload it. The value is an integer number of seconds between 3,600 (1 hour) and 7,776,000 (90 days).
 
 ## ccdvf-bedrock-messages-endpoint | d2
 TOPIC: D2 Applications & integration
@@ -1017,6 +1135,8 @@ msg = client.messages.create(model="anthropic.claude-opus-5",
                              max_tokens=1024, messages=msgs)
 USAGE:
 Grep your code for client.messages.batches, client.files and structured-output requests before migration; each is a hard stop on Bedrock.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/claude-in-amazon-bedrock
+The endpoint follows the pattern https://bedrock-mantle.{region}.api.aws/anthropic/v1/messages.
 
 ## ccdvf-vertex-request-differences | d2
 TOPIC: D2 Applications & integration
@@ -1032,6 +1152,8 @@ curl https://aiplatform.googleapis.com/v1/projects/$PROJECT/locations/global/pub
        "messages": [{"role": "user", "content": "Hi"}]}'
 USAGE:
 Use the platform SDK client rather than hand-built HTTP so the URL and body rewrites are handled once instead of in every call site.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/claude-on-vertex-ai
+On Agent Platform, model is not passed in the request body. Instead, it is specified in the Google Cloud endpoint URL.
 
 ## ccdvf-foundry-deployment-and-auth | d2
 TOPIC: D2 Applications & integration
@@ -1047,6 +1169,8 @@ msg = client.messages.create(model="my-claude-deployment",
                              max_tokens=1024, messages=msgs)
 USAGE:
 Treat the deployment name as an environment-specific config value, since dev, staging and prod deployments can point at the same model under different names.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/claude-in-microsoft-foundry
+Use the deployment name (not necessarily the model ID) in your API requests.
 
 ## ccdvf-settings-precedence | d2
 TOPIC: D2 Applications & integration
@@ -1061,6 +1185,8 @@ claude --settings '{"model": "claude-opus-5"}'
 claude --model claude-opus-5
 USAGE:
 When a value "does not apply", check /status for a higher source before editing the file again.
+SOURCE: https://code.claude.com/docs/en/settings
+When the same key appears in more than one place, Claude Code uses the value from the highest level that sets it.
 
 ## ccdvf-plugin-dependency-version-constraints | d2
 TOPIC: D2 Applications & integration
@@ -1095,6 +1221,8 @@ CODE: json
 ]
 USAGE:
 Make the seed batch a fixed step in the pipeline and gate the bulk submission on its processing_status becoming ended.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+Send a batch request with a single request that has this shared prefix and a 1-hour cache block. This writes the prefix to the 1-hour cache.
 
 ## ccdvf-batch-error-triage | d2
 TOPIC: D2 Applications & integration
@@ -1113,6 +1241,8 @@ for r in client.messages.batches.results(batch_id):
         retry_queue.append(r.custom_id)
 USAGE:
 Build the retry batch from custom_ids, not from the original request list, so already-succeeded rows are never paid for twice.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/batch-processing
+Dry run a single request shape with the Messages API to avoid validation errors.
 
 ## ccdvf-files-vs-base64-vs-url | d2
 TOPIC: D2 Applications & integration
@@ -1122,6 +1252,8 @@ A:
 Use base64 when the bytes are local, used once, and within the request cap (32 MB on the Claude API, 20 MB on Bedrock, 30 MB on Google Cloud); it is also the only source the token-counting endpoint accepts and the only one Bedrock and Google Cloud offer. Use url when the content is already publicly hosted and you want no upload step. Use file_id when the same file recurs (reference manuals, multi-turn conversations with images, datasets for code execution) or when payload size and latency matter: upload once, reference many times, pay only input tokens. Files add a stored, workspace-visible artifact that is not eligible for zero data retention, so short-lived sensitive documents may still be better as base64.
 USAGE:
 Default to file_id for anything referenced more than once, and fall back to base64 on partner platforms where the Files API does not exist.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/vision
+Upload the image once, then reference the returned file_id in subsequent messages instead of resending base64 data.
 
 ## ccdvf-aws-bedrock-vs-claude-platform | d3
 TOPIC: D2 Applications & integration
@@ -1131,6 +1263,8 @@ A:
 Claude Platform on AWS is the full Claude API (/v1 endpoints, same request shapes) operated by Anthropic on AWS infrastructure and billed through AWS Marketplace: features typically land the same day as the Claude API, anthropic-beta headers pass through, Batches, Files (beta) and Skills (beta) work, and model IDs and lifecycle follow the Claude API. It fits the feature-hungry team. Claude in Amazon Bedrock is operated by AWS with AWS as inference data processor, runs the Messages API at /anthropic/v1/messages with anthropic.-prefixed IDs, follows Bedrock's release schedule, and is the documented choice for FedRAMP High, IL4, IL5 or HIPAA-ready needs where AWS must be the sole processor. The two use separate capacity pools, so workloads can fail over between them.
 USAGE:
 Decide on the operator first (Anthropic or AWS), because that single choice determines the feature list, the data processor and the compliance story.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/claude-platform-on-aws
+Claude Platform on AWS gives you the full Anthropic platform experience, including the Messages API, Agent Skills, code execution, and beta features, accessible through your AWS account.
 
 ## ccdvf-foundry-hosting-option-choice | d2
 TOPIC: D2 Applications & integration
@@ -1140,6 +1274,7 @@ A:
 Hosted on Azure runs an Anthropic-operated service on Azure infrastructure: prompts and completions stay within Azure, only usage metadata and safety-flagged content egress to Anthropic, Global Standard and US Data Zone Standard deployments exist, and it is recommended for most workloads. It supports only the latest Opus, Sonnet and Haiku models and returns 400 for code execution, Agent Skills, programmatic tool calling, the Files API and web tool versions newer than web_search_20250305 and web_fetch_20250910. Hosted on Anthropic runs on Anthropic infrastructure, offers every Claude model available on Foundry and those missing features, but only Global Standard deployments. Both bill in Claude Consumption Units through Azure Marketplace, lack Batches and the Models API, and omit Anthropic's rate-limit headers.
 USAGE:
 Pick Hosted on Azure by default and add a Hosted on Anthropic deployment only for the specific workload that needs Files or code execution, switching by deployment name.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/claude-in-microsoft-foundry
 
 ## ccdvf-model-upgrade-as-release | d2
 TOPIC: D2 Applications & integration
@@ -1149,6 +1284,8 @@ A:
 Treat a model change as a release. Because IDs are pinned snapshots, production prompts were tuned against one specific model; the replacement may tokenize differently (Claude 4.7 and later count roughly 30% more tokens for the same text), reject deprecated parameters (temperature, top_p and top_k return 400 on 4.7 and later when set to non-default values), and score differently on your evals. Procedure: locate every caller with the Console Usage CSV export, run the recommended replacement against your eval set, adjust prompts, then change the ID and record the prompt and model pair together. In Claude Code, /claude-api migrate rewrites model IDs and breaking parameter changes for your target platform. You have at least 60 days.
 USAGE:
 Version prompts alongside the model ID they were validated on, so a rollback restores both.
+SOURCE: https://platform.claude.com/docs/en/about-claude/model-deprecations
+Test your applications with newer models well before the retirement date of your current model.
 
 ## ccdvf-claude-code-model-pin-third-party | d2
 TOPIC: D2 Applications & integration
@@ -1161,6 +1298,8 @@ export ANTHROPIC_DEFAULT_SONNET_MODEL='us.anthropic.claude-sonnet-4-5-20250929-v
 export ANTHROPIC_DEFAULT_OPUS_MODEL='us.anthropic.claude-opus-4-8[1m]'
 USAGE:
 Ship the pin variables in the same managed config as the provider credentials so no engineer can start a session on an unvetted model.
+SOURCE: https://code.claude.com/docs/en/model-config
+When deploying Claude Code through Amazon Bedrock, Google Cloud’s Agent Platform, Microsoft Foundry, or Claude Platform on AWS, pin model versions before rolling out to users.
 
 ## ccdvf-config-instruction-vs-enforcement | d3
 TOPIC: D2 Applications & integration
@@ -1175,6 +1314,8 @@ CODE: json
 }
 USAGE:
 Audit CLAUDE.md quarterly: anything phrased as "never" or "must" is a candidate for a deny rule, anything phrased as "how to" is a candidate for a skill.
+SOURCE: https://code.claude.com/docs/en/memory
+Settings rules are enforced by the client regardless of what Claude decides to do. CLAUDE.md instructions shape Claude’s behavior but are not a hard enforcement layer.
 
 ## ccdvf-claude-md-hierarchy | d1
 TOPIC: D3 Claude Code
@@ -1195,6 +1336,8 @@ A:
 /init asks Claude to analyze the codebase and write a starting CLAUDE.md with the build commands, test instructions and conventions it discovers; it also reads other tools' instruction files (Cursor rules in .cursor/rules/ or .cursorrules, Copilot rules in .github/copilot-instructions.md) and folds the relevant parts in. If a CLAUDE.md already exists, /init proposes improvements instead of overwriting it. It does not enforce anything: the result is context Claude reads every session, so the team should still add what Claude cannot infer (deploy rules, "never touch X") and keep the file under roughly 200 lines. Confirm it loaded with /context under Memory files.
 USAGE:
 Treat /init output as a first draft: delete generic advice, keep the commands and layout, then add the corrections you keep typing in chat.
+SOURCE: https://code.claude.com/docs/en/memory
+Run /init to generate a starting CLAUDE.md automatically. Claude analyzes your codebase and creates a file with build commands, test instructions, and project conventions it discovers.
 
 ## ccdvf-cc-rules-path-scoped | d1
 TOPIC: D3 Claude Code
@@ -1213,6 +1356,8 @@ paths:
 - Return the shared error envelope from src/api/errors.ts
 USAGE:
 One topic per rule file (testing.md, api-design.md) so a reviewer can see what applies to a change without reading the whole CLAUDE.md.
+SOURCE: https://code.claude.com/docs/en/memory
+Move instructions that matter for only part of the codebase into path-scoped rules, which load only when Claude works with matching files.
 
 ## ccdvf-cc-skills-progressive-disclosure | d1
 TOPIC: D3 Claude Code
@@ -1249,6 +1394,8 @@ arguments: [issue, branch]
 Fix issue #$issue on branch $branch. Run the tests before you finish.
 USAGE:
 Put side-effect commands (commit, deploy, send-message) behind disable-model-invocation so a description match can never fire them on Claude's own initiative.
+SOURCE: https://code.claude.com/docs/en/skills
+For example, /my-skill "hello world" second makes $0 expand to hello world and $1 to second. The $ARGUMENTS placeholder always expands to the full argument string as typed.
 
 ## ccdvf-cc-subagent-definition-file | d1
 TOPIC: D3 Claude Code
@@ -1266,6 +1413,8 @@ model: sonnet
 You are a senior reviewer. Report each issue with file, line and a suggested fix.
 USAGE:
 Give reviewer agents Read, Grep and Glob only: a subagent that cannot edit cannot "fix" the code it was asked to judge.
+SOURCE: https://code.claude.com/docs/en/sub-agents
+Configure a subagent with YAML frontmatter between --- markers at the top of its file, and write its system prompt as Markdown after the closing ---. Only name and description are required.
 
 ## ccdvf-cc-agent-memory-scopes | d2
 TOPIC: D3 Claude Code
@@ -1282,6 +1431,8 @@ memory: project
 Before starting, read your memory directory. After finishing, record schema quirks you learned.
 USAGE:
 Ask the agent in its own prompt to consult memory first and update it last; the field creates the directory but the habit comes from the instructions.
+SOURCE: https://code.claude.com/docs/en/sub-agents
+The subagent’s system prompt also includes the first 200 lines or 25KB of MEMORY.md in the memory directory, whichever comes first, with instructions to curate MEMORY.md if it exceeds that limit.
 
 ## ccdvf-cc-auto-memory-vs-claude-md | d1
 TOPIC: D3 Claude Code
@@ -1291,6 +1442,8 @@ A:
 Auto memory is on by default: Claude writes its own notes to ~/.claude/projects/<project>/memory/, a MEMORY.md index plus one topic file per memory, keyed to the git repository so all worktrees share it and kept machine-local. It records four kinds of notes: user (your role and preferences), feedback (corrections you gave), project (decisions and deadlines not derivable from code) and reference (where information lives outside the repo), and it skips anything the codebase or CLAUDE.md already states. The first 200 lines or 25 KB of MEMORY.md load every session; topic files are read on demand. CLAUDE.md is written by you and holds rules; auto memory is written by Claude and holds learnings. Both are context, neither is enforced.
 USAGE:
 Turn it off per project with "autoMemoryEnabled": false, or everywhere with CLAUDE_CODE_DISABLE_AUTO_MEMORY=1, when sessions must behave identically across machines.
+SOURCE: https://code.claude.com/docs/en/memory
+Use CLAUDE.md files when you want to guide Claude’s behavior. Auto memory lets Claude learn from your corrections without manual effort.
 
 ## ccdvf-cc-session-resume-transcripts | d1
 TOPIC: D3 Claude Code
@@ -1304,6 +1457,8 @@ claude -p "Continue that review" --resume "$session_id"
 claude --continue --fork-session   # branch the last interactive session under a new id
 USAGE:
 Name long-running work at launch (claude -n auth-refactor) so --resume auth-refactor works without hunting for ids.
+SOURCE: https://code.claude.com/docs/en/sessions
+Terminal: claude --continue, claude --resume <session-id>, or claude --resume <name> when the name matches one session, without -p.
 
 ## ccdvf-cc-builtin-slash-commands | d1
 TOPIC: D3 Claude Code
@@ -1313,6 +1468,8 @@ A:
 /context shows a live breakdown of context usage by category, including which CLAUDE.md and auto memory files loaded; /status shows session status with the Setting sources line; /permissions (alias /allowed-tools) lists allow, ask and deny rules and the settings.json each came from; /memory opens the CLAUDE.md files and the auto memory toggle. Nearby: /config (alias /settings) changes preferences, /doctor runs a setup checkup that flags slow hooks and trims oversized CLAUDE.md, /mcp manages server connections and OAuth, /hooks views hook configuration, /usage (alias /cost) shows tokens and cost, /rewind opens the checkpoint menu, and /agents since v2.1.198 only reminds you to edit .claude/agents/ directly. Custom skills appear as /<name>; MCP prompts as /server:prompt, also runnable as /mcp__server__prompt.
 USAGE:
 When a rule "does not apply", the fastest triage is /status (did the file load?) then /permissions (which rule matched?), not editing JSON blind.
+SOURCE: https://code.claude.com/docs/en/commands
+When the conversation gets long, /context shows what’s filling the window and /compact summarizes it to free space.
 
 ## ccdvf-cc-streaming-input-mode | d2
 TOPIC: D3 Claude Code
@@ -1327,6 +1484,7 @@ claude -p "Write a poem" --output-format stream-json --verbose --include-partial
   | jq -rj 'select(.type == "stream_event" and .event.delta.type? == "text_delta") | .event.delta.text'
 USAGE:
 Use streaming input for chat-style hosts that need a warm process and prompt cache; for one-shot CI jobs the simpler --output-format json is enough.
+SOURCE: https://code.claude.com/docs/en/cli-reference
 
 ## ccdvf-cc-auto-mode-classifier | d2
 TOPIC: D3 Claude Code
@@ -1347,6 +1505,8 @@ A:
 default (labelled Manual) runs reads only and asks before edits, shell commands and network. acceptEdits also auto-approves file edits and common filesystem commands (mkdir, touch, mv, cp, rm, sed) inside the working directory. plan reads and explores but blocks edits until you approve the plan. auto approves everything a background classifier passes. dontAsk denies anything that would prompt, so scripts never block. The mode enabled by --dangerously-skip-permissions skips every check including protected paths; the docs restrict it to containers or VMs without internet access, it refuses to run as root, and it cannot be entered mid-session unless enabled at launch. Shift+Tab cycles default, acceptEdits and plan; --permission-mode sets the start; deny rules block in every mode.
 USAGE:
 For unattended work prefer auto (classifier still watching) or dontAsk plus an explicit allow list; reserve the skip-all-checks mode for a throwaway container.
+SOURCE: https://code.claude.com/docs/en/permission-modes
+Only use this mode in isolated environments like containers, VMs, or dev containers without internet access, where Claude Code cannot damage your host system.
 
 ## ccdvf-cc-settings-json-permission-rules | d2
 TOPIC: D3 Claude Code
@@ -1365,6 +1525,8 @@ CODE: json
 }
 USAGE:
 Put the * after the subcommand: Bash(git *) approves every git command, Bash(git log *) only log.
+SOURCE: https://code.claude.com/docs/en/permissions
+Rules are evaluated in order: deny, then ask, then allow. The first match in that order determines the outcome, and rule specificity doesn’t change the order.
 
 ## ccdvf-headless-p-output-json | d1
 TOPIC: D3 Claude Code
@@ -1379,6 +1541,8 @@ gh pr diff "$PR" | claude --bare -p \
   --output-format json | jq -r '.result'
 USAGE:
 Log total_cost_usd from each CI run; it is a client-side estimate but good enough to catch a prompt that silently doubled in size.
+SOURCE: https://code.claude.com/docs/en/headless
+Add the -p (or --print) flag to any claude command to run it non-interactively.
 
 ## ccdvf-mcp-config-scopes | d2
 TOPIC: D3 Claude Code
@@ -1392,6 +1556,8 @@ claude mcp add --scope user --transport http tracker https://mcp.example.com/mcp
 claude mcp list   # scope and status per server; /mcp inside a session
 USAGE:
 Commit .mcp.json for servers the whole team needs and keep credentials out of it with ${VAR} expansion; personal servers go to user or local scope.
+SOURCE: https://code.claude.com/docs/en/mcp
+Local scope is the default. A local-scoped server loads only in the project where you added it and stays private to you.
 
 ## ccdvf-rule-skill-command-agent-choice | d2
 TOPIC: D3 Claude Code
@@ -1401,6 +1567,8 @@ A:
 Ask how the content must load. A constraint that applies every session and everywhere is a CLAUDE.md line or an unscoped rule; if it applies only to certain paths, a rule with paths frontmatter. A procedure needed only sometimes is a skill, loaded on invoke; when a person must decide the timing, the same skill with disable-model-invocation: true becomes a user-triggered command. Work whose intermediate output you never want in your context, or that needs different tools or a different model, is a subagent, which returns only a summary. Something that must happen every time without asking is a hook, not a prompt instruction. A second repository needing the same setup means a plugin.
 USAGE:
 The docs' trigger table: same mistake twice, CLAUDE.md; same pasted procedure the third time, skill; output you never reread, subagent; must happen every time, hook.
+SOURCE: https://code.claude.com/docs/en/features-overview
+Features range from always-on context that Claude sees every session, to on-demand capabilities you or Claude can invoke, to background automation that runs on specific events.
 
 ## ccdvf-compact-vs-clear | d1
 TOPIC: D3 Claude Code
@@ -1410,6 +1578,8 @@ A:
 /compact [instructions] replaces the history with a summary, optionally focused ("/compact focus on the auth fix"), and keeps the session going; Claude Code also compacts automatically near the limit, or earlier if you set /autocompact. After compaction the project-root CLAUDE.md, unscoped rules, auto memory and the plan are re-injected from disk, up to five recently read files come back (over 5,000 tokens as path references), invoked skill bodies return capped at 5,000 tokens each and 25,000 total, and path-scoped rules reload when their files are read again. /clear starts an empty conversation; the old one is saved and reachable through /resume. Compact when the next step still needs what happened; clear when it does not.
 USAGE:
 Before a long unrelated task, /clear; before continuing the same task with a full window, /compact with a focus sentence.
+SOURCE: https://code.claude.com/docs/en/context-window
+Clear between tasks: run /clear when switching to unrelated work. Old conversation crowds out the files you need next and costs tokens on every message.
 
 ## ccdvf-cc-hook-vs-claude-md-enforcement | d2
 TOPIC: D3 Claude Code
@@ -1432,6 +1602,8 @@ CODE: json
 }
 USAGE:
 Write the prohibition in CLAUDE.md for intent and in a deny rule or hook for enforcement; the sentence alone is a request Claude may forget after compaction.
+SOURCE: https://code.claude.com/docs/en/hooks
+On events that can block, exit 2 blocks whether or not you print JSON: even a JSON permissionDecision of "allow" can’t override it.
 
 ## ccdvf-cc-local-vs-shared-settings | d2
 TOPIC: D3 Claude Code
@@ -1466,6 +1638,8 @@ background: false
 Research $ARGUMENTS: find relevant files with Glob and Grep, read them, summarize findings.
 USAGE:
 Forked skills are for reads and reports; a forked skill that edits files in the background is not covered by /rewind checkpoints, so use git to undo it.
+SOURCE: https://code.claude.com/docs/en/skills
+Despite the name, a skill with context: fork doesn’t run in a fork of the current conversation, which would hand the subagent everything you’ve discussed so far.
 
 ## ccdvf-cc-untrusted-repo-headless-p | d3
 TOPIC: D3 Claude Code
@@ -1479,6 +1653,8 @@ claude --bare -p "Summarize README.md" --allowedTools "Read" --max-turns 5 --out
 claude -p "Summarize README.md" --setting-sources user --settings '{"disableAllHooks": true}'
 USAGE:
 Treat a cloned repository's .claude/ and .mcp.json as untrusted input to your runner, exactly like its package.json postinstall scripts.
+SOURCE: https://code.claude.com/docs/en/permissions
+Start with --bare so Claude Code reads no hooks, skills, custom commands, subagents, plugins, or .mcp.json servers from the project.
 
 ## ccdvf-stop-reason-vs-http-error | d1
 TOPIC: D4 Eval, testing & debugging
@@ -1512,6 +1688,8 @@ CODE: json
 ]}
 USAGE:
 An exception that aborts the loop costs the whole task; an is_error result costs one more turn.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls
+is_error (optional): Set to true if the tool execution resulted in an error.
 
 ## ccdvf-transcript-failure-modes | d2
 TOPIC: D4 Eval, testing & debugging
@@ -1521,6 +1699,8 @@ A:
 Read the raw transcripts, not just the scores: the reasoning and feedback the agent wrote before each tool call, what it left out, and whether it understood each tool's purpose. Log per task the total runtime, the number of tool calls, token consumption and tool errors. The patterns point at specific fixes: many invalid-parameter tool errors mean the descriptions or examples are unclear; redundant calls mean pagination or token-limit parameters need tuning; a tool that returns every record wastes the context window and should filter or paginate. Keep a held-out task set so you do not tune to the eval itself, and let Claude Code analyse the concatenated transcripts to find rough edges at scale.
 USAGE:
 The score says that it failed; the transcript says which tool, which turn, and why.
+SOURCE: https://www.anthropic.com/engineering/writing-tools-for-agents
+Review the raw transcripts (including tool calls and tool responses) to catch any behavior not explicitly described in the agent’s CoT.
 
 ## ccdvf-schema-valid-but-wrong | d2
 TOPIC: D4 Eval, testing & debugging
@@ -1535,6 +1715,7 @@ data = json.loads(resp.content[0].text)  # the shape is guaranteed here
 assert data["total"] == golden["total"]  # the meaning is not: eval it
 USAGE:
 Schema errors are caught by the parser; value errors are only caught by an eval you wrote.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/structured-outputs
 
 ## ccdvf-http-error-taxonomy | d2
 TOPIC: D4 Eval, testing & debugging
@@ -1550,6 +1731,8 @@ CODE: json
 }
 USAGE:
 Log request_id with every failure; support can trace that, your stack trace they cannot.
+SOURCE: https://platform.claude.com/docs/en/api/errors
+401 - authentication_error: There's an issue with your API key (for example, it's malformed, revoked, or expired; see Key expiration).
 
 ## ccdvf-retriable-vs-terminal | d1
 TOPIC: D4 Eval, testing & debugging
@@ -1569,6 +1752,8 @@ except anthropic.BadRequestError:              # 400: fix the request, never ret
     raise
 USAGE:
 Backoff cures capacity problems; it cannot cure a wrong request or an empty budget.
+SOURCE: https://platform.claude.com/docs/en/cli-sdks-libraries/sdks/python
+Connection errors (for example, because of a network connectivity problem), 408 Request Timeout, 409 Conflict, 429 Rate Limit, and >=500 Internal errors are all retried by default.
 
 ## ccdvf-stop-reason-playbook | d2
 TOPIC: D4 Eval, testing & debugging
@@ -1586,6 +1771,8 @@ match resp.stop_reason:
     case _:              return resp                        # end_turn, stop_sequence
 USAGE:
 Five of the seven stop reasons mean "you are not finished yet"; only two mean "ship it".
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons
+The server runs a sampling loop when executing server tools. If the loop reaches its iteration limit, the API returns pause_turn.
 
 ## ccdvf-stream-error-after-200 | d2
 TOPIC: D4 Eval, testing & debugging
@@ -1611,6 +1798,8 @@ A:
 Reproduce from the exact request, not from the UI. Log the request_id and the full body that was sent: system, messages, every tool_result and document block, and the model id. Check the response metadata first: a stop_reason of max_tokens or model_context_window_exceeded means truncation, not misunderstanding, and a refusal means empty content. Then read what the model was given. If the retrieved document, tool_result or user text already contained the wrong figure, the model reported its input faithfully and the defect is in retrieval, tool code or message assembly. Only when the input was correct and the output still wrong is it a model or prompt problem, fixed by prompt iteration re-run against an eval set, not by a one-off patch.
 USAGE:
 Ask "what did the model see?" before "what did the model say?".
+SOURCE: https://platform.claude.com/docs/en/api/errors
+The Python and TypeScript SDKs expose the request ID as a _request_id property on top-level response objects.
 
 ## ccdvf-eval-grader-choice | d2
 TOPIC: D4 Eval, testing & debugging
@@ -1620,6 +1809,8 @@ A:
 Choose the fastest, most reliable method that can judge the criterion. Categorical or string-matchable answers use code-based grading (exact match, key phrase in output): fastest and most scalable, but blind to nuance. Tone and other complex judgments use LLM-based grading: fast and flexible, but test its reliability first, then scale. Human grading is the highest quality but slow and expensive; avoid it where possible. For the LLM grader: write detailed rubrics, demand an empirical output (correct/incorrect or a 1–5 scale), ask it to reason first and then discard the reasoning, and use a different model from the one being evaluated. Prefer many automated questions over a few hand-graded ones, and mirror real traffic including edge cases.
 USAGE:
 Volume of automated checks beats a small hand-graded set; keep humans for calibrating the grader.
+SOURCE: https://platform.claude.com/docs/en/test-and-evaluate/develop-tests
+Code-based grading: Fastest and most reliable, extremely scalable, but also lacks nuance for more complex judgments that require less rule-based rigidity.
 
 ## ccdvf-tokens-what-they-are | d1
 TOPIC: D5 Model selection & optimization
@@ -1629,6 +1820,8 @@ A:
 Tokens are the units a model actually reads and writes: words, subwords, characters or bytes. For Claude a token is roughly 3.5 English characters, so 12,000 characters is about 3,400 tokens, but the ratio varies by language and content. Claude 4.7 and later models use a newer tokenizer that produces approximately 30% more tokens for the same text, so counts measured on Sonnet 4.6 do not carry over. Count with the model you will call, and never estimate cost from character length alone.
 USAGE:
 Re-run count_tokens with the target model ID before quoting a cost for a migration; a count measured on an older model under-reports the new bill.
+SOURCE: https://platform.claude.com/docs/en/about-claude/glossary
+For Claude, a token approximately represents 3.5 English characters, though the exact number can vary depending on the language used.
 
 ## ccdvf-context-window-working-memory | d1
 TOPIC: D5 Model selection & optimization
@@ -1690,6 +1883,8 @@ A:
 Each model has a minimum cacheable prompt length, and a shorter prefix is silently not cached: no error, just zeros in the cache usage fields. The minimums are 512 tokens for Claude Fable 5.1 and Claude Opus 5; 1,024 for Claude Opus 4.8, Sonnet 5, Sonnet 4.6 and Sonnet 4.5; 2,048 for Claude Opus 4.7; and 4,096 for Claude Opus 4.6, Opus 4.5 and Haiku 4.5. A 3,000-token prefix clears Opus 5's 512 but not Haiku 4.5's 4,096. Check the usage fields to confirm caching happened rather than trusting the marker.
 USAGE:
 Put the minimum-prefix threshold for your model into the cache-hit-rate alert so a model swap that silently disables caching gets caught.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+Shorter prompts cannot be cached, even if marked with cache_control. Any requests to cache fewer than this number of tokens will be processed without caching, and no error is returned.
 
 ## ccdvf-extended-thinking-budget-tokens | d2
 TOPIC: D5 Model selection & optimization
@@ -1706,6 +1901,8 @@ CODE: json
 }
 USAGE:
 Read usage.output_tokens_details.thinking_tokens to see what a budget actually cost before raising it.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+Minimum of 1,024 tokens. The API rejects smaller values.
 
 ## ccdvf-adaptive-thinking-concept | d1
 TOPIC: D5 Model selection & optimization
@@ -1726,6 +1923,8 @@ A:
 Effort is a behavioral signal, not a strict token budget. It shapes all output tokens: text, tool calls and arguments, and thinking when active, so lower effort means terser answers, fewer and more consolidated tool calls, and thinking skipped on simple problems. But at low effort Claude still thinks on sufficiently hard problems, and nothing guarantees a count. The only hard ceiling on a request's output is max_tokens; Claude never generates past it. Use effort to tune cost and latency, max_tokens to bound spend, and task budgets (beta) when you want the model to see a countdown.
 USAGE:
 Pair a low effort setting with an explicit max_tokens in cost-capped routes; effort alone is guidance the model can exceed.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/effort
+Because effort applies to every output token, it works whether or not thinking is enabled. Lower effort also means fewer and terser tool calls.
 
 ## ccdvf-zero-one-multi-shot | d1
 TOPIC: D5 Model selection & optimization
@@ -1735,6 +1934,8 @@ A:
 Zero-shot gives instructions with no examples; single-shot adds one worked example; multishot (few-shot) adds several. Examples are one of the most reliable ways to steer output format, tone and structure, and 3 to 5 well-crafted examples give the best results. Make them relevant (mirror the real use case), diverse (cover edge cases so Claude does not pick up unintended patterns), and structured: wrap each in <example> tags, several in <examples>, so Claude can tell examples from instructions. Start zero-shot for simple tasks and add examples when consistency, not capability, is the problem.
 USAGE:
 When labels drift, add a handful of varied labeled examples inside <examples> before touching model or parameters.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices
+A few well-crafted examples (known as few-shot or multishot prompting) improve accuracy and consistency.
 
 ## ccdvf-sdk-wraps-rest | d1
 TOPIC: D5 Model selection & optimization
@@ -1767,6 +1968,8 @@ with client.messages.stream(model="claude-opus-5", max_tokens=64000,
     final = stream.get_final_message()
 USAGE:
 Proxy the SSE stream to the browser as-is; a WebSocket layer adds bidirectional plumbing the API never uses.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/streaming
+When creating a Message, you can set "stream": true to incrementally stream the response using server-sent events (SSE).
 
 ## ccdvf-opus-sonnet-haiku-use-cases | d1
 TOPIC: D5 Model selection & optimization
@@ -1785,6 +1988,8 @@ A:
 Adaptive thinking is the only mode on Claude Opus 5, Opus 4.8, Opus 4.7 and Sonnet 5, and is on by default on Opus 5 and Sonnet 5 (off by default on 4.8 and 4.7 until you set it). Claude Fable 5.1 and Fable 5 are adaptive-only and always on: both "enabled" and "disabled" return a 400. Opus 4.6 and Sonnet 4.6 accept adaptive or the deprecated extended mode. Haiku 4.5, Sonnet 4.5 and Opus 4.5 support extended thinking only, so "adaptive" returns a 400 there. Branch the thinking config on the model family, not on a global flag.
 USAGE:
 In a model-routing layer, map each model ID to its thinking mode once; a wrong mode is a hard 400, not a degraded response.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting
+On Claude 4.5 and earlier models that support thinking, extended thinking is the only available thinking mode.
 
 ## ccdvf-quality-latency-cost-triangle | d1
 TOPIC: D5 Model selection & optimization
@@ -1794,6 +1999,8 @@ A:
 Evaluate four things first: capabilities (which features the task needs), speed (Opus 5 and Opus 4.8 even offer fast mode for up to 2.5x output speed at premium pricing), cost (development and production budget), and effort, which trades intelligence for latency and cost within a single model. Tuning effort is often a better lever than switching models: start at the default high on Fable 5.1 and Opus 5 and move it on eval evidence. Then build benchmark tests on your own prompts and data, compare accuracy, quality and edge cases across candidates, and weigh the tradeoffs.
 USAGE:
 Before opening a model-switch ticket, run the same eval set at low, medium and high effort on the current model.
+SOURCE: https://platform.claude.com/docs/en/about-claude/models/choosing-a-model
+Effort: Several Claude models support an effort parameter that trades intelligence for latency and cost within a single model. Tuning effort is often a better lever than switching models.
 
 ## ccdvf-breaking-behavior-changes-releases | d2
 TOPIC: D5 Model selection & optimization
@@ -1803,6 +2010,8 @@ A:
 These are behavior changes, not API breaking changes: newer Opus models calibrate response length to task complexity, interpret prompts more literally (especially at low effort), respect effort levels more strictly, use tools less and reasoning more, and give built-in progress updates. Prompts tuned for the old model, such as forced interim summaries or verbosity hedges, may now be over-obeyed or fight the model. Handle it like any migration: run your eval set on the new model, sweep effort afresh, audit and prune dated prompt scaffolding, and adjust style prompts against the new baseline before cutover.
 USAGE:
 Keep a prompt-audit step in every model upgrade; removing instructions written for an older model is often where cost and accuracy both improve.
+SOURCE: https://platform.claude.com/docs/en/models/opus-5-5/migration-guide
+Claude Opus 4.7 introduced behavioral differences from Claude Opus 4.6 that are not API breaking changes.
 
 ## ccdvf-usage-object-fields | d2
 TOPIC: D5 Model selection & optimization
@@ -1823,6 +2032,8 @@ CODE: json
 }
 USAGE:
 Log the whole usage object per request ID, not two numbers, so cache hit rate and thinking share can be computed later.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+Important: input_tokens does NOT represent all input tokens, only the portion after your last cache breakpoint.
 
 ## ccdvf-cost-model-per-request-formula | d2
 TOPIC: D5 Model selection & optimization
@@ -1840,6 +2051,8 @@ cost = (u.input_tokens * IN
         + u.output_tokens * OUT) / 1_000_000
 USAGE:
 Put this formula in one shared pricing module keyed by model ID so every team prices requests the same way.
+SOURCE: https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence
+If your loop waits on a person between turns, use the 1-hour cache duration. It costs more to write (2x the input price instead of 1.25x).
 
 ## ccdvf-prompt-caching-concept | d1
 TOPIC: D5 Model selection & optimization
@@ -1849,6 +2062,8 @@ A:
 Prompt caching lets the API resume from a prefix it processed recently instead of reprocessing it, cutting latency and cost for repeated content. Writing a prefix to the 5-minute cache costs 1.25x the base input price; a 1-hour write costs 2x; a cache hit costs 0.1x (0.025x on Claude Fable 5.1). So the 5-minute cache pays for itself after one hit and the 1-hour cache after two, and a miss costs a write that the next hit repays. Every hit refreshes the entry's lifetime at no extra charge. Enable it with a single top-level cache_control (automatic breakpoints) or place cache_control on specific blocks for fine-grained control.
 USAGE:
 Turn on automatic caching first for any multi-turn product; it is the largest single cost lever in the documentation.
+SOURCE: https://platform.claude.com/docs/en/about-claude/pricing
+Prompt caching reduces costs and latency by reusing previously processed portions of your prompt across API calls.
 
 ## ccdvf-cache-checkpointing-breakpoints | d2
 TOPIC: D5 Model selection & optimization
@@ -1866,6 +2081,8 @@ CODE: json
 }
 USAGE:
 Order request content stable-first (tools, system, long documents) and put per-request data such as timestamps in the newest user turn.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+Cache writes happen only at your breakpoint. Marking a block with cache_control writes exactly one cache entry: a hash of the prefix ending at that block.
 
 ## ccdvf-model-lineup-price-context | d1
 TOPIC: D5 Model selection & optimization
@@ -1884,6 +2101,8 @@ A:
 Modifiers as of 2026-09: the Batch API takes 50% off input and output; 5-minute cache writes cost 1.25x base input, 1-hour writes 2x, and cache hits 0.1x (0.025x on Claude Fable 5.1); inference_geo "us" adds a 1.1x multiplier on every token category for 4.6 and later models; fast mode on Claude Opus 5 and 4.8 is $10/$50 per million tokens. Batch and cache discounts combine, and cache and data-residency multipliers stack on fast mode. The 1M context window is standard pricing with no long-context premium. Fast mode is not available with Batch, and Managed Agents sessions get no batch discount.
 USAGE:
 When quoting a batch job with cached context, apply both discounts: a cached read inside a batch is billed at half the already-reduced cache-read rate.
+SOURCE: https://platform.claude.com/docs/en/about-claude/pricing
+For Claude 4.6 and later models, using inference_geo: "us" applies a 1.1x pricing multiplier. inference_geo: "global" (default) uses standard pricing.
 
 ## ccdvf-choosing-a-model-two-approaches | d1
 TOPIC: D5 Model selection & optimization
@@ -1902,6 +2121,8 @@ A:
 From the 4.6 generation on, a dateless ID such as claude-sonnet-5 or claude-opus-5 is the canonical, pinned snapshot: Anthropic does not update the weights or configuration behind an existing ID, and an updated model ships under a new ID with its own deprecation schedule. Only pre-4.6 models have convenience aliases (claude-sonnet-4-5 resolving to the latest dated snapshot). Weights are fixed, but serving infrastructure (router, safety classifiers, sampling logic) can change and occasionally shift observable behavior. Upgrades are therefore a deliberate ID change you test, not something that happens to you.
 USAGE:
 Store the model ID in versioned config and treat changing it like a dependency bump with a full eval run.
+SOURCE: https://platform.claude.com/docs/en/about-claude/models/model-ids-and-versions
+For the 4.6 generation and later, the dateless ID is the canonical model ID for that release. It maps to a single, fixed model snapshot.
 
 ## ccdvf-model-deprecation-lifecycle | d1
 TOPIC: D5 Model selection & optimization
@@ -1911,6 +2132,8 @@ A:
 Active means fully supported; legacy means no more updates and possible future deprecation; deprecated means still functional but not recommended, with a named replacement and a retirement date; retired means requests fail. Anthropic notifies customers by email and in the documentation with at least 60 days' notice before retiring a publicly released model. To audit usage, export the CSV from the Console Usage page, which breaks usage down by API key and model. Test the recommended replacement well before the date, since deprecated models may be less reliable than active ones.
 USAGE:
 Subscribe an on-call alias to deprecation emails and run the usage export monthly so retirements never surprise a production key.
+SOURCE: https://platform.claude.com/docs/en/about-claude/model-deprecations
+Deprecated: The model is still functional but no longer recommended. Anthropic provides a recommended replacement and assigns a retirement date.
 
 ## ccdvf-effort-levels | d2
 TOPIC: D5 Model selection & optimization
@@ -1927,6 +2150,8 @@ CODE: json
 }
 USAGE:
 Pick effort per route (low for subagents and classification, high or xhigh for long coding runs) rather than per turn.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/effort
+The API default is high. Set effort explicitly to use a different level.
 
 ## ccdvf-fast-mode-scope | d2
 TOPIC: D5 Model selection & optimization
@@ -1960,6 +2185,8 @@ CODE: json
 }
 USAGE:
 Set display to summarized only in products that show reasoning to users; leave the default for pipelines and take the faster first text token.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/thinking
+You're still charged for the full thinking tokens. Omitting reduces latency, not cost.
 
 ## ccdvf-context-window-overflow-behavior | d2
 TOPIC: D5 Model selection & optimization
@@ -1969,6 +2196,8 @@ A:
 If the input alone exceeds the context window, every model returns a 400 invalid_request_error ("prompt is too long"). If input plus max_tokens exceeds the window on Claude 4.5 models and newer, the API accepts the request and, should generation reach the limit, stops with stop_reason "model_context_window_exceeded" instead of erroring; earlier models return a validation error unless you send the model-context-window-exceeded-2025-08-26 beta header. Thinking counts toward both max_tokens and the window. Estimate with the token counting API first, and use compaction or context editing when conversations regularly approach the limit.
 USAGE:
 Handle model_context_window_exceeded like max_tokens in your stop-reason switch: the output is incomplete and the history needs trimming before a retry.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/context-windows
+On Claude 4.5 models and newer, if input tokens plus max_tokens exceeds the context window size, the API accepts the request.
 
 ## ccdvf-token-counting-endpoint | d1
 TOPIC: D5 Model selection & optimization
@@ -1984,6 +2213,8 @@ if count.input_tokens > 180_000:
     model = "claude-sonnet-5"   # 1M window
 USAGE:
 Route by measured tokens, not by file size: a 500 kB PDF can be about 125,000 tokens while a 10 kB web page is about 2,500.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/token-counting
+The token counting endpoint accepts the same structured list of inputs for creating a message, including support for system prompts, tools, images, and PDFs.
 
 ## ccdvf-optimizing-cost-lever-order | d2
 TOPIC: D5 Model selection & optimization
@@ -1993,6 +2224,8 @@ A:
 Pull the free wins first, because they cut spend without touching quality: prompt caching (the largest single lever; agent loops read a median 84% of input from cache on real traffic), input and context trimming (tool search with deferred loading, pruning stale tool results, image resizing, the Files API instead of pasted data), the Batch API's 50% discount for latency-tolerant jobs, and a prompt audit that removes instructions written for older models. Only then trade cost for intelligence: upgrade to the newest model, lower effort, set task budgets and output caps, and last consider advisor or orchestrator setups. A cheaper model is a tradeoff, not a free win.
 USAGE:
 Check usage.cache_read_input_tokens across your traffic before any model change; a low cache rate is the cheapest fix available.
+SOURCE: https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence
+Prompt caching, token hygiene, batch processing, and a prompt audit against your current model all lower what you pay without lowering output quality.
 
 ## ccdvf-batch-api-limits | d1
 TOPIC: D5 Model selection & optimization
@@ -2002,6 +2235,8 @@ A:
 A Message Batch holds at most 100,000 requests or 256 MB, whichever comes first, so 150,000 needs two batches. Processing is asynchronous at 50% of standard prices; most batches finish within 1 hour, results are available when all requests complete or after 24 hours, and requests still unprocessed at 24 hours expire unbilled. Results stay downloadable for 29 days after creation, so a month later is too late. Results are a JSONL stream in any order keyed by custom_id, with types succeeded, errored, canceled or expired. Batches have their own rate limits, separate from the Messages API.
 USAGE:
 Split into 100,000-request batches, poll processing_status until "ended", and persist results immediately by custom_id.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/batch-processing
+Batch results are available for 29 days after creation. After that, you may still view the Batch, but its results will no longer be available for download.
 
 ## ccdvf-cache-aware-itpm | d2
 TOPIC: D5 Model selection & optimization
@@ -2011,6 +2246,8 @@ A:
 Rate limits are per model in requests per minute, input tokens per minute and output tokens per minute, enforced with a token bucket that replenishes continuously. For most models only uncached input counts toward ITPM: input_tokens and cache_creation_input_tokens count, cache_read_input_tokens do not. So caching the document makes almost all of each request free of rate-limit cost; with a 2,000,000 ITPM limit and an 80% hit rate you can process 10,000,000 input tokens per minute. OTPM counts actual generated tokens, not max_tokens. A 429 carries a retry-after header; a spend-cap 429 does not.
 USAGE:
 Watch anthropic-ratelimit-input-tokens-remaining and the Console cache-rate chart together; raising the cache rate is faster than a tier increase.
+SOURCE: https://platform.claude.com/docs/en/api/rate-limits
+For most Claude models, only uncached input tokens count toward your ITPM rate limits.
 
 ## ccdvf-adaptive-vs-manual-thinking | d2
 TOPIC: D5 Model selection & optimization
@@ -2024,6 +2261,8 @@ CODE: json
 {"thinking": {"type": "adaptive"}, "output_config": {"effort": "high"}}
 USAGE:
 Remove the interleaved-thinking-2025-05-14 beta header at the same time; adaptive models ignore it.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+With adaptive thinking, Claude decides whether and how much to think on each request, and at lower effort settings it may skip thinking entirely on easy inputs.
 
 ## ccdvf-cache-ttl-5m-vs-1h | d2
 TOPIC: D5 Model selection & optimization
@@ -2033,6 +2272,8 @@ A:
 The default 5-minute cache writes at 1.25x and repays itself after one hit; the 1-hour cache writes at 2x and needs two hits, and either lifetime is measured from the start of the writing or reading request. Choose 1-hour when prompts recur less often than every 5 minutes but more than hourly, when latency matters after long pauses, or to improve rate-limit utilization. The cost guide's rule: if turns arrive seconds apart stay on 5 minutes; if more than about 1 gap in 20 falls between 5 minutes and an hour, use 1-hour; if most long pauses exceed an hour, stay on the default. Both the chat and the batch fit 1-hour.
 USAGE:
 Set ttl "1h" on breakpoints that precede any 5-minute ones; longer TTLs must come first in the prefix.
+SOURCE: https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence
+More than about 1 gap in 20 falls between 5 minutes and an hour, and gaps over an hour are rare: use the 1-hour duration.
 
 ## ccdvf-cost-per-completed-task | d2
 TOPIC: D5 Model selection & optimization
@@ -2053,6 +2294,8 @@ A:
 When cost is too high and quality holds, tune effort down: it is the cheapest single-model lever and needs no rearchitecture. When quality is not good enough, first restore effort if you had lowered it; only then try the next tier, starting at low effort, since low effort on a newer, stronger model often beats the older model's default for a fraction of the cost. Sweep effort on the current model before adding a second model, and if you are a model behind, upgrade: the current model solves more tasks, at a cost per solved task from about 40% lower to about 20% higher, so measure it rather than assume it saves.
 USAGE:
 Ship an effort sweep (low, medium, high) as a standing eval job so the answer to "cheaper or better?" is always a lookup.
+SOURCE: https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence
+Sweep effort on your current model first. It is the cheapest experiment on this page, and most workloads end there.
 
 ## ccdvf-max-tokens-vs-effort-vs-task-budget | d3
 TOPIC: D5 Model selection & optimization
@@ -2062,6 +2305,8 @@ A:
 max_tokens is an invisible hard cap: Claude does not know it exists, so lowering it does not make the model economize; capped turns are discarded and still billed. On an internal benchmark a 16,384 cap ended 15% of Opus 5 attempts and 43% of Fable 5.1 attempts, and cost per solved task stayed about the same as at 64,000. Effort is soft guidance the model sees and paces by. A task budget (beta, 20,000-token floor) is an advisory countdown for the whole loop, set once on the first request because a mid-task change invalidates the cache. Treat stop_reason max_tokens as failure and save with effort and task budgets instead.
 USAGE:
 For agentic work keep max_tokens at 64,000 or 128,000 and control spend with effort; alert on any max_tokens stop.
+SOURCE: https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence
+A task budget saves money, because the model sees it. max_tokens is a safety cap: lowering it cut cost per attempt without lowering cost per solved task.
 
 ## ccdvf-rerun-failures-higher-effort | d2
 TOPIC: D5 Model selection & optimization
@@ -2071,6 +2316,8 @@ A:
 Run every task at low effort first, then re-run only the failures at the default. On SWE-bench Pro, Opus 5 at low failed 16% of tasks; re-running those at default gave about 93% passing for about $0.45 each, against 91.7% for $0.93 running everything at default: the same pass rate for half the cost, counting the failed cheap attempts. Two conditions: you need a trustworthy failure signal (tests, a checker), because a checker that passes bad work lets failures through, and each first-pass failure costs two runs of wall-clock time, so the saving is paid in latency on the failures.
 USAGE:
 Apply this only where a verifier exists; for tasks graded by eye, the cheap first pass just hides its own mistakes.
+SOURCE: https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence
+When a task's outcome is checkable, the cheapest policy on the effort curve is not a fixed setting: run every task at a low setting and re-run only the failures at a higher one.
 
 ## ccdvf-thinking-vs-caching-effort-change | d2
 TOPIC: D5 Model selection & optimization
@@ -2109,6 +2356,8 @@ A:
 An advisor pays when a real capability gap exists (Haiku plus an Opus advisor gains a lot; frontier plus advisor gains almost nothing) and the executor actually asks: if it consults on most tasks you are paying advisor rates across the workload and the advisor's model alone is cheaper, and an executor at low effort can stop noticing it is stuck and score below itself alone. An orchestrator pays only when there is bulk to hand off: many independent pieces, ideally more than one context window, or routine work whose cost tail a solo model spirals on; it loses on a single dependent chain. Before either, sweep effort; the number to beat is the stronger model alone at low effort.
 USAGE:
 Add the advisor as a tool definition and measure consult rate in production before calling the pairing a win.
+SOURCE: https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence
+Whatever the pairing, first price the advisor's model alone at low effort; that is the baseline to beat.
 
 ## ccdvf-disable-thinking-vs-low-effort | d2
 TOPIC: D5 Model selection & optimization
@@ -2118,6 +2367,8 @@ A:
 Thinking is on by default on Opus 5 and can be disabled only at effort high or below; combining disabled with xhigh or max returns a 400 on every request. With thinking off, Opus 5 can occasionally write a tool call as plain text instead of a tool_use block, so the call never runs and the leaked text pollutes later turns, and it can leak internal XML tags into visible output; instructions not to think make the leakage worse. Keeping thinking on and lowering effort fixes both while still cutting cost, because effort scales thinking down and skips it on simple requests.
 USAGE:
 Reserve disabled thinking for routes with no tools and a measured need; everywhere else use effort low or medium.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting
+A 400 error on "disabled" can also occur on Claude Opus 5, which accepts thinking: {type: "disabled"} only at effort high or below: combining it with effort xhigh or max is rejected.
 
 ## ccdvf-shorter-output-vs-lower-effort | d2
 TOPIC: D5 Model selection & optimization
@@ -2138,6 +2389,8 @@ A:
 API-breaking items first: remove budget_tokens (adaptive thinking is the only mode and is on by default, so revisit max_tokens), drop temperature, top_p and top_k, replace assistant prefill with structured outputs or instructions, stop reading content[0].text because a thinking block can come first, and expect thinking text to be omitted unless display is summarized. Then re-baseline: the Opus 4.7 and later tokenizer uses roughly 1x to 1.35x as many tokens, so recount prompts with count_tokens under the new model and recheck cache minimums. Finally run your evals, sweep effort afresh instead of carrying settings over, audit prompts for dated scaffolding, and shadow real traffic before cutover.
 USAGE:
 Keep a migration checklist per target model in the repo; the same list serves the next upgrade.
+SOURCE: https://platform.claude.com/docs/en/models/opus-5-5/migration-guide
+Remove temperature, top_p, and top_k from request payloads.
 
 ## ccdvf-serving-drift-vs-model-change | d3
 TOPIC: D5 Model selection & optimization
@@ -2158,6 +2411,8 @@ A:
 More context is not automatically better. As token count grows, accuracy and recall degrade, which Anthropic calls context rot: the model has a finite attention budget that every added token depletes. The principle of context engineering is therefore to find the smallest set of high-signal tokens that maximizes the likelihood of the desired outcome, so curating what is in context matters as much as how much space exists. A large window is headroom for long tasks, not a reason to skip pruning. The degradation is a gradient rather than a cliff: the model still works at long contexts, with reduced precision on retrieval and long-range reasoning.
 USAGE:
 When a prompt grows past what the task needs, cut retrieved chunks and stale tool output before reaching for a model with a bigger window.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/context-windows
+As token count grows, accuracy and recall degrade, a phenomenon known as context rot. This makes curating what's in context just as important as how much space is available.
 
 ## ccdvf-context-window-what-counts | d1
 TOPIC: D6 Prompt & context engineering
@@ -2189,6 +2444,8 @@ A:
 A subagent runs in its own context window with a fresh, separate history, so the tens of thousands of tokens of file reads and search results stay inside it. Only its final summary returns to the parent, typically 1,000 to 2,000 tokens in Anthropic's multi-agent research work, plus a small metadata trailer in Claude Code. The parent's context therefore does not grow with the exploration and the lead agent stays focused on synthesis. Use it when a side task would flood the main conversation with output you will not reference again; keep work in the main conversation when phases share significant context, need back-and-forth, or latency matters, since a subagent starts fresh.
 USAGE:
 "Use a subagent to run the test suite and report only the failing tests with their error messages" is the canonical prompt shape.
+SOURCE: https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents
+Each subagent might explore extensively, using tens of thousands of tokens or more, but returns only a condensed, distilled summary of its work (often 1,000-2,000 tokens).
 
 ## ccdvf-context-drift-vs-bloat | d2
 TOPIC: D6 Prompt & context engineering
@@ -2198,6 +2455,8 @@ A:
 Bloat is volume: tool results, tool definitions and history pile up until the window fills, cost rises and attention thins. Its levers are tool output pruning, context editing that clears old tool results, tool search for large toolsets, and server-side compaction. Drift is loss of fidelity: as history grows or gets summarized, early instructions and decisions lose weight and the model wanders from them. Its levers are re-asserting operator constraints with mid-conversation or turn-scoped system messages, custom compaction instructions naming what must be preserved, and persistent notes through the memory tool. Bloat is measured in tokens, drift in behavior, so monitor both.
 USAGE:
 If the agent forgets a rule, re-inject the rule; if it runs out of room, clear the room. Do not fix one with the other's tool.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/manage-tool-context
+Tool definitions and accumulated tool_result blocks consume your context window.
 
 ## ccdvf-just-in-time-context | d2
 TOPIC: D6 Prompt & context engineering
@@ -2218,6 +2477,8 @@ A:
 Show the prompt to a colleague with minimal context on the task and ask them to follow it; if they would be confused, Claude will be too. Claude responds to clear, explicit instructions and does not infer "above and beyond" behavior from vague asks, so request it: "Create an analytics dashboard. Include as many relevant features and interactions as possible. Go beyond the basics to create a fully-featured implementation." Be specific about output format and constraints, and give sequential steps as numbered lists when order or completeness matters. Think of Claude as a brilliant new employee who lacks your norms: precision in the request is what raises the result.
 USAGE:
 Before tuning anything else, rewrite the instruction so a new hire could execute it without asking a question.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices
+Golden rule: Show your prompt to a colleague with minimal context on the task and ask them to follow it. If they'd be confused, Claude will be too.
 
 ## ccdvf-explain-why-behind-instructions | d1
 TOPIC: D6 Prompt & context engineering
@@ -2227,6 +2488,8 @@ A:
 Give the motivation: "Your response will be read aloud by a text-to-speech engine, so never use ellipses since the engine will not know how to pronounce them." Providing the context behind an instruction lets Claude understand the goal and generalize from the explanation, so it also avoids related problems you did not enumerate, such as other unpronounceable symbols, instead of matching one literal pattern. A bare prohibition in capitals is the weaker form: it gives no signal about scope or edge cases. This pairs with the broader rule to tell Claude what to do rather than only what not to do.
 USAGE:
 Every hard rule in a system prompt gets a "because" clause; it costs a few tokens and buys generalization.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices
+Providing context or motivation behind your instructions, such as explaining to Claude why such behavior is important, can help Claude better understand your goals and deliver more targeted responses.
 
 ## ccdvf-few-shot-3-to-5 | d1
 TOPIC: D6 Prompt & context engineering
@@ -2236,6 +2499,8 @@ A:
 Include 3 to 5 examples for best results. Make them relevant (mirroring the real use case), diverse (covering edge cases and varied enough that Claude does not pick up unintended patterns) and structured: wrap each in <example> tags, with several inside an <examples> block, so Claude can tell them apart from instructions. Examples are one of the most reliable ways to steer format, tone and structure. Anthropic's context-engineering guidance adds a warning: do not stuff a laundry list of edge cases into the prompt; curate a small set of canonical examples, since for an LLM examples are the pictures worth a thousand words. Ask Claude to critique or extend your set.
 USAGE:
 When a format rule keeps being ignored, one good example beats three more sentences of instruction.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices
+Structured: Wrap examples in <example> tags (multiple examples in <examples> tags) so Claude can distinguish them from instructions.
 
 ## ccdvf-xml-tags-structure | d1
 TOPIC: D6 Prompt & context engineering
@@ -2245,6 +2510,8 @@ A:
 Wrap each kind of content in its own XML tag, such as <instructions>, <context> and <input>, so Claude can parse the prompt unambiguously and does not confuse data with directives. Use consistent, descriptive tag names across prompts, and nest when there is a natural hierarchy: several <document index="n"> elements inside <documents>, each with <source> and <document_content> subtags. Tags also work as output indicators ("write the prose sections in <smoothly_flowing_prose_paragraphs> tags"). Anthropic notes that exact formatting matters less as models improve, but clear section boundaries remain the cheapest defense against misinterpretation and a useful guard against injected text inside supplied content.
 USAGE:
 If you cannot say which tag a line of your prompt belongs in, the model cannot either; restructure before adding words.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices
+Wrapping each type of content in its own tag (for example, <instructions>, <context>, <input>) reduces misinterpretation.
 
 ## ccdvf-role-prompt-system-param | d1
 TOPIC: D6 Prompt & context engineering
@@ -2272,6 +2539,8 @@ A:
 The "right altitude": the Goldilocks zone between hardcoded, brittle logic that breaks and needs constant maintenance, and vague high-level guidance that gives no concrete signal or falsely assumes shared context. A good system prompt is specific enough to guide behavior yet flexible enough to leave the model strong heuristics. Organize it into distinct sections (background information, instructions, tool guidance, output description) with XML tags or Markdown headers, and aim for the minimal set of information that fully describes expected behavior, where minimal does not mean short. Start by testing a minimal prompt on the best available model, then add instructions and examples for the failure modes you observe.
 USAGE:
 Write the rule a senior engineer would give a new hire, not the code they would write for a machine.
+SOURCE: https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents
+The optimal altitude strikes a balance: specific enough to guide behavior effectively, yet flexible enough to provide the model with strong heuristics to guide behavior.
 
 ## ccdvf-skepticism-confident-output | d1
 TOPIC: D6 Prompt & context engineering
@@ -2281,6 +2550,8 @@ A:
 Never assume confidence equals correctness. Give Claude explicit permission to say "I don't have enough information", which drastically reduces false statements. For long documents (over 20k tokens) ask it to extract word-for-word quotes first and base its analysis only on those; have it cite a supporting quote for every claim and retract any claim it cannot support; restrict it to the provided documents rather than general knowledge. Advanced checks include chain-of-thought verification, best-of-N comparison across runs, and iterative follow-up prompts. These techniques reduce hallucination but do not eliminate it, so critical information still gets validated outside the model.
 USAGE:
 Treat any output that will drive a decision as a claim to be checked, not a fact to be forwarded.
+SOURCE: https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-hallucinations
+Allow Claude to say "I don't know": Explicitly give Claude permission to admit uncertainty. This simple technique can drastically reduce false information.
 
 ## ccdvf-response-validation-layers | d2
 TOPIC: D6 Prompt & context engineering
@@ -2290,6 +2561,8 @@ A:
 First read stop_reason: end_turn means complete; max_tokens or model_context_window_exceeded means truncated, so do not parse; refusal arrives as a normal HTTP 200 whose text will not match your schema; tool_use means there is no final answer yet. Second, parse and validate structure: with structured outputs the JSON is guaranteed to match the schema except in those refusal and truncation cases, and enum values may differ in capitalization, so compare case-insensitively. Third, validate semantics and business rules, because a schema-valid object can still be wrong. Log every branch. Structured outputs remove syntax and shape errors; they do not remove the first or third gate.
 USAGE:
 stop_reason check, then schema, then business rules: three gates, in that order, on every response.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons
+Check this field to decide whether to use the response as-is, continue the conversation, retry, or fall back to another model.
 
 ## ccdvf-input-sanitization-delimiters | d2
 TOPIC: D6 Prompt & context engineering
@@ -2313,6 +2586,8 @@ CODE: json
 }
 USAGE:
 Anything a user typed goes inside a tag or a JSON string, never spliced into the instruction sentence.
+SOURCE: https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/mitigate-jailbreaks
+JSON escaping provides unambiguous delimiters between the untrusted payload and the surrounding structure, so an attacker cannot close a quote or tag to "break out" into an instruction context.
 
 ## ccdvf-prompt-engineering-prerequisites | d1
 TOPIC: D6 Prompt & context engineering
@@ -2322,6 +2597,8 @@ A:
 Three prerequisites: a clear definition of success criteria, an empirical way to test against them, and a first draft prompt to improve. Without evals, prompt changes are guesses. And not every failing criterion is best solved in the prompt: latency and cost are often easier to improve by selecting a different model than by rewording. Prompt engineering is the right lever when the failure is controllable through instructions, examples, structure or placement. The loop is: define the metric, measure the baseline, change one thing, re-measure. Vague dissatisfaction such as "feels slow" is not a success criterion, so turn it into a number first.
 USAGE:
 Write the eval before the second draft of the prompt; the eval decides whether the draft was better.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/overview
+Not every success criteria or failing eval is best solved by prompt engineering. For example, you can sometimes improve latency and cost more easily by selecting a different model.
 
 ## ccdvf-structured-outputs-schema-rules | d2
 TOPIC: D6 Prompt & context engineering
@@ -2352,6 +2629,8 @@ CODE: json
 }
 USAGE:
 Let the SDK helpers (Pydantic with messages.parse, Zod with zodOutputFormat) build the schema; they strip unsupported keywords and validate the reply against the original constraints.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/structured-outputs
+The request carries the schema in output_config.format with type: "json_schema". SDK helpers set this for you.
 
 ## ccdvf-structured-outputs-invalid-cases | d2
 TOPIC: D6 Prompt & context engineering
@@ -2361,6 +2640,8 @@ A:
 Three documented cases. A refusal: the response is a normal 200 with stop_reason "refusal", tokens are billed, and the refusal text takes precedence over the grammar, so it will not match. Truncation: stop_reason "max_tokens" means the JSON was cut off; retry with a higher limit. Enum casing: the grammar does not guarantee capitalization of enum or const strings, so "Conversation topic 3" may come back as "Conversation Topic 3" with no error and a normal stop_reason; compare case-insensitively and avoid values that differ only in case. Two more shape rules: required properties are emitted before optional ones regardless of schema order, and grammars apply only to the final text, not to tool calls or thinking.
 USAGE:
 Guaranteed schema still means "check stop_reason, then parse"; the refusal case is what breaks a naive consumer in production.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/structured-outputs
+Compare enum values case-insensitively, and avoid enum values that differ only in capitalization.
 
 ## ccdvf-structured-outputs-grammar-cache-limits | d2
 TOPIC: D6 Prompt & context engineering
@@ -2370,6 +2651,8 @@ A:
 Schemas are compiled into grammars. The first use of a schema pays compilation latency; compiled grammars are then cached for 24 hours from last use. Changing the schema structure or the request's tool set invalidates that cache; changing only name or description fields does not. Complexity limits apply across all strict schemas in one request, as of 2026-09: at most 20 tools with strict true, 24 optional parameters in total, 16 parameters using anyOf or type arrays, plus internal grammar-size limits and a 180-second compilation timeout. Reduce complexity by marking only critical tools strict, making parameters required, flattening nesting, or splitting tools across requests. Structured outputs also inject an extra system prompt, so changing output_config.format invalidates the prompt cache.
 USAGE:
 Warm the grammar with a canary request after each schema deploy so real users never pay the compile.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/structured-outputs
+More complex schemas produce larger grammars that take longer to compile. To protect against excessive compilation times, the API enforces several complexity limits.
 
 ## ccdvf-server-side-compaction | d2
 TOPIC: D6 Prompt & context engineering
@@ -2392,6 +2675,8 @@ CODE: json
 }
 USAGE:
 Put a cache_control breakpoint at the end of the system prompt so a new summary does not force the system prompt to be re-cached.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/compaction
+Compaction replaces the older turns of a conversation with a summary that Claude writes on the server, so you need no summarization code of your own.
 
 ## ccdvf-context-editing-clear-tool-uses | d2
 TOPIC: D6 Prompt & context engineering
@@ -2416,6 +2701,8 @@ CODE: json
 }
 USAGE:
 Call count_tokens with the same context_management block to compare original_input_tokens with the post-clearing size before tuning the trigger.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/context-editing
+The clear_tool_uses_20250919 strategy clears tool results when conversation context grows beyond your configured threshold.
 
 ## ccdvf-thinking-block-clearing | d2
 TOPIC: D6 Prompt & context engineering
@@ -2434,6 +2721,8 @@ CODE: json
 }
 USAGE:
 Keep all thinking while a task is short and cache-heavy; switch to a small thinking_turns window once conversations run long.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/context-editing
+This strategy gives you control over thinking preservation: you can choose to keep more thinking blocks to maintain reasoning continuity, or clear them more aggressively to save context space.
 
 ## ccdvf-context-awareness-token-budget | d1
 TOPIC: D6 Prompt & context engineering
@@ -2443,6 +2732,8 @@ A:
 Context awareness. Claude Sonnet 5, Sonnet 4.6, Sonnet 4.5 and Haiku 4.5 track their remaining token budget: the API injects a <budget:token_budget> tag with the total window into every system prompt and a <system_warning> line with used and remaining tokens after each tool call. It is automatic; you never send these tags, and image tokens are included. Opus 4.7 and later, and the Fable and Mythos models, do not receive them; for those, task budgets (beta) give an explicit budget. If your harness compacts context or saves state to files, say so in the prompt, or the model may stop tasks early out of budget concern.
 USAGE:
 In a compacting harness, add "your context will be compacted automatically, do not stop early; save progress to memory as you approach the limit".
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/context-windows
+Claude Sonnet 5, Claude Sonnet 4.6, Claude Sonnet 4.5, and Claude Haiku 4.5 have context awareness: these models track their remaining context window (their "token budget") throughout a conversation.
 
 ## ccdvf-mid-conversation-system-message | d2
 TOPIC: D6 Prompt & context engineering
@@ -2461,6 +2752,8 @@ CODE: json
 }
 USAGE:
 Never edit an already-sent system message; if the rule changes, append a new one.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages
+Append the system message after the breakpoint. Because it comes after the cached prefix, it does not change the prefix hash and the cache still hits.
 
 ## ccdvf-turn-scoped-system-message | d2
 TOPIC: D6 Prompt & context engineering
@@ -2476,6 +2769,8 @@ CODE: json
 }
 USAGE:
 Use it for per-turn nudges; use a normal mid-conversation system message for rules that must persist.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages
+Once a later user message exists, the message is cleared: it stays in the array but renders nothing and costs no input tokens, on that request and every later one.
 
 ## ccdvf-memory-tool-notes | d2
 TOPIC: D6 Prompt & context engineering
@@ -2490,6 +2785,8 @@ CODE: json
 }
 USAGE:
 For multi-session projects, have the first session create a progress log and feature checklist; every later session opens by reading them.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool
+The memory tool operates client-side: Claude requests file operations, and your application executes them.
 
 ## ccdvf-prefill-removed-4-6 | d1
 TOPIC: D6 Prompt & context engineering
@@ -2521,6 +2818,8 @@ A:
 Compaction summarizes the whole conversation server-side once input tokens hit the trigger (default 150,000), returning a compaction block the client appends; it is Anthropic's recommended primary strategy for long-running chats and agentic workflows, with no client summarization code. Context editing is surgical: clear_tool_uses removes only old tool results (default trigger 100,000, keeping the latest 3 pairs) and leaves everything else verbatim, which suits tool-heavy loops where results are dead weight but the dialogue must survive intact. Compaction loses whatever the summary omits, so give it custom instructions when specific facts must survive; clearing invalidates the cache at the clearing point, so use clear_at_least. The docs present them separately and never say the two edits stack, so choose by workload.
 USAGE:
 Chat products: compaction. Search-heavy agents whose dialogue must survive verbatim: tool result clearing.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/context-editing
+Manage long conversations with server-side compaction, the recommended strategy for most use cases.
 
 ## ccdvf-system-vs-user-placement | d1
 TOPIC: D6 Prompt & context engineering
@@ -2530,6 +2829,8 @@ A:
 Stable content that holds for the whole session (the role, behavior rules, glossary, output constraints and examples) goes in the top-level system parameter; content that changes per request (the text to translate and any one-off instruction) goes in the user turn. Two payoffs. Priority: system content is treated as coming from the operator and takes precedence when it conflicts with a user turn, so guardrails belong there. Caching: the prefix is hashed as tools, then system, then messages, so a stable system prompt is cached and re-read cheaply, while anything volatile placed in it forces a cache miss every turn. Untrusted third-party text belongs in neither; it goes in tool results.
 USAGE:
 If a line would be identical in every request, it is system; if it changes, it is user.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages
+When the two conflict, system instructions take precedence, so use the system role for operator-level facts and constraints that should hold even if the end user asks for something different.
 
 ## ccdvf-positive-vs-negative-instructions | d2
 TOPIC: D6 Prompt & context engineering
@@ -2539,6 +2840,8 @@ A:
 Tell Claude what to do instead of what not to do: "Your response should be composed of smoothly flowing prose paragraphs." Use XML format indicators: "Write the prose sections in <smoothly_flowing_prose_paragraphs> tags." Match your prompt style to the desired output, since markdown in the prompt begets markdown in the answer. For fine control, provide a detailed guidance block that says when lists are acceptable and why prose reads better. Prohibitions name the failure without describing the target, so the model guesses. One caution: Claude Fable 5.1 already formats less than earlier models, so a heavy anti-markdown block can suppress structure the content needs; use a shorter rule there.
 USAGE:
 Rewrite every "don't" in a format section as the positive shape you want, then delete the "don't".
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices
+If you are still experiencing steerability issues with output formatting, try matching your prompt style to your desired output style as closely as possible.
 
 ## ccdvf-compaction-vs-notes-vs-subagents | d2
 TOPIC: D6 Prompt & context engineering
@@ -2548,6 +2851,8 @@ A:
 Compaction summarizes a near-full conversation and restarts a window with the summary; it maintains conversational flow, so it fits tasks with extensive back-and-forth. Structured note-taking (agentic memory) has the agent write notes outside the window, a NOTES.md file or the memory tool, and read them back later; it excels at iterative development with clear milestones, tracking progress across dozens of tool calls with minimal overhead. Sub-agent architectures give focused workers clean context windows that return condensed summaries to a coordinating agent; they handle complex research and analysis where parallel exploration pays off. Compaction is usually the first lever, and the art is choosing what to keep, tuned first for recall and then for precision.
 USAGE:
 Long chat: compaction. Multi-day build: notes. Wide research: subagents. Most real agents use two of the three.
+SOURCE: https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents
+Multi-agent architectures handle complex research and analysis where parallel exploration pays dividends.
 
 ## ccdvf-fresh-context-vs-compact | d2
 TOPIC: D6 Prompt & context engineering
@@ -2557,6 +2862,8 @@ A:
 Start a brand-new context window and let the model recover state from the local filesystem instead of from a summary. Current models discover state well, so the pattern is: use a different prompt for the first window that sets up a framework (tests in a structured tests.json, an init.sh setup script, progress.txt notes, git checkpoints), then have later windows resume from those artifacts. Be prescriptive about how a fresh window starts: "Call pwd", "Review progress.txt, tests.json and the git logs", "run a fundamental integration test before new features". Provide verification tools and encourage using the whole budget without leaving uncommitted work. Compaction preserves flow; a fresh start preserves precision, because artifacts are exact where summaries are lossy.
 USAGE:
 Make the repository the memory: tests, progress notes and commits are what the next window reads.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices
+Starting fresh versus compacting: When a context window is cleared, consider starting with a brand new context window rather than using compaction.
 
 ## ccdvf-top-level-system-vs-mid-conversation | d2
 TOPIC: D6 Prompt & context engineering
@@ -2566,6 +2873,8 @@ A:
 Prompt caching hashes tools, then system, then messages; the top-level system field sits near the very start, so any change to it, even one appended sentence, re-processes the system prompt and every cached message after it. Appending a role-system message at the end leaves the prefix intact, costs only the new tokens, keeps operator priority, and becomes cacheable history itself on the next turn. Use the top-level field for instructions that apply from the first message and on models without the feature, such as Sonnet 5 as of 2026-09; use mid-conversation messages for mid-session policy changes, per-turn authoritative context and state changes the application observes. Never rewrite a sent one; append instead.
 USAGE:
 Static persona up top, evolving policy appended; that is the cache-friendly split.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages
+Any change to it, even appending a sentence, produces a different hash, and the request misses the cache for the system prompt and every cached message after it.
 
 ## ccdvf-structured-outputs-vs-prompted-json | d2
 TOPIC: D6 Prompt & context engineering
@@ -2575,6 +2884,8 @@ A:
 Prompted JSON keeps flexibility and works everywhere, but even careful prompting can yield syntax errors, missing fields and type drift that need retries. Structured outputs (output_config.format) give guaranteed schema compliance through constrained decoding, with no parse errors and no schema retries, at the cost of schema restrictions (additionalProperties must be false, no numeric or length constraints, no recursion), first-call compile latency, a slightly larger injected system prompt, and incompatibility with citations and prefill. Choose prompting when citations are required, the model is unsupported, or the shape is loose; choose structured outputs for anything a program consumes. For tool calls, set strict true on the tool definition instead: it validates names and inputs with the same grammar machinery.
 USAGE:
 Program consumes it: structured outputs. Human reads it, or citations needed: prompt for the format and validate.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/structured-outputs
+Without structured outputs, Claude can generate malformed JSON responses or invalid tool inputs that break your applications.
 
 ## ccdvf-tool-context-four-approaches | d2
 TOPIC: D6 Prompt & context engineering
@@ -2584,6 +2895,8 @@ A:
 Tool search keeps definitions out of context until Claude asks, for large toolsets (about 20+ tools) where most are unused on a given turn. Programmatic tool calling collapses a chain of calls into one script run in the code execution sandbox, so intermediate results never enter history. Prompt caching does not shrink context but cuts what you pay for stable definitions. Context editing removes old tool_result blocks. Suggested order: enable caching on tool definitions from day one (cache writes carry a 25 percent markup that pays back on the second hit); add tool search past roughly 20 tools; add context editing once conversations run long; consider programmatic calling when you see repetitive chains. They compose without conflict.
 USAGE:
 Measure where tokens go first: definitions, roundtrips and history each have their own fix.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/manage-tool-context
+Long-running agents with many tools or many turns can exhaust available context before the task is finished. Four approaches address this at different points in the pipeline.
 
 ## ccdvf-prompt-chaining-vs-single-call | d2
 TOPIC: D6 Prompt & context engineering
@@ -2604,6 +2917,8 @@ A:
 Refine against evals, not impressions: start with a minimal prompt on the best model, run the tests, then add instructions and examples only for observed failure modes. On migration the direction often reverses: current models are more responsive to the system prompt, so anti-laziness language written for older models ("if in doubt, use the tool") now causes overtriggering; dial it back to normal phrasing ("use this tool when...") and replace blanket defaults with targeted conditions. Use effort as a fallback lever for over-exploration. Re-check any model-specific technique on your own evals before carrying it to another model. Treat the prompt as versioned code with a test suite.
 USAGE:
 Every prompt change is a diff plus an eval run; deletions count as improvements when the model got better.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices
+The fix is to dial back any aggressive language. Where you might have said "CRITICAL: You MUST use this tool when...", you can use more normal prompting like "Use this tool when...".
 
 ## ccdvf-instruction-placement-tool-result-vs-user-turn | d2
 TOPIC: D6 Prompt & context engineering
@@ -2624,6 +2939,8 @@ A:
 The first is a jailbreak or direct prompt injection: the user of your application is the adversary, so defenses target the user turn (harmlessness screen, input validation, a system prompt that says how to refuse, throttling repeat offenders). The second is indirect prompt injection: the user is trusted but Claude reads third-party content (emails, web pages, OCR output, tool results) carrying adversarial instructions, so defenses target how content enters context (tool_result only, labeled source, JSON encoding, least privilege, output screening). Screening only the user turn leaves the email path wide open.
 USAGE:
 Name the threat model before picking a control: "who wrote the malicious text, the user or a document?" decides where the guardrail goes.
+SOURCE: https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/mitigate-jailbreaks
+Indirect prompt injection, where the user is trusted but Claude processes third-party content (web pages, emails, documents, tool results) that contains adversarial instructions.
 
 ## ccdvf-untrusted-content-in-tool-result | d2
 TOPIC: D7 Security & safety
@@ -2665,6 +2982,8 @@ fi
 exit 0
 USAGE:
 Test every safety hook by exiting 1 on purpose once: if the action still runs, you have seen why the code must be 2.
+SOURCE: https://code.claude.com/docs/en/hooks
+Without valid JSON on stdout, Claude Code treats exit code 1 as a non-blocking error and proceeds with the action, even though 1 is the conventional Unix failure code.
 
 ## ccdvf-api-key-vs-wif-vs-app-attest | d2
 TOPIC: D7 Security & safety
@@ -2674,6 +2993,8 @@ A:
 Static API keys (sk-ant-api...) suit local development, prototyping, scripts and servers where you control secret storage. Workload Identity Federation suits production workloads on AWS, Google Cloud, Azure, Kubernetes and CI/CD pipelines: the workload exchanges its identity-provider JWT for a short-lived token, so there is no sk-ant string to distribute or rotate. App Attest suits iOS and macOS apps distributed to end users: each genuine installation gets a one-hour, workspace-scoped token that authorizes only Messages API calls, and the app ships no key. A shared static key inside an app binary or a CI log is exactly the leak these options exist to prevent.
 USAGE:
 Match the credential to who holds it: a person or server you control, a platform identity, or an app on a stranger's phone.
+SOURCE: https://platform.claude.com/docs/en/manage-claude/authentication
+Move to Workload Identity Federation when your workload already has a platform-issued identity you can federate. Use App Attest for iOS and macOS apps you distribute to end users.
 
 ## ccdvf-workspace-isolation | d1
 TOPIC: D7 Security & safety
@@ -2683,6 +3004,8 @@ A:
 Every request runs in exactly one workspace. Keys can be scoped to a single workspace, and Files, Message Batches and Skills are workspace resources; prompt caches on the Claude API are isolated per workspace too. Each workspace can carry its own monthly spend limit and rate limits, set lower than (never higher than) the organization's, so a runaway development job cannot burn the production budget, and usage and cost reports group by workspace_id. Billing and member administration stay at the organization level, organization-wide limits always apply, and the Default Workspace cannot take limits or be archived. An organization gets 100 workspaces by default.
 USAGE:
 Name them "Prod - Support Bot" and "Dev - Support Bot", give dev a small spend cap, and scope each key to its workspace at creation.
+SOURCE: https://platform.claude.com/docs/en/manage-claude/workspaces
+Every request runs in exactly one workspace and can only access resources within that workspace.
 
 ## ccdvf-web-fetch-exfiltration | d2
 TOPIC: D7 Security & safety
@@ -2692,6 +3015,8 @@ A:
 An injected instruction could try to make Claude fetch a URL that carries sensitive data to an attacker's host. The API limits this with URL validation: Claude can only fetch URLs that already appeared in the conversation (user messages, client-side tool results, earlier web search or web fetch results), never a URL that appears only in its own output or only in the system prompt; violations return the url_not_in_prior_context error code. Residual risk remains, so for sensitive workloads set allowed_domains to known-safe hosts and max_uses to cap fetches (there is no default limit), or disable the tool. allowed_domains and blocked_domains cannot be combined.
 USAGE:
 When a fetch-enabled agent also sees private data, pin allowed_domains to your own documentation hosts and cap max_uses at a handful.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool
+For security reasons, the web fetch tool can only fetch URLs that have previously appeared in the conversation context.
 
 ## ccdvf-zdr-eligibility | d2
 TOPIC: D7 Security & safety
@@ -2701,6 +3026,8 @@ A:
 ZDR means Anthropic does not store prompts or responses at rest after the response returns, but only for eligible features. Not eligible: the Files API (files kept until deleted or expired), Message Batches (29-day retention), code execution and programmatic tool calling (container data up to 30 days), the MCP connector, MCP tunnels, Agent Skills, and Claude Managed Agents (session transcripts persist until deleted). Under ZDR the API does not block these; using one is a choice to step outside ZDR for that data, so the guard has to be your own review. Plain Messages, token counting, prompt caching, thinking, web search and inline PDFs remain eligible. Flagged content may still be retained up to 2 years.
 USAGE:
 Before adding a feature to a ZDR workload, check the eligibility table; the API will not warn you.
+SOURCE: https://platform.claude.com/docs/en/manage-claude/api-and-data-retention
+Under ZDR, the API does not block these features; using one is a choice to step outside your ZDR arrangement for that specific data, and the feature's own documented retention policy applies.
 
 ## ccdvf-harmlessness-screen-haiku | d1
 TOPIC: D7 Security & safety
@@ -2735,6 +3062,8 @@ A:
 Respond to repeat offenders at the account level: adjust responses, tell the user that their actions violate the relevant usage policies, and consider throttling or banning users who repeatedly attempt to circumvent the guardrails. Refusals are per request; a per-user counter turns them into a signal. This sits inside continuous monitoring: regularly analyze outputs for signs of successful injection and feed what you learn back into prompts, validation and filtering. It is a product control (rate limits, warnings, bans), not something the model does for you.
 USAGE:
 Log the refusal category per user id; three identical refusals in a short window is a sensible first throttle threshold.
+SOURCE: https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/mitigate-jailbreaks
+Respond to repeat offenders: Adjust responses and consider throttling or banning users who repeatedly attempt to circumvent your application's guardrails.
 
 ## ccdvf-prompt-leak-tradeoff | d2
 TOPIC: D7 Security & safety
@@ -2744,6 +3073,8 @@ A:
 Use leak-resistant prompt engineering only when absolutely necessary: the added complexity can degrade performance on the actual task, so test thoroughly after adding it. Try monitoring first: post-processing filters (regular expressions, keyword filtering, or a prompted LLM) that catch leaked text in outputs, plus regular audits of prompts and outputs. Keep the prompt lean: if Claude does not need the proprietary detail to do the job, leave it out, because extra content distracts from "no leak" instructions. System prompts do separate context from user queries, but no method is foolproof, and prefill-based reinforcement is not supported on Claude 4.6 and later.
 USAGE:
 The cheapest leak defense is deleting the secret from the prompt; the second cheapest is an output filter, not ten more rules.
+SOURCE: https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-prompt-leak
+Consider using leak-resistant prompt engineering strategies only when absolutely necessary.
 
 ## ccdvf-phi-hipaa-vs-zdr | d2
 TOPIC: D7 Security & safety
@@ -2753,6 +3084,8 @@ A:
 PHI calls for HIPAA readiness: a signed BAA and a HIPAA-enabled organization, which applies encryption, access controls and audit logging across the data lifecycle rather than immediate deletion, and you do not also need ZDR. Under HIPAA readiness the API blocks requests that include a non-eligible feature with a 400 error; under ZDR the API does not block them, and using one simply steps outside ZDR for that data. PHI is expected in message content, attached files and file metadata, not in workspace names, user details or billing data. Claude Code, the Console interface, beta features and partner-operated platforms such as Bedrock are not covered under HIPAA readiness.
 USAGE:
 If the data is health records, start with the BAA; a ZDR contract alone is the wrong instrument.
+SOURCE: https://platform.claude.com/docs/en/manage-claude/api-and-data-retention
+If your organization handles PHI, HIPAA readiness is the arrangement to use; you do not also need ZDR.
 
 ## ccdvf-streaming-refusal-200 | d2
 TOPIC: D7 Security & safety
@@ -2774,6 +3107,8 @@ CODE: json
 }
 USAGE:
 Branch on stop_reason in the message_delta handler and count refusals as a metric next to 4xx and 5xx.
+SOURCE: https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/handle-streaming-refusals
+A refusal arrives as a successful HTTP 200 response with stop_reason: "refusal", so monitoring built only on error rates won't surface it. Track refusals as their own signal.
 
 ## ccdvf-permission-rules-not-model | d1
 TOPIC: D7 Security & safety
@@ -2783,6 +3118,8 @@ A:
 Permission rules are enforced by Claude Code, not by the model. Instructions in a prompt or CLAUDE.md shape what Claude tries to do, but they do not change what Claude Code allows. To grant or revoke access, use /permissions, allow, ask and deny rules in settings, a permission mode, or a PreToolUse hook. A deny rule such as Bash(git push --force *) blocks matching calls as written; a hook that exits 2 blocks them regardless of any allow rule. CLAUDE.md stays useful for guidance, but only the harness can say no.
 USAGE:
 Write the policy twice: once in CLAUDE.md so Claude understands it, once as a deny rule or hook so it holds.
+SOURCE: https://code.claude.com/docs/en/permissions
+Permission rules are enforced by Claude Code, not by the model. Instructions in your prompt or CLAUDE.md shape what Claude tries to do, but they don’t change what Claude Code allows.
 
 ## ccdvf-identity-backed-keys | d2
 TOPIC: D7 Security & safety
@@ -2792,6 +3129,8 @@ A:
 Three key types exist. A personal key acts as you with your roles and stops working when you lose access to the organization or workspace; it is archived when you are removed and not restored on re-invite. A service account key acts as a non-human service account and stops when that account is archived or removed from the workspace. A legacy workspace key belongs to no one and keeps working until it expires, is disabled or deleted, or its workspace is archived. Personal and service account keys are identity-backed, so keys do not outlive their owners; shared or automated workloads should use a service account, and workspace keys are considered legacy.
 USAGE:
 Audit for workspace keys and replace each with a service account key or federation so offboarding revokes access automatically.
+SOURCE: https://platform.claude.com/docs/en/manage-claude/authentication
+When that identity is removed from the organization, the key stops working. This means that keys won't accidentally outlive the people or workloads that own them.
 
 ## ccdvf-key-expiration-presets | d1
 TOPIC: D7 Security & safety
@@ -2801,6 +3140,8 @@ A:
 Presets are 3 hours, 1 day, 7 days or 30 days, plus a custom duration or Never for keys you store in a secrets manager and rotate yourself; an organization maximum-expiration policy can remove Never. Expiration is fixed at creation and cannot be changed later. After expiry, requests return 401 authentication_error and the key cannot be reactivated, so you create a new one. The creator is emailed 7 days before expiry for keys with a lifetime of at least 14 days and 1 day before for lifetimes of at least 7 days. Expiration limits how long a leaked credential stays usable, but you still keep keys in a secrets manager and disable or delete any key you suspect has leaked.
 USAGE:
 Give demo and hackathon keys a 1-day or 7-day life; the deadline does the cleanup you would forget.
+SOURCE: https://platform.claude.com/docs/en/manage-claude/authentication
+After a key expires, requests made with it return a 401 authentication_error. Create a new key to restore access; expired keys cannot be reactivated.
 
 ## ccdvf-admin-key-scope | d1
 TOPIC: D7 Security & safety
@@ -2810,6 +3151,8 @@ A:
 Those endpoints belong to the Admin family and need an Admin API key, created under Settings > Admin keys by an organization member with the admin role; the secret starts with sk-ant-admin01- and is shown once. One key covers the Admin, Usage and Cost, Rate Limits and Claude Code Analytics APIs, sent in the x-api-key header, and it is organization-scoped rather than tied to a workspace. The Admin API also accepts a personal or service account key that is not scoped to a workspace; service-account and federation endpoints accept only an org:admin OAuth token. Claude Enterprise keys carry selectable scopes, and a call beyond them returns 403.
 USAGE:
 Keep the admin key in the ops secrets store, separate from application keys; it can reshape the whole organization.
+SOURCE: https://platform.claude.com/docs/en/manage-claude/admin-api-keys
+An Admin API key authenticates every API in the Admin section of this guide: the Admin API, Analytics APIs, Compliance API, Spend Limits API, Usage and Cost API, and Rate Limits API.
 
 ## ccdvf-access-monitoring-signals | d2
 TOPIC: D7 Security & safety
@@ -2819,6 +3162,8 @@ A:
 Use the Usage and Cost API with an Admin key, filtering by workspace_ids and grouping by workspace_id to attribute consumption; the anthropic-workspace-id response header on Messages and other API responses (absent on Admin API calls) tells you which workspace a call resolved to. Audit workspace membership regularly, and prefer identity-backed keys so each workload maps to a person or service account. Workload Identity Federation keeps an authentication history page, including rejected exchanges such as jti_reused. For Claude Code, monitor usage through OpenTelemetry metrics and audit or block settings edits during sessions with a ConfigChange hook, which fires when a configuration file changes and can log or block the change.
 USAGE:
 Wire a ConfigChange hook that appends timestamp, source and file path to an audit log; it is a one-line jq command.
+SOURCE: https://platform.claude.com/docs/en/manage-claude/workspaces
+Use the Usage and Cost API to track workspace-level consumption.
 
 ## ccdvf-computer-use-injection-classifier | d2
 TOPIC: D7 Security & safety
@@ -2861,6 +3206,8 @@ CODE: json
 }
 USAGE:
 Turn on filesystem and network isolation together; one without the other leaves a path to exfiltrate keys or backdoor the host.
+SOURCE: https://code.claude.com/docs/en/sandboxing
+The operating system enforces the sandbox boundary on the running process, so it holds regardless of what the model chose to run and even if an allowed command does more than its name suggests.
 
 ## ccdvf-read-deny-sensitive-files | d1
 TOPIC: D7 Security & safety
@@ -2880,6 +3227,8 @@ CODE: json
 }
 USAGE:
 Commit the deny list in .claude/settings.json so every teammate's session refuses the secrets folder on day one.
+SOURCE: https://code.claude.com/docs/en/permissions
+To block Claude’s file tools from reading a file or directory, add a Read deny rule for its path, such as Read(./.env) or Read(./secrets/**); Exclude sensitive files has a paste-ready example.
 
 ## ccdvf-wif-three-resources | d2
 TOPIC: D7 Security & safety
@@ -2898,6 +3247,8 @@ curl -sS https://api.anthropic.com/v1/oauth/token \
        "workspace_id":"wrkspc_..."}'
 USAGE:
 Run `ant auth status` inside the workload after migrating; it names which credential source won.
+SOURCE: https://platform.claude.com/docs/en/manage-claude/workload-identity-federation
+You configure three resources in the Claude Console before any workload can federate. Together they express "tokens signed by issuer X, with claims that look like Y, may act as service account Z."
 
 ## ccdvf-mcp-toolset-denylist | d2
 TOPIC: D7 Security & safety
@@ -2920,6 +3271,8 @@ CODE: json
 }
 USAGE:
 Ship read-only agents with an explicit allowlist; a destructive tool the server adds later then stays invisible.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
+Denylisting write or destructive tools is recommended when building read-only assistants, or when you want a human confirmation step before state changes
 
 ## ccdvf-hook-vs-claude-md-enforcement | d2
 TOPIC: D7 Security & safety
@@ -2929,6 +3282,8 @@ A:
 Preferences and style go in CLAUDE.md: they guide the model but rely on it choosing to comply. Anything that must happen every time, or must never happen, goes in a hook, because hooks give deterministic control: Claude Code runs them at fixed lifecycle points, and a PreToolUse hook that exits 2 blocks the action regardless of what the model wanted. For rules that need judgment rather than a fixed pattern, a type "prompt" hook (default 30-second timeout) sends the hook input to a Claude model for a single-turn decision. Command hooks execute with your full user permissions, so review and test every hook command before adding it to your configuration.
 USAGE:
 Sort every guideline into "nice to have" (CLAUDE.md) or "must hold under attack" (hook); the second list is usually short.
+SOURCE: https://code.claude.com/docs/en/hooks-guide
+Claude Code runs them at specific points in its lifecycle, which gives you deterministic control: certain actions always happen rather than relying on the LLM to choose to run them.
 
 ## ccdvf-permission-deny-vs-sandbox | d2
 TOPIC: D7 Security & safety
@@ -2949,6 +3304,8 @@ A:
 Screen tool outputs before Claude acts on them: run each tool, pass its raw output to a small classifier call on Claude Haiku 4.5 that asks whether the content contains instructions trying to redirect the assistant, override the system prompt or trigger unrequested actions, and constrain the verdict with structured outputs such as an injection_suspected boolean. Only when the screen reports no attempt do you return the content as a tool_result; otherwise return an error or a stripped summary and consider surfacing the attempt to the user. This layers an independent application-side check on top of the model's own skepticism, and you should red-team it with documents that deliberately contain injections.
 USAGE:
 Put the screen inside the tool wrapper so every call is covered, and log the suspected cases for review.
+SOURCE: https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/mitigate-jailbreaks
+Run each tool, pass its raw output to a small classifier call with Claude Haiku 4.5, and only return the content as a tool_result block if the screen reports no injection attempt.
 
 ## ccdvf-own-instructions-not-in-tool-result | d2
 TOPIC: D7 Security & safety
@@ -2969,6 +3326,8 @@ A:
 allowed_tools pre-approves the listed tools; unlisted tools fall through to the permission mode, and in the prompt-skipping mode that step approves everything, so Bash, Write and Edit ran. To block tools there, use disallowed_tools: a bare name such as "Bash" removes the tool from Claude's context, and a scoped rule such as Bash(rm *) is denied in every mode. Deny rules, explicit ask rules and PreToolUse hooks are evaluated before the mode check and still apply. The docs say to use this mode only in isolated environments such as containers or VMs where Claude cannot cause damage, and an organization can disable it through managed settings.
 USAGE:
 Treat the skip-prompts mode as "trust the sandbox, not the model": lock it to a throwaway container and pair it with disallowed_tools.
+SOURCE: https://code.claude.com/docs/en/agent-sdk/permissions
+Any other tool not listed in allowed_tools is still available to Claude, and a call to it that needs approval falls through to the permission mode.
 
 ## ccdvf-least-privilege-agent-access | d2
 TOPIC: D7 Security & safety
@@ -2989,6 +3348,8 @@ A:
 PreToolUse hooks run before the permission prompt and before mode checks, in every permission mode. A hook that exits 2 or returns permissionDecision "deny" stops the call even when an allow rule, or the prompt-skipping mode, would let it through; the documented pattern is exactly "allow Bash, then register a hook that rejects specific commands". In the other direction, hooks cannot loosen policy: Claude Code still evaluates deny and ask rules regardless of a hook's "allow", so the managed deny wins and a matching ask rule still prompts. Hooks tighten, rules set the floor, and managed settings cannot be overridden by any other level.
 USAGE:
 Model your policy as "rules set the floor, hooks add exceptions downward"; nothing in a hook can raise the ceiling.
+SOURCE: https://code.claude.com/docs/en/permissions
+A hook that exits with code 2 stops the tool call before permission rules are evaluated, so the block applies even when an allow rule would otherwise let the call proceed.
 
 ## ccdvf-reset-vs-retry-after-refusal | d2
 TOPIC: D7 Security & safety
@@ -3009,6 +3370,8 @@ A:
 Chain safeguards so no single layer is load-bearing: an input harmlessness screen on a lightweight model with a structured boolean verdict; a system prompt that states directives, ethical boundaries and an explicit refusal script; an untrusted-content policy with JSON-encoded tool_result delivery and output screening for tool content; least-privilege tool scoping so injected text cannot reach sensitive actions; post-processing filters on outputs; and continuous monitoring with throttling of repeat offenders. Underneath, all Claude models carry built-in safety behaviors and streaming classifiers that refuse policy-violating content in line with Anthropic's Acceptable Use Policy regardless of your prompt. Your layers narrow the space; Anthropic's set the outer boundary.
 USAGE:
 When one layer fails in a red-team test, ask which other layer should have caught it; if the answer is "none", add one there.
+SOURCE: https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/mitigate-jailbreaks
+By layering these strategies, you create a robust defense against jailbreaking and prompt injections, ensuring your Claude-powered applications maintain the highest standards of safety and compliance.
 
 ## ccdvf-tool-description-quality | d1
 TOPIC: D8 Tools & MCP
@@ -3028,6 +3391,8 @@ CODE: json
 }
 USAGE:
 Write every tool description as if onboarding a new colleague who has never seen the API: purpose, trigger, parameters, limits.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools
+Provide extremely detailed descriptions. This is by far the most important factor in tool performance.
 
 ## ccdvf-tool-use-contract | d1
 TOPIC: D8 Tools & MCP
@@ -3037,6 +3402,8 @@ A:
 The model never executes anything. It emits a structured tool_use request (a tool name plus JSON input); your code, or Anthropic's servers for server tools, runs the operation and the result flows back as a tool_result. That makes Claude behave like a typed function you call: define the schema, handle the callback, return a result. The tell-tale smell is a regex that extracts a decision from free text; parsing prose to recover structured intent means the structure belonged in a tool schema. Skip tools when the model can answer from training, the interaction is one-shot with no side effects, or a round trip would dominate a trivial response.
 USAGE:
 Replace every "parse the model's answer for a yes/no" with a tool whose schema has that field.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/how-tool-use-works
+The model never executes anything on its own. It emits a structured request, your code (or Anthropic's servers) runs the operation, and the result flows back into the conversation.
 
 ## ccdvf-tool-definition-fields | d1
 TOPIC: D8 Tools & MCP
@@ -3063,6 +3430,8 @@ CODE: json
 }
 USAGE:
 Keep names stable and machine-like (snake_case, service-prefixed); the name is the identifier Claude emits, so renaming a tool changes its behavior.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools
+The name of the tool. Must match the regex ^[a-zA-Z0-9_-]{1,128}$.
 
 ## ccdvf-mcp-tools-resources-prompts | d1
 TOPIC: D8 Tools & MCP
@@ -3122,6 +3491,8 @@ A:
 Tools fit actions with side effects (send an email, write a record), fresh or external data (prices, database rows), guaranteed-shape structured output, and calls into existing systems. They do not fit when the model can answer from training alone (summarization, translation, general knowledge), when the interaction is one-shot Q&A with nothing to execute, or when the extra round trip would dominate a trivial response, because every tool call costs at least one additional request. For a fixed-shape answer with no side effects, structured outputs give schema guarantees without a tool loop.
 USAGE:
 Ask "what would the tool execute?"; if the honest answer is "nothing", it is prose or structured output, not a tool.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/how-tool-use-works
+The model can answer from training alone. Summarization, translation, and general-knowledge questions don't need a tool round trip.
 
 ## ccdvf-anthropic-schema-tools-trained-in | d1
 TOPIC: D8 Tools & MCP
@@ -3149,6 +3520,8 @@ A:
 Consolidate related operations into fewer, more capable tools. Replace the three scheduling calls with one schedule_event that finds availability and books, and group the PR actions into a single tool with an action parameter. Fewer tools reduce selection ambiguity and shrink the surface the model must navigate; overlapping tools distract agents and waste context. The same principle says not to wrap every API endpoint one-to-one: design tools around agent workflows (search_logs returning relevant lines rather than read_logs dumping everything) so each tool is purposeful and distinct.
 USAGE:
 Before adding a fourth tool, ask whether an action enum on an existing tool covers it.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools
+Consolidate related operations into fewer tools. Rather than creating a separate tool for every action (create_pr, review_pr, merge_pr), group them into a single tool with an action parameter.
 
 ## ccdvf-tool-namespacing | d1
 TOPIC: D8 Tools & MCP
@@ -3169,6 +3542,8 @@ A:
 Return only high-signal information: the fields Claude needs for its next step, with semantic, stable identifiers (names, slugs) instead of opaque UUIDs, because resolving identifiers to meaningful language measurably improves precision. Offer a response_format enum with "concise" and "detailed" values so the agent asks for IDs only when a downstream call needs them; Anthropic's Slack example dropped from 206 tokens (detailed) to 72 (concise). Add pagination, filtering, and truncation with sensible defaults, and test XML versus JSON versus Markdown output shapes in your evals, since structure affects performance.
 USAGE:
 Default to concise; make "detailed" an explicit opt-in parameter rather than the norm.
+SOURCE: https://www.anthropic.com/engineering/writing-tools-for-agents
+Agents also tend to grapple with natural language names, terms, or identifiers significantly more successfully than they do with cryptic identifiers.
 
 ## ccdvf-tool-error-messages-as-interface | d1
 TOPIC: D8 Tools & MCP
@@ -3178,6 +3553,8 @@ A:
 Because tool output is loaded straight into the agent's context, error text steers the next action. Opaque codes and tracebacks leave Claude guessing; actionable messages let it recover without a human. For the malformed query, name the expected format and give a correct example ("query must be key=value pairs, e.g. level=ERROR service=api"). For the over-broad query, steer toward an efficient strategy ("results truncated at 200 lines; make several targeted searches by service and time window instead of one broad search"). Send both with is_error: true so Claude knows the call failed rather than treating the text as data.
 USAGE:
 Write error strings for the model's next move, not for a log file; a good one names what went wrong and what to try.
+SOURCE: https://www.anthropic.com/engineering/writing-tools-for-agents
+Tool truncation and error responses can steer agents towards more token-efficient tool-use behaviors (using filters or pagination) or give examples of correctly formatted tool inputs.
 
 ## ccdvf-skill-progressive-disclosure | d1
 TOPIC: D8 Tools & MCP
@@ -3187,6 +3564,8 @@ A:
 Skills use progressive disclosure. Level 1, the YAML frontmatter name and description, loads at startup into the system prompt for every installed Skill at roughly 100 tokens each, and the description is what Claude matches a request against. Level 2, the SKILL.md body, loads only when the Skill triggers and should stay under about 5k tokens; Claude reads it from the filesystem with bash. Level 3, bundled reference files and scripts, costs nothing until accessed: FORMS.md loads only if form filling is needed, and when Claude runs fill_form.py only the script's output enters context, never its code. Many Skills can be installed without a context penalty.
 USAGE:
 Put deterministic work in scripts and rarely needed detail in sibling files; keep SKILL.md to the workflow itself.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview
+This filesystem-based architecture enables progressive disclosure: Claude loads information in stages as needed, rather than consuming context upfront.
 
 ## ccdvf-skill-md-required-fields | d2
 TOPIC: D8 Tools & MCP
@@ -3201,6 +3580,8 @@ description: Extract text and tables from PDF files, fill forms, merge documents
 ---
 USAGE:
 Write the description as "does X. Use when Y." and test it against three phrasings of a real request before shipping.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview
+The description must include both what the Skill does and when Claude should use it.
 
 ## ccdvf-server-tool-use-block | d1
 TOPIC: D8 Tools & MCP
@@ -3217,6 +3598,8 @@ CODE: json
 }
 USAGE:
 Filter your tool dispatcher on block type "tool_use" only; server_tool_use and mcp_tool_use blocks are read-only history.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/server-tools
+The tool's result block (for example, web_search_tool_result for web search) follows the server_tool_use block in the same assistant turn, paired by tool_use_id.
 
 ## ccdvf-agent-sdk-inprocess-mcp | d2
 TOPIC: D8 Tools & MCP
@@ -3236,6 +3619,8 @@ options = ClaudeAgentOptions(
 )
 USAGE:
 Prefer in-process SDK servers for app-private logic; reserve external MCP servers for capabilities other hosts must share.
+SOURCE: https://code.claude.com/docs/en/agent-sdk/custom-tools
+After defining a tool, wrap it in a server with createSdkMcpServer (TypeScript) or create_sdk_mcp_server (Python). The server runs in-process inside your application, not as a separate process.
 
 ## ccdvf-mcp-tool-naming-claude-code | d1
 TOPIC: D8 Tools & MCP
@@ -3245,6 +3630,8 @@ A:
 A regular MCP server's tool is named mcp__<server-name>__<tool-name>, for example mcp__database-tools__query; a server bundled by a plugin becomes mcp__plugin_<plugin>_<server>__<tool>. Use the full name in permission rules (allow, ask, deny), in a Skill's allowed-tools list, in a subagent's tools field, and in hook matchers, where patterns such as mcp__memory__.* or mcp__.*__write.* select whole groups. Permission rules also accept the server alone (mcp__puppeteer) or a wildcard (mcp__puppeteer__*); allow rules require a literal server segment, while deny and ask rules may use mcp__* to cover every MCP tool.
 USAGE:
 Run claude mcp list to see server names exactly as configured; the name in the rule must match that spelling.
+SOURCE: https://code.claude.com/docs/en/mcp
+Use this full name when referencing the tool in permission rules, a skill’s allowed-tools list, a subagent’s tools field, or a hook matcher.
 
 ## ccdvf-parallel-tool-calls-execution | d1
 TOPIC: D8 Tools & MCP
@@ -3259,6 +3646,8 @@ CODE: json
 ]
 USAGE:
 Collect results into one array and send once; never stream results back one message at a time.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/parallel-tool-use
+The API doesn't prescribe an execution order: you can run the calls concurrently (Promise.all, asyncio.gather), sequentially in the order they appear, or in any combination that suits your tools.
 
 ## ccdvf-tool-choice-modes | d2
 TOPIC: D8 Tools & MCP
@@ -3273,6 +3662,8 @@ CODE: json
 }
 USAGE:
 Force a tool only for the one turn that must be structured; return to auto afterwards so Claude can explain itself.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools
+Note that when you have tool_choice as any or tool, the API prefills the assistant message to force a tool to be used.
 
 ## ccdvf-tool-search-threshold | d2
 TOPIC: D8 Tools & MCP
@@ -3289,6 +3680,8 @@ CODE: json
 }
 USAGE:
 Watch selection accuracy as the catalog passes 30–50 tools; that is where Anthropic says degradation starts.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
+Standard tool calling, without tool search, is a better fit when you have fewer than 10 tools, every tool is used in every request, or your tool definitions are small (less than 100 tokens total).
 
 ## ccdvf-strict-tool-use | d2
 TOPIC: D8 Tools & MCP
@@ -3309,6 +3702,8 @@ CODE: json
 }
 USAGE:
 Turn strict on for every tool whose handler would crash on a wrong type; the grammar is compiled once and reused for up to 24 hours, so steady-state requests pay no recompilation.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/strict-tool-use
+When Claude uses the tool, the input field in the tool_use block strictly follows your input_schema, and the name is always valid.
 
 ## ccdvf-tool-result-block-shape | d2
 TOPIC: D8 Tools & MCP
@@ -3332,6 +3727,8 @@ CODE: json
 }
 USAGE:
 Return screenshots and fetched files as image or document blocks inside tool_result rather than describing them in prose.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls
+tool_use_id: The id of the tool use request this is a result for.
 
 ## ccdvf-disable-parallel-tool-use | d1
 TOPIC: D8 Tools & MCP
@@ -3343,6 +3740,8 @@ CODE: json
 {"tool_choice": {"type": "auto", "disable_parallel_tool_use": true}}
 USAGE:
 Set it when your handler cannot run calls concurrently or when you want one action per turn for human review.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/parallel-tool-use
+To turn it off, set disable_parallel_tool_use: true inside the tool_choice object. It is not a top-level request parameter.
 
 ## ccdvf-web-search-tool-params | d2
 TOPIC: D8 Tools & MCP
@@ -3360,6 +3759,8 @@ CODE: json
 }
 USAGE:
 Cap max_uses per request as a hard budget; simple factual queries need 1–3 searches, comparisons 10 or more.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
+Provide allowed_domains or blocked_domains, not both. If a request includes both, the API returns a 400 error.
 
 ## ccdvf-web-fetch-url-validation | d2
 TOPIC: D8 Tools & MCP
@@ -3377,6 +3778,8 @@ CODE: json
 }
 USAGE:
 Always set max_content_tokens in production; one unbounded PDF fetch can cost more than the rest of the conversation.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool
+The tool cannot fetch URLs that appear only in Claude's own output or only in the system prompt. To make a URL from the system prompt fetchable, also include it in a user message.
 
 ## ccdvf-code-execution-tool-facts | d2
 TOPIC: D8 Tools & MCP
@@ -3386,6 +3789,8 @@ A:
 Declare {"type": "code_execution_20250825", "name": "code_execution"}; 20260120 adds REPL persistence and programmatic tool calling, 20260521 documents the 90-second per-cell limit; no beta header. Claude gets two sub-tools, bash_code_execution and text_editor_code_execution, in a Linux x86_64 sandbox with Python 3.11, 1 CPU, 5 GiB RAM, 5 GiB disk, and no internet (pre-installed libraries only). Each request gets a new container unless you pass the container id back; containers checkpoint after about 5 minutes idle and expire 30 days after creation. Files are captured only from $OUTPUT_DIR. As of 2026-09: 1,550 free container-hours per organization per month, then $0.05 per hour per container (5-minute minimum); free when a 20260209-or-later web search or fetch tool is in the request. Not ZDR eligible.
 USAGE:
 Reuse the container id across a multi-step analysis so files and REPL state survive; drop it to get a clean sandbox.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
+Containers expire 30 days after creation. After about 5 minutes of inactivity a container is checkpointed, and sending a request with its ID inside the 30-day window restores it.
 
 ## ccdvf-programmatic-tool-calling | d2
 TOPIC: D8 Tools & MCP
@@ -3403,6 +3808,8 @@ CODE: json
 }
 USAGE:
 Use it for loops over many lookups where only the aggregate matters; Anthropic reports 11 percent better search benchmarks with 24 percent fewer input tokens.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/programmatic-tool-calling
+The response stops with stop_reason: "tool_use", a container ID, and a tool_use block for query_database whose caller field identifies the code execution run that called it.
 
 ## ccdvf-mcp-connector-request-shape | d2
 TOPIC: D8 Tools & MCP
@@ -3422,6 +3829,8 @@ CODE: json
 }
 USAGE:
 Use the connector when a remote server and tools are all you need; for prompts, resources, or a local server, run your own MCP client with the SDK helpers.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
+The MCPToolset lives in the tools array and configures which tools from the MCP server are enabled and how they should be configured.
 
 ## ccdvf-mcp-toolset-allowlist-denylist | d2
 TOPIC: D8 Tools & MCP
@@ -3441,6 +3850,8 @@ CODE: json
 }
 USAGE:
 Ship read-only assistants with an allowlist, so a server that adds a new write tool tomorrow stays blocked by default.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
+Default configuration applied to all tools in this set. Individual tool configs in configs override these defaults.
 
 ## ccdvf-claude-mcp-add-transports | d1
 TOPIC: D8 Tools & MCP
@@ -3456,6 +3867,7 @@ claude mcp add --transport stdio airtable --env AIRTABLE_API_KEY=YOUR_KEY \
 claude mcp add --transport http shared-server --scope project https://example.com/mcp
 USAGE:
 Commit .mcp.json with ${TOKEN} placeholders and let each developer export the variable; never commit the token itself.
+SOURCE: https://code.claude.com/docs/en/mcp
 
 ## ccdvf-mcp-output-token-limit | d2
 TOPIC: D8 Tools & MCP
@@ -3471,6 +3883,8 @@ CODE: json
 }
 USAGE:
 Annotate only tools that legitimately return a whole schema or file tree; give the rest a filter parameter so most calls stay far below 10k tokens.
+SOURCE: https://code.claude.com/docs/en/mcp
+Claude Code displays a warning when MCP tool output exceeds 10,000 tokens and limits output to 25,000 tokens by default.
 
 ## ccdvf-bash-tool-client-session | d1
 TOPIC: D8 Tools & MCP
@@ -3487,6 +3901,8 @@ CODE: json
 }
 USAGE:
 Give every command a deadline; a command waiting on stdin never emits your sentinel and would block the session forever.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/bash-tool
+Your application keeps one bash process alive across tool calls, so state persists between commands.
 
 ## ccdvf-text-editor-tool-commands | d1
 TOPIC: D8 Tools & MCP
@@ -3503,6 +3919,8 @@ CODE: json
 }
 USAGE:
 Reject ambiguous replacements loudly; a silent first-match edit is the classic way an agent corrupts a file.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
+The str_replace command requires an exact match for the text to be replaced. Your application should ensure that there is exactly one match for the old text or provide appropriate error messages.
 
 ## ccdvf-memory-tool-client-side | d2
 TOPIC: D8 Tools & MCP
@@ -3519,6 +3937,8 @@ CODE: json
 }
 USAGE:
 Store durable facts and progress logs in memory; keep transient tool output in the conversation where context editing can clear it.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool
+Implement a client-side handler for each memory command. Your handler must reject paths outside /memories, so read Path traversal protection before you write it.
 
 ## ccdvf-computer-use-toolset | d2
 TOPIC: D8 Tools & MCP
@@ -3534,6 +3954,8 @@ CODE: json
 }
 USAGE:
 Run computer use in a dedicated VM with a domain allowlist and require a human to confirm consequential actions such as payments.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool
+Claude's calls are tool_use blocks whose name is the member and which carry "toolset_name": "computer", often several per turn (a batch action).
 
 ## ccdvf-tool-cache-control-placement | d2
 TOPIC: D8 Tools & MCP
@@ -3550,6 +3972,8 @@ CODE: json
 }
 USAGE:
 Freeze tool definitions in production and vary behavior through prompts or tool_choice; each redeploy of a tool description is a full cache miss.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-use-with-prompt-caching
+Place cache_control: {"type": "ephemeral"} on the last tool in your tools array.
 
 ## ccdvf-server-tools-mixed-turn | d2
 TOPIC: D8 Tools & MCP
@@ -3567,6 +3991,8 @@ CODE: json
 }
 USAGE:
 Detect the state by scanning for server_tool_use ids without result blocks; there is no other marker.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/server-tools
+To continue the turn, run the client tools and send a user message whose content is only the tool_result blocks, one for each tool_use block in that response.
 
 ## ccdvf-tool-use-system-prompt-overhead | d2
 TOPIC: D8 Tools & MCP
@@ -3576,6 +4002,8 @@ A:
 When tools is non-empty the API constructs a special system prompt that wraps your definitions with formatting instructions and bills those tokens as input. The count depends on the model and on tool_choice: as of 2026-09, Claude Opus 5 adds 286 tokens for auto or none and 406 for any or tool; Sonnet 5 adds 354 / 474; Haiku 4.5 adds 496 / 588. With no tools at all, none costs 0 extra. You also pay for the tools parameter itself, tool_use and tool_result blocks, and usage-based server tool fees such as web search. Anthropic-schema tools add their own definition tokens, about 325 for bash on Opus 5. Cache the tools prefix to pay these once per TTL.
 USAGE:
 Budget roughly 300–800 hidden tokens per request for the tool-use system prompt (Opus 4.7 sits at the top of that range) before counting your own definitions.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+When you use tools, the API also automatically includes a special system prompt for the model that enables tool use.
 
 ## ccdvf-skills-api-mechanics | d2
 TOPIC: D8 Tools & MCP
@@ -3585,6 +4013,8 @@ A:
 Skills run inside the code execution container, so the request must include the code execution tool and reference the Skill by skill_id (pptx, xlsx, docx, or pdf) in the container parameter. Custom Skills are uploaded through the Skills API (/v1/skills) and shared workspace-wide; on the API they have no network access and no runtime package installation, and they are not covered by ZDR. Surfaces do not sync: Claude Code Skills are directories at ~/.claude/skills/ (personal) or .claude/skills/ (project) and can ship in plugins, but the pre-built document Skills are not available in Claude Code; claude.ai custom Skills are per-user zip uploads with no admin distribution. Treat a Skill like installing software: audit its scripts before enabling it.
 USAGE:
 Keep one source repository per Skill and publish it separately to the API, Claude Code, and claude.ai; nothing propagates automatically.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview
+The Claude API supports both pre-built Agent Skills and custom Skills. Both work identically: specify the relevant skill_id in the container parameter along with the code execution tool.
 
 ## ccdvf-client-vs-server-tools | d2
 TOPIC: D8 Tools & MCP
@@ -3594,6 +4024,8 @@ A:
 The difference is where the code executes. Client tools (your user-defined tools and Anthropic-schema tools such as bash, text_editor, memory, computer, browser) run in your application: Claude returns stop_reason tool_use with tool_use blocks, you execute, and you send tool_result blocks back, so you own the loop, the sandbox, and the error handling. Server tools (web_search, web_fetch, code_execution, tool_search, mcp_toolset) run on Anthropic's infrastructure inside a server-side loop: you enable them and read server_tool_use plus result blocks, never constructing a tool_result; your only jobs are continuing pause_turn responses and handling mixed turns. Choose client tools for anything that touches your systems or data; choose server tools when Anthropic's implementation (search index, sandbox) is the point.
 USAGE:
 If the answer to "who is responsible when this fails at 3 a.m." is you, it is a client tool; build the timeout and retries accordingly.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+Tools differ primarily by where the code executes. Client tools (including user-defined tools and tools with Anthropic-defined schemas, such as bash and text_editor) run in your application.
 
 ## ccdvf-builtin-vs-custom-vs-skill-vs-mcp | d2
 TOPIC: D8 Tools & MCP
@@ -3603,6 +4035,8 @@ A:
 Use a built-in server tool when Anthropic already provides the capability: code execution handles the CSV with no code on your side. Use a custom tool for single-application private logic: a price_lookup tool with your schema, executed by your app. Use a Skill for reusable procedural knowledge: a SKILL.md with the release-notes workflow and helper scripts, loaded on demand and shareable across projects, with no external system involved. Use an MCP server for an external system that several applications must reach and that is maintained independently: the ticketing system exposed once as tools over Streamable HTTP. The usual over-reach is packaging one app's private lookup as an MCP server nobody else will connect to, or writing a Skill whose steps all hinge on a live system the Skill cannot call.
 USAGE:
 Ask three questions in order: does Anthropic already run it, is it one app's logic, is it knowledge or an external system.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/how-tool-use-works
+For web_search, web_fetch, code_execution, and tool_search, Anthropic runs the code. You enable the tool in your request and the server handles everything else.
 
 ## ccdvf-stdio-vs-streamable-http | d2
 TOPIC: D8 Tools & MCP
@@ -3612,6 +4046,8 @@ A:
 stdio is for a server that runs as a local process on the host's machine: the host spawns it, talks over stdin and stdout with no network overhead, and it typically serves one client, which suits personal dev tools, filesystem access, and anything holding local credentials. Streamable HTTP is for remote servers: HTTP POST for client messages with optional SSE streaming, standard auth (bearer tokens, OAuth), and many concurrent clients, which suits shared team services. The Messages API MCP connector reaches only publicly exposed HTTP servers (Streamable HTTP or the older SSE transport) and cannot connect a stdio server; Claude Code supports both and treats SSE as deprecated. The JSON-RPC messages are identical on either transport.
 USAGE:
 Prototype over stdio on your laptop, then publish the same server over Streamable HTTP once a second consumer appears.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
+The server must be publicly exposed through HTTP (supports both Streamable HTTP and SSE transports). Local STDIO servers cannot be connected directly.
 
 ## ccdvf-mcp-connector-vs-own-client | d2
 TOPIC: D8 Tools & MCP
@@ -3621,6 +4057,8 @@ A:
 Run your own client. The connector (mcp_servers plus mcp_toolset) supports tool calls only, needs a public https URL, and cannot reach stdio servers; it is the low-effort path when a remote server and tools are all you need. When you need prompts, resources, local servers, or control over the connection, use an MCP SDK client alongside the Anthropic SDK: the helpers mcpTools(tools, client) convert MCP tools for the tool runner, mcpMessages converts prompt messages into Claude messages, and mcpResourceToContent or mcpResourceToFile turn resources into content blocks or Files API uploads. The helpers raise an unsupported-value error for content the Claude API cannot take, so resolve resource links first.
 USAGE:
 Start with the connector; migrate to a client-side MCP session the day you need a prompt, a resource, or a local server.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
+The server must be publicly exposed through HTTP (supports both Streamable HTTP and SSE transports). Local STDIO servers cannot be connected directly.
 
 ## ccdvf-defer-loading-which-tools | d2
 TOPIC: D8 Tools & MCP
@@ -3630,6 +4068,8 @@ A:
 Keep the 3–5 tools used in almost every request non-deferred so Claude calls them without a search round trip, and never defer the tool search tool itself, or the request fails with "At least one tool must have defer_loading=false". Defer the long tail. For an MCP server you do not set defer_loading per tool definition; set it once on the mcp_toolset's default_config for the whole server, or per tool in its configs. For the computer and browser toolsets, set it per member inside configs with the same value on every enabled member, never on the entry, because the toolset loads and expands as one unit. Add a system-prompt sentence naming the tool categories so Claude knows what to search for.
 USAGE:
 Review discovery logs monthly and promote any deferred tool that Claude searches for on most requests.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
+Keep your 3–5 most frequently used tools non-deferred so Claude can call them without searching first.
 
 ## ccdvf-programmatic-vs-direct-calling | d2
 TOPIC: D8 Tools & MCP
@@ -3639,6 +4079,8 @@ A:
 The single lookup stays direct: omit allowed_callers or set ["direct"], so the result lands in context where Claude reasons about it. The 200-account sweep gets ["code_execution_20260120"]: Claude writes one script that loops, filters, and aggregates in the sandbox, cutting N model round trips to one and keeping raw rows out of context. Anthropic advises one caller per tool rather than both, because a single value gives clearer guidance. allowed_callers shapes how the tool is presented and is validated against tool_choice, but it is not a hard API block: your client must still handle a direct tool_use for any tool, so never treat it as a security boundary. Describe the tool's output format so the code can parse it.
 USAGE:
 Route "many calls, small answer" tools through code; keep "one call, read it" tools direct.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/programmatic-tool-calling
+Keep the tool direct-only by omitting allowed_callers (or setting it to ["direct"]). Other tools in the same request can still use programmatic calling.
 
 ## ccdvf-fix-selection-vs-fix-inputs | d2
 TOPIC: D8 Tools & MCP
@@ -3648,6 +4090,8 @@ A:
 Type conformance is a sampling problem: strict: true with additionalProperties: false makes passengers arrive as 2 every time. Tool selection is a description problem: rewrite the descriptions to state when each tool should and should not be used, consolidate if they overlap, and namespace them. A missing required parameter is usually missing context: Opus tends to ask for it while Sonnet may guess; return an is_error result naming the field and, durably, improve the parameter description or add input_examples, plus strict mode, which also forbids omitting required fields. Swapping to a larger model addresses none of these root causes.
 USAGE:
 Classify every tool failure as type, selection, or context before touching the model parameter.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/strict-tool-use
+Without strict mode, Claude might return incompatible types ("2" instead of 2) or omit required fields, breaking your functions and causing runtime errors.
 
 ## ccdvf-parallel-run-strategy | d2
 TOPIC: D8 Tools & MCP
@@ -3657,6 +4101,8 @@ A:
 Because these calls depend on each other, run them sequentially in order and stop at the first failure; for the calls you skip, still return a tool_result with is_error: true and a short explanation such as "Not executed: the preceding write_file call failed", all in one user message with every result before any text. Claude reissues the call next turn. Independent read-only calls can instead run concurrently; if a parallel call fails because its prerequisite was not done, return the natural error with is_error. The computer and browser toolsets make sequential-stop-on-failure mandatory and define the exact skip text. To reduce dependent calls arriving together, add "Only batch tool calls that are independent of each other" to the system prompt.
 USAGE:
 Never drop a tool_use silently; every id in the assistant turn needs a result or the next request fails.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/parallel-tool-use
+Independent, read-only operations are usually safe to run in parallel for lower latency. Tools with side effects, shared state, or ordering requirements might be better run sequentially.
 
 ## ccdvf-approval-pattern-enforced-vs-prompted | d2
 TOPIC: D8 Tools & MCP
@@ -3688,6 +4134,8 @@ while resp.stop_reason == "tool_use":
                                   container=getattr(resp, "container", None) and resp.container.id)
 USAGE:
 Treat "which block types can appear" as a versioned contract; every new tool family adds a branch to this switch.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/how-tool-use-works
+In practice this reads as: while stop_reason == "tool_use", execute the tools and continue the conversation.
 
 ## ccdvf-web-search-vs-web-fetch | d2
 TOPIC: D8 Tools & MCP
@@ -3697,6 +4145,8 @@ A:
 The first is web fetch: the URL is already in the user message, so Claude retrieves the full document (a PDF returns as base64) with no per-fetch charge, only tokens, and citations optional. The second is web search: nothing in context points at a page, the answer is current information, and search returns cited results at $10 per 1,000 searches as of 2026-09. The third needs both: with search and fetch enabled, Claude searches to locate the README and then fetches it, because fetch cannot invent a URL that never appeared in context. Enable only what the task needs; toggling either tool also invalidates the system and messages caches.
 USAGE:
 Give fetch a max_content_tokens budget and search a max_uses budget so one open-ended request cannot run away.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool
+The web fetch tool is available on the Claude API at no additional cost. You only pay standard token costs for the fetched content that becomes part of your conversation context.
 
 ## ccdvf-code-execution-vs-bash-tool | d2
 TOPIC: D8 Tools & MCP
@@ -3706,6 +4156,8 @@ A:
 web_search_20260209 and later run dynamic filtering inside Anthropic's code execution sandbox, which the API provisions automatically, so Claude now has two execution environments: the server sandbox (no internet, files reset per container, only pre-installed packages) and your bash session (the user's filesystem, persistent state). Claude can confuse them and assume shared state. Anthropic's fix is an explicit system-prompt note: variables, files, and state do not persist between environments; use code_execution for general computation in the sandbox; use the client bash tool for the user's local files; pass results between environments explicitly in tool calls. The same applies whenever code execution is combined with any client tool that also runs code.
 USAGE:
 Name both environments in the system prompt the moment you enable a 20260209-or-later web tool alongside a local shell.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
+Claude can sometimes confuse these environments, attempting to use the wrong tool or assuming state is shared between them.
 
 ## ccdvf-mcp-resources-vs-tools-for-data | d2
 TOPIC: D8 Tools & MCP
@@ -3715,6 +4167,8 @@ A:
 Model them as resources: read-only data with URIs (schema://tables, file:///docs/api.md) that the host application fetches with resources/read and decides how to include, whether whole, selected, or searched with embeddings. A tool named get_schema forces the model to spend a round trip and a decision every time and clutters the tool list. Keep tools for actions the model should choose, such as run_query, and prompts for user-invoked templates. The constraint: the Messages API MCP connector supports tool calls only, so a connector-based integration never sees resources or prompts; if the schema must reach Claude there, run your own MCP client and inject the resource as a content block, or accept a schema tool as the fallback.
 USAGE:
 Attach resources in the host at conversation start; leave the model to decide about tools only.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
+Of the feature set of the MCP specification, only tool calls are currently supported.
 
 ## ccdvf-mcp-server-output-shaping | d2
 TOPIC: D8 Tools & MCP
@@ -3735,6 +4189,8 @@ A:
 Anthropic-provided tools carry a _YYYYMMDD suffix, and a new version ships when behavior, schema, or model support changes; older versions stay available but are not guaranteed to work with newer models. Versions relate in different ways: capability-keyed (web_search_20260209 adds dynamic filtering, 20260318 adds response_inclusion, code_execution_20260120 adds programmatic calling), model-keyed (text_editor_20250728 for Claude 4 and later, 20250124 for earlier), variants (regex and bm25 tool search, neither supersedes the other), legacy (code_execution_20250522 is Python-only), and successor (computer_toolset_20260801 replaces computer_20251124). Move text_editor to 20250728 and code_execution to 20250825 or later, and remember that 20260209-or-later web tools require code_execution_20260120 or later if you also declare code execution.
 USAGE:
 Pin tool versions in config next to the model id and review both together at every model upgrade.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
+A new version is released when the tool's behavior, schema, or model support changes. Older versions remain available so that existing integrations continue to work.
 
 ## ccdvf-remote-mcp-auth-pattern | d2
 TOPIC: D8 Tools & MCP
@@ -3744,6 +4200,8 @@ A:
 Through the connector, your application owns the OAuth flow: obtain an access token before the request, pass it as authorization_token in the mcp_servers entry, and refresh it yourself when it expires; the API does not perform the flow for you. For testing, the MCP Inspector (npx @modelcontextprotocol/inspector) runs its Quick OAuth Flow and hands you an access_token to paste in. Claude Code is an interactive host with its own OAuth support: /mcp lists servers, shows "Needs authentication", and launches the browser login, or claude mcp login <name> does it from the terminal; static headers (--header "Authorization: Bearer ...") cover token-based servers. Either way the MCP specification's authorization section defines the protocol and the transport carries the credential.
 USAGE:
 In production, keep token refresh in middleware that rewrites authorization_token per request; never bake a long-lived token into config.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
+API consumers are expected to handle the OAuth flow and obtain the access token prior to making the API call, and to refresh the token as needed.
 
 ## ccdvf-agent-iteration-cap-mcq | d2
 TOPIC: D1 Agents & workflows
@@ -3898,6 +4356,8 @@ A:
 Use a PreToolUse hook: hooks run first in the permission evaluation order, on every matching call, and a hook deny holds regardless of the mode. Prompts are advisory, the approval callback is skipped for auto-approved calls, and leaving a tool out of allowed_tools does not remove it from the agent.
 USAGE:
 "Never" in a security requirement maps to a hook deny, not to a prompt line or a callback.
+SOURCE: https://code.claude.com/docs/en/agent-sdk/permissions
+To gate every tool call regardless of mode and rules, use a PreToolUse hook instead.
 
 ## ccdvf-managed-vs-sdk-hosting-mcq | d2
 TOPIC: D1 Agents & workflows
@@ -3922,6 +4382,8 @@ A:
 Managed Agents fits: Anthropic runs the agent loop and a per-session sandbox with a persistent filesystem and event history, supports long-running execution, and lets you send follow-up events or interrupt. The Agent SDK and a custom loop both leave hosting to the team, and Batches is not an agent runtime.
 USAGE:
 When "who hosts the container" is the question and the answer is "nobody here", it is Managed Agents.
+SOURCE: https://platform.claude.com/docs/en/managed-agents/overview
+Claude Managed Agents is stateful by design: sessions are long-running, resume cleanly after pauses, and store conversation history, sandbox state, and outputs server-side.
 
 ## ccdvf-self-hosted-sandbox-mcq | d2
 TOPIC: D1 Agents & workflows
@@ -3972,6 +4434,8 @@ A:
 Orchestrator-workers is Anthropic's recommended pattern for coding tasks that involve complex changes to multiple files, because the subtasks cannot be predicted in advance and a central LLM must determine them dynamically. Sectioning, chaining, and routing all assume the decomposition is known before the model runs.
 USAGE:
 Unknown subtask list means an orchestrator; known list means parallelization.
+SOURCE: https://www.anthropic.com/engineering/building-effective-agents
+In the orchestrator-workers workflow, a central LLM dynamically breaks down tasks, delegates them to worker LLMs, and synthesizes their results.
 
 ## ccdvf-routing-cost-mcq | d2
 TOPIC: D1 Agents & workflows
@@ -3996,6 +4460,8 @@ A:
 Route: classify first, then dispatch simple inputs to the cheaper model and complex ones to the capable one. Anthropic lists exactly this use, routing easy or common questions to smaller, cost-efficient models and hard or unusual ones to more capable models, as a routing example; caching, a two-model sequence, or parallel voting all keep the large model on every message.
 USAGE:
 Routing turns "which model?" from a global choice into a per-request one.
+SOURCE: https://www.anthropic.com/engineering/building-effective-agents
+Routing easy/common questions to smaller, cost-efficient models like Claude Haiku 4.5 and hard/unusual questions to more capable models like Claude Sonnet 4.5 to optimize for best performance.
 
 ## ccdvf-max-turns-result-mcq | d3
 TOPIC: D1 Agents & workflows
@@ -4022,6 +4488,8 @@ A:
 Branch on the result subtype, because the result text is present only on the success variant and is None otherwise, and treat error_max_turns as a resumable state: every result carries session_id, so the job can resume with a larger limit and keep the work already done. Swallowing the exception or deleting the cap loses either the signal or the bound.
 USAGE:
 A turn cap is a checkpoint, not a failure, if you resume from it.
+SOURCE: https://code.claude.com/docs/en/agent-sdk/agent-loop
+The result field holds the final text output and is only present on the success variant, so always check the subtype before reading it.
 
 ## ccdvf-tool-result-ordering-loop-mcq | d2
 TOPIC: D1 Agents & workflows
@@ -4051,6 +4519,8 @@ CODE: json
 ]}
 USAGE:
 Run every tool_use in the turn, collect the results, then emit exactly one user message and one API call.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/parallel-tool-use
+Whichever strategy you use, return one tool_result for each tool_use block, all together in the next user message.
 
 ## ccdvf-framework-debug-mcq | d2
 TOPIC: D1 Agents & workflows
@@ -4075,6 +4545,8 @@ A:
 Look at the actual prompts and responses: Anthropic warns that frameworks add abstraction that can obscure the underlying prompts and responses and make debugging harder, and suggests starting with the API directly or at least understanding the framework's underlying code. Blind example-tuning, extra wrappers, and a framework swap all leave the real defect hidden.
 USAGE:
 The bug is in a prompt you have not read yet.
+SOURCE: https://www.anthropic.com/engineering/building-effective-agents
+We suggest that developers start by using LLM APIs directly: many patterns can be implemented in a few lines of code. If you do use a framework, ensure you understand the underlying code.
 
 ## ccdvf-memory-across-sessions-mcq | d2
 TOPIC: D1 Agents & workflows
@@ -4127,6 +4599,8 @@ A:
 Combine the spend cap with the depth cap: max_budget_usd is compared against total cost including subagent requests, refuses new spawns at the limit, and ends the query with the budget error subtype, while the spawn-depth environment variable bounds nesting (default three layers below the main agent). Prompt wording, max_tokens, and a one-turn limit do not bound the tree.
 USAGE:
 Budget for dollars, depth for structure; the prompt is a suggestion.
+SOURCE: https://code.claude.com/docs/en/agent-sdk/subagents
+You can cap that growth in three ways: how deeply subagents nest, how many run at once, and how much the whole query spends.
 
 ## ccdvf-long-session-compaction-mcq | d3
 TOPIC: D1 Agents & workflows
@@ -4153,6 +4627,8 @@ A:
 Persistent rules belong in CLAUDE.md because compaction replaces older messages with a summary and early instructions may not survive, while CLAUDE.md is re-injected on every request; the PreCompact hook fires before compaction (with a trigger field of manual or auto) and is the documented place to archive the full transcript. Reminders, prompt pleas, and disabling compaction do not address either need.
 USAGE:
 If a rule must outlive the conversation, it is not a message; it is configuration.
+SOURCE: https://code.claude.com/docs/en/agent-sdk/agent-loop
+Persistent rules belong in CLAUDE.md (loaded via settingSources) rather than in the initial prompt, because CLAUDE.md content is re-injected on every request.
 
 ## ccdvf-multiagent-roster-mcq | d2
 TOPIC: D1 Agents & workflows
@@ -4257,6 +4733,8 @@ A:
 Sandboxed testing with guardrails, and explicit stopping conditions with human checkpoints, are the two safeguards Anthropic pairs with agent autonomy, because agents carry higher cost and the potential for compounding errors. Removing checkpoints, maximizing tools, or trusting self-termination each remove a control instead of adding one.
 USAGE:
 Autonomy is granted per capability, verified in a sandbox, and bounded by a counter.
+SOURCE: https://www.anthropic.com/engineering/building-effective-agents
+The autonomous nature of agents means higher costs, and the potential for compounding errors. We recommend extensive testing in sandboxed environments, along with the appropriate guardrails.
 
 ## ccdvf-parallel-subagents-review-mcq | d2
 TOPIC: D1 Agents & workflows
@@ -4281,6 +4759,8 @@ A:
 Spawn three specialized subagents in parallel: the Agent SDK documentation states that multiple subagents can run concurrently so independent subtasks finish in the time of the slowest one rather than the sum, and each keeps its file reads out of the main context. Sequential, merged, or chained designs serialize the work.
 USAGE:
 Independent checks are a fan-out, not a queue.
+SOURCE: https://code.claude.com/docs/en/agent-sdk/subagents
+Parallelization: multiple subagents can run concurrently, so independent subtasks finish in the time of the slowest one rather than the sum of all of them.
 
 ## ccdvf-cache-miss-timestamp-mcq-01 | d2
 TOPIC: D2 Applications & integration
@@ -4305,6 +4785,8 @@ A:
 The per-request timestamp inside the cached prefix changes the hash every time, so the system writes a fresh entry and never reads one; move the timestamp after the breakpoint or out of the system prompt. Length, TTL and breakpoint billing all fail to explain a 9,000-token write on every 30-second request.
 USAGE:
 Grep your prompt builder for datetime calls and request IDs before you touch TTLs or model choice.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+Cache writes happen only at the breakpoint, and if that block changes (timestamps, per-request context, the incoming message), the prefix hash never matches.
 
 ## ccdvf-streaming-usage-cumulative-mcq-01 | d1
 TOPIC: D2 Applications & integration
@@ -4329,6 +4811,7 @@ A:
 The token counts in each message_delta usage object are cumulative; take the value from the final message_delta instead of adding events together.
 USAGE:
 Treat streaming usage as a snapshot to overwrite, not an increment to accumulate.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/streaming
 
 ## ccdvf-tool-result-400-mcq-01 | d1
 TOPIC: D2 Applications & integration
@@ -4353,6 +4836,7 @@ A:
 The tool_result must be the first content in the user message that immediately follows the tool_use message; consecutive user messages are merged, so the text still lands in front of the result and breaks the rule.
 USAGE:
 Build the results message first, then append commentary blocks to it, never the other way around.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls
 
 ## ccdvf-empty-end-turn-after-tool-result-mcq-01 | d2
 TOPIC: D2 Applications & integration
@@ -4377,6 +4861,8 @@ A:
 Appending text right after tool results trains Claude within the conversation to expect user input after each tool, producing empty end_turn responses; send tool results alone and, if needed, add a continuation prompt as a new user message only as a last resort.
 USAGE:
 Keep tool-result messages pure; put orchestration hints in the system prompt, not after every result.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons
+Never add text blocks immediately after tool results: This teaches Claude to expect user input after every tool use.
 
 ## ccdvf-pdf-page-limit-mcq-01 | d2
 TOPIC: D2 Applications & integration
@@ -4401,6 +4887,8 @@ A:
 The page limit is 600 per request on 1M-context models, so splitting the document into chunks under that limit is the only option that addresses the rejection directly. Size chunks by tokens as well: at 1,500 to 3,000 text tokens plus image tokens per page, a dense 600-page chunk can overflow the 1M context window and fail with "prompt is too long", so far smaller chunks are usually needed in practice.
 USAGE:
 Chunk by logical sections and label each request so citations map back to the original page numbers.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/context-windows
+A single request can include up to 600 images or PDF pages (100 for models with a 200k-token context window).
 
 ## ccdvf-image-payload-growth-mcq-01 | d2
 TOPIC: D2 Applications & integration
@@ -4451,6 +4939,8 @@ A:
 Each streamed thinking block ends with a signature_delta before its content_block_stop; a replayed block without that signature fails verification, so accumulate the signature or use the SDK's message accumulator.
 USAGE:
 If you hand-roll SSE handling, treat signature_delta as part of the block, not an optional extra.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/streaming
+For thinking content, a special signature_delta event is sent just before the content_block_stop event. This signature is used to verify the integrity of the thinking block.
 
 ## ccdvf-files-tenant-isolation-mcq-01 | d2
 TOPIC: D2 Applications & integration
@@ -4475,6 +4965,8 @@ A:
 Files are visible to every API key in a workspace, so isolation comes from your own authorization layer plus one workspace per tenant, never from client-supplied file IDs.
 USAGE:
 Treat file_id like a database primary key you never expose to the browser.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/files
+Files are scoped to the workspace they were uploaded in.
 
 ## ccdvf-cache-lookback-second-breakpoint-mcq-01 | d3
 TOPIC: D2 Applications & integration
@@ -4499,6 +4991,8 @@ A:
 The lookback checks at most 20 positions behind a breakpoint for entries earlier requests wrote; when a turn adds more than that, a second breakpoint placed where the previous turn ended keeps a written entry inside the window.
 USAGE:
 For fan-out agents, cache at two points: the stable prefix and the end of the last completed turn.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+The lookback window is 20 blocks. The system checks at most 20 positions per breakpoint, counting the breakpoint itself as the first.
 
 ## ccdvf-image-history-resend-mcq-01 | d2
 TOPIC: D2 Applications & integration
@@ -4523,6 +5017,8 @@ A:
 Every image block in the request is billed each turn, and earlier turns already contain the originals, so re-attaching copies only duplicates visual tokens; send each image once and ask follow-up questions in text.
 USAGE:
 Distinguish bytes from tokens: file_id trims bytes, message hygiene trims tokens.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/vision
+Claude has access to every image from earlier turns, so follow-up questions such as "Are these similar to the first two?" work without including the earlier images again in the new turn's content.
 
 ## ccdvf-conversation-memory-mcq-01 | d1
 TOPIC: D2 Applications & integration
@@ -4573,6 +5069,8 @@ A:
 All tool_result blocks for a turn must be returned together in one user message; splitting them across messages conditions Claude to serialize its calls.
 USAGE:
 If parallel calls disappear, inspect the transcript shape before touching prompts or models.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/parallel-tool-use
+The most common issue is formatting tool results incorrectly in the conversation history. This "teaches" Claude to avoid parallel calls.
 
 ## ccdvf-server-tool-pending-mcq-01 | d3
 TOPIC: D2 Applications & integration
@@ -4623,6 +5121,8 @@ A:
 In manual extended thinking the budget is a subset of max_tokens, so the request must leave room for the answer: raise max_tokens above the budget or lower the budget.
 USAGE:
 Set max_tokens to the budget plus the longest answer you expect, then read thinking_tokens to tune the budget down.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+Thinking tokens count toward the max_tokens limit for the turn, so the budget must leave room for the final response.
 
 ## ccdvf-forced-tool-with-manual-thinking-mcq-01 | d2
 TOPIC: D2 Applications & integration
@@ -4647,6 +5147,8 @@ A:
 Manual extended thinking only allows tool_choice auto or none; adaptive thinking lifts that restriction, so switching modes keeps reasoning and permits forced tool use.
 USAGE:
 On 4.6 and later, default to adaptive thinking so thinking and tool_choice never fight.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/thinking
+Forced tool use (tool_choice: {"type": "any"} or {"type": "tool", ...}) is incompatible with manual extended thinking but works with adaptive thinking.
 
 ## ccdvf-prefill-removed-mcq-01 | d1
 TOPIC: D2 Applications & integration
@@ -4671,6 +5173,8 @@ A:
 Assistant prefill is not supported on Claude 4.6 and later models; structured outputs through output_config.format replace it with a schema-enforced JSON response.
 USAGE:
 Treat any trailing assistant message in your request builder as a migration blocker for current models.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/structured-outputs
+JSON outputs (output_config.format): Get Claude's response in a specific JSON format, for example to extract data from images or text, generate structured reports, or format API responses.
 
 ## ccdvf-prewarm-cache-mcq-01 | d2
 TOPIC: D2 Applications & integration
@@ -4695,6 +5199,8 @@ A:
 A max_tokens 0 request reads the prompt, writes the cache at the explicit breakpoint on the shared prefix and returns an empty response with no output tokens billed.
 USAGE:
 Fire the warm-up at deploy time and on a timer shorter than the TTL, using the same thinking and effort settings as production.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+The max_tokens: 0 approach is preferred: no output is produced, so there is no single-token reply to discard, no output tokens are billed, and the intent of the request is unambiguous.
 
 ## ccdvf-pdf-visual-content-mcq-01 | d1
 TOPIC: D2 Applications & integration
@@ -4745,6 +5251,8 @@ A:
 Claude performs best with images before text, and labeling each image lets both the prompt and later turns refer to a specific one unambiguously.
 USAGE:
 Standardize a helper that emits "Image N:" labels ahead of every image block.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/vision
+When sending several images, introduce each one with a short text label (Image 1:, Image 2:, and so on) so you can refer to them by name in your prompt and in follow-up turns.
 
 ## ccdvf-count-tokens-limits-mcq-01 | d2
 TOPIC: D2 Applications & integration
@@ -4799,6 +5307,8 @@ A:
 tool_choice changes and the presence or absence of images affect only the messages level of the tools, system, messages hierarchy, while tool edits, web search toggles and system prompt edits invalidate higher levels.
 USAGE:
 Before shipping a prompt or tool tweak, classify it by hierarchy level to predict the cache rebuild cost.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+As described in Structuring your prompt, the cache follows the hierarchy: tools → system → messages. Changes at each level invalidate that level and all subsequent levels.
 
 ## ccdvf-tool-result-content-types-mcq-01 | d2
 TOPIC: D2 Applications & integration
@@ -4825,6 +5335,8 @@ A:
 tool_result content accepts text, image, document and search_result blocks, so a text caption plus an image block returns both the description and the pixels in one result.
 USAGE:
 Return screenshots as image blocks, not as base64 strings pasted into text, so Claude actually sees them.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls
+These content blocks can use the text, image, document, or search_result types.
 
 ## ccdvf-thinking-replay-rules-mcq-01 | d3
 TOPIC: D2 Applications & integration
@@ -4851,6 +5363,8 @@ A:
 Within a tool-use turn, echo the assistant content unchanged and hold the thinking and effort configuration steady; both editing blocks and toggling modes mid-turn break the turn.
 USAGE:
 Treat the assistant message as immutable and the thinking config as per-turn state that only changes between user turns.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/thinking
+To keep thinking valid, send every assistant turn back exactly as you received it and add new messages only at the end of messages.
 
 ## ccdvf-batch-vs-realtime-mcq | d1
 TOPIC: D2 Applications & integration
@@ -4875,6 +5389,8 @@ A:
 Route the backfill through the Message Batches API: the workload is latency-tolerant, results are needed only by the launch, and batch requests cost 50% of standard prices within a 24-hour completion window per batch. Rate limiting, caching and fast mode either leave the price unchanged or raise it.
 USAGE:
 Any job whose consumer is a scheduled process rather than a waiting human is a batch candidate by default.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/batch-processing
+The Batches API offers significant cost savings. All usage is charged at 50% of the standard API prices.
 
 ## ccdvf-batch-results-join-mcq | d1
 TOPIC: D2 Applications & integration
@@ -4899,6 +5415,8 @@ A:
 Join on custom_id, the caller-chosen identifier that every result line echoes back; it is the only field designed to survive the reordering that batch processing makes no promises about.
 USAGE:
 Make custom_id your own primary key so the write-back is a single keyed update per line.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/batch-processing
+Use meaningful custom_id values to easily match results with requests, since order is not guaranteed.
 
 ## ccdvf-batch-latency-mismatch-mcq | d2
 TOPIC: D2 Applications & integration
@@ -4923,6 +5441,8 @@ A:
 Use the Batches API only for the latency-tolerant Sunday summary and leave the two-second checkout path on the synchronous API; batch is a pricing tier bought with latency, not a faster or cheaper version of the same call.
 USAGE:
 Classify each call site by who waits for the answer before deciding which API serves it.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/batch-processing
+This approach is well-suited to tasks that do not require immediate responses, with most batches finishing in less than 1 hour while reducing costs by 50% and increasing throughput.
 
 ## ccdvf-batch-expired-results-mcq | d2
 TOPIC: D2 Applications & integration
@@ -4947,6 +5467,8 @@ A:
 Expired results mean the 24-hour window closed before those requests were processed; they are unbilled, so resubmit exactly those custom_ids in a fresh batch and keep the successes.
 USAGE:
 Log expired counts per batch so you can shrink batch size or shift submission time before it becomes a nightly problem.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/batch-processing
+Batch reached its 24-hour expiration before this request could be sent to the model. You will not be billed for these requests.
 
 ## ccdvf-batch-dry-run-validation-mcq | d2
 TOPIC: D2 Applications & integration
@@ -4971,6 +5493,8 @@ A:
 Dry-run a single request shape through the synchronous Messages API, where validation errors return immediately, before committing the batch; that is the documented way around batch validation being asynchronous.
 USAGE:
 Put the dry-run in the same CI step that deploys a change to the request builder.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/batch-processing
+Dry run a single request shape with the Messages API to avoid validation errors.
 
 ## ccdvf-batch-shared-prefix-cache-mcq | d2
 TOPIC: D2 Applications & integration
@@ -4995,6 +5519,8 @@ A:
 Seed the cache with a single-request batch carrying a one-hour cache breakpoint on the shared rulebook, then release the bulk of the requests; the one-hour entry survives the minutes-to-an-hour typical batch runtime and the batch and cache discounts stack.
 USAGE:
 Wire the seed step into the pipeline as a gate that waits for processing_status ended before the bulk submit.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+Send a batch request with a single request that has this shared prefix and a 1-hour cache block. This writes the prefix to the 1-hour cache.
 
 ## ccdvf-batch-tenant-isolation-mcq | d2
 TOPIC: D2 Applications & integration
@@ -5099,6 +5625,7 @@ A:
 Bedrock does not offer the Message Batches endpoint or the Files API (nor URL sources), so the batch job and the file_id references break; prompt caching, client-side tool use and thinking are all supported and survive the move.
 USAGE:
 Before a platform move, diff your code against the Features overview availability column rather than against the Bedrock model list.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/claude-in-amazon-bedrock
 
 ## ccdvf-vertex-model-in-body-mcq | d2
 TOPIC: D2 Applications & integration
@@ -5123,6 +5650,8 @@ A:
 Agent Platform differs from the Claude API in exactly two request-format ways: the model ID is part of the URL path (.../models/claude-opus-5:rawPredict) and anthropic_version is a body field fixed at vertex-2023-10-16; leaving the model in the body and the version in a header breaks both.
 USAGE:
 Keep platform adapters in one module so the two Google Cloud rewrites live in a single place.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/claude-on-vertex-ai
+On Agent Platform, anthropic_version is passed in the request body (rather than as a header), and must be set to the value vertex-2023-10-16.
 
 ## ccdvf-foundry-deployment-name-mcq | d1
 TOPIC: D2 Applications & integration
@@ -5147,6 +5676,8 @@ A:
 On Foundry the model parameter carries the deployment name; if the admin created the deployment under a custom name, that name, not claude-sonnet-5, is what the request must send.
 USAGE:
 Read the Target URI and deployment name from the deployment's Details tab and put both in environment config.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/claude-in-microsoft-foundry
+Solution: The model parameter should contain your deployment name, which can be customized in the Foundry portal.
 
 ## ccdvf-foundry-hosted-azure-400-mcq | d2
 TOPIC: D2 Applications & integration
@@ -5171,6 +5702,8 @@ A:
 Code execution, along with the Files API, Agent Skills, programmatic tool calling and newer web tool versions, is unavailable on deployments hosted on Azure and available on deployments hosted on Anthropic, so deploy the model's Hosted on Anthropic version and switch the deployment name.
 USAGE:
 Keep a Hosted on Anthropic deployment in the same resource for tool-heavy workloads so the endpoint and credentials stay unchanged.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/claude-in-microsoft-foundry
+Create a new deployment of the model's other hosting version (Hosted on Azure or Hosted on Anthropic).
 
 ## ccdvf-aws-compliance-choice-mcq | d3
 TOPIC: D2 Applications & integration
@@ -5197,6 +5730,8 @@ A:
 Bedrock is AWS-operated end to end, with AWS as the inference data processor, and is the documented path for FedRAMP High, IL4, IL5 and HIPAA-ready needs; Claude Platform on AWS is Anthropic-operated and wins on feature parity, not on compliance posture.
 USAGE:
 Let the compliance requirement pick the operator first, then check whether the feature gaps are acceptable.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/claude-platform-on-aws
+Bedrock runs entirely on AWS-controlled infrastructure with AWS as the operating party.
 
 ## ccdvf-bedrock-endpoint-cost-mcq | d2
 TOPIC: D2 Applications & integration
@@ -5221,6 +5756,8 @@ A:
 Use the global endpoint: it gives dynamic routing across all available regions for availability at no premium, whereas regional endpoints exist for data residency and cost 10% more.
 USAGE:
 Reserve regional endpoints for workloads with a written residency requirement and let everything else ride the global endpoint.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/claude-in-amazon-bedrock
+Global: dynamic routing across all available regions for maximum availability. No pricing premium.
 
 ## ccdvf-model-pin-snapshot-mcq | d2
 TOPIC: D2 Applications & integration
@@ -5273,6 +5810,8 @@ A:
 Locate every caller with the Usage export and validate the recommended replacement on your own evals before the date; aliases do not migrate you, retired models fail, and dates are not negotiated per customer.
 USAGE:
 Track retirement dates for every model ID in your config repository and open the migration ticket when the notice lands.
+SOURCE: https://platform.claude.com/docs/en/about-claude/model-deprecations
+Review the downloaded CSV to see usage broken down by API key and model.
 
 ## ccdvf-settings-local-model-override-mcq | d1
 TOPIC: D2 Applications & integration
@@ -5297,6 +5836,8 @@ A:
 Put the override in .claude/settings.local.json: project local settings sit above the committed project file, apply only to this developer in this project, and Claude Code keeps the file out of git.
 USAGE:
 Test new values in settings.local.json first and promote them to the shared file only when the team agrees.
+SOURCE: https://code.claude.com/docs/en/settings
+Project local settings (.claude/settings.local.json): your personal settings for this project.
 
 ## ccdvf-claude-md-personal-sandbox-mcq | d1
 TOPIC: D2 Applications & integration
@@ -5347,6 +5888,8 @@ A:
 Put the deny rule in managed settings: settings rules are enforced by the client regardless of what the model decides, and managed settings cannot be overridden by user, project or local files, which is what "guarantee on every machine" requires.
 USAGE:
 Use managed CLAUDE.md for style and compliance reminders, and managed settings for anything that must be technically impossible.
+SOURCE: https://code.claude.com/docs/en/permissions
+For example, a managed settings deny can’t be overridden by --allowedTools, and --disallowedTools can add restrictions beyond what managed settings define.
 
 ## ccdvf-plugin-dep-pin-mcq | d2
 TOPIC: D2 Applications & integration
@@ -5399,6 +5942,8 @@ A:
 Shared project settings outrank user settings, so opus applies, and list keys such as permissions.allow merge rather than replace, so both allow lists apply; the command line never beats managed settings, and a local allow rule cannot cancel a project ask rule.
 USAGE:
 Run /status to see which settings sources loaded before debugging a key that seems ignored.
+SOURCE: https://code.claude.com/docs/en/settings
+When the same key appears in more than one place, Claude Code uses the value from the highest level that sets it.
 
 ## ccdvf-claude-md-bloat-mcq | d2
 TOPIC: D2 Applications & integration
@@ -5423,6 +5968,8 @@ A:
 Trim CLAUDE.md to the facts every session needs and scope the rest with path-specific rules in .claude/rules/, which load into context only when Claude works with files that match their paths globs.
 USAGE:
 When a rule mentions a directory name, that is the signal to move it into a paths-scoped rule file.
+SOURCE: https://code.claude.com/docs/en/memory
+Longer files consume more context and reduce adherence. Move instructions that matter for only part of the codebase into path-scoped rules, which load only when Claude works with matching files.
 
 ## ccdvf-cc-ci-lockdown-mcq-01 | d2
 TOPIC: D3 Claude Code
@@ -5473,6 +6020,8 @@ A:
 Make it a skill: only its description loads at startup, and the full body enters the conversation when someone types /backfill or Claude matches the description. CLAUDE.md, an unscoped rule and a SessionStart hook all put the 300 lines into every session.
 USAGE:
 The third time you paste the same playbook, turn it into a skill; the second time Claude makes the same mistake, add one line to CLAUDE.md.
+SOURCE: https://code.claude.com/docs/en/skills
+In a regular session, skill descriptions are loaded into context so Claude knows what’s available, but full skill content only loads when invoked.
 
 ## ccdvf-cc-block-env-edit-mcq-03 | d2
 TOPIC: D3 Claude Code
@@ -5497,6 +6046,8 @@ A:
 Put the prohibition in permissions.deny: deny rules are evaluated first, before ask and allow, in every permission mode, and a Read deny also blocks Edit and Write on the same path. CLAUDE.md wording, an after-the-fact hook and plan mode all shape or repair behaviour, but none of them makes the tool call impossible.
 USAGE:
 For secrets, pair the deny rules with the sandbox if subprocesses must not read the file either: Read and Edit rules cover Claude's tools and recognized shell commands, not arbitrary scripts.
+SOURCE: https://code.claude.com/docs/en/permissions
+To block Claude’s file tools from reading a file or directory, add a Read deny rule for its path, such as Read(./.env) or Read(./secrets/**); Exclude sensitive files has a paste-ready example.
 
 ## ccdvf-cc-monorepo-rules-mcq-04 | d2
 TOPIC: D3 Claude Code
@@ -5521,6 +6072,8 @@ A:
 Move language- and directory-specific guidance into path-scoped rules: a rule with a paths field loads only when Claude reads a matching file, so a session touching the Python worker never pays for the Terraform standards. Imports, a bigger compaction window and a user-level CLAUDE.md all keep the full text in every session.
 USAGE:
 Target under 200 lines for CLAUDE.md; when a section only matters for one part of the tree, it is a rule with paths, not a CLAUDE.md paragraph.
+SOURCE: https://code.claude.com/docs/en/memory
+Rules can be scoped to specific files using YAML frontmatter with the paths field. These conditional rules only apply when Claude is working with files matching the specified patterns.
 
 ## ccdvf-cc-mcp-share-team-mcq-05 | d3
 TOPIC: D3 Claude Code
@@ -5547,6 +6100,8 @@ A:
 Use project scope for the shared server, which lands in the committed .mcp.json so a clone brings it along, and local scope for the personal one, which lives in ~/.claude.json under this project path and is neither shared nor visible in other projects. User scope is private but global, and committing the personal server shares it.
 USAGE:
 Project scope for "the repo needs it", user scope for "I need it everywhere", local scope for "I need it here only".
+SOURCE: https://code.claude.com/docs/en/mcp
+To share the server with your team instead, add --scope project, or add the entry under mcpServers in .mcp.json at your project root and commit it.
 
 ## ccdvf-retrieval-vs-model-fault-mcq | d2
 TOPIC: D4 Eval, testing & debugging
@@ -5571,6 +6126,7 @@ A:
 Fix retrieval first. The trace proves the model's output matched its input, so the defect sits in the integration layer that chose the document; the durable fix is re-indexing plus an eval case that guards retrieval, not a hard-coded prompt figure, a bigger model, or a grader that scores the model's faithfulness.
 USAGE:
 When the model quotes its context correctly, the bug is upstream of the model.
+SOURCE: https://www.anthropic.com/engineering/writing-tools-for-agents
 
 ## ccdvf-spend-cap-429-mcq-01 | d2
 TOPIC: D4 Eval, testing & debugging
@@ -5621,6 +6177,8 @@ A:
 Handle the error event in the stream consumer itself. After a 200 the API can still send an SSE error event such as overloaded_error, which the status-code and automatic-retry path does not cover; the consumer must back off and either reissue the request or resume from the captured partial text. Going non-streaming, shrinking max_tokens or checking the status afterwards never see the event.
 USAGE:
 Retry logic for streams lives in the event loop, not around the HTTP call.
+SOURCE: https://platform.claude.com/docs/en/api/errors
+When receiving a streaming response over server-sent events (SSE), an error can occur after the API returns a 200 response.
 
 ## ccdvf-thinking-blocks-400-mcq-01 | d2
 TOPIC: D4 Eval, testing & debugging
@@ -5673,6 +6231,8 @@ A:
 Detect refusals in code by branching on stop_reason and emitting their own metric, and recover by retrying on a different model. Refusals are successful 200 responses, so exception- and 5xx-based monitoring is blind to them, the explanation text is not a stable routing key, and the same model usually refuses again.
 USAGE:
 If your only error signal is exceptions, refusals stay invisible until a user complains.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback
+Instrument refusals as their own signal. A refusal is an HTTP 200, so monitoring built on error rates or 5xx responses never sees it.
 
 ## ccdvf-right-size-classifier-mcq-01 | d1
 TOPIC: D5 Model selection & optimization
@@ -5697,6 +6257,8 @@ A:
 Downgrade to Claude Haiku 4.5 because the eval shows equal accuracy on this simple, high-volume task, and keep the eval in place as a guardrail. Right-sizing is the efficiency-first path the documentation describes; batching or lowering effort on Opus 5 still pays Opus input prices for cheap work, and moving up a tier only makes sense when quality, not cost, is the problem.
 USAGE:
 Right-size every high-volume route with an eval, then let the eval, not a hunch, decide when to move back up.
+SOURCE: https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence
+Run the winner in shadow on a traffic slice before cutover, then keep the suite running.
 
 ## ccdvf-budget-tokens-400-mcq-02 | d1
 TOPIC: D5 Model selection & optimization
@@ -5747,6 +6309,8 @@ A:
 The route fell under Haiku 4.5's 4,096-token minimum: Opus 5 caches prefixes from 512 tokens, so the same prompt cached there, but a shorter-than-minimum prefix is silently not cached and only the usage fields reveal it. Model support, a first-request write or TTL expiry would each leave a non-zero cache_creation_input_tokens value; zeros in both fields mean the cache was never written.
 USAGE:
 When a model swap changes the cache minimum, either lengthen the stable prefix or accept uncached input in the cost model.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+Shorter prompts cannot be cached, even if marked with cache_control. Any requests to cache fewer than this number of tokens will be processed without caching, and no error is returned.
 
 ## ccdvf-cache-ttl-support-chat-mcq-04 | d2
 TOPIC: D5 Model selection & optimization
@@ -5823,6 +6387,8 @@ A:
 The pause is thinking time, so control thinking rather than throughput: omitted display starts text streaming sooner and lower effort reduces how often and how deeply the model thinks; fast mode only speeds up the tokens after the first one.
 USAGE:
 Diagnose latency complaints as time-to-first-token versus tokens-per-second before choosing a lever; the two have different fixes and prices.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/fast-mode
+TTFT: Fast mode's benefits are focused on output tokens per second (OTPS), not time to first token (TTFT).
 
 ## ccdvf-eval-batch-cache-mcq-07 | d3
 TOPIC: D5 Model selection & optimization
@@ -5849,6 +6415,8 @@ A:
 Batch the latency-tolerant job for the 50% discount and cache the shared rubric as the leading prefix with a 1-hour TTL, since batches can run past 5 minutes and the two discounts stack on every cached read. Pre-warming with max_tokens 0 is not allowed inside a batch, a varying transcript ahead of the rubric defeats prefix matching, and the default 5-minute lifetime can expire while a batch is still running.
 USAGE:
 For any overnight scoring job, batch plus a stable leading prefix on a 1-hour cache is the default shape before anyone touches the model choice.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+Send a batch request with a single request that has this shared prefix and a 1-hour cache block. This writes the prefix to the 1-hour cache.
 
 ## ccdvf-max-tokens-truncation-mcq-08 | d2
 TOPIC: D5 Model selection & optimization
@@ -5925,6 +6493,8 @@ A:
 Use the token counting endpoint with the same body and the model you intend to call; it is free, returns a close estimate under that model's tokenizer, and accepts base64 PDFs and images. Character heuristics miss page images and tokenizer differences, a trial request wastes a call and does not fire when only input plus max_tokens overflows, and counts measured on a pre-4.7 model under-report Sonnet 5 by roughly 30%.
 USAGE:
 Gate every large-document route with count_tokens and route on the number, logging it next to the request ID.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/token-counting
+The token counting endpoint counts under the tokenizer of the model you pass.
 
 ## ccdvf-cost-per-task-compare-mcq-11 | d2
 TOPIC: D5 Model selection & optimization
@@ -6027,6 +6597,8 @@ A:
 Dateless 4.6 and later IDs are fixed snapshots that never receive new weights, so upgrades are explicit ID changes to test; the only drift on a pinned ID comes from serving infrastructure updates such as the router, safety classifiers or sampling logic. Alias-style resolution to the newest snapshot applies only to pre-4.6 models, and 4.6 and later IDs have no dated variant to append.
 USAGE:
 Treat a model ID like a locked dependency version and re-run evals when you change it or notice unexplained drift.
+SOURCE: https://platform.claude.com/docs/en/about-claude/models/model-ids-and-versions
+Model weights are fixed for a given ID, but the serving infrastructure around the model can change over time.
 
 ## ccdvf-retirement-notice-mcq-15 | d1
 TOPIC: D5 Model selection & optimization
@@ -6051,6 +6623,8 @@ A:
 Use the Console usage export, which attributes usage to API key and model, and treat the documented minimum of 60 days' notice as the migration window. A repository grep misses scripts and notebooks that hold keys, waiting for failures means an outage on a model that may already be less reliable, and the Models API reports availability rather than who in your organization is calling what.
 USAGE:
 Automate a monthly usage export diffed against the deprecations page so retiring models show up as a ticket, not an outage.
+SOURCE: https://platform.claude.com/docs/en/about-claude/model-deprecations
+Anthropic notifies customers with active deployments for models with upcoming retirements, providing at least 60 days' notice before model retirement for publicly released models.
 
 ## ccdvf-rate-limit-cache-mcq-16 | d2
 TOPIC: D5 Model selection & optimization
@@ -6103,6 +6677,8 @@ A:
 Editing a tool definition invalidates the whole cache and editing the system prompt invalidates the system and message caches, because the prefix is rendered tools, then system, then messages. Setting effort explicitly to its default is equivalent to omitting it, appending a message after the last breakpoint is normal conversation growth, and reading a response header changes nothing in the request, so none of those touch the cached prefix.
 USAGE:
 Ship tool and system prompt edits deliberately and warm the cache after deploy; log-only changes need no cache thought.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+As described in Structuring your prompt, the cache follows the hierarchy: tools → system → messages. Changes at each level invalidate that level and all subsequent levels.
 
 ## ccdvf-effort-vs-downgrade-mcq-18 | d2
 TOPIC: D5 Model selection & optimization
@@ -6127,6 +6703,8 @@ A:
 Tune effort down first: it is the cheapest single-model lever, quality is currently above the bar, and an eval-backed step to medium or low saves a large share of tokens without a rearchitecture or model switch. A model change trades quality and must be judged on cost per task, an orchestrator only pays for bulk independent work, and a lower max_tokens wastes capped turns that are still billed.
 USAGE:
 Budget overruns with green evals are the textbook case for an effort step-down, not a model change.
+SOURCE: https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence
+Sweep effort on your current model first. It is the cheapest experiment on this page, and most workloads end there.
 
 ## ccdvf-thinking-blocks-tool-loop-mcq-19 | d2
 TOPIC: D5 Model selection & optimization
@@ -6231,6 +6809,8 @@ A:
 Price the stronger model alone at low effort first, because that is the number any advisor pairing must beat, and recognize that a low-effort executor which rarely consults has stopped noticing when it needs help. A prompt plea does not restore that detection, a same-tier advisor brings no capability gap, and an orchestrator addresses bulk or over-context work rather than a consult-rate failure.
 USAGE:
 Instrument consult rate from day one of any advisor deployment; it is the metric that decides whether the architecture earns its keep.
+SOURCE: https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence
+So watch the consult rate: prompt for it, measure it, and restore the executor's effort if it collapses.
 
 ## ccdvf-fast-mode-facts-mcq-23 | d3
 TOPIC: D5 Model selection & optimization
@@ -6257,6 +6837,8 @@ A:
 Fast mode is a throughput feature for the tokens after the first one, with a separate rate limit and no cache sharing with standard speed; it is premium priced at $10/$50 per million tokens, first-party only as of 2026-09, and incompatible with batch processing and Priority Tier. Use it when users watch long outputs stream, not to fix time to first token or to cut cost.
 USAGE:
 Use fast mode for long streamed generations in interactive products and keep a fallback that drops speed on a 429, accepting the cache miss.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/fast-mode
+Prompt caching: Switching between fast and standard speed invalidates the prompt cache. Requests at different speeds do not share cached prefixes.
 
 ## ccdvf-usage-tracking-mcq-24 | d3
 TOPIC: D5 Model selection & optimization
@@ -6283,6 +6865,8 @@ A:
 Combine the organization-level Usage and Cost Admin API for billing-grade totals by workspace and model with per-request usage logging for request-level cache and thinking detail; both report actual billed tokens. count_tokens is a pre-send estimate that ignores caching and output, workspace-scoped keys are rejected by the Admin API, and character heuristics cannot account for tokenizers, images, thinking or cache tiers.
 USAGE:
 Feed both sources into the same dashboard: the Admin API for reconciliation, per-request usage for debugging which route is missing its cache.
+SOURCE: https://platform.claude.com/docs/en/manage-claude/usage-cost-api
+Track token consumption across your organization with detailed breakdowns by model, workspace, and service tier with the /v1/organizations/usage_report/messages endpoint.
 
 ## ccdvf-defensive-parsing-retry-mcq | d2
 TOPIC: D6 Prompt & context engineering
@@ -6307,6 +6891,8 @@ A:
 Use structured outputs so the shape is guaranteed by constrained decoding, then still check stop_reason and validate, because refusals and max_tokens truncation are the documented cases where output will not match the schema, and retry those with a higher limit or a fallback rather than discarding them. Silencing exceptions, upsizing the model or patching braces each leave a failure mode open.
 USAGE:
 "Guaranteed valid JSON" plus "check stop_reason and retry" is the pair; either half alone still fails in production.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/structured-outputs
+Structured outputs constrain Claude's responses to follow a specific schema, ensuring valid, parseable output for downstream processing.
 
 ## ccdvf-context-bloat-tool-results-mcq-01 | d2
 TOPIC: D6 Prompt & context engineering
@@ -6331,6 +6917,8 @@ A:
 Enable tool result clearing through context editing: one context_management block and a beta header make the API replace stale search results with placeholders after the 100,000-token default trigger while keeping the last three pairs, without touching your stored history. A subagent rewrite is bigger, max_tokens targets output not input, and hand-pruning history breaks pairing and caching.
 USAGE:
 When the bloat is old tool results, the one-field fix is already in the API; reach for architecture only if that is not enough.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/context-editing
+When activated, the API automatically clears the oldest tool results in chronological order. The API replaces each cleared result with placeholder text indicating to Claude that it was removed.
 
 ## ccdvf-long-document-placement-mcq-02 | d1
 TOPIC: D6 Prompt & context engineering
@@ -6459,6 +7047,8 @@ A:
 Treat model_context_window_exceeded as truncation: it is a successful response whose generation filled the model's context window, so the content is incomplete and needs compaction or context editing before the loop continues. Retrying repeats the overflow, max_tokens targets the wrong limit, and parsing hides the cut.
 USAGE:
 Every consumer branches on stop_reason before it looks at content; truncation stop reasons never flow into "success".
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/context-windows
+Compaction automatically summarizes earlier parts of the conversation on the server, so the conversation can continue past the context window limit.
 
 ## ccdvf-hallucinated-figures-mcq-07 | d2
 TOPIC: D6 Prompt & context engineering
@@ -6483,6 +7073,8 @@ A:
 Ground the answer in extracted quotes: for long documents Anthropic recommends pulling exact quotes first, restricting analysis to them, allowing "I don't know", and having Claude cite or retract each claim. Prohibitions, temperature and model size do not give the model evidence to check itself against.
 USAGE:
 Quote, then answer, then cite: three steps that turn a summary into something an auditor can verify.
+SOURCE: https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-hallucinations
+Use direct quotes for factual grounding: For tasks involving long documents (>20k tokens), ask Claude to extract word-for-word quotes first before performing its task.
 
 ## ccdvf-over-prompting-overtrigger-mcq-08 | d2
 TOPIC: D6 Prompt & context engineering
@@ -6533,6 +7125,8 @@ A:
 Prefilled assistant turns are rejected with a 400 on Claude 4.6 and later, and Anthropic's migration for format control is structured outputs: output_config.format with a schema (or a tool with an enum field) gives guaranteed JSON with one request change. A prose instruction has no guarantee, downgrading reverses the upgrade, and retrying a 400 is pointless.
 USAGE:
 "Prefill to force JSON" migrates to output_config.format; "prefill to skip preamble" migrates to a system-prompt instruction.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices
+Starting with Claude 4.6 models and Claude Mythos Preview, prefilled responses (providing a partial assistant message for Claude to continue from) on the last assistant turn are no longer supported.
 
 ## ccdvf-tool-response-verbosity-mcq-10 | d2
 TOPIC: D6 Prompt & context engineering
@@ -6557,6 +7151,8 @@ A:
 Fix the tool's response: return only high-signal fields, drop low-level identifiers by default, and expose a concise or detailed response_format so ids are fetched only when a downstream call needs them, the pattern Anthropic's tool-writing guidance describes at roughly a third of the tokens. Prompt instructions and caching do not shrink results, and clearing only cleans up afterwards.
 USAGE:
 Token-efficient tools are cheaper than every downstream context trick; design the response, then add clearing if needed.
+SOURCE: https://www.anthropic.com/engineering/writing-tools-for-agents
+You can enable both by exposing a simple response_format enum parameter in your tool, allowing your agent to control whether tools return “concise” or “detailed” responses (images below).
 
 ## ccdvf-compaction-instructions-mcq-11 | d3
 TOPIC: D6 Prompt & context engineering
@@ -6583,6 +7179,8 @@ A:
 Custom instructions completely replace the default summarization prompt, so name exactly what must survive, and back it with memory-tool notes that persist outside the window and are re-read after any reset. Raising the trigger, pausing without acting, or upsizing the model leaves the summary's contents unspecified.
 USAGE:
 Whatever the agent would be sad to forget goes in the compaction instructions and in a notes file, not in hope.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool
+For long-running agents, consider using both: compaction keeps the active context small without client-side bookkeeping, and memory preserves the information that must survive summarization.
 
 ## ccdvf-instruction-in-tool-result-mcq-12 | d2
 TOPIC: D6 Prompt & context engineering
@@ -6635,6 +7233,8 @@ A:
 Numeric and length constraints such as minimum, maximum, minLength and maxLength are unsupported, and additionalProperties must be false on every object, so move the limits into descriptions and code-level validation and lock the object down. Optional properties are allowed as they are, and neither a beta header nor max_tokens affects schema validation.
 USAGE:
 The SDK helpers do exactly this transformation automatically; when writing raw schemas, do it by hand.
+SOURCE: https://platform.claude.com/docs/en/build-with-claude/structured-outputs
+If you use an unsupported feature, you'll receive a 400 error with details.
 
 ## ccdvf-input-sanitization-user-text-mcq-14 | d3
 TOPIC: D6 Prompt & context engineering
@@ -6661,6 +7261,8 @@ A:
 Treat the message as data by delimiting it and telling the model in the system prompt what it is, and add a lightweight classifier screen with a structured-outputs verdict your code can branch on. Splicing it into the system prompt hands it authority, an action tool widens the blast radius, and temperature is not a control.
 USAGE:
 Two layers: structure so the model knows what is data, and a screen so your code knows what is hostile.
+SOURCE: https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/mitigate-jailbreaks
+Harmlessness screens: Use a lightweight model like Claude Haiku 4.5 to pre-screen user input before it reaches your main conversation.
 
 ## ccdvf-least-privilege-tool-scope-mcq | d2
 TOPIC: D7 Security & safety
@@ -6685,6 +7287,8 @@ A:
 Remove the dangerous capability from the model's reach: denylist issue_refund and delete_account in the toolset, or do not expose them at all, and put refunds behind a human-confirmed step. Least privilege means a successful injection can do minimal damage because the action is not available, whereas deferred loading, input screens and model-side confirmation steps only lower the odds.
 USAGE:
 For any action with money or deletion behind it, ask "can the model call this at all?" before asking "will it choose not to?".
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
+Denylisting write or destructive tools is recommended when building read-only assistants, or when you want a human confirmation step before state changes
 
 ## ccdvf-email-agent-injection-mcq | d3
 TOPIC: D7 Security & safety
@@ -6711,6 +7315,8 @@ A:
 Put untrusted email content only in JSON-encoded tool_result blocks with an explicit source label, and put the dangerous action behind least-privilege controls: a recipient allowlist plus human confirmation on send_email. The first makes injection harder to pull off; the second makes a successful one harmless. System-prompt placement, free-text labels and server authentication change neither.
 USAGE:
 For every agent that both reads strangers' text and can act on the world, fix the input channel and the output action; one without the other still loses.
+SOURCE: https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/mitigate-jailbreaks
+Put untrusted content only in tool results. Deliver third-party content to Claude inside tool_result blocks, never in system prompts or plain user text blocks.
 
 ## ccdvf-web-fetch-sensitive-data-mcq | d2
 TOPIC: D7 Security & safety
@@ -6735,6 +7341,8 @@ A:
 Restrict web_fetch to the known-safe documentation domain with allowed_domains and cap requests with max_uses, which is what the docs recommend when exfiltration is a concern; disabling the tool entirely is the other option. The prior-context rule is a floor with residual risk, denylists cannot enumerate attackers, and content limits address tokens, not destinations.
 USAGE:
 Treat allowed_domains as the security control and max_content_tokens as the budget control; do not confuse the two.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool
+The max_uses parameter limits the number of web fetches performed.
 
 ## ccdvf-ci-pipeline-auth-mcq | d2
 TOPIC: D7 Security & safety
@@ -6759,6 +7367,8 @@ A:
 Use Workload Identity Federation: GitHub Actions already issues an OIDC token per job, a federation rule exchanges it for a short-lived Anthropic token bound to a service account, and no static key exists to leak or to outlive the departing engineer. A replacement personal key keeps the same failure mode, an Admin key is the wrong scope, and App Attest is for Apple apps.
 USAGE:
 Any workload that already has a platform identity, whether a CI job, a pod or a cloud VM, should federate rather than carry a key.
+SOURCE: https://platform.claude.com/docs/en/manage-claude/authentication
+For shared or automated workloads (CI, production services), have an organization admin create a service account so the workload has its own identity.
 
 ## ccdvf-ios-app-auth-mcq | d2
 TOPIC: D7 Security & safety
@@ -6809,6 +7419,8 @@ A:
 Exit code 2 is the blocking error: on PreToolUse it blocks the tool call and the stderr text becomes the reason fed back to Claude. Exit 1 and other non-2 codes are non-blocking unless the hook prints a valid JSON decision, so the one-character change is the whole fix.
 USAGE:
 Standardize hook scripts on "exit 2 to block, exit 0 otherwise" and reject any other code in code review.
+SOURCE: https://code.claude.com/docs/en/hooks
+Without valid JSON on stdout, Claude Code treats exit code 1 as a non-blocking error and proceeds with the action, even though 1 is the conventional Unix failure code.
 
 ## ccdvf-env-file-protection-mcq | d2
 TOPIC: D7 Security & safety
@@ -6833,6 +7445,8 @@ A:
 Read deny rules are enforced by Claude Code for its built-in file tools, @file mentions and recognized file commands; a bare filename pattern matches at any depth under the working directory, and a Read deny also blocks Edit and Write on the same path, so one rule covers both reading and overwriting at every level. Guidance text, a single Bash pattern and Edit-only rules each leave paths open.
 USAGE:
 Put the deny rules in the committed project settings so a fresh clone is protected before anyone runs a session.
+SOURCE: https://code.claude.com/docs/en/permissions
+A Read deny rule also blocks the Edit and Write tools on the same path, including creating a new file there.
 
 ## ccdvf-curl-network-control-mcq | d2
 TOPIC: D7 Security & safety
@@ -6857,6 +7471,8 @@ A:
 Sandbox network isolation routes every sandboxed command and its child processes through a proxy that admits only allowlisted domains, and the operating system enforces it regardless of what the model chose to run; keep the allowlist narrow, since the proxy decides on hostname without inspecting TLS. Text-matching deny rules and tool-specific allow rules depend on how the command is spelled or which tool is used, which is exactly what an injection defeats.
 USAGE:
 For agents that read untrusted input, treat the sandbox allowlist as mandatory and the deny rules as a convenience layer on top.
+SOURCE: https://code.claude.com/docs/en/sandboxing
+The operating system enforces the sandbox boundary on the running process, so it holds regardless of what the model chose to run and even if an allowed command does more than its name suggests.
 
 ## ccdvf-workspace-env-separation-mcq | d1
 TOPIC: D7 Security & safety
@@ -6881,6 +7497,8 @@ A:
 Workspaces are the isolation boundary: keys scoped to a workspace only work there, and each workspace can carry spend and rate limits below the organization's, so a development leak is capped at the development budget and cannot touch production quotas. Rotation, bigger limits and batch pricing leave a single shared blast radius. Limits cannot be set on the Default Workspace, so production should live in a named workspace too.
 USAGE:
 The first three workspaces to create are dev, staging and prod; scope every key at creation time.
+SOURCE: https://platform.claude.com/docs/en/manage-claude/workspaces
+You can set custom spend and rate limits for each workspace to protect against overuse and ensure fair resource distribution.
 
 ## ccdvf-zdr-feature-choice-mcq | d3
 TOPIC: D7 Security & safety
@@ -6907,6 +7525,8 @@ A:
 The Files API keeps uploaded files until they are deleted or expire, and Message Batches need asynchronous storage with 29-day retention, so both are marked not eligible, and the API will not stop you from using them under ZDR. Prompt caching, inline PDFs and token counting stay inside the arrangement.
 USAGE:
 Print the eligibility table into the design review checklist; the two most common accidental exits are file uploads and batch jobs.
+SOURCE: https://platform.claude.com/docs/en/manage-claude/api-and-data-retention
+Features marked "No" for ZDR are fundamentally stateful: the Batch API stores your jobs, the Files API stores your files, and code execution runs in persistent containers.
 
 ## ccdvf-refusal-handling-mcq | d2
 TOPIC: D7 Security & safety
@@ -6931,6 +7551,8 @@ A:
 Branch on the stop_reason carried by message_delta: surface the explanation, then recover by removing or rephrasing the triggering turn or by retrying on a different Claude model with the fallback credit. Refusals are responses, not errors, so retry loops built for 5xx conditions and exception handlers never engage, and output limits are unrelated.
 USAGE:
 Add refusal to the same switch statement that handles end_turn, max_tokens and tool_use; it is just another branch.
+SOURCE: https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/handle-streaming-refusals
+Retry on a different model. Re-sending a refused request to the same model usually results in another refusal.
 
 ## ccdvf-overlapping-tools-mcq-01 | d2
 TOPIC: D8 Tools & MCP
@@ -6955,6 +7577,8 @@ A:
 Fix the definitions: consolidate the overlapping tools and write descriptions that say when to use each and when not to. Selection accuracy is driven by descriptions and by how many similar tools compete; strict mode, forced tool choice, and a larger model all act after or beside the selection step rather than on it.
 USAGE:
 When the wrong tool is chosen, the tool list is the bug, not the model.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools
+Consolidate related operations into fewer tools. Rather than creating a separate tool for every action (create_pr, review_pr, merge_pr), group them into a single tool with an action parameter.
 
 ## ccdvf-skill-vs-mcp-choice-mcq-02 | d2
 TOPIC: D8 Tools & MCP
@@ -6979,6 +7603,8 @@ A:
 A Skill is the fit: reusable procedural knowledge with helper scripts, discovered by its description, loaded only when triggered, and shareable across projects. MCP is for external systems, custom tools for callable application logic, and the system prompt for stable per-session instructions.
 USAGE:
 Knowledge plus scripts with no external service points to a Skill every time.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview
+Unlike prompts (conversation-level instructions for one-off tasks), Skills load on demand, so you don't have to repeat the same guidance across conversations.
 
 ## ccdvf-mixed-turn-400-mcq-03 | d2
 TOPIC: D8 Tools & MCP
@@ -7055,6 +7681,8 @@ A:
 Strict tool use compiles the schema into a grammar that constrains sampling, so passengers arrives as an integer every time and required fields are never omitted. Prompting, retries, and forced tool choice all leave the argument shape to chance; only grammar-constrained sampling removes the invalid token at generation time.
 USAGE:
 Any tool whose handler would crash on a wrong type should be strict.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/strict-tool-use
+Without strict mode, Claude might provide passengers: "two" or passengers: "2". With strict: true, the response always contains passengers: 2.
 
 ## ccdvf-stdio-vs-http-deploy-mcq-06 | d2
 TOPIC: D8 Tools & MCP
@@ -7105,6 +7733,8 @@ A:
 An allowlist is the secure shape: disable everything by default and enable only the read tools, so the API never presents delete or share tools to Claude and new server tools are blocked automatically. A denylist covers only what you remembered to name, and prompt text is not enforcement.
 USAGE:
 Read-only assistants get allowlists; denylists are for removing one or two known-dangerous tools from an otherwise trusted server.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/mcp-connector
+Default configuration applied to all tools in this set. Individual tool configs in configs override these defaults.
 
 ## ccdvf-web-fetch-url-not-in-context-mcq-08 | d1
 TOPIC: D8 Tools & MCP
@@ -7183,6 +7813,8 @@ A:
 Isolation plus an allowlist: run the session in a container or VM as a least-privileged user with limits and timeouts, which the docs call the real control, and validate commands against an explicit allowlist rather than a blocklist as the tripwire in front of it. Prompt text and logging are complements, not containment, and blocklists miss what they did not foresee.
 USAGE:
 Assume every bash command Claude sends is attacker-influenced; design the sandbox so the worst command cannot matter.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/bash-tool
+Decide which commands and operators your application allows. The real control is isolation: run the whole session inside a container or a virtual machine (see Security).
 
 ## ccdvf-pause-turn-handling-mcq-11 | d2
 TOPIC: D8 Tools & MCP
@@ -7207,6 +7839,8 @@ A:
 Continue the turn: send the paused assistant content back as-is with the same tools and loop until a different stop_reason arrives, capping the number of continuations. The paused response is state to resume, not a result to consume or a client tool call to answer.
 USAGE:
 Every server-tool loop needs a while-pause_turn branch with an iteration limit.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/server-tools
+Check stop_reason on each response and continue until you get a different stop reason, capping the number of continuations as you would any retry loop.
 
 ## ccdvf-cache-tool-choice-mcq-12 | d2
 TOPIC: D8 Tools & MCP
@@ -7231,6 +7865,8 @@ A:
 tool_choice changes invalidate only the messages portion of the prefix hierarchy (tools → system → messages); the cached tools and system stay valid. Keep the definitions stable and put a breakpoint ahead of the variation so most of the prefix is still read from cache.
 USAGE:
 Vary behavior in the cheapest layer, tool_choice or the last user turn, never the tool definitions.
+SOURCE: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-use-with-prompt-caching
+The cache follows a prefix hierarchy (tools → system → messages), so a change at one level invalidates that level and everything after it
 
 ## ccdvf-mcp-primitive-choice-mcq-13 | d3
 TOPIC: D8 Tools & MCP
@@ -7283,6 +7919,8 @@ A:
 The SDK's in-process MCP server is the low-overhead path: define the tool with @tool, wrap it with create_sdk_mcp_server, pass it through mcp_servers, and list mcp__pricing__price_quote in allowed_tools. The handler runs inside your own process, so no subprocess, endpoint, beta header, or credential is added.
 USAGE:
 App-local functions become in-process SDK tools; only capabilities other hosts need become external servers.
+SOURCE: https://code.claude.com/docs/en/agent-sdk/custom-tools
+After defining a tool, wrap it in a server with createSdkMcpServer (TypeScript) or create_sdk_mcp_server (Python). The server runs in-process inside your application, not as a separate process.
 
 ## ccdvf-tool-response-shaping-mcq-15 | d3
 TOPIC: D8 Tools & MCP
@@ -7309,3 +7947,5 @@ A:
 Reshape the tool: a response_format enum that defaults to concise, plus pagination and filtering with sensible defaults and steering truncation notes. Those changes cut tokens at the source; raising output limits, a bigger model, or a prompt to ignore fields all pay for the bloat instead of removing it.
 USAGE:
 Tokens leave a tool once; the only place to save them is inside the tool's response design.
+SOURCE: https://www.anthropic.com/engineering/writing-tools-for-agents
+We suggest implementing some combination of pagination, range selection, filtering, and/or truncation with sensible default parameter values for any tool responses that could use up lots of context.
