@@ -64,13 +64,13 @@ describe.each(ZONES)('exam pace in $tz', ({ tz, januaryOffsetMinutes }) => {
     const start = buildExamPace({ examDate: exam, totalCards: 371, learnedCards: 65, nowMs: morning });
     expect(start).toMatchObject({ perDay: 18, leftToday: 18 });
 
-    // 10 learned since the morning: the anchor (306 left at day start) keeps the target at 18.
-    const midday = buildExamPace({ examDate: exam, totalCards: 371, learnedCards: 75, nowMs: at(2026, 10, 4, 13), remainingAtDayStart: 306 });
+    // 10 learned since the morning: the anchor (65 learned at day start) keeps the target at 18.
+    const midday = buildExamPace({ examDate: exam, totalCards: 371, learnedCards: 75, nowMs: at(2026, 10, 4, 13), learnedAtDayStart: 65 });
     expect(midday).toMatchObject({ kind: 'pace', perDay: 18, remaining: 296, leftToday: 8 });
     expect(examPaceLabel(midday)).toBe('≈ 18 cards/day to be ready by Oct 21');
 
     // Today's share done: the line says so instead of a shrinking number.
-    const evening = buildExamPace({ examDate: exam, totalCards: 371, learnedCards: 85, nowMs: at(2026, 10, 4, 21), remainingAtDayStart: 306 });
+    const evening = buildExamPace({ examDate: exam, totalCards: 371, learnedCards: 85, nowMs: at(2026, 10, 4, 21), learnedAtDayStart: 65 });
     expect(evening).toMatchObject({ perDay: 18, leftToday: 0 });
     expect(examPaceLabel(evening)).toBe("Today's 18 done · on track for Oct 21");
 
@@ -82,9 +82,22 @@ describe.each(ZONES)('exam pace in $tz', ({ tz, januaryOffsetMinutes }) => {
     });
   });
 
-  it('ignores an anchor smaller than what is left now (the deck grew or the account changed)', () => {
-    const pace = buildExamPace({ examDate: '2026-10-22', totalCards: 400, learnedCards: 0, nowMs: at(2026, 10, 4), remainingAtDayStart: 306 });
+  it('counts nothing as done today when the anchor is above the learned count (progress was reset)', () => {
+    const pace = buildExamPace({ examDate: '2026-10-22', totalCards: 400, learnedCards: 0, nowMs: at(2026, 10, 4), learnedAtDayStart: 65 });
     expect(pace).toMatchObject({ remaining: 400, perDay: 24, leftToday: 24 });
+  });
+
+  it('does not count a deck update as today’s work: only cards learned since the anchor are', () => {
+    const exam = '2026-10-22';
+    const nowMs = at(2026, 10, 4, 15);
+    // Morning: 371 cards, 65 learned → 18/day. 10 learned since, then an update retires 50 unlearned cards.
+    const shrunk = buildExamPace({ examDate: exam, totalCards: 321, learnedCards: 75, nowMs, learnedAtDayStart: 65 });
+    // 246 left now + 10 done today = 256 at the day's start against today's deck → 16/day, 6 still to go.
+    expect(shrunk).toMatchObject({ kind: 'pace', remaining: 246, perDay: 16, leftToday: 6 });
+    expect(examPaceLabel(shrunk)).toBe('≈ 16 cards/day to be ready by Oct 21');
+    // An update that adds 29 unlearned cards raises the day's target; the 10 done still count.
+    const grown = buildExamPace({ examDate: exam, totalCards: 400, learnedCards: 75, nowMs, learnedAtDayStart: 65 });
+    expect(grown).toMatchObject({ kind: 'pace', remaining: 325, perDay: 20, leftToday: 10 });
   });
 
   it('asks for everything on the last learning day, and says "final review" once the cap has passed', () => {

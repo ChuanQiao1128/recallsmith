@@ -6,9 +6,11 @@ import { daysUntilExam, examReviewCapMs, localDayStartMs } from './studyGoal';
  * local days left before the review cap (examReviewCapMs, the day before the exam), so the last
  * day is left for the final review pass.
  *
- * "Recalculated daily": the target is worked out from what was left at the start of the local day
- * (`remainingAtDayStart`, recorded by examPaceAnchor.ts on Home's first look that day), so it holds
- * still while the learner works through today's cards and moves only when the day changes.
+ * "Recalculated daily": the target is worked out from how many cards were learned at the start of
+ * the local day (`learnedAtDayStart`, recorded per account partition by examPaceAnchor.ts on Home's
+ * first look that day), so it holds still while the learner works through today's cards and moves
+ * only when the day changes. The anchor is a learned count, not a remaining count, so a deck update
+ * that adds or retires unlearned cards changes what is left without being counted as today's work.
  *
  * It does not touch the draw economy: the target says how many cards to learn, not how to get them.
  */
@@ -20,8 +22,8 @@ export type ExamPaceInput = {
   /** Cards of the goal deck the learner has learned (reviewed at least once). */
   learnedCards: number;
   nowMs: number;
-  /** Cards that were left at the start of today, when recorded earlier today. */
-  remainingAtDayStart?: number | null;
+  /** Cards of the goal deck that were learned at the start of today, when recorded earlier today. */
+  learnedAtDayStart?: number | null;
 };
 
 export type ExamPace =
@@ -88,12 +90,15 @@ export function buildExamPace(input: ExamPaceInput): ExamPace {
   // Whole local days from today to the cap day. Both ends are local midnights, so rounding absorbs
   // a 23- or 25-hour day at a DST change.
   const learningDays = Math.max(1, Math.round((cap - localTodayStartMs(nowMs)) / DAY_MS));
-  // Today's starting point only ever counts down during a day; a larger "now" (the deck grew,
-  // another account's progress) means the anchor no longer describes today, so "now" wins.
-  const anchor = wholeCount(input.remainingAtDayStart);
-  const dayStart = anchor != null && anchor >= remaining ? anchor : remaining;
+  // Cards learned today: the learned count only ever goes up during a day, so an anchor above
+  // "now" (progress was reset, learned cards were retired) no longer describes today and counts as
+  // nothing done. Today's starting point is what is left now plus what was learned today, against
+  // the deck as it is now.
+  const anchor = wholeCount(input.learnedAtDayStart);
+  const doneToday = anchor != null && anchor <= learned ? learned - anchor : 0;
+  const dayStart = remaining + doneToday;
   const perDay = Math.max(1, Math.ceil(dayStart / learningDays));
-  const leftToday = Math.max(0, perDay - (dayStart - remaining));
+  const leftToday = Math.max(0, perDay - doneToday);
   return { kind: 'pace', perDay, learningDays, remaining, leftToday, readyBy: dayKeyOf(cap) };
 }
 

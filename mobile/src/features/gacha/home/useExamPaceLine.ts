@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { buildExamPace, examPaceDayKey, examPaceLabel } from '../../goal/examPace';
-import { resolveDayStartRemaining } from '../../goal/examPaceAnchor';
+import { resolveDayStartLearned } from '../../goal/examPaceAnchor';
 
 export type ExamPaceLineInput = {
   /** The study goal's deck and exam date; null fields mean "no goal" / "no date". */
@@ -38,9 +38,9 @@ export function useExamPaceLine(input: ExamPaceLineInput): string | null {
       setLine(examPaceLabel(live));
       return undefined;
     }
-    void resolveDayStartRemaining({ deckSlug, examDate, remaining: live.remaining, nowMs }).then((dayStart) => {
+    void resolveDayStartLearned({ deckSlug, examDate, learned: learnedCards, nowMs }).then((dayStart) => {
       if (cancelled) return;
-      setLine(examPaceLabel(buildExamPace({ ...base, remainingAtDayStart: dayStart })));
+      setLine(examPaceLabel(buildExamPace({ ...base, learnedAtDayStart: dayStart })));
     });
     return () => {
       cancelled = true;
