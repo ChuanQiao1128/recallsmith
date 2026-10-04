@@ -310,7 +310,7 @@ REMOTE_FEATURES: dict[str, dict[str, Callable[[object], bool]]] = {
     "mistakeBook": {"enabled": _is_bool, "relatedCount": _is_related_count},
     "cardSource": {"enabled": _is_bool},
     "sentry": {"enabled": _is_bool},
-    "cardReport": {"enabled": _is_bool},
+    "cardReport": {"enabled": _is_bool, "anonymous": _is_bool},
     "fsrs": {"enabled": _is_bool},
     "anonFunnel": {"enabled": _is_bool},
 }
