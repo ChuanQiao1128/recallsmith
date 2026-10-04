@@ -48,7 +48,8 @@ import { isStarterLessonOpen, resolveStarterSlug } from '../features/gacha/start
 import { STARTER_COPY } from '../features/gacha/starter/starterCopy';
 import { skipStarterLesson } from '../features/gacha/starter/starterLesson';
 import { buildExamCountdownLabel } from '../features/gacha/home/examCountdown';
-import { getStudyGoal } from '../features/goal/studyGoal';
+import { useExamPaceLine } from '../features/gacha/home/useExamPaceLine';
+import { getStudyGoal, type StudyGoal } from '../features/goal/studyGoal';
 import { colors } from '../theme/colors';
 import { spacing } from '../theme/spacing';
 import { typography } from '../theme/typography';
@@ -215,15 +216,17 @@ export function HomeScreen({ navigation, route }: Props) {
       };
     }, [openStarterLesson]),
   );
-  // R22 §2/§5: the study goal's exam date, read on every focus so a date set in onboarding or
-  // Settings shows up on return. Null (the default for most learners) shows nothing about exams.
-  const [examDate, setExamDate] = useState<string | null>(null);
+  // R22 §2/§5: the study goal (deck + exam date), read on every focus so a goal set in onboarding
+  // or changed in Settings › Study shows up on return. Null (the default for most learners) shows
+  // nothing about exams.
+  const [studyGoal, setStudyGoalState] = useState<StudyGoal | null>(null);
+  const examDate = studyGoal?.examDate ?? null;
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
       void getStudyGoal().then((goal) => {
         if (cancelled || !isMountedRef.current) return;
-        setExamDate(goal?.examDate ?? null);
+        setStudyGoalState(goal);
       });
       return () => {
         cancelled = true;
@@ -528,6 +531,18 @@ export function HomeScreen({ navigation, route }: Props) {
       null
     );
   }, [homeState.vm]);
+  // U5: the daily target for the goal deck (not the selected one): its card count and learned count
+  // from this load's deck summary. A goal deck Home does not list yields no line.
+  const goalDeck = useMemo(() => {
+    if (!studyGoal) return null;
+    return homeState.vm.decks.rows.find((row) => row.deck.slug === studyGoal.deckSlug)?.deck ?? null;
+  }, [homeState.vm, studyGoal]);
+  const examPaceLine = useExamPaceLine({
+    deckSlug: goalDeck ? goalDeck.slug : null,
+    examDate,
+    totalCards: goalDeck ? goalDeck.totalCards || goalDeck.localCards : null,
+    learnedCards: goalDeck ? goalDeck.masteredApprox : null,
+  });
   const handlePrimaryCta = useCallback(async () => {
     const slug = homeState.vm.selectedDeckSlug ?? selectedDeckRow?.deck.slug ?? null;
     if (starterSlug) {
@@ -657,7 +672,8 @@ export function HomeScreen({ navigation, route }: Props) {
   const totalDueAcrossDecks = homeState.vm.counts.totalDueAllDecks;
   const examCountdownLabel = buildExamCountdownLabel(examDate, Date.now());
   // The header line is context, never a second instruction: the hero below carries the one
-  // instruction (R22 §1.6). It shows the exam countdown when a date is set; otherwise a status
+  // instruction (R22 §1.6). It shows the exam countdown when a date is set (with the goal deck's
+  // daily target under it, U5: a pace, not a button); otherwise a status
   // that agrees with the hero. While the starter lesson is open the hero already says it all.
   // "Caught up" only sits over a hero that says the learner is clear; every other hero line
   // (new cards ready, today in progress, a deck to set up) gets no subtitle rather than a
@@ -741,6 +757,12 @@ export function HomeScreen({ navigation, route }: Props) {
                 ) : headerStatus ? (
                   <Text testID="home-header-subtitle" style={styles.headerStatusSubtitle} numberOfLines={1}>
                     {headerStatus}
+                  </Text>
+                ) : null}
+                {/* U5: the goal deck's daily target under the countdown (one line, only with a date). */}
+                {examCountdownLabel && examPaceLine ? (
+                  <Text testID="home-exam-pace" style={styles.headerStatusSubtitle} numberOfLines={1}>
+                    {examPaceLine}
                   </Text>
                 ) : null}
               </View>
