@@ -1,0 +1,4 @@
+{
+ "note": "seeded-v1 is frozen: the 2026-09-27 claude-cli baseline was measured on it. A deck card corrected after the v1 cut keeps its v1-era text here, field by field, so dc-evals seed --dataset v1 still rebuilds the committed dataset byte for byte. Add an entry whenever a correction changes a card's question, explanation, code, usage, topic or mcq; never edit seeded-v1.jsonl itself.",
+ "pins": []
+}
