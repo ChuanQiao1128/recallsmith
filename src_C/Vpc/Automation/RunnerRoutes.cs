@@ -29,6 +29,12 @@ public static class RunnerRoutes
   public const int MaxLeaseMinutes = 240;
   public const int RetryBackoffMinutes = 60;
 
+  /// <summary>The queue item kinds the source watch creates (<see cref="SourceWatchRoutes"/>); the R28 daily cap applies to them.</summary>
+  public static readonly string[] WatchKinds = ["source_changed", "feed_item"];
+
+  /// <summary>Transaction-scoped advisory lock that serializes the watch-cap count with the claim ("WATCHCAP").</summary>
+  internal const long WatchClaimLockKey = 0x5741544348434150;
+
   /// <summary>
   /// The error prefix of a run the runner could not do at all (R18D M5): claude could not start, ran off the
   /// subscription, the MCP server did not start, or a usage limit. The item goes back to <c>queued</c> without using an
@@ -207,15 +213,52 @@ public static class RunnerRoutes
           return RunnerMismatch(res);
         }
 
-        var due = await DbUtil.QueryAsync(conn, tx,
+        // R28 MONITOR (report AI-6): one source-watch run can queue an item per changed page and deck (a weekly re-check
+        // covers every cited page), so at most AUTOMATION_WATCH_CLAIMS_PER_DAY source-watch items are claimed in any
+        // rolling 24 hours, whoever's runner claims them; the rest stay queued (visible, skippable) and drain day by day.
+        // Owner-created items are never held. The lock makes the count and the claims one step across runners.
+        var watchCap = AutomationEnv.WatchClaimsPerDay();
+        await DbUtil.ExecuteAsync(conn, tx, "select pg_advisory_xact_lock($1)", [WatchClaimLockKey]);
+        var watchClaimed24h = Long(await DbUtil.ExecuteScalarAsync(conn, tx,
+          """
+          select count(*) from automation_runs r join authoring_queue_items q on q.id = r.queue_item_id
+          where q.kind = any($1) and r.started_at > now() - interval '24 hours'
+          """, [WatchKinds]));
+        var watchLeft = (int)Math.Clamp(watchCap - watchClaimed24h, 0, MaxClaim);
+
+        // Two locked reads (FOR UPDATE allows no window function or UNION): the owner's items, and the source-watch items
+        // the cap leaves. Rows read but not claimed below stay queued; their row locks end with the transaction.
+        var manual = await DbUtil.QueryAsync(conn, tx,
           """
           select id, kind, url, deck_id, title, section_hint, note
           from authoring_queue_items
-          where status = 'queued' and not_before <= now() and deck_id is not null
+          where status = 'queued' and not_before <= now() and deck_id is not null and kind <> all($2)
           order by id
           limit $1
           for update skip locked
-          """, [max]);
+          """, [max, WatchKinds]);
+        var watched = watchLeft == 0 ? [] : await DbUtil.QueryAsync(conn, tx,
+          """
+          select id, kind, url, deck_id, title, section_hint, note
+          from authoring_queue_items
+          where status = 'queued' and not_before <= now() and deck_id is not null and kind = any($2)
+          order by id
+          limit $1
+          for update skip locked
+          """, [Math.Min(max, watchLeft), WatchKinds]);
+        var due = manual.Concat(watched).OrderBy(r => Long(r["id"])).Take(max).ToList();
+        if (watched.Count == 0 && watchLeft == 0)
+        {
+          var held = Long(await DbUtil.ExecuteScalarAsync(conn, tx,
+            """
+            select count(*) from authoring_queue_items
+            where status = 'queued' and not_before <= now() and deck_id is not null and kind = any($1)
+            """, [WatchKinds]));
+          if (held > 0)
+          {
+            Log.Event("info", new { tag = "automation", reason = "watch_claim_cap", runnerId, cap = watchCap, claimed24h = watchClaimed24h, held });
+          }
+        }
 
         var deckIds = due.Select(r => Long(r["deck_id"])).Distinct().ToArray();
         var liveDecks = new Dictionary<long, string>();
