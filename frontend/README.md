@@ -187,9 +187,16 @@ Sentry project settings the owner turns on: the server-side Data Scrubber,
 "Prevent Storing of IP Addresses", spike protection, and Allowed Domains set to
 the console origin.
 
-There is no Content-Security-Policy on the console today. A future CSP needs
-`connect-src` to include the DSN's ingest origin
-(`https://o<org-id>.ingest.<region>.sentry.io`), or every report is blocked.
+The console has an enforced Content-Security-Policy (R29 HARDEN), set by its
+CloudFront response headers policy from
+`infra/modules/edge/security_headers.json` (`infra/RUNBOOK.md` §16). Its
+`connect-src` names the DSN's ingest origin
+(`https://o4511427425599488.ingest.us.sentry.io`): a DSN from another Sentry
+organisation needs that entry changed first, or every report is blocked. The
+Playwright smoke serves the build with the same headers
+(`scripts/serve-with-headers.mjs`) and `tests/e2e/cspGuard.ts` fails any test
+whose page reports a CSP violation, so a dependency that would load a script,
+style, font or host the policy does not allow fails CI first.
 
 ### Pruning old assets
 

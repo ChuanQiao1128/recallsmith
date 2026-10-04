@@ -101,6 +101,9 @@ public static class Pg
         // Npgsql uses seconds here
         Timeout = Math.Max(1, connTimeoutMs / 1000),
         ConnectionIdleLifetime = Math.Max(1, idleTimeoutMs / 1000),
+
+        // SPC-01: server-side statement and idle-in-transaction limits from the first statement (PgSessionTimeouts).
+        Options = PgSessionTimeouts.Current.ConnectionOptions,
       };
 
       _dataSource = new NpgsqlDataSourceBuilder(csb.ConnectionString).Build();

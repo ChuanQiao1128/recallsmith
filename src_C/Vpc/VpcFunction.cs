@@ -13,6 +13,10 @@ public sealed class VpcFunction
 
   public VpcFunction()
   {
+    // SPC-01: core-vpc's server-side database limits (statement 20 s, idle in transaction 60 s), named here before the
+    // warmup below opens the first connection. The default already; stated so the entry point owns the choice.
+    RecallSmith.Lambda.Db.PgSessionTimeouts.Current = RecallSmith.Lambda.Db.PgSessionTimeouts.Api;
+
     // SnapStart runtime hooks must be registered during init (before snapshot).
     // Note these never fire while SnapStart is off on this function, which is why the
     // warmup below hangs off the constructor rather than off a restore hook.

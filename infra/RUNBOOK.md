@@ -1447,3 +1447,147 @@ allow-file selection and paths (non-ASCII and glob names included), the stale ch
 workflow's step bodies run under `bash -e` with stubbed `python3`, `terraform` and `aws`, and the static facts of
 `terraform.yml`, `ci.yml` and the role (its deny blocks no refresh read); `ci.yml` job `infra` runs `pr-check` on
 every run except a push to `main`.
+
+## 16. Hardening limits: database timeouts, route throttles, security headers (R29 HARDEN, 2026-10-04)
+
+Owner policy 2026-10-04: no new features, hardening only; nothing changes what a user sees except refusing abuse.
+Three limits from the enterprise audit (2026-10-03): SPC-01 (no `statement_timeout`), SPC-02 (routes share the stage
+default throttle) and the console's missing security headers (SEC-05, user-perspective review G11). Traffic and latency
+below are from read-only CloudWatch (`devcards-ro`) for the 30 days to 2026-10-04 08:00 UTC.
+
+### Database timeouts (SPC-01)
+
+Every application connection starts with Postgres' `statement_timeout` and `idle_in_transaction_session_timeout`, sent
+as startup options in the connection string (`Options=-c statement_timeout=… -c idle_in_transaction_session_timeout=…`)
+by both pools, `src_C/Shared/RecallSmith.Lambda.Db/Pg.cs` and `src_C/Vpc/Db/Pg.cs` (the migration runner's). The values
+live in one file, `src_C/Shared/RecallSmith.Lambda.Db/PgSessionTimeouts.cs`; each Lambda constructor names its profile
+before the first connection.
+
+| Who | statement_timeout | idle_in_transaction | Why this value |
+|---|---|---|---|
+| core-vpc (`PgSessionTimeouts.Api`, `VpcFunction`) | 20 s | 60 s | App and console calls come through API Gateway, which answers 503 after 30 s (`timeout_milliseconds = 30000`); a statement past that works for nobody. core-vpc is also invoked directly, without the gateway: `scripts/invoke-as-admin.sh` (bootstrap-roles, db ping, migrate) and the DR drill's copy of core-vpc (`infra/scripts/dr-restore-drill.sh`: `GET /api/v1/admin/db/migrations`, `/api/v1/admin/decks`). Those calls are bounded only by the 90 s Lambda timeout, so there the 20 s is the effective cap; every statement on them is small today (migrate lifts it, below), and a long admin statement added on that path needs its own `set local statement_timeout`. The slowest invocation in the 30 days took 7.4 s (p99.9 4.2 s, 31 209 invocations), the slowest route 9.1 s (`POST /api/internal/automation/tick`, whose own budget is 20 s; user routes ≤ 3.3 s, SLO sync latency 2 s). 20 s is that whole budget and twice the slowest route. Idle 60 s is twice the gateway timeout: on a gateway call it only ends a transaction whose caller already has its 503, and a dead function's locks go after a minute |
+| worker-lambda (`PgSessionTimeouts.Worker`, `WorkerFunction`) | 600 s | 600 s | The function may run 615 s (slowest job 4.6 s). Nothing a live job does is cut off; only what a dead worker left behind is ended |
+| Migration runner (`Vpc/Db/Migrate.cs`) | none | none | Each migration's transaction (and the `card_embeddings` vector block) starts with `set local statement_timeout = 0; set local idle_in_transaction_session_timeout = 0` (`Migrate.LiftTimeoutsSql`), for that transaction only. The advisory-lock wait before it keeps the 20 s: a second **Migrate** press while one runs already failed before this change, at Npgsql's 30 s client Command Timeout; it now fails after 20 s on the server (57014) instead. Press again when the first is done |
+| `set local` inside code | lower | — | The usage rollup (3 s) and the anonymous-funnel retention (2 s) already set their own; a `set local` always wins for its transaction |
+
+- Why startup options and not `ALTER ROLE … SET`: no migration, the RDS role and parameter group stay as they are, the
+  worker and core-vpc share the role but not the values, and Npgsql's reset of a pooled connection (`RESET ALL`) returns
+  to the startup value, so a `set statement_timeout` by one request cannot leak into the next (tested). A session
+  someone else opens (psql as the master, the DR drill of §13) keeps the server defaults of the instance's parameter
+  group `default.postgres17` (read 2026-10-04): no `statement_timeout`, `idle_in_transaction_session_timeout`
+  86 400 000 ms (24 h).
+- Npgsql's client-side Command Timeout (30 s default, never overridden here) is unchanged. It fires only while the
+  function is alive; the server-side limits also hold for a function that timed out, crashed or was frozen. Migration
+  statements are still bounded by those 30 s, as before.
+- What a user sees: nothing at today's latencies. A statement over 20 s now ends with `57014 canceling statement due to
+  statement timeout` (core-vpc answers 500) instead of running on behind API Gateway's 503.
+- Find one: Logs Insights on `/aws/lambda/core-vpc`, `filter @message like /57014|statement timeout|25P03/`; on the
+  database (master, read-only), `select pid, usename, state, now() - xact_start as xact_age, left(query, 60) from
+  pg_stat_activity where usename = 'developercards_app' order by xact_start nulls last`.
+- Change a value: edit `PgSessionTimeouts.cs` and the pinned values in
+  `src_C/Tests/RecallSmith.Lambda.IntegrationTests/DbSessionTimeoutsTests.cs` (`ShippedProfiles_AreTheMeasuredValues`),
+  pull request, CD deploys core-vpc and worker-lambda (§12). One slow statement that needs more is better served by a
+  `set local statement_timeout = <ms>` in its own transaction than by raising the profile.
+- Tests (Testcontainers, CI job `backend`): `DbSessionTimeoutsTests` — both pools start with 20 s / 1 min; a slow
+  query and a real handler (`GET /api/v1/entitlements`) blocked behind a lock are cancelled by the server (57014); an
+  idle transaction's session is ended by the server (`pg_stat_activity`); a session-level `SET` does not survive the
+  pool; `new WorkerFunction()` selects 10 min / 10 min and keeps a statement the app path cancels; a migration that
+  sleeps past the app limit is applied and the limit is back afterwards.
+- Rollback: revert the change; CD redeploys (§12).
+
+### Route throttles (SPC-02)
+
+`infra/modules/api/gateway.tf` `local.route_throttles` puts each listed route in its own token bucket on both stages
+(`route_settings`); every other route uses the stage default (`modules/api/variables.tf`: `$default` 200 rps / burst
+400, `dev` 50 / 100, unchanged). A bucket is shared by every caller of that route: the HTTP API has no per-client limit.
+R29 adds an entry for every unauthenticated route that had none and for the expensive routes; each limit is at least
+100 times the busiest minute the route had:
+
+| Route | Who calls it | 30 days | Busiest minute | burst / rate |
+|---|---|---|---|---|
+| `GET /health` | synthetic check, CD smoke (no token) | 565 | 5 | 20 / 10 |
+| `OPTIONS /{proxy+}`, `OPTIONS /api/v1/authoring/{proxy+}`, `OPTIONS /api/v1/admin/{proxy+}` | browser preflights (no token; core-vpc answers them) | 1 / 19 / 13 | 1 / 5 / 9 | 40 / 20 each |
+| `ANY /api/v1/authoring/{proxy+}` | console: card import, publish, QA runs | 42 | 11 | 40 / 20 |
+| `ANY /api/v1/admin/{proxy+}` | console: usage analytics (whole-history scans, SPC-04), embeddings, manifest rebuild, migrate | 17 | 9 | 40 / 20 |
+| `ANY /api/v1/user/{proxy+}` | app (any self-registered account): bootstrap, client errors, card reports, account deletion | 20 | 3 | 40 / 20 |
+| `POST /api/v1/authoring/cards/similar`, `POST /api/v1/authoring/drafts` | the local agent (MCP server) | 9 / 2 | 5 / 1 | 20 / 10 each |
+
+The 17 existing entries (sync and draw-state 40 / 20, the callbacks, the runner, the two public routes) are unchanged.
+The route guard (terraform validate) now also fails when an `auth = "none"` route has no entry or an entry has a burst
+or rate below 1 (0 refuses everything: the 2026-09-23 incident); mutation test
+`docs/delivery/r29-issues/HARDEN-route-guard-test.sh`.
+
+- A refusal is a `429` whose access-log line has `integrationLatency` `-`; alarm `api-429` (§7) pages at 3 in 15
+  minutes. Live values: `aws apigatewayv2 get-stage --api-id ktbq1sie2c --stage-name '$default' --query
+  '{d:DefaultRouteSettings,r:RouteSettings}'`.
+- Change a limit: edit the entry (never 0), add an allow file listing `module.api.aws_apigatewayv2_stage.default` and
+  `…stage.dev` as `update` with keys `route_settings`, and let the pipeline apply it (§15). The console's import
+  runner retries a 429 batch after 1, 2 and 4 s.
+- What it does not stop: one self-registered mobile account can still spend a whole route's bucket (20 rps of sync)
+  for everyone; a per-user limit (SPC-02's second half) needs code in core-vpc or a REST API with usage plans, and is
+  deferred.
+
+### Security headers (SEC-05)
+
+`infra/modules/edge/security_headers.json` holds every value; `security_headers.tf` builds two CloudFront response
+headers policies from it, `developercards-prod-console-security-headers` (on `console.developercards.app`,
+E85FKUMZZWQWX, `cdn.tf`) and `developercards-prod-site-security-headers` (on `developercards.app` and
+`www.developercards.app`, EML9BSZ8EXMQ1, `site.tf`). They replace the AWS managed SecurityHeadersPolicy (X-Frame-Options
+SAMEORIGIN, no CSP). Every header overrides what S3 sends; CloudFront adds them to the SPA fallback (403/404 →
+`/index.html`) too.
+
+| Header | Value |
+|---|---|
+| Strict-Transport-Security | `max-age=31536000; includeSubDomains` (every developercards.app host is HTTPS; `.app` is HSTS-preloaded anyway) |
+| X-Content-Type-Options | `nosniff` |
+| X-Frame-Options | `DENY` (and CSP `frame-ancestors 'none'`) |
+| Referrer-Policy | `strict-origin-when-cross-origin` |
+| Permissions-Policy | `camera=(), microphone=(), geolocation=(), payment=(), usb=()` |
+| Content-Security-Policy | enforced (not report-only); below |
+
+The console's CSP, built from what the built console loads (its bundle and the live one were read on 2026-10-04):
+
+| Directive | Sources | Because |
+|---|---|---|
+| `default-src`, `script-src`, `style-src`, `font-src` | `'self'` | `index.html` has one external module script; chunks, CSS and preloads are files under `/assets/`; the font stack is the system's. No `'unsafe-inline'`: there is no inline script or style, React sets `style` props through the CSSOM (which CSP does not govern), highlight.js markup carries classes only. No `'unsafe-eval'`: nothing in the bundle evaluates strings |
+| `img-src` | `'self' data:` | the favicon is an SVG data URI in `index.html` |
+| `connect-src` | `'self' https://api.developercards.app https://ap-southeast-24vf8ucxkt.auth.ap-southeast-2.amazoncognito.com https://o4511427425599488.ingest.us.sentry.io` | the API (`VITE_API_BASE`), the console pool's hosted UI domain for `/oauth2/token` (the sign-in and sign-out redirects are navigations, which CSP does not restrict), the console DSN's Sentry ingest origin. The console reads no CDN: its manifest URL is same-origin (`/manifest/index.json`) |
+| `object-src`, `frame-src`, `frame-ancestors` | `'none'` | no plugins, no frames, never framed |
+| `base-uri` / `form-action` | `'none'` / `'self'` | no `<base>`; the console's forms are handled in script, and a native submit could only go to the console itself |
+
+The site's: `default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors
+'none'` (one HTML page and `styles.css`; no script, no inline style, nothing from another origin).
+
+Proof, 2026-10-04 (no AWS call): `frontend/scripts/serve-with-headers.mjs` serves a build with exactly these headers.
+(1) The Playwright smoke (CI job `e2e`) now runs against it, and `tests/e2e/cspGuard.ts` fails a test on any CSP
+violation the browser reports: 16 of 16 passed; with `style-src 'none'` and `connect-src` without `'self'` the same
+test failed naming both violations. (2) The production-mode bundle (real API, Cognito and Sentry hosts; a dummy DSN key)
+and the bundle live on the console that day, each served the same way with every outside request answered by
+`page.route` (nothing left the machine): sign-in redirect, callback token exchange to the Cognito domain, signed-in
+deck list from the API, an uncaught error reported to the Sentry ingest origin, all with no violation; a `fetch` to
+`https://example.com` was blocked (`connect-src`). (3) `site/` served with the site headers: the page and its
+stylesheet loaded with no violation; an injected `<style>` and an external image were blocked.
+`infra/scripts/tests/test_r29_harden.py` (CI job `python`) keeps the policy strict and tied to
+`frontend/.env.production`, and the landing page loadable under its policy.
+
+- After the apply: `curl -sI https://console.developercards.app/ | grep -i -e content-security -e x-frame` and the same
+  for `https://developercards.app/`; open the console, sign in, open a deck and a card, and check the browser console
+  for `Content Security Policy` errors.
+- Change a header: edit `security_headers.json` (and `test_r29_harden.py` when the rule changes), run
+  `npx playwright test` in `frontend/` (it serves the edited headers), and add an allow file listing
+  `module.edge.aws_cloudfront_response_headers_policy.security["console"]` (or `["site"]`) as `update` with keys
+  `security_headers_config` (CSP, HSTS, frame, referrer) or `custom_headers_config` (Permissions-Policy); the pipeline
+  applies it (§15). A new API or sign-in host (a Cognito custom domain), a console DSN from another Sentry
+  organisation, or a font or script from a CDN (better bundled) each needs a `connect-src` / `script-src` change
+  first, or the browser refuses it.
+- The Sentry origin is checked at deploy time: `frontend/scripts/check-bundle-dsn.sh` (CD's deploy preflight, and
+  `frontend/deploy.sh` with `PREBUILT=1`) refuses a console whose DSN ingest origin (`https://<host after the @>` of
+  the SSM DSN) is not a `connect-src` source in `security_headers.json`, before anything is uploaded. Moving the DSN
+  to another Sentry organisation or region is therefore two steps in this order: the CSP change above (applied by
+  the pipeline), then the SSM parameter and the repository variable `CONSOLE_SENTRY_DSN`. The check reads the file
+  at the deployed commit, not the live distribution, so merge and apply the CSP change before changing the DSN.
+- Rollback: revert the change in a pull request; its allow file lists the two policies as `delete` and both
+  distributions as `update` with keys `default_cache_behavior`.
+- Not covered: no CSP reporting endpoint, so a violation in production shows only in that browser's console (Sentry's
+  security endpoint would put the DSN key in a public header); the other half of SEC-05 (refresh token lifetime and
+  revocation on sign-out) changes what users see and is left to a later round.

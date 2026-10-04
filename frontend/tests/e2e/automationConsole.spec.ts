@@ -24,7 +24,9 @@
 // and anything unrecognised is recorded and fails the test.
 
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test, type Page, type Route } from '@playwright/test';
+import type { Page, Route } from '@playwright/test';
+// R29 HARDEN: Playwright's test plus a fixture that fails on any CSP violation (the smoke serves the production headers).
+import { expect, test } from './cspGuard';
 
 const TOKEN_KEY = 'devcards:tokens';
 

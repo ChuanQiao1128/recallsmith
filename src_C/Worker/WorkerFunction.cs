@@ -37,6 +37,9 @@ public class WorkerFunction
       new S3DeckUploader()),
     RebuildManifestAfterAsync)
   {
+    // SPC-01: before any connection, the worker's own server-side limits (600 s, under the function's 615 s), not
+    // core-vpc's 20 s: a live publish job is never cut off, only what a dead worker left behind (PgSessionTimeouts).
+    PgSessionTimeouts.Current = PgSessionTimeouts.Worker;
     SnapStartHooks.RegisterOnce();
   }
 

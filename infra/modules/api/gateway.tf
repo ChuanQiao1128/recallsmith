@@ -90,8 +90,23 @@ locals {
     mobile  = aws_apigatewayv2_authorizer.mobile.id
   }
 
-  # Lower per-route throttles layered over each stage's validated default (Changes 4).
+  # Lower per-route throttles layered over each stage's validated default (Changes 4). Each key is its own token bucket,
+  # shared by every caller of that route on that stage (the HTTP API has no per-client limit).
+  # R29 HARDEN (enterprise audit SPC-02): every unauthenticated route and the expensive routes have their own entry, so
+  # no single route can spend core-vpc (reserved concurrency 40) at the stage default of 200 rps. Sized from the
+  # 30 days to 2026-10-04 (AWS/ApiGateway Count per route, read-only; infra/RUNBOOK.md §16) with at least 100x
+  # headroom over the busiest minute seen on each: GET /health 5 a minute (the synthetic check), the console's
+  # preflights and calls at most 11, the app's user routes 3, the agent's 5.
   route_throttles = {
+    "GET /health"                                        = { burst = 20, rate = 10 }
+    "OPTIONS /{proxy+}"                                  = { burst = 40, rate = 20 }
+    "OPTIONS /api/v1/authoring/{proxy+}"                 = { burst = 40, rate = 20 }
+    "OPTIONS /api/v1/admin/{proxy+}"                     = { burst = 40, rate = 20 }
+    "ANY /api/v1/authoring/{proxy+}"                     = { burst = 40, rate = 20 }
+    "ANY /api/v1/admin/{proxy+}"                         = { burst = 40, rate = 20 }
+    "ANY /api/v1/user/{proxy+}"                          = { burst = 40, rate = 20 }
+    "POST /api/v1/authoring/cards/similar"               = { burst = 20, rate = 10 }
+    "POST /api/v1/authoring/drafts"                      = { burst = 20, rate = 10 }
     "ANY /api/v1/sync/{proxy+}"                          = { burst = 40, rate = 20 }
     "ANY /api/v1/draw-state/{proxy+}"                    = { burst = 40, rate = 20 }
     "POST /webhooks/revenuecat/production"               = { burst = 20, rate = 10 }
@@ -118,6 +133,8 @@ locals {
   # exactly contract §3.3 (exact key, NONE on core_vpc, burst 10 / rate 5 on both stages via route_throttles).
   # R28 ANONREPORT: every /api/v1/public/ route has a per-route throttle, and the anonymous card report route is
   # exactly POST /api/v1/public/card-reports, NONE on core_vpc, burst 5 / rate 2.
+  # R29 HARDEN (SPC-02): every auth = "none" route (OPTIONS preflights and GET /health included) has a per-route
+  # throttle, and no throttle is below 1 (API Gateway reads 0 as "refuse everything": the 2026-09-23 incident).
   route_guard_public_events       = lookup(local.routes, "public_events", { route_key = "", integration = "", auth = "" })
   route_guard_public_card_reports = lookup(local.routes, "public_card_reports", { route_key = "", integration = "", auth = "" })
   route_guard_errors = concat(
@@ -132,6 +149,8 @@ locals {
     local.route_guard_public_card_reports.integration == "core_vpc" ? [] : ["routes.public_card_reports.integration must be \"core_vpc\""],
     local.route_guard_public_card_reports.auth == "none" ? [] : ["routes.public_card_reports.auth must be \"none\""],
     lookup(local.route_throttles, "POST /api/v1/public/card-reports", { burst = 0, rate = 0 }) == { burst = 5, rate = 2 } ? [] : ["route_throttles[\"POST /api/v1/public/card-reports\"] must be { burst = 5, rate = 2 }"],
+    [for name, r in local.routes : "auth = \"none\" route ${name} (\"${r.route_key}\") has no route_throttles entry" if r.auth == "none" && !contains(keys(local.route_throttles), r.route_key)],
+    [for k, t in local.route_throttles : "route_throttles[\"${k}\"] must have burst >= 1 and rate >= 1" if t.burst < 1 || t.rate < 1],
   )
   # tobool() of the joined messages fails validate and prints them; an empty list evaluates to true.
   route_guard_ok = length(local.route_guard_errors) == 0 ? true : tobool("ROUTE GUARD: ${join("; ", local.route_guard_errors)}")
