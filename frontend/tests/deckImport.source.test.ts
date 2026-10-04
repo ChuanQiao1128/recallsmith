@@ -259,16 +259,20 @@ describe('deckImport SOURCE:', () => {
       expect(headers.length).toBeGreaterThan(0);
       expect(parsed.cards.length).toBe(headers.length);
       expect(parsed.errors).toEqual([]);
-      // The decks carry reviewed SOURCE lines (R20 citation backfill); each one must be well formed.
+      // The decks carry reviewed SOURCE lines (R20 and R29 citation backfills); each one must be well
+      // formed. R29 also cites the ledger page URL-only where no verbatim sentence on the page backs
+      // the card, so the quote may be null; when present it is non-blank and within the limit.
       for (const c of parsed.cards) {
         if (!c.source) continue;
         expect(c.source.url, c.stableUid).toMatch(/^https:\/\/\S+$/);
-        expect((c.source.quote ?? '').length, c.stableUid).toBeGreaterThan(0);
-        expect((c.source.quote ?? '').length, c.stableUid).toBeLessThanOrEqual(1000);
+        if (c.source.quote !== null) {
+          expect(c.source.quote.trim().length, c.stableUid).toBeGreaterThan(0);
+          expect(c.source.quote.length, c.stableUid).toBeLessThanOrEqual(1000);
+        }
       }
       // R23 rebuilt the .NET deck with a verbatim Microsoft Learn quote on every card.
       if (name === 'csharp-basics.md') {
-        expect(parsed.cards.filter((c) => !c.source).map((c) => c.stableUid)).toEqual([]);
+        expect(parsed.cards.filter((c) => !c.source?.quote).map((c) => c.stableUid)).toEqual([]);
       }
     }
   });
