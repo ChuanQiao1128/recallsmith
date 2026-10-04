@@ -5,8 +5,9 @@
 #
 #   [1/2] health           GET $API_URL/health -> HTTP 200 and "ok": true (the body is {"success":true,"data":{"ok":true},…})
 #   [2/2] synthetic-check  aws lambda invoke developercards-synthetic-check:prod {"job":"synthetic-check"}
-#                          -> {"ok": true, "failed": []}: api-health, cdn-manifest, cdn-deck, console-index and
-#                          api-auth-guard against the live hosts (services/synthetic-check, infra/RUNBOOK.md §8)
+#                          -> {"ok": true, "failed": []}: api-health, cdn-manifest, cdn-deck, console-index,
+#                          api-auth-guard, api-sync-guard, remote-config, cognito-console and cognito-mobile against
+#                          the live hosts (services/synthetic-check, infra/RUNBOOK.md §8)
 #
 #   scripts/smoke.sh                 # needs lambda:InvokeFunction on developercards-synthetic-check:prod: the CD role
 #                                    # has it, devcards-deploy does not; locally run AWS_PROFILE=devcards-admin (MFA)

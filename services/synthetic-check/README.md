@@ -2,12 +2,14 @@
 
 Python 3.12 (arm64) Lambda `developercards-synthetic-check`, handler
 `synthetic_check.handler.lambda_handler` (contract H00 §5.1–§5.3). Once per scheduled invocation it
-probes, sequentially, the five public paths the app depends on and emits one CloudWatch Embedded
-Metric Format line. A scheduled Lambda rather than a CloudWatch Synthetics canary: see H00 §5.1.
+probes, sequentially, the public paths the app depends on (nine checks since R28 MONITOR, 2026-10-04)
+and emits one CloudWatch Embedded Metric Format line. A scheduled Lambda rather than a CloudWatch
+Synthetics canary: see H00 §5.1.
 
 - **Stdlib only** (`dependencies = []`). It calls no AWS API (no `boto3` in `src/`), reads no SSM,
   holds no secret and never calls a model.
-- **Read only.** Five `GET`s, no write route, never an `Authorization` header or a cookie.
+- **Read only.** Eleven `GET`s, no write route, never an `Authorization` header or a cookie. No account:
+  every probed URL is public (R28 MONITOR added no IAM and no secret).
 - **Infrastructure is H05's:** the function (created with placeholder code), its role, the 15-minute
   schedule (created **DISABLED**) and the two-consecutive-failures alarm. This package ships at the
   release; the schedule is enabled per `infra/RUNBOOK.md` §8 (H06).
@@ -18,7 +20,7 @@ Metric Format line. A scheduled Lambda rather than a CloudWatch Synthetics canar
    `{"skipped": "unknown-event"}` with one `synthetic-skip` log line and **no** metric.
 2. Settings are read from the environment at call time. An invalid value fails every check with
    `CONFIG` and no request is sent.
-3. The five checks run in order (below); an unexpected exception inside one check makes that check
+3. The checks run in order (below); an unexpected exception inside one check makes that check
    `ERROR`, the others still run. The whole run has a 40 s wall-time deadline (`RUN_DEADLINE_S`),
    well under the 60 s Lambda timeout: each check runs in a worker thread joined with the remaining
    budget, so a DNS stall or a slow-drip body cannot hold the run. A check still running at the
@@ -28,7 +30,7 @@ Metric Format line. A scheduled Lambda rather than a CloudWatch Synthetics canar
    `failedChecks`), and the return value `{"ok": bool, "failed": [check names in order]}`.
    The handler never raises.
 
-## The five checks
+## The checks
 
 | # | name | Request | Pass when (else) |
 |---|---|---|---|
@@ -37,6 +39,29 @@ Metric Format line. A scheduled Lambda rather than a CloudWatch Synthetics canar
 | 3 | `cdn-deck` | the first manifest deck with `downloadMode "public"`, `availability "live"`, a relative `path` (no leading `/`, no `://`, no `..` segment, no `?`/`#`) and a 64-char lowercase-hex `sha256`; `GET {CDN_BASE}/{prefix}/{path}`, cap 5 MiB | 200 and the body's SHA-256 equals `sha256` (else `HTTP_STATUS` / `HASH_MISMATCH` / `TOO_LARGE`); `NO_PUBLIC_DECK` without a request when check 2 failed, `prefix` is missing or invalid, or no deck qualifies |
 | 4 | `console-index` | `GET {CONSOLE_BASE}/`, cap 1 MiB | 200, `Content-Type` starting with `text/html` and a body containing `<html` (both case-insensitive; else `HTTP_STATUS` / `BAD_BODY`) |
 | 5 | `api-auth-guard` | `GET {API_BASE}/api/v1/me`, no token, cap 1 MiB | status exactly 401 (a 200, 403 or 5xx is `HTTP_STATUS`) |
+| 6 | `api-sync-guard` | `GET {API_BASE}/api/v1/sync/progress`, no token, cap 1 MiB | status exactly 401: the app's sync route is served and a JWT authorizer rejects the token-less call (a 200 or 403 means the route lost its authorizer, a 429 a throttle, a 5xx an outage; all `HTTP_STATUS`). A 401 cannot tell which authorizer answered: a deleted sync route falls to `ANY /{proxy+}`, which is guarded too |
+| 7 | `remote-config` | `GET {REMOTE_CONFIG_URL}` (the document `mobile/App.tsx` `REMOTE_CONFIG_URL` reads), cap 64 KiB | 200, JSON, and the rules below (else `HTTP_STATUS` / `BAD_BODY` with `detail` / `TOO_LARGE`) |
+| 8 | `cognito-console` | `GET {COGNITO_CONSOLE_ISSUER}/.well-known/openid-configuration`, then `GET {COGNITO_CONSOLE_ISSUER}/.well-known/jwks.json` (the configured URL, never one read from the response), cap 64 KiB each | both 200 and JSON; discovery `issuer` equals the configured issuer and `jwks_uri` equals the JWKS URL; `keys` a non-empty list of objects with a non-empty string `kid` and a string `kty`, at least one `kty RSA`, `alg RS256`, `use` absent or `sig` (core-vpc accepts RS256 only) |
+| 9 | `cognito-mobile` | the same for `COGNITO_MOBILE_ISSUER` | the same |
+
+### Remote-config rules (`checks.remote_config_problem`)
+
+The app never fails on a bad document: it keeps the last good copy, or uses a flag's built-in default for
+a value of the wrong type, so a broken document silently changes behaviour. The check fails `BAD_BODY`
+with the first broken rule as `detail`:
+
+| `detail` | Rule |
+|---|---|
+| `json` | the body is a JSON object |
+| `ios` | `ios`, when present, is an object |
+| `ios.<key>` | each of `minSupportedVersion`, `latestVersion`, `updateUrl`, `appStoreId`, `message`, when present, is a string (the app calls `.trim()` on them); the two versions are 1–3 dot-separated numbers; `updateUrl`, when not blank, starts with `https://apps.apple.com/` (report G10: the only place a gated user may be sent); `appStoreId`, when not blank, is digits |
+| `ios.minAboveLatest` | `minSupportedVersion` is not above `latestVersion` (raise both together, or every gated user is sent to a version that does not exist) |
+| `features` | `features`, when present, is an object |
+| `features.<flag>` / `features.<flag>.<leaf>` | each known flag is an object and each known leaf has the type `applyRemoteFeatures` accepts (booleans; `mcq.maxPerRun` a non-negative integer; `mistakeBook.relatedCount` 0–5) |
+| `features.unknown` | a flag this check does not know (a newer app's) is still an object |
+
+`null` counts as absent everywhere. `tests/test_remote_config_schema.py` fails when the app's readers
+(`featureFlags.ts`, `remoteConfig.ts`) and these rules drift apart.
 
 Every request: no proxy, **no redirect followed** (a 3xx is `HTTP_STATUS`), per-request timeout
 `CHECK_TIMEOUT_SECONDS`, **no retry**, only `User-Agent: CHECK_USER_AGENT` and `Accept` set, at
@@ -58,23 +83,33 @@ is always written inside H05's 60 s Lambda timeout.
 | `CONFIG` | an environment value is invalid; nothing was requested |
 | `ERROR` | an unexpected exception inside the check |
 
+A failed R28 check may also carry `detail`: a remote-config rule id (above) or, for the Cognito checks,
+`discovery` / `jwks` (which request failed) or `discovery.issuer`, `discovery.jwks_uri`, `jwks.keys`,
+`jwks.rs256`. Every value comes from a fixed list in `checks.DETAILS`, never from a response.
+
 ## Metrics (EMF, namespace `METRICS_NAMESPACE`, dimension `Service = synthetic-check`)
 
 | Metric | Unit | Value |
 |---|---|---|
-| `SyntheticCheckSuccess` | Count | 1 only when all five checks pass, else 0 |
+| `SyntheticCheckSuccess` | Count | 1 only when every check passes, else 0 |
 | `SyntheticCheckLatency` | Milliseconds | wall time of the whole run |
 
 The same line carries `failedChecks` (names in check order), `checks`
-(`{name: {ok, status, ms, code}}`) and `xrayTraceId` when the invocation has an X-Ray root. Logs and
-metrics never carry a URL, a response body or a header value.
+(`{name: {ok, status, ms, code}}`, plus `detail` on a failed check that set one) and `xrayTraceId` when
+the invocation has an X-Ray root. Logs and metrics never carry a URL, a response body or a header value.
+
+The API Gateway alarms of R28 MONITOR (`infra/modules/observability/alarms_r28.tf`) leave this check's
+requests out by their `User-Agent` (`DeveloperCards-Synthetic/…`), and the api-availability SLO subtracts
+its API routes (`GET /health`; the 4xx of `GET /api/v1/me` and `ANY /api/v1/sync/{proxy+}`).
+`tests/test_infra_contract.py` keeps both in step with `CHECK_USER_AGENT` and the probed paths: change
+them together.
 
 ## What it does not prove: the database
 
 The synthetic proves edge, CDN and console reachability, not RDS. `GET /health` is answered by
 core-vpc before any database access (`src_C/Vpc/VpcFunction.cs`, the `/health` branch), and the
-token-less `GET /api/v1/me` is rejected with 401 by the API Gateway JWT authorizer without invoking
-core-vpc at all. Only check 1 invokes core-vpc. An RDS outage, connection exhaustion or a broken DB
+token-less `GET /api/v1/me` and `GET /api/v1/sync/progress` are rejected with 401 by the API Gateway
+JWT authorizer without invoking core-vpc at all. Only check 1 invokes core-vpc. An RDS outage, connection exhaustion or a broken DB
 secret leaves the synthetic green.
 
 A database outage still pages within 30 minutes, through the automation tick:
@@ -105,6 +140,9 @@ change and is a follow-up, not part of this function.
 | `API_BASE` | `https://api.developercards.app` | `https://<host>[:port]` (tests: `http://127.0.0.1:<port>`) |
 | `CDN_BASE` | `https://cdn.developercards.app` | same |
 | `CONSOLE_BASE` | `https://console.developercards.app` | same |
+| `REMOTE_CONFIG_URL` | `https://raw.githubusercontent.com/ChuanQiao1128/recallsmith-mobile-config/refs/heads/main/recallsmith-config.json` | a base (as above) plus a path of unreserved segments; equals `mobile/App.tsx` `REMOTE_CONFIG_URL` (tested) |
+| `COGNITO_CONSOLE_ISSUER` | `https://cognito-idp.ap-southeast-2.amazonaws.com/ap-southeast-2_4Vf8uCXKt` | a base plus one segment, the pool id; the console pool (core-vpc `DefaultConsolePool`, tested) |
+| `COGNITO_MOBILE_ISSUER` | `https://cognito-idp.ap-southeast-2.amazonaws.com/ap-southeast-2_04hd6iisb` | the same; the mobile pool (core-vpc `DefaultIssuers`, tested) |
 | `CHECK_TIMEOUT_SECONDS` | `10` | a number in [0.1, 10] |
 | `CHECK_USER_AGENT` | `DeveloperCards-Synthetic/1.0 (+https://developercards.app)` | non-empty |
 | `METRICS_NAMESPACE` | `DeveloperCards` | non-empty |
@@ -118,14 +156,15 @@ uv lock --check
 uv run --python 3.12 pytest -q
 ```
 
-The tests serve all five paths from a loopback `ThreadingHTTPServer` on `127.0.0.1`; they never reach
-the real hosts. Packaging: `DRY_RUN=1 services/deploy-python-lambda.sh synthetic-check` builds the zip
+The tests serve every probed path from a loopback `ThreadingHTTPServer` on `127.0.0.1`; they never
+reach the real hosts. Packaging: `DRY_RUN=1 services/deploy-python-lambda.sh synthetic-check` builds the zip
 and prints the function, zip size and env key names only.
 
 ## Cost (H00 §9)
 
-Once H05's schedule is enabled: 2,880 runs/month × ≈ 2 s × 256 MB ≈ 1.4k GB-s (Lambda free tier)
-⇒ USD 0.00; 5,760 API Gateway requests ⇒ ≈ USD 0.01 (only the 2,880 `/health` requests invoke
-core-vpc; the 2,880 token-less `/api/v1/me` requests stop at the JWT authorizer); 2,880 deck downloads ≈ 0.6 GB CloudFront (free
-tier) ⇒ USD 0.00; two custom metrics × USD 0.30 = USD 0.60; ≈ 6 MB of logs ⇒ ≈ USD 0.01.
-Total ≈ USD 0.62/month.
+Once H05's schedule is enabled: 2,880 runs/month × ≈ 3 s × 256 MB ≈ 2.2k GB-s (Lambda free tier)
+⇒ USD 0.00; 8,640 API Gateway requests ⇒ ≈ USD 0.01 (only the 2,880 `/health` requests invoke
+core-vpc; the token-less `/api/v1/me` and `/api/v1/sync/progress` requests stop at the JWT authorizer);
+2,880 deck downloads ≈ 0.6 GB CloudFront (free tier) ⇒ USD 0.00; the GitHub raw and Cognito discovery/JWKS
+reads are free; two custom metrics × USD 0.30 = USD 0.60; ≈ 8 MB of logs ⇒ ≈ USD 0.01.
+Total ≈ USD 0.62/month (R28 MONITOR adds no metric).

@@ -61,3 +61,14 @@ def test_emf_line_shape(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureF
     emf.run_line("DeveloperCards", [], 1)
     (line_text,) = capsys.readouterr().out.splitlines()
     assert json.loads(line_text)["SyntheticCheckSuccess"] == 0
+
+
+def test_detail_is_written_only_when_set(capsys: pytest.CaptureFixture[str]) -> None:
+    results = [
+        CheckResult(n, n != "remote-config", 200, 7, "BAD_BODY" if n == "remote-config" else None, "ios.updateUrl" if n == "remote-config" else None)
+        for n in CHECK_NAMES
+    ]
+    line = _line(capsys, results)
+    assert line["checks"]["remote-config"] == {"ok": False, "status": 200, "ms": 7, "code": "BAD_BODY", "detail": "ios.updateUrl"}
+    assert all("detail" not in entry for name, entry in line["checks"].items() if name != "remote-config")
+    assert line["failedChecks"] == ["remote-config"]

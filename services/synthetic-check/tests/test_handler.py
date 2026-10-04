@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 import pytest
-from conftest import DECK_BODY, DECK_PATH, FakeSite, json_answer
+from conftest import DECK_BODY, DECK_PATH, MOBILE_POOL, REMOTE_CONFIG_PATH, FakeSite, json_answer, jwks_path
 
 from synthetic_check import checks, handler
 from synthetic_check.checks import CHECK_NAMES
@@ -79,5 +79,20 @@ def test_logs_carry_no_url_query_or_body(fake_site: FakeSite, capsys: pytest.Cap
     fake_site.routes["/content/" + DECK_PATH] = (200, {"Content-Type": "application/json"}, DECK_BODY + marker.encode())
     handler.lambda_handler(EVENT, None)
     out = capsys.readouterr().out
-    for forbidden in (marker, "127.0.0.1", "http://", "https://", "?", "/health", "manifest.json", "deck.json", "User-Agent"):
+    for forbidden in (marker, "127.0.0.1", "http://", "https://", "?", "/health", "manifest.json", "deck.json", "User-Agent",
+                      "/api/v1/", "recallsmith-config", ".well-known", "jwks.json", "consoletest1", "mobiletest1"):
         assert forbidden not in out, forbidden
+
+
+def test_failure_details_carry_rule_ids_only(fake_site: FakeSite, capsys: pytest.CaptureFixture[str]) -> None:
+    marker = "SECRETISH-KEY-MARKER"
+    # A document whose bad value sits under a key name that must never be echoed.
+    fake_site.routes[REMOTE_CONFIG_PATH] = json_answer(200, {"features": {marker: True}})
+    fake_site.routes[jwks_path(MOBILE_POOL)] = json_answer(200, {"keys": [{"kid": marker, "kty": "EC", "alg": "ES256"}]})
+    assert handler.lambda_handler(EVENT, None) == {"ok": False, "failed": ["remote-config", "cognito-mobile"]}
+    out = capsys.readouterr().out
+    assert marker not in out
+    (line,) = [json.loads(row) for row in out.splitlines() if "_aws" in row]
+    assert line["checks"]["remote-config"] == {"ok": False, "status": 200, "ms": line["checks"]["remote-config"]["ms"], "code": "BAD_BODY", "detail": "features.unknown"}
+    assert line["checks"]["cognito-mobile"]["detail"] == "jwks.rs256"
+    assert "detail" not in line["checks"]["api-health"]

@@ -16,10 +16,18 @@ SUCCESS = "SyntheticCheckSuccess"
 LATENCY = "SyntheticCheckLatency"
 
 
+def _check_entry(result: CheckResult) -> dict[str, Any]:
+    """`{ok, status, ms, code}`, plus `detail` (a fixed rule id, checks.DETAILS) when the check set one."""
+    entry: dict[str, Any] = {"ok": result.ok, "status": result.status, "ms": result.ms, "code": result.code}
+    if result.detail is not None:
+        entry["detail"] = result.detail
+    return entry
+
+
 def run_line(namespace: str, results: list[CheckResult], latency_ms: int, *, timestamp_ms: int | None = None) -> None:
     """Print exactly one EMF line: success 1 only when every check passed. Never raises.
 
-    Carries check names, statuses, durations and codes only: never a URL, body or header value.
+    Carries check names, statuses, durations, codes and rule ids only: never a URL, body or header value.
     """
     try:
         ok = bool(results) and all(r.ok for r in results)
@@ -41,7 +49,7 @@ def run_line(namespace: str, results: list[CheckResult], latency_ms: int, *, tim
             SUCCESS: 1 if ok else 0,
             LATENCY: max(0, int(latency_ms)),
             "failedChecks": [r.name for r in results if not r.ok],
-            "checks": {r.name: {"ok": r.ok, "status": r.status, "ms": r.ms, "code": r.code} for r in results},
+            "checks": {r.name: _check_entry(r) for r in results},
         }
         root = tracectx.current_root()
         if root is not None:

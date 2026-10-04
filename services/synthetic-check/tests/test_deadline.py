@@ -65,10 +65,7 @@ def test_a_stalled_check_is_timeout_and_the_rest_are_not_run(
     assert time.monotonic() - started < 1.5
     assert _codes(results) == [
         ("api-health", True, None),
-        ("cdn-manifest", False, "TIMEOUT"),
-        ("cdn-deck", False, "TIMEOUT"),
-        ("console-index", False, "TIMEOUT"),
-        ("api-auth-guard", False, "TIMEOUT"),
+        *((name, False, "TIMEOUT") for name in CHECK_NAMES[1:]),
     ]
     assert all(r.status is None for r in results[1:])
     assert all(r.ms == 0 for r in results[2:])
@@ -119,9 +116,7 @@ def test_slow_drip_body_is_bounded_by_the_deadline(fake_site: FakeSite) -> None:
     assert _codes(results) == [
         ("api-health", True, None),
         ("cdn-manifest", True, None),
-        ("cdn-deck", False, "TIMEOUT"),
-        ("console-index", False, "TIMEOUT"),
-        ("api-auth-guard", False, "TIMEOUT"),
+        *((name, False, "TIMEOUT") for name in CHECK_NAMES[2:]),
     ]
 
 

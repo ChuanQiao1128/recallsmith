@@ -1,6 +1,6 @@
 """Lambda entry point `synthetic_check.handler.lambda_handler` (H00 §5.2).
 
-Only `{"job": "synthetic-check"}` runs the five checks; anything else is skipped without a metric.
+Only `{"job": "synthetic-check"}` runs the checks (checks.CHECK_NAMES); anything else is skipped without a metric.
 One run = one EMF line + one `synthetic-run` log line. Never raises.
 """
 
