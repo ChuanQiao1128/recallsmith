@@ -1008,6 +1008,69 @@ describe('HomeScreen v9', () => {
     const noGoal = await renderHome();
     expect(noGoal.root.findAllByProps({ testID: 'home-exam-countdown' })).toHaveLength(0);
     expect(textBlob(noGoal)).not.toMatch(/exam/i);
+    expect(noGoal.root.findAllByProps({ testID: 'home-exam-pace' })).toHaveLength(0);
+  });
+
+  // U5: the goal deck's daily target, one line under the countdown.
+  const examPaceText = (tree: renderer.ReactTestRenderer) =>
+    tree.root
+      .findAll((node) => (node.type as any) === 'Text' && node.props?.testID === 'home-exam-pace')
+      .map((node) => String(node.props.children));
+
+  it('shows the goal deck’s daily target under the countdown, from the goal deck and not the selected one', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 9, 4, 12, 0, 0));
+    try {
+      // The selected deck is csharp; the goal deck is aws: 371 cards, 65 learned, exam Oct 22.
+      deckSummariesFixture = deckSummariesFixture.map((deck) =>
+        deck.slug === 'aws' ? { ...deck, totalCards: 371, localCards: 371, studyCards: 371, masteredApprox: 65 } : deck,
+      );
+      studyGoalFixture = { deckSlug: 'aws', examDate: '2026-10-22' };
+      const tree = await renderHome();
+      await flush();
+      expect(examPaceText(tree)).toEqual(['≈ 18 cards/day to be ready by Oct 21']);
+
+      // The line follows the countdown in the header.
+      const order = tree.root
+        .findAll((node) => typeof node.props?.testID === 'string' && typeof node.type === 'string')
+        .map((node) => node.props.testID as string);
+      expect(order.indexOf('home-exam-pace')).toBe(order.indexOf('home-exam-countdown') + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows no daily target without an exam date, for a past exam, or for a goal deck Home does not list', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 9, 4, 12, 0, 0));
+    try {
+      for (const goal of [
+        { deckSlug: 'aws', examDate: null },
+        { deckSlug: 'aws', examDate: '2026-10-01' },
+        { deckSlug: 'claude-ccdv-f', examDate: '2026-10-22' },
+      ]) {
+        studyGoalFixture = goal;
+        const tree = await renderHome();
+        await flush();
+        expect(examPaceText(tree)).toEqual([]);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('says the goal deck is finished once every card is learned', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 9, 4, 12, 0, 0));
+    try {
+      deckSummariesFixture = deckSummariesFixture.map((deck) => (deck.slug === 'aws' ? { ...deck, masteredApprox: 8 } : deck));
+      studyGoalFixture = { deckSlug: 'aws', examDate: '2026-10-22' };
+      const tree = await renderHome();
+      await flush();
+      expect(examPaceText(tree)).toEqual(['Every card learned · keep up your reviews']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('labels the fourth Today tile Collected, not Owned', async () => {

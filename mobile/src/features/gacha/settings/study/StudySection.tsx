@@ -5,6 +5,8 @@ import { spacing } from '../../../../theme/spacing';
 import { typography } from '../../../../theme/typography';
 import { ToggleRow } from '../feedback/FeedbackSection';
 import type { StudyPrefs } from '../../study/studyPrefs';
+import type { StudyGoal } from '../../../goal/studyGoal';
+import { StudyGoalRow } from './StudyGoalRow';
 
 export const STUDY_COPY = {
   title: 'Study',
@@ -12,13 +14,19 @@ export const STUDY_COPY = {
   fourButtonsBody: 'Rate cards with Again, Hard, Good and Easy instead of Forgot and Remembered.',
 } as const;
 
-export function StudySection(props: { prefs: StudyPrefs; onToggleFourButtons: (value: boolean) => void }) {
-  const { prefs, onToggleFourButtons } = props;
+export function StudySection(props: {
+  prefs: StudyPrefs;
+  onToggleFourButtons: (value: boolean) => void;
+  /** U4: the study goal row. Omitted, the section shows only the rating-button toggle. */
+  goal?: { value: StudyGoal | null; fallbackDeckSlug: string | null; onSaved: (goal: StudyGoal | null) => void };
+}) {
+  const { prefs, onToggleFourButtons, goal } = props;
   return (
     <View style={styles.sectionCard}>
       <Text style={styles.sectionTitle} numberOfLines={1}>
         {STUDY_COPY.title}
       </Text>
+      {goal ? <StudyGoalRow goal={goal.value} fallbackDeckSlug={goal.fallbackDeckSlug} onSaved={goal.onSaved} /> : null}
       <ToggleRow
         testID="settings-four-buttons-toggle"
         label={STUDY_COPY.fourButtonsLabel}

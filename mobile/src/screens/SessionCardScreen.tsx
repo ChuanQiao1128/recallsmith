@@ -77,6 +77,7 @@ import ReviewBody from '../features/gacha/components/ReviewBody';
 import LearningStudyView, { LearningGotItDock } from '../features/gacha/components/LearningStudyView';
 import { getFeatureFlags } from '../config/featureFlags';
 import { SessionReportButton } from '../features/cardReport/SessionReportButton';
+import { CardSourceLine } from '../features/gacha/components/CardSourceLine';
 import { loadExpoHaptics } from '../components/ceremonyHaptics';
 import { getFeedbackPrefsSync } from '../features/gacha/settings/feedbackPrefs';
 import { getStudyPrefsSync, loadStudyPrefs } from '../features/gacha/study/studyPrefs';
@@ -1389,6 +1390,18 @@ export function SessionCardScreen({ navigation, route }: Props) {
                 onFlip={handleFlip}
               />
             )}
+            {/* U3: the card's source once the answer is on screen — the MCQ verdict (right or wrong)
+                and the Q/A answer after reveal. The study view shows its own SOURCE block. */}
+            {current
+            && learningPhase !== 'study'
+            && (mcqState.mcq ? mcqState.stage === 'verdict' : showAnswer) ? (
+              <CardSourceLine
+                key={current.card.StableUid}
+                testID="session-card-source"
+                deckSlug={deck.Slug}
+                stableUid={current.card.StableUid}
+              />
+            ) : null}
             {/* V11: default-off flag, read defensively (older suites mock flags without the key). */}
             {current
             && getFeatureFlags().cardReport?.enabled === true
