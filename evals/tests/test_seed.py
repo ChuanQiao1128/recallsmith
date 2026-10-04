@@ -1,8 +1,18 @@
 from __future__ import annotations
 
+import json
 from collections import Counter
 
-from dc_evals.dataset import DECKS, SEEDED_PATH, card_of, load_dataset, load_exported_cards, load_mutations
+from dc_evals.dataset import (
+    DECKS,
+    SEEDED_PATH,
+    V1_PINS_PATH,
+    card_of,
+    load_dataset,
+    load_exported_cards,
+    load_mutations,
+    load_v1_cards,
+)
 from dc_evals.seed import build_rows, render
 
 EXPECTED_COUNTS = {
@@ -16,7 +26,20 @@ EXPECTED_COUNTS = {
 
 
 def exported_index() -> dict[tuple[str, str], dict]:
-    return {(slug, c["sourceUid"]): c for slug, cards in load_exported_cards().items() for c in cards}
+    # The decks as seeded-v1 was cut from them: later corrections are pinned back (seeded-v1-pins.json).
+    return {(slug, c["sourceUid"]): c for slug, cards in load_v1_cards().items() for c in cards}
+
+
+def test_v1_pins_name_real_cards_whose_text_has_since_changed() -> None:
+    current = {(slug, c["sourceUid"]): c for slug, cards in load_exported_cards().items() for c in cards}
+    pins = json.loads(V1_PINS_PATH.read_text(encoding="utf-8"))["pins"]
+    assert len({(p["deck"], p["uid"]) for p in pins}) == len(pins)
+    for pin in pins:
+        card = current[(pin["deck"], pin["uid"])]
+        assert pin["fields"], pin["uid"]
+        for field, value in pin["fields"].items():
+            # A pin whose text equals the deck again is stale and would hide nothing; drop it.
+            assert card[field] != value, (pin["uid"], field)
 
 
 def test_seed_regenerates_committed_dataset_byte_for_byte() -> None:

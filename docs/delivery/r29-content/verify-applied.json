@@ -1,0 +1,559 @@
+{
+ "note": "R29 re-verification of the 61 live aws-saa-c03 cards that had no ledger source, as applied to content/decks/aws-saa-c03.md. sourced = both checkers judged the card correct and agreed on the page; fixed+sourced = both flagged the same problem, re-confirmed on the official page, minimal A: edit; disputed-unchanged = the checkers disagree, nothing changed, listed for the owner.",
+ "appliedOn": "2026-10-04",
+ "verification": {
+  "method": "source-watcher code path: robots.txt, UA DeveloperCards-SourceWatch/1.0, 10 s timeout, 5 MiB cap, <=3 redirects, normalize_html, quote_present",
+  "cards": 57,
+  "urls": 56,
+  "failures": 0
+ },
+ "counts": {
+  "sourced": 48,
+  "fixed+sourced": 9,
+  "disputed-unchanged": 4
+ },
+ "items": [
+  {
+   "uid": "aws-iam-permissions-boundary",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html",
+   "quote": "Identity-based policies grant permission to the entity, and permissions boundaries limit those permissions. The effective permissions are the intersection of both policy types."
+  },
+  {
+   "uid": "aws-s3-bucket-policy-vs-iam-policy",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic-cross-account.html",
+   "quote": "The request is allowed only if both evaluations return a decision of Allow."
+  },
+  {
+   "uid": "aws-resource-access-manager",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/ram/latest/userguide/shareable.html",
+   "quote": "Default subnets are not shareable. You can share only subnets you create yourself."
+  },
+  {
+   "uid": "aws-s3-cloudfront-oac",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html",
+   "quote": "Use an S3 bucket policy to allow the CloudFront service principal (cloudfront.amazonaws.com) to access the bucket."
+  },
+  {
+   "uid": "aws-s3-presigned-urls",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html",
+   "quote": "IAM role credentials – The presigned URL expires when the role session expires, even if you specify a longer expiration time."
+  },
+  {
+   "uid": "aws-cognito-user-pool-vs-identity-pool",
+   "first": "needs_fix",
+   "second": "needs_fix",
+   "outcome": "fixed+sourced",
+   "url": "https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-using-tokens-with-identity-providers.html",
+   "quote": "Amazon Cognito refresh tokens are encrypted, opaque to user pools users and administrators, and can only be read by your user pool.",
+   "edits": [
+    {
+     "before": "and issues OIDC JSON web tokens (ID, access and refresh) that your app or API can verify directly.",
+     "after": "and issues ID and access tokens as OIDC JSON web tokens that your app or API can verify directly, plus an encrypted refresh token that only the user pool can read."
+    }
+   ]
+  },
+  {
+   "uid": "aws-vpc-endpoints-gateway-vs-interface",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/vpc/latest/privatelink/vpc-endpoints-s3.html",
+   "quote": "However, gateway endpoints do not allow access from on-premises networks, from peered VPCs in other AWS Regions, or through a transit gateway."
+  },
+  {
+   "uid": "aws-vpc-flow-logs",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs-records-examples.html",
+   "quote": "Conversely, network ACLs are stateless, therefore responses to allowed traffic are subject to network ACL rules."
+  },
+  {
+   "uid": "aws-ssm-session-manager-vs-bastion",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager.html",
+   "quote": "Session Manager provides secure node management without the need to open inbound ports, maintain bastion hosts, or manage SSH keys."
+  },
+  {
+   "uid": "aws-ec2-imdsv2",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html",
+   "quote": "PUT requests are rejected if they contain an X-Forwarded-For header."
+  },
+  {
+   "uid": "aws-api-gateway-auth-options",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-api-usage-plans.html",
+   "quote": "Don't use API keys for authentication or authorization to control access to your APIs."
+  },
+  {
+   "uid": "aws-lambda-vpc-access",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/lambda/latest/dg/configuration-vpc.html",
+   "quote": "Connecting a function to a public subnet doesn't give it internet access or a public IP address."
+  },
+  {
+   "uid": "aws-privatelink-expose-service",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/whitepapers/latest/building-scalable-secure-multi-vpc-network-infrastructure/aws-privatelink.html",
+   "quote": "If the VPC is different, the consumer and service provider VPCs can have overlapping IP address ranges."
+  },
+  {
+   "uid": "aws-cloudfront-signed-urls-vs-cookies",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-choosing-signed-urls-cookies.html",
+   "quote": "You want to provide access to multiple restricted files, for example, all of the files for a video in HLS format or all of the files in the subscribers' area of website."
+  },
+  {
+   "uid": "aws-systems-manager-run-command-patch-and-parameters",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-parameter-store.html",
+   "quote": "For secrets such as database credentials, API keys, or tokens, we recommend AWS Secrets Manager"
+  },
+  {
+   "uid": "aws-s3-block-public-access",
+   "first": "needs_fix",
+   "second": "needs_fix",
+   "outcome": "fixed+sourced",
+   "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html",
+   "quote": "Amazon S3 blocks public and cross-account access derived from any public access point or bucket policy, including non-public delegation to specific accounts.",
+   "edits": [
+    {
+     "before": "and RestrictPublicBuckets cuts off cross-account access to a bucket whose policy is public. The settings exist at account level and bucket level, and S3 applies the most restrictive combination,",
+     "after": "and RestrictPublicBuckets cuts off public and cross-account access to a bucket whose policy is public. The settings exist at organisation, account, bucket and access point level, and S3 applies the most restrictive combination,"
+    }
+   ]
+  },
+  {
+   "uid": "aws-s3-encryption-options-sse",
+   "first": "needs_fix",
+   "second": "needs_fix",
+   "outcome": "fixed+sourced",
+   "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucket-key.html",
+   "quote": "After you enable an S3 Bucket Key, your AWS KMS CloudTrail events log your bucket ARN instead of your object ARN.",
+   "edits": [
+    {
+     "before": "enable an S3 Bucket Key so S3 derives data keys from a bucket-level key and reduces KMS traffic.",
+     "after": "enable an S3 Bucket Key so S3 derives data keys from a bucket-level key and reduces KMS traffic, but KMS CloudTrail events then log the bucket ARN instead of each object ARN, which weakens per-object audit."
+    },
+    {
+     "before": "SSE-C means you send your own key on every request and S3 never stores it, so losing the key loses the object.",
+     "after": "SSE-C means you send your own key on every request and S3 never stores it, so losing the key loses the object; since April 2026 it is disabled on new general purpose buckets until you enable it with PutBucketEncryption."
+    }
+   ]
+  },
+  {
+   "uid": "aws-acm-certificates-and-cloudfront-region",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/acm/latest/userguide/acm-overview.html",
+   "quote": "To use an ACM certificate with Amazon CloudFront, you must request or import the certificate in the US East (N. Virginia) region."
+  },
+  {
+   "uid": "aws-cloudhsm-vs-kms",
+   "first": "needs_fix",
+   "second": "needs_fix",
+   "outcome": "fixed+sourced",
+   "url": "https://docs.aws.amazon.com/cloudhsm/latest/userguide/backups.html",
+   "quote": "AWS CloudHSM makes periodic backups of the users, keys, and policies in the cluster.",
+   "edits": [
+    {
+     "before": "in return you own availability, backups and scaling.",
+     "after": "in return you own availability and scaling by adding HSMs, while CloudHSM still takes periodic cluster backups automatically."
+    }
+   ]
+  },
+  {
+   "uid": "aws-rds-encryption-and-iam-auth",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Overview.Encryption.html",
+   "quote": "You can only encrypt an Amazon RDS DB instance when you create it, not after the DB instance is created."
+  },
+  {
+   "uid": "aws-ebs-encryption-default",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/ebs/latest/userguide/encryption-by-default.html",
+   "quote": "Encryption by default has no effect on existing EBS volumes or snapshots."
+  },
+  {
+   "uid": "aws-s3-versioning-and-mfa-delete",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/MultiFactorAuthenticationDelete.html",
+   "quote": "However, only the bucket owner (root account) can enable MFA delete."
+  },
+  {
+   "uid": "aws-config-rules-remediation",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/config/latest/developerguide/remediation.html",
+   "quote": "AWS Config applies remediation using AWS Systems Manager Automation documents."
+  },
+  {
+   "uid": "aws-sqs-long-polling",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-short-and-long-polling.html",
+   "quote": "Long polling – ReceiveMessage queries all servers for messages, sending a response once at least one message is available, up to the specified maximum."
+  },
+  {
+   "uid": "aws-sqs-message-retention-and-size",
+   "first": "correct",
+   "second": "needs_fix",
+   "outcome": "disputed-unchanged"
+  },
+  {
+   "uid": "aws-lambda-retries-and-destinations",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/lambda/latest/dg/invocation-retries.html",
+   "quote": "Asynchronous invocation – Lambda retries function errors twice."
+  },
+  {
+   "uid": "aws-asg-health-checks-elb-vs-ec2",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/autoscaling/ec2/userguide/health-checks-overview.html",
+   "quote": "By default, Amazon EC2 Auto Scaling ignores the results of the Elastic Load Balancing health checks."
+  },
+  {
+   "uid": "aws-elb-deregistration-delay",
+   "first": "needs_fix",
+   "second": "needs_fix",
+   "outcome": "fixed+sourced",
+   "url": "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/edit-target-group-attributes.html",
+   "quote": "If a deregistering target has no in-flight requests and no active connections, Elastic Load Balancing immediately completes the deregistration process",
+   "edits": [
+    {
+     "before": "Set the value just above your longest normal request, because the full delay must elapse before termination, otherwise scale-in and deployments look slow.",
+     "after": "Set the value just above your longest normal request, because Auto Scaling waits until in-flight requests finish or the delay expires before terminating, so an oversized value lets lingering connections slow scale-in and deployments."
+    }
+   ]
+  },
+  {
+   "uid": "aws-dr-strategies-rpo-rto",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/whitepapers/latest/disaster-recovery-workloads-on-aws/disaster-recovery-options-in-the-cloud.html",
+   "quote": "The distinction is that pilot light cannot process requests without additional action taken first, whereas warm standby can handle traffic (at reduced capacity levels) immediately."
+  },
+  {
+   "uid": "aws-cloudfront-origin-failover",
+   "first": "needs_fix",
+   "second": "needs_fix",
+   "outcome": "fixed+sourced",
+   "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/high_availability_origin_failover.html",
+   "quote": "CloudFront fails to connect to the primary origin (when 503 is set as a failover code)",
+   "edits": [
+    {
+     "before": "or cannot be reached or times out once 503 and 504 are listed,",
+     "after": "or CloudFront cannot connect to it (when 503 is listed) or its response times out (when 504 is listed),"
+    }
+   ]
+  },
+  {
+   "uid": "aws-ebs-multi-attach-io2",
+   "first": "outdated",
+   "second": "outdated",
+   "outcome": "fixed+sourced",
+   "url": "https://docs.aws.amazon.com/ebs/latest/userguide/nvme-reservations.html",
+   "quote": "Multi-Attach enabled io1 and io2 volumes support NVMe reservations, which is a set of industry-standard storage fencing protocols.",
+   "edits": [
+    {
+     "before": "io2 supports NVMe reservations for I/O fencing, io1 does not.",
+     "after": "Both io1 and io2 support NVMe reservations for I/O fencing (on by default for io2 volumes created after 18 September 2023 and io1 volumes created after 1 October 2026)."
+    }
+   ]
+  },
+  {
+   "uid": "aws-s3-transfer-acceleration",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/transfer-acceleration.html",
+   "quote": "Transfer Acceleration takes advantage of the globally distributed edge locations in Amazon CloudFront."
+  },
+  {
+   "uid": "aws-elasticache-redis-vs-memcached",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/SelectEngine.html",
+   "quote": "Choose Memcached if the following apply for you: You need the simplest model possible."
+  },
+  {
+   "uid": "aws-route53-resolver-hybrid-dns",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver-overview-DSN-queries-to-vpc.html",
+   "quote": "Forwarding private DNS queries to any VPC CIDR + 2 address from on-premises or other VPC DNS servers is not supported, and can cause unstable results."
+  },
+  {
+   "uid": "aws-migration-strategies-7rs",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/prescriptive-guidance/latest/large-migration-guide/migration-strategies.html",
+   "quote": "Relocate is the quickest way to migrate and operate your workload in the cloud because it does not impact the overall architecture of your application."
+  },
+  {
+   "uid": "aws-s3-storage-classes",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/lifecycle-transition-general-considerations.html",
+   "quote": "You might want to archive objects that you don't need to access in real time to the S3 Glacier Flexible Retrieval or S3 Glacier Deep Archive storage classes."
+  },
+  {
+   "uid": "aws-ebs-snapshot-cross-region-copy-and-dlm",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/ebs/latest/userguide/ebs-copy-snapshot.html",
+   "quote": "If you copy a snapshot to a new Region, a full (non-incremental) copy is created."
+  },
+  {
+   "uid": "aws-ebs-gp3-vs-gp2-and-snapshot-archive",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/ebs/latest/userguide/general-purpose.html",
+   "quote": "Additionally, gp3 volumes offer a 20 percent lower price per GiB than General Purpose SSD (gp2) volumes."
+  },
+  {
+   "uid": "aws-efs-ia-and-lifecycle",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/efs/latest/ug/lifecycle-management-efs.html",
+   "quote": "Metadata operations for file systems in IA or Archive storage, such as listing the contents of a directory, don't count as file access."
+  },
+  {
+   "uid": "aws-s3-lifecycle-rules-minimums",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/lifecycle-transition-general-considerations.html",
+   "quote": "You can't create a single Lifecycle rule that transitions objects from one storage class to another before the minimum storage duration period has passed."
+  },
+  {
+   "uid": "aws-ec2-purchase-options",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instance-purchasing-options.html",
+   "quote": "Spot Instances are a cost-effective choice if you can be flexible about when your applications run and if they can be interrupted."
+  },
+  {
+   "uid": "aws-spot-fleet-and-interruption-handling",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-instance-termination-notices.html",
+   "quote": "Interruption notices are emitted on a best effort basis."
+  },
+  {
+   "uid": "aws-ec2-dedicated-hosts-vs-instances",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/dedicated-hosts-overview.html",
+   "quote": "There are no performance, security, or physical differences between Dedicated Instances and instances on Dedicated Hosts."
+  },
+  {
+   "uid": "aws-fargate-spot-and-compute-savings-plans",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-capacity-providers.html",
+   "quote": "Fargate doesn't replace Spot capacity with on-demand capacity."
+  },
+  {
+   "uid": "aws-dynamodb-standard-ia-table-class",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/WorkingWithTables.tableclasses.html",
+   "quote": "No more than two table class updates on your table are allowed in a 30-day trailing period."
+  },
+  {
+   "uid": "aws-rds-reserved-and-stop-start",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_StopInstance.html",
+   "quote": "If you don't manually start your DB instance after it is stopped for seven consecutive days, RDS automatically starts your DB instance for you."
+  },
+  {
+   "uid": "aws-data-transfer-costs-az-region",
+   "first": "correct",
+   "second": "needs_fix",
+   "outcome": "disputed-unchanged"
+  },
+  {
+   "uid": "aws-cloudfront-cost-reduction",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/origin-shield.html",
+   "quote": "are consolidated with other requests for the same object, resulting in as few as one request going to your origin."
+  },
+  {
+   "uid": "aws-cloudwatch-alarm-vs-eventbridge-rule",
+   "first": "correct",
+   "second": "needs_fix",
+   "outcome": "disputed-unchanged"
+  },
+  {
+   "uid": "aws-sqs-fifo-vs-standard",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/quotas-messages.html",
+   "quote": "If you use batching, non-high throughput FIFO queues support up to 3,000 messages per second, per API action (SendMessage, ReceiveMessage, and DeleteMessage)."
+  },
+  {
+   "uid": "aws-api-gateway-rest-vs-http-vs-websocket",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-vs-rest.html",
+   "quote": "Choose REST APIs if you need features such as API keys, per-client throttling, request validation, AWS WAF integration, or private API endpoints."
+  },
+  {
+   "uid": "aws-appsync-graphql",
+   "first": "outdated",
+   "second": "outdated",
+   "outcome": "fixed+sourced",
+   "url": "https://docs.aws.amazon.com/appsync/latest/devguide/conflict-detection-and-sync.html",
+   "quote": "This feature allows clients to fetch all results from a DynamoDB table and subsequently retrieve only data altered since their last query.",
+   "edits": [
+    {
+     "before": "and Amplify DataStore clients generated from the schema give mobile apps offline sync.",
+     "after": "and sync operations on versioned DynamoDB data sources let a client that was offline fetch only the data changed since its last query."
+    }
+   ]
+  },
+  {
+   "uid": "aws-cloudwatch-logs-metric-filters-and-insights",
+   "first": "correct",
+   "second": "outdated",
+   "outcome": "disputed-unchanged"
+  },
+  {
+   "uid": "aws-cloudformation-vs-cdk-vs-elastic-beanstalk",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/cdk/v2/guide/home.html",
+   "quote": "Then, you deploy your CDK applications through AWS CloudFormation to provision or update your resources."
+  },
+  {
+   "uid": "aws-codedeploy-blue-green-lambda-ecs",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/codedeploy/latest/userguide/welcome.html",
+   "quote": "AWS Lambda and Amazon ECS deployments cannot use an in-place deployment type."
+  },
+  {
+   "uid": "aws-well-architected-pillars",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/wellarchitected/latest/framework/definitions.html",
+   "quote": "Security and operational excellence are generally not traded-off against the other pillars."
+  },
+  {
+   "uid": "aws-opensearch-use-cases",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/opensearch-service/latest/developerguide/what-is.html",
+   "quote": "OpenSearch is a fully open-source search and analytics engine for use cases such as log analytics, real-time application monitoring, and clickstream analysis."
+  },
+  {
+   "uid": "aws-s3-glacier-retrieval-tiers",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/restoring-objects-retrieval-options.html",
+   "quote": "Without provisioned capacity, Expedited retrievals might not be accepted during periods of high demand."
+  },
+  {
+   "uid": "aws-trusted-advisor",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/awssupport/latest/user/trusted-advisor.html",
+   "quote": "AWS Trusted Advisor checks are available to customers with an AWS Business Support+, AWS Enterprise Support, or AWS Unified Operations plan."
+  },
+  {
+   "uid": "aws-compute-optimizer-and-rightsizing",
+   "first": "outdated",
+   "second": "outdated",
+   "outcome": "fixed+sourced",
+   "url": "https://docs.aws.amazon.com/compute-optimizer/latest/ug/external-metrics-ingestion.html",
+   "quote": "ingest EC2 memory utilization metrics from one of the four observability products: Datadog, Dynatrace, Instana, and New Relic.",
+   "edits": [
+    {
+     "before": "Memory utilisation only counts when the CloudWatch agent is installed.",
+     "after": "Memory utilisation only counts when the CloudWatch agent reports it, or, for instances outside Auto Scaling groups, when external metrics ingestion pulls it from Datadog, Dynatrace, Instana or New Relic."
+    },
+    {
+     "before": "The trap is picking Trusted Advisor, which flags low-utilisation instances against fixed thresholds but does not suggest a target instance type.",
+     "after": "The trap is picking Trusted Advisor: its legacy low-utilisation check flags instances against fixed thresholds without a target type, and its newer EC2 cost check only relays Cost Optimization Hub actions, which need Compute Optimizer opted in anyway."
+    }
+   ]
+  },
+  {
+   "uid": "aws-application-migration-service-mgn",
+   "first": "correct",
+   "second": "correct",
+   "outcome": "sourced",
+   "url": "https://docs.aws.amazon.com/migrationhub/latest/ug/whatishub.html",
+   "quote": "AWS Migration Hub is no longer open to new customers as of November 7, 2025."
+  }
+ ]
+}

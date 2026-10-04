@@ -16,6 +16,8 @@ DECKS = ("aws-saa-c03", "claude-ccdv-f")
 DATASET_NAME = "seeded-v1"
 SEEDED_PATH = DATA_DIR / f"{DATASET_NAME}.jsonl"
 MUTATIONS_PATH = DATA_DIR / "mutations-v1.json"
+# seeded-v1 is frozen; deck corrections made after its cut keep their v1-era text here.
+V1_PINS_PATH = DATA_DIR / "seeded-v1-pins.json"
 
 # The six seeded-v1 defect classes in the fixed seeding order (contract §12.1).
 DEFECT_CLASSES_V1 = (
@@ -121,6 +123,21 @@ def dump_line(obj: Any) -> str:
 def load_exported_cards() -> dict[str, list[dict[str, Any]]]:
     """The exported cards per deck, in file order."""
     return {slug: read_jsonl(cards_path(slug)) for slug in DECKS}
+
+
+def load_v1_cards(pins_path: Path = V1_PINS_PATH) -> dict[str, list[dict[str, Any]]]:
+    """The exported cards with every seeded-v1 pin applied: the decks as seeded-v1 was cut from them."""
+    exported = load_exported_cards()
+    index = {(slug, card["sourceUid"]): card for slug, cards in exported.items() for card in cards}
+    with pins_path.open(encoding="utf-8") as fh:
+        pins = json.load(fh)["pins"]
+    for pin in pins:
+        card = index[(pin["deck"], pin["uid"])]
+        for field, value in pin["fields"].items():
+            if field not in card or field in ("sourceUid", "deckSlug", "stableUid", "source"):
+                raise ValueError(f"seeded-v1 pin {pin['deck']}/{pin['uid']}: cannot pin field {field!r}")
+            card[field] = value
+    return exported
 
 
 def load_mutations(path: Path = MUTATIONS_PATH) -> dict[str, Any]:

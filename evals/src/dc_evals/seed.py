@@ -28,6 +28,7 @@ from .dataset import (
     dump_line,
     load_exported_cards,
     load_mutations,
+    load_v1_cards,
 )
 from .mutations import (
     CONSTRUCTED_CLASSES,
@@ -73,7 +74,7 @@ def build_rows(
     exported_by_deck: dict[str, list[dict[str, Any]]] | None = None,
     templates: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    exported_by_deck = exported_by_deck if exported_by_deck is not None else load_exported_cards()
+    exported_by_deck = exported_by_deck if exported_by_deck is not None else load_v1_cards()
     templates = templates if templates is not None else load_mutations()
     rng = random.Random(templates["seed"])
     counts = templates["counts"]
