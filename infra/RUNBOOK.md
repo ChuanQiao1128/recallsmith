@@ -360,6 +360,59 @@ link to the new address) and the recipient ARN in `developercards-notifier-ses-s
 with `MessageRejected` until the owner clicks the new link. The plan shows every changed value as
 `(sensitive value)`; never print the plan JSON.
 
+### User-facing refusals (R28 MONITOR)
+
+Three alarms on the alerts topic for requests users are refused (user-perspective review 2026-10-04, G4),
+`treat_missing_data = notBreaching` (no traffic is not an outage; `developercards-prod-synthetic-check-failing`
+covers that). The HTTP API publishes no throttle metric (a throttled request is one more `4xx`) and cannot leave a
+caller out of `AWS/ApiGateway` `4xx` / `Count`, so they read log metric filters
+(`infra/modules/observability/alarms_r28.tf`; namespace `DeveloperCards`, no dimensions, 1 per matching line):
+
+| Metric | Log group | Counts |
+|---|---|---|
+| `ApiUserRequests` | `/aws/apigateway/developercards-api` | every access-log line except the synthetic check (`userAgent` `DeveloperCards-Synthetic/*`: its token-less `GET /api/v1/me` and `/api/v1/sync/progress` are 8 of the API's 4xx every hour by design) and the unmatched routes `ANY /{proxy+}` and `$default` (scanners and retired paths: 99 of their 106 requests in the 14 days to 2026-10-04 were 4xx) |
+| `ApiUser4xx` | the same | the same lines with a `4xx` status |
+| `Api429Responses` | the same | every `429`, any caller (the probe too), any route |
+| `CoreVpcAuthRejects` | `/aws/lambda/core-vpc` | `Auth.cs`'s warn lines `{"level":"warn","tag":"auth","reason":…,"traceId","method","path"}`: a bearer core-vpc verified itself (a route without a JWT authorizer, a direct invoke) and rejected, or an admin-group token that failed the console binding; the info line for a non-JWT bearer is not counted |
+
+Both stages write to the access log group and its line carries no stage, so `dev` counts too (1 request in the week
+to 2026-10-04). Reading the API access log needs `devcards-admin` (the read-only role is denied it by design);
+core-vpc's log is readable with `devcards-ro`.
+
+- `api-4xx-rate` — in one hour at least half of the app's and console's API requests got a 4xx (guards: ≥ 10
+  requests and ≥ 5 4xx in the hour). An authorizer, CORS or client change that refuses users. Replayed over the
+  14 days to 2026-10-04 it would have fired only at 2026-09-26 07:00 and 08:00 UTC (the console's CORS preflights
+  answered 401). First, which routes and statuses (Logs Insights, `/aws/apigateway/developercards-api`, the hour
+  of the alarm):
+  ```
+  filter status like /^4/ and userAgent not like /^DeveloperCards-Synthetic/ and routeKey != "ANY /{proxy+}" and routeKey != "$default"
+  | stats count(*) as n by routeKey, status, authorizerError
+  | sort n desc
+  ```
+  401 with an `authorizerError` on the JWT routes: the authorizers (issuer and audience in
+  `infra/modules/api/gateway.tf`, the pools; the `cognito-console` / `cognito-mobile` synthetic checks); 403
+  answered by core-vpc: an app policy (`AgentClientPolicy`, the console binding); many from one `ip`: one broken
+  client. Then what changed last: the newest Terraform apply (Actions → Terraform), CD deploy (Actions → CD) or OTA.
+- `api-429` — at least 3 responses were 429 in 15 minutes. Either a gateway throttle (`integrationLatency` is `-`:
+  core-vpc was never invoked) or an app limit core-vpc answered (`AI_QA_DAILY_CAP`, `REPORT_DAILY_LIMIT`, the
+  anonymous-funnel budget). Logs Insights: `filter status = "429" | fields routeKey, integrationLatency, userAgent | sort @timestamp desc | limit 50`.
+  Compare with `aws apigatewayv2 get-stage --api-id ktbq1sie2c --stage-name '$default' --query '{d:DefaultRouteSettings,r:RouteSettings}'`
+  and `route_throttles` / the stage default (200 rps, burst 400) in `gateway.tf`. A limit of 0 throttles every
+  request (the 2026-09-23 incident): revert the change that wrote it.
+- `core-vpc-auth-rejects` — core-vpc rejected at least 10 bearer tokens in 15 minutes (none in the 14 days to
+  2026-10-04). `aws logs filter-log-events --log-group-name /aws/lambda/core-vpc --filter-pattern '{ ($.tag = "auth") && ($.level = "warn") }' --start-time <epoch ms> --query 'events[].message'`
+  and count by `reason`: `jwks_unavailable` — core-vpc cannot fetch a pool's JWKS (the `cognito-*` synthetic
+  checks, Cognito's health in ap-southeast-2, core-vpc's egress); `expired`, `invalid`, `issuer`, `alg`, `kid`,
+  `unknown_kid`, `token_use` on one `path` — forged or stale tokens sent to a route without an authorizer (a scan;
+  nothing is granted: the request is anonymous and gets 401); `admin_issuer` / `admin_client` — an admin-group
+  token from the mobile pool or an app client missing from `AUTH_CONSOLE_CLIENT_IDS` (`src_C/env/prod.env.json`);
+  `unverified_jwt_enabled` — must never appear in production: `AUTH_ALLOW_UNVERIFIED=1` with `API_ENV` not
+  `production`; fix core-vpc's environment and redeploy at once.
+
+Cost ≈ USD 1.20/month: the four filters are free, their custom metrics USD 0.30 each for the hours they carry data
+(`Api429Responses` and `CoreVpcAuthRejects` normally none), the three alarms USD 0.40 (the rate alarm reads two
+metrics), and the api-availability 6-hour and 30-minute children one more metric each (USD 0.20).
+
 ## 8. Traces, SLOs and the synthetic check (R18H)
 
 ### Find a trace from a log line and back
@@ -413,15 +466,18 @@ multi-window (SRE workbook): fast = 1 h AND 5 min, slow = 6 h AND 30 min, so an 
 
 | SLO | SLI | Target | Window |
 |---|---|---|---|
-| api-availability | app API requests (API Gateway `Count`) without a `5xx`. The slow burn and the budget leave out the synthetic check's own requests (`GET /health`, and the `4xx` of `GET /api/v1/me`, which is the token-less probe's 401) through the detailed route metrics; the fast burn counts every request. Scheduled `/api/internal/*` callbacks that pass the gateway are counted. | 99.5 % | 28 days |
+| api-availability | app API requests (API Gateway `Count`) without a `5xx`. The slow burn and the budget leave out the synthetic check's own requests (`GET /health`, and the `4xx` of `GET /api/v1/me` and of `ANY /api/v1/sync/{proxy+}`, which are the token-less probes' 401s) through the detailed route metrics; the fast burn counts every request. Scheduled `/api/internal/*` callbacks that pass the gateway are counted. | 99.5 % | 28 days |
 | sync-latency | requests to `POST /api/v1/sync/push`, `GET /api/v1/sync/progress`, `POST /api/v1/draw-state/sync` served in ≤ 2000 ms (EMF `Latency` `PR(:2000)` weighted by `SampleCount`). This is **handler latency**: RouteMetrics times the core-vpc dispatch, so Lambda init / cold start is not in it. | 95 % | 28 days |
 | publish-success | publish jobs that end in success (`PublishJobsSucceeded` vs `PublishJobsFailed`) | 95 % | 28 days |
 
-The synthetic check sends 8 API requests an hour (4 × `GET /health`, 4 × `GET /api/v1/me` → 401). Counted as
-traffic, they would be ≈ 73 % of the availability denominator at 13–124 real requests a day, and the budget
-would read ≈ 100 % whatever users saw. That is why the slow burn and the budget subtract them. The 1-hour
-fast-burn guard is ≥ **16** requests, twice the probes' 8, so the probes alone never meet it and are at most
-half of the hour it measures. A synthetic-only outage in a quiet hour (4 of 8 probe requests 5xx) therefore
+The synthetic check sends 12 API requests an hour (4 × `GET /health`, 4 × `GET /api/v1/me` → 401, and since R28
+MONITOR 4 × `GET /api/v1/sync/progress` → 401). Counted as traffic, they would be most of the availability
+denominator at 13–124 real requests a day, and the budget would read ≈ 100 % whatever users saw. That is why the
+slow burn and the budget subtract them. The 1-hour fast-burn guard is ≥ **24** requests (≥ 16 before R28),
+twice the probes' 12, so the probes alone never meet it and are at most half of the hour it measures
+(`slo_probe_api_requests_per_hour` in `slo_r18h.tf`; `services/synthetic-check/tests/test_infra_contract.py`
+fails when the probe's API checks and these numbers drift apart). A synthetic-only outage in a quiet hour (the
+probe's own requests 5xx) therefore
 pages through `developercards-prod-synthetic-check-failing` (≈ 30 minutes), which is the alarm built for the
 "no real traffic" case, and not through the SLO alarms.
 
@@ -439,7 +495,7 @@ is rare but live, the slow burn is live.
 |---|---|---|---|
 | `developercards-prod-slo-api-availability-fast-burn` | composite: the 1-hour **and** 5-minute availability burn are both ≥ 14.4 | yes | 1. `API 5xx by route (top 10)` on the dashboard (or run `SEARCH('{AWS/ApiGateway,ApiId,Method,Resource,Stage} MetricName="5xx" ApiId="ktbq1sie2c" Stage="$default"', 'Sum', 300)` in the metrics console); 2. core-vpc errors / throttles (`developercards-prod-core-vpc-errors`, `-core-vpc-throttles`); 3. recent deploys (`aws lambda list-aliases --function-name core-vpc`) |
 | `developercards-prod-slo-api-availability-slow-burn` | composite: the 6-hour **and** 30-minute availability burn, synthetic check excluded, are both ≥ 6; actions suppressed while the fast burn is in ALARM and 30 minutes after | yes | same three as the fast burn; also RDS CPU / connections |
-| `developercards-prod-slo-api-availability-burn-1h` | child: 1-hour burn ≥ 14.4 (≥ 16 requests, ≥ 2 5xx; all requests) | never | only read as part of the composite |
+| `developercards-prod-slo-api-availability-burn-1h` | child: 1-hour burn ≥ 14.4 (≥ 24 requests, ≥ 2 5xx; all requests) | never | only read as part of the composite |
 | `developercards-prod-slo-api-availability-burn-5m` | child: 5-minute burn ≥ 14.4 | never | only read as part of the composite |
 | `developercards-prod-slo-api-availability-burn-6h` | child: 6-hour burn ≥ 6 (≥ 30 requests, ≥ 3 5xx; synthetic check excluded) | never | only read as part of the composite |
 | `developercards-prod-slo-api-availability-burn-30m` | child: 30-minute burn ≥ 6 (synthetic check excluded) | never | only read as part of the composite |
@@ -510,11 +566,17 @@ Replaced and kept:
 ### Synthetic check
 
 `developercards-synthetic-check` runs every 15 minutes (schedule `developercards-synthetic-check`, input
-`{"job":"synthetic-check"}`) and runs five checks in order: `api-health` (`GET /health`), `cdn-manifest`
+`{"job":"synthetic-check"}`) and runs nine checks in order: `api-health` (`GET /health`), `cdn-manifest`
 (the app's content manifest), `cdn-deck` (the first public live deck, SHA-256 checked), `console-index`
-(the console's HTML) and `api-auth-guard` (`GET /api/v1/me` without a token must be exactly 401). It emits
-`SyntheticCheckSuccess` (1 when all five pass) and `SyntheticCheckLatency`; the EMF line lists the failed
-checks with a code:
+(the console's HTML), `api-auth-guard` (`GET /api/v1/me` without a token must be exactly 401) and, since R28
+MONITOR (2026-10-04; no account, no new IAM, every URL public): `api-sync-guard` (`GET /api/v1/sync/progress`
+without a token must be exactly 401: the app's sync route is served and guarded), `remote-config` (the
+document the app reads at every cold start, `mobile/App.tsx` `REMOTE_CONFIG_URL` on raw.githubusercontent.com:
+200, JSON and the schema rules in `services/synthetic-check/README.md`), `cognito-console` and `cognito-mobile`
+(each pool's OIDC discovery document names its own issuer and JWKS URL, and the JWKS holds an RS256 signing
+key). It emits `SyntheticCheckSuccess` (1 when every check passes) and `SyntheticCheckLatency`; the EMF line
+lists the failed checks with a code, and the R28 checks with a `detail` (a rule id such as `ios.updateUrl`,
+`features.paywall.hidden`, `discovery`, `jwks.rs256`; never a value from the response):
 
 | Code | Meaning |
 |---|---|
@@ -523,10 +585,28 @@ checks with a code:
 | `NETWORK` | DNS, TLS or connection failure |
 | `BAD_BODY` | the body is not the expected JSON / HTML |
 | `HASH_MISMATCH` | the deck's SHA-256 differs from the manifest |
-| `TOO_LARGE` | body over the size cap (1 MiB manifest, 5 MiB deck) |
+| `TOO_LARGE` | body over the size cap (1 MiB manifest, 5 MiB deck, 64 KiB remote config and Cognito documents) |
 | `NO_PUBLIC_DECK` | the manifest failed or lists no public live deck |
 | `CONFIG` | a base URL in the environment is not `https://` |
 | `ERROR` | an unexpected exception inside the check |
+
+First checks for the R28 checks:
+
+- `api-sync-guard` `HTTP_STATUS` with status 200 or 403: the sync route lost its JWT authorizer (gateway.tf
+  `routes.sync`), every caller reaches core-vpc. 429: a throttle (`developercards-prod-api-429` fires too). 5xx:
+  the API is down (`api-health` fails too).
+- `remote-config` `BAD_BODY`: open the document
+  (`curl -s https://raw.githubusercontent.com/ChuanQiao1128/recallsmith-mobile-config/refs/heads/main/recallsmith-config.json`),
+  fix the field the `detail` names in the config repository (`ios.minAboveLatest`: raise `latestVersion` with
+  `minSupportedVersion`; `ios.updateUrl`: only `https://apps.apple.com/…`). An `updateUrl` that is not the App
+  Store, or a change nobody made, is a security incident: check the config repository's history first.
+  `HTTP_STATUS` / `NETWORK` / `TIMEOUT`: GitHub raw is unreachable; the app keeps its last good copy, so this
+  is not a user outage by itself (githubstatus.com).
+- `cognito-console` / `cognito-mobile`: `detail` `discovery` or `jwks` with a transport code is a Cognito
+  regional problem (AWS Health Dashboard, ap-southeast-2): users cannot sign in. `discovery.issuer` /
+  `discovery.jwks_uri` / `jwks.*`: the pool answers something unexpected; check the pool still exists
+  (`aws cognito-idp describe-user-pool --user-pool-id <pool id>`) and that `COGNITO_*_ISSUER` in
+  `services/synthetic-check/env/prod.env.json` names it.
 
 One supervised run (after a deploy, or to confirm a fix):
 `aws lambda invoke --function-name developercards-synthetic-check:prod --payload '{"job":"synthetic-check"}' --cli-binary-format raw-in-base64-out /dev/stdout`
@@ -794,7 +874,8 @@ of order, a re-run of an old CI run) deploys nothing older: CD never deploys bac
 `scripts/smoke.sh`, up to 3 attempts per check 15 s apart: (1) `GET https://api.developercards.app/health` → 200 and
 `"ok": true`; (2) `aws lambda invoke --function-name developercards-synthetic-check:prod --payload
 '{"job":"synthetic-check"}'` → `{"ok": true, "failed": []}` (api-health, cdn-manifest, cdn-deck, console-index,
-api-auth-guard; §8). The CD role may invoke only that alias.
+api-auth-guard, api-sync-guard, remote-config, cognito-console, cognito-mobile; §8). The CD role may invoke only
+that alias.
 
 The deploy job runs it twice: once **before** the restore point (the baseline, never fails the job; a red baseline is
 a warning on the run) and once after the deploy with `SMOKE_BASELINE`. After the deploy a check fails (and rolls

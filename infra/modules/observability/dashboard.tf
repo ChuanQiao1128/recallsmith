@@ -203,6 +203,7 @@ locals {
           ["AWS/ApiGateway", "Count", "ApiId", var.api_id, "Stage", var.api_stage_name, "Resource", "/health", "Method", "GET", { stat = "Sum", id = "hc", visible = false }],
           ["AWS/ApiGateway", "5xx", "ApiId", var.api_id, "Stage", var.api_stage_name, "Resource", "/health", "Method", "GET", { stat = "Sum", id = "h5xx", visible = false }],
           ["AWS/ApiGateway", "4xx", "ApiId", var.api_id, "Stage", var.api_stage_name, "Resource", "/api/v1/me", "Method", "GET", { stat = "Sum", id = "m4xx", visible = false }],
+          ["AWS/ApiGateway", "4xx", "ApiId", var.api_id, "Stage", var.api_stage_name, "Resource", "/api/v1/sync/{proxy+}", "Method", "ANY", { stat = "Sum", id = "s4xx", visible = false }],
           [{ expression = local.slo_api_user_total, label = "requests in window, synthetic check excluded (budget counts from ${local.slo_budget_min_events.api})", id = "user_total" }],
           [{ expression = local.slo_api_user_bad, id = "user_bad", visible = false }],
           [{ expression = "IF(user_total >= ${local.slo_budget_min_events.api}, 100 * (1 - (user_bad / user_total) / 0.005), 100)", label = "API availability budget remaining % (synthetic check excluded)", id = "budget" }],
@@ -375,6 +376,30 @@ locals {
         metrics = [
           [{ expression = "SORT(SEARCH('{AWS/ApiGateway,ApiId,Method,Resource,Stage} MetricName=\"5xx\" ApiId=\"${var.api_id}\" Stage=\"${var.api_stage_name}\"', 'Sum', 300), SUM, DESC, 10)", label = "5xx by route", id = "top5xx" }],
         ]
+      }
+    },
+    {
+      # R28 MONITOR (alarms_r28.tf): the 4xx rate the api-4xx-rate alarm reads, beside the 429s and core-vpc's
+      # bearer rejects; hourly like that alarm.
+      type   = "metric"
+      x      = 12
+      y      = 48
+      width  = 12
+      height = 6
+      properties = {
+        region  = var.region
+        view    = "timeSeries"
+        stacked = false
+        period  = 3600
+        title   = "API 4xx rate (users) / 429 / core-vpc auth rejects"
+        metrics = [
+          [var.metrics_namespace, "ApiUserRequests", { stat = "Sum", id = "req", visible = false }],
+          [var.metrics_namespace, "ApiUser4xx", { stat = "Sum", id = "e4xx", visible = false }],
+          [{ expression = "100 * FILL(e4xx, 0) / req", label = "4xx rate % (synthetic check, unmatched routes excluded)", id = "rate" }],
+          [var.metrics_namespace, "Api429Responses", { stat = "Sum", id = "e429", yAxis = "right" }],
+          [var.metrics_namespace, "CoreVpcAuthRejects", { stat = "Sum", id = "authrej", yAxis = "right" }],
+        ]
+        annotations = { horizontal = [{ label = "api-4xx-rate alarm (50 %)", value = 50 }] }
       }
     },
     {

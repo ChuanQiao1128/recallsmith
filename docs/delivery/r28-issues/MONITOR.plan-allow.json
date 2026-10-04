@@ -1,0 +1,38 @@
+{
+  "tags_only_updates": false,
+  "changes": {
+    "module.observability.aws_cloudwatch_log_metric_filter.api_user_requests": "create",
+    "module.observability.aws_cloudwatch_log_metric_filter.api_user_4xx": "create",
+    "module.observability.aws_cloudwatch_log_metric_filter.api_429": "create",
+    "module.observability.aws_cloudwatch_log_metric_filter.core_vpc_auth_rejects": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.api_4xx_rate": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.api_429": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.core_vpc_auth_rejects": "create",
+    "module.observability.aws_cloudwatch_metric_alarm.slo_api_availability_burn_1h": {
+      "action": "update",
+      "keys": [
+        "alarm_description",
+        "metric_query"
+      ]
+    },
+    "module.observability.aws_cloudwatch_metric_alarm.slo_api_availability_burn_6h": {
+      "action": "update",
+      "keys": [
+        "metric_query"
+      ]
+    },
+    "module.observability.aws_cloudwatch_metric_alarm.slo_api_availability_burn_30m": {
+      "action": "update",
+      "keys": [
+        "metric_query"
+      ]
+    },
+    "module.observability.aws_cloudwatch_dashboard.prod": {
+      "action": "update",
+      "keys": [
+        "dashboard_body"
+      ]
+    }
+  },
+  "_note": "R28 MONITOR (user-perspective review 2026-10-04 G3/G4): expect PLAN OK 11 (7 create, 4 update, nothing else, no output change). Creates: the API access-log metric filters ApiUserRequests / ApiUser4xx (synthetic check by User-Agent and the unmatched routes ANY /{proxy+} and $default left out) and Api429Responses, the core-vpc log metric filter CoreVpcAuthRejects (Auth.cs warn lines tag=auth), and the alarms developercards-prod-api-4xx-rate, -api-429 and -core-vpc-auth-rejects on developercards-alerts. Updates: the api-availability SLO also subtracts the synthetic check's new token-less GET /api/v1/sync/progress (4xx of ANY /api/v1/sync/{proxy+}) in the 6-hour and 30-minute children and the budget widget, the 1-hour fast-burn guard moves from >= 16 to >= 24 requests (twice the probe's 12 API requests an hour), and the dashboard gains the R28 widget. The synthetic check's create-time environment in envs/prod/main.tf gains three keys for parity with its env file; the function ignores environment, so it plans no change. Apply after the synthetic-check deploy that adds the sync probe (or in either order: before it, the SLO subtracts a route the probe does not call yet, and the api-4xx-rate filters already leave the probe out by User-Agent)."
+}
