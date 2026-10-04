@@ -279,6 +279,10 @@ public sealed class AnonymousCardReportsTests : IDisposable
     yield return JsonSerializer.Serialize(new { deckSlug = "deck", stableUid = "uid", reason = "typo" });
     yield return JsonSerializer.Serialize(new { deckSlug = "deck", stableUid = "uid", reason = "typo", appVersion = "2.0" });
     yield return JsonSerializer.Serialize(new { deckSlug = "deck", stableUid = "uid", reason = "typo", appVersion = "2.0.0 (24)" });
+    // .NET traps: $ matches before a final "\n" and \d matches any Unicode digit (ANONREPORT-R3).
+    yield return JsonSerializer.Serialize(new { deckSlug = "deck", stableUid = "uid", reason = "typo", appVersion = "2.0.0\n" });
+    yield return JsonSerializer.Serialize(new { deckSlug = "deck", stableUid = "uid", reason = "typo", appVersion = "\u0662.\u0660.\u0660" });
+    yield return JsonSerializer.Serialize(new { deckSlug = "deck", stableUid = "uid", reason = "typo", appVersion = "\uFF12.0.0" });
     // Free text, identifiers and anything else the route does not know are refused, not dropped.
     yield return JsonSerializer.Serialize(new { deckSlug = "deck", stableUid = "uid", reason = "typo", appVersion = AppVersion, note = "x" });
     yield return JsonSerializer.Serialize(new { deckSlug = "deck", stableUid = "uid", reason = "typo", appVersion = AppVersion, note = (string?)null });

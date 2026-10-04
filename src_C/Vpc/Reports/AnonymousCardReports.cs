@@ -47,7 +47,9 @@ public static class AnonymousCardReports
   /// <summary>The body keys this route accepts; any other key is refused so free text cannot arrive by mistake.</summary>
   public static readonly IReadOnlyList<string> Fields = ["deckSlug", "stableUid", "reason", "appVersion"];
 
-  private static readonly Regex AppVersionRegex = new(@"^\d+\.\d+\.\d+$", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(50));
+  // ASCII digits and \z, not \d and $: in .NET \d matches any Unicode digit (e.g. Arabic-Indic) and $ also matches
+  // before a final "\n", so "2.0.0\n" or 2.0.0 in Arabic-Indic digits would reach client_version (R28 ANONREPORT-R3).
+  private static readonly Regex AppVersionRegex = new(@"^[0-9]+\.[0-9]+\.[0-9]+\z", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(50));
 
   /// <summary>The clock of the request budget and the cap line. Internal so a test can move "now".</summary>
   internal static Func<DateTime> UtcNow = () => DateTime.UtcNow;

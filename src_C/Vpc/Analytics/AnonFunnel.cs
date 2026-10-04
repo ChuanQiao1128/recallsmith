@@ -72,7 +72,9 @@ public static class AnonFunnel
 
   public static readonly string[] Platforms = ["ios", "android"];
 
-  private static readonly Regex AppVersionRegex = new(@"^\d+\.\d+\.\d+$", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(50));
+  // ASCII digits and \z, not \d and $: "1.9.0\n" and non-ASCII digits are refused (R28 ANONREPORT-R3, same rule as
+  // AnonymousCardReports).
+  private static readonly Regex AppVersionRegex = new(@"^[0-9]+\.[0-9]+\.[0-9]+\z", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(50));
 
   /// <summary>The clock of the day window, the budget and the retention delete. Internal so a test can move "now".</summary>
   internal static Func<DateTime> UtcNow = () => DateTime.UtcNow;
