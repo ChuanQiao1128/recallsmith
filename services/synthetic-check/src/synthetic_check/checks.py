@@ -48,6 +48,13 @@ CHECK_NAMES = (
     "cognito-mobile",
 )
 
+# Checks whose failure is not an outage of ours, so they stay out of SyntheticCheckSuccess, the handler's `ok` /
+# `failed` (the CD smoke) and the paging alarm developercards-<env>-synthetic-check-failing. remote-config is served
+# by a third party (raw.githubusercontent.com) and the app keeps its last good copy when it cannot read it; a failure
+# there must not hold that alarm in ALARM and hide a real API, CDN, console or Cognito outage behind it. It has its
+# own metric (emf.ADVISORY_METRICS) and alarm (infra alarms_r28.tf synthetic_remote_config_failing).
+ADVISORY_CHECKS = frozenset({"remote-config"})
+
 HTTP_STATUS = "HTTP_STATUS"
 TIMEOUT = "TIMEOUT"
 NETWORK = "NETWORK"
@@ -315,7 +322,6 @@ DETAILS = frozenset(
         "json",
         "ios",
         *(f"ios.{key}" for key in REMOTE_IOS_KEYS),
-        "ios.minAboveLatest",
         "features",
         "features.unknown",
         *(f"features.{name}" for name in REMOTE_FEATURES),
@@ -328,11 +334,6 @@ DETAILS = frozenset(
         "jwks.rs256",
     ]
 )
-
-
-def _version(value: str) -> tuple[int, int, int]:
-    parts = [int(p) for p in value.split(".")] + [0, 0]
-    return parts[0], parts[1], parts[2]
 
 
 def remote_config_problem(doc: object) -> str | None:
@@ -348,22 +349,17 @@ def remote_config_problem(doc: object) -> str | None:
             value = ios.get(key)
             if value is not None and not isinstance(value, str):
                 return f"ios.{key}"
-        for key in ("minSupportedVersion", "latestVersion"):
-            value = (ios.get(key) or "").strip()
-            if value and not _VERSION.fullmatch(value):
-                return f"ios.{key}"
+        # The version gate compares minSupportedVersion (remoteConfig.ts resolveIosUpdate, compareSemver).
+        # latestVersion is only trimmed and returned, never used to gate or shown, so it needs only to be a string.
+        floor = (ios.get("minSupportedVersion") or "").strip()
+        if floor and not _VERSION.fullmatch(floor):
+            return "ios.minSupportedVersion"
         update_url = (ios.get("updateUrl") or "").strip()
         if update_url and not update_url.startswith(APP_STORE_URL_PREFIX):
             return "ios.updateUrl"
         store_id = (ios.get("appStoreId") or "").strip()
         if store_id and not _DIGITS.fullmatch(store_id):
             return "ios.appStoreId"
-        floor = (ios.get("minSupportedVersion") or "").strip()
-        latest = (ios.get("latestVersion") or "").strip()
-        # A floor above the newest version gates users onto a version that does not exist; raise latestVersion
-        # together with minSupportedVersion.
-        if floor and latest and _version(floor) > _version(latest):
-            return "ios.minAboveLatest"
     features = doc.get("features")
     if features is not None:
         if not isinstance(features, dict):

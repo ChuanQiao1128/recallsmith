@@ -62,12 +62,12 @@ run "access_log_metric_filters" {
   }
 
   assert {
-    condition     = aws_cloudwatch_log_metric_filter.api_user_requests.pattern == "{ ($.userAgent != \"DeveloperCards-Synthetic/*\") && ($.routeKey != \"ANY /{proxy+}\") && ($.routeKey != \"$default\") }"
-    error_message = "ApiUserRequests must leave out the synthetic check (by User-Agent) and the unmatched routes"
+    condition     = aws_cloudwatch_log_metric_filter.api_user_requests.pattern == "{ ($.userAgent != \"DeveloperCards-Synthetic/*\") && ($.routeKey != \"ANY /{proxy+}\") && ($.routeKey != \"$default\") && ($.routeKey != \"POST /api/internal/*\") && ($.routeKey != \"GET /api/v1/internal/*\") && ($.routeKey != \"POST /api/v1/internal/*\") && ($.routeKey != \"POST /webhooks/*\") && ($.routeKey != \"POST /api/v1/authoring/automation/runner/*\") }"
+    error_message = "ApiUserRequests must leave out the synthetic check (by User-Agent), the unmatched routes and the server-to-server callbacks (R28 review F1)"
   }
 
   assert {
-    condition     = aws_cloudwatch_log_metric_filter.api_user_4xx.pattern == "{ ($.status = \"4*\") && ($.userAgent != \"DeveloperCards-Synthetic/*\") && ($.routeKey != \"ANY /{proxy+}\") && ($.routeKey != \"$default\") }"
+    condition     = aws_cloudwatch_log_metric_filter.api_user_4xx.pattern == "{ ($.status = \"4*\") && ($.userAgent != \"DeveloperCards-Synthetic/*\") && ($.routeKey != \"ANY /{proxy+}\") && ($.routeKey != \"$default\") && ($.routeKey != \"POST /api/internal/*\") && ($.routeKey != \"GET /api/v1/internal/*\") && ($.routeKey != \"POST /api/v1/internal/*\") && ($.routeKey != \"POST /webhooks/*\") && ($.routeKey != \"POST /api/v1/authoring/automation/runner/*\") }"
     error_message = "ApiUser4xx must be the 4xx of exactly the requests ApiUserRequests counts"
   }
 
@@ -163,14 +163,14 @@ run "refusal_alarms" {
   assert {
     condition = length([for q in aws_cloudwatch_metric_alarm.api_4xx_rate.metric_query : q
       if q.id == "rate" && q.return_data == true &&
-    q.expression == "IF(FILL(req, 0) >= 10 AND FILL(e4xx, 0) >= 5, 100 * FILL(e4xx, 0) / FILL(req, 0), 0)"]) == 1
-    error_message = "api-4xx-rate is a ratio of 4xx to requests with the >= 10 request and >= 5 4xx guards"
+    q.expression == "IF(FILL(req, 0) >= 5 AND FILL(e4xx, 0) >= 5, 100 * FILL(e4xx, 0) / FILL(req, 0), 0)"]) == 1
+    error_message = "api-4xx-rate is a ratio of 4xx to requests with the >= 5 request and >= 5 4xx guards"
   }
 
   assert {
     condition = toset([for q in aws_cloudwatch_metric_alarm.api_4xx_rate.metric_query : "${q.id}:${q.metric[0].metric_name}:${q.metric[0].period}:${q.metric[0].stat}"
-    if length(q.metric) > 0]) == toset(["req:ApiUserRequests:3600:Sum", "e4xx:ApiUser4xx:3600:Sum"])
-    error_message = "api-4xx-rate reads the hourly sums of the two access-log metrics"
+    if length(q.metric) > 0]) == toset(["req:ApiUserRequests:10800:Sum", "e4xx:ApiUser4xx:10800:Sum"])
+    error_message = "api-4xx-rate reads the three-hour sums of the two access-log metrics (R28 review F1: hourly could not see users at 2026-10 traffic)"
   }
 
   assert {
@@ -215,5 +215,43 @@ run "slo_leaves_out_the_synthetic_checks_requests" {
     condition = length([for w in jsondecode(aws_cloudwatch_dashboard.prod.dashboard_body).widgets : w
     if w.x == 12 && w.y == 48 && w.width == 12 && w.properties.title == "API 4xx rate (users) / 429 / core-vpc auth rejects"]) == 1
     error_message = "the R28 widget sits beside API 5xx by route"
+  }
+}
+
+run "remote_config_has_its_own_alarm" {
+  command = plan
+
+  assert {
+    condition = (
+      aws_cloudwatch_metric_alarm.synthetic_remote_config_failing.alarm_name == "developercards-prod-synthetic-remote-config-failing" &&
+      aws_cloudwatch_metric_alarm.synthetic_remote_config_failing.namespace == "DeveloperCards" &&
+      aws_cloudwatch_metric_alarm.synthetic_remote_config_failing.metric_name == "SyntheticRemoteConfigSuccess" &&
+      aws_cloudwatch_metric_alarm.synthetic_remote_config_failing.dimensions == tomap({ Service = "synthetic-check" }) &&
+      aws_cloudwatch_metric_alarm.synthetic_remote_config_failing.statistic == "Maximum" &&
+      aws_cloudwatch_metric_alarm.synthetic_remote_config_failing.comparison_operator == "LessThanThreshold" &&
+      aws_cloudwatch_metric_alarm.synthetic_remote_config_failing.threshold == 1 &&
+      aws_cloudwatch_metric_alarm.synthetic_remote_config_failing.period == 900 &&
+      aws_cloudwatch_metric_alarm.synthetic_remote_config_failing.evaluation_periods == 2 &&
+      aws_cloudwatch_metric_alarm.synthetic_remote_config_failing.datapoints_to_alarm == 2 &&
+      aws_cloudwatch_metric_alarm.synthetic_remote_config_failing.treat_missing_data == "notBreaching" &&
+      aws_cloudwatch_metric_alarm.synthetic_remote_config_failing.actions_enabled != false &&
+      aws_cloudwatch_metric_alarm.synthetic_remote_config_failing.alarm_actions == toset(["arn:aws:sns:ap-southeast-2:000000000000:developercards-alerts"]) &&
+      aws_cloudwatch_metric_alarm.synthetic_remote_config_failing.ok_actions == toset(["arn:aws:sns:ap-southeast-2:000000000000:developercards-alerts"])
+    )
+    error_message = "remote-config: two failed runs in a row on its own metric, missing data not breaching, on the alerts topic (R28 review F2)"
+  }
+
+  assert {
+    condition = (
+      aws_cloudwatch_metric_alarm.synthetic_check_failing.metric_name == "SyntheticCheckSuccess" &&
+      aws_cloudwatch_metric_alarm.synthetic_check_failing.treat_missing_data == "breaching"
+    )
+    error_message = "the paging synthetic alarm keeps reading SyntheticCheckSuccess, which leaves remote-config out"
+  }
+
+  assert {
+    condition = length([for w in jsondecode(aws_cloudwatch_dashboard.prod.dashboard_body).widgets : w
+    if w.properties.title == "Synthetic check success" && strcontains(jsonencode(w), "SyntheticRemoteConfigSuccess")]) == 1
+    error_message = "the synthetic success widget shows the remote-config metric too"
   }
 }

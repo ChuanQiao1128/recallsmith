@@ -36,7 +36,8 @@ def test_every_rule_id_is_a_known_detail() -> None:
     docs: list[object] = [
         None,
         {"ios": 1},
-        {"ios": {"minSupportedVersion": "9.0.0", "latestVersion": "1.0.0"}},
+        {"ios": {"minSupportedVersion": "9.0"}},
+        {"ios": {"minSupportedVersion": "9.0.0-rc1"}},
         {"features": 1},
         {"features": {"x": 1}},
         *({"ios": {key: 1}} for key in REMOTE_IOS_KEYS),
@@ -45,4 +46,5 @@ def test_every_rule_id_is_a_known_detail() -> None:
     ]
     for doc in docs:
         problem = remote_config_problem(doc)
-        assert problem in DETAILS, (doc, problem)
+        assert problem is None or problem in DETAILS, (doc, problem)
+    assert remote_config_problem({"ios": {"minSupportedVersion": "9.0.0-rc1"}}) == "ios.minSupportedVersion"

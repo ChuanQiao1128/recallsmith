@@ -4,6 +4,8 @@
   User-Agent prefix: CHECK_USER_AGENT must start with it, or the probe's by-design 401s count as users' 4xx.
 - infra/modules/observability/slo_r18h.tf subtracts the probe's API routes from the api-availability SLO and sets the
   1-hour fast-burn guard to twice the probe's API requests per hour: both follow the checks that call API_BASE.
+- infra/modules/observability/alarms_r28.tf alarms on each advisory check's own metric (emf.ADVISORY_METRICS), and
+  the paging alarm alarms_r18h.tf keeps reading SyntheticCheckSuccess, which leaves the advisory checks out.
 """
 
 from __future__ import annotations
@@ -12,7 +14,7 @@ import json
 import re
 from pathlib import Path
 
-from synthetic_check import checks
+from synthetic_check import checks, emf
 
 REPO = Path(__file__).resolve().parents[3]
 OBSERVABILITY = REPO / "infra" / "modules" / "observability"
@@ -56,3 +58,12 @@ def test_the_fast_burn_guard_is_twice_the_probes_api_requests() -> None:
     assert int(match.group(1)) == SCHEDULE_RUNS_PER_HOUR * len(API_CHECKS)
     schedule = (REPO / "infra" / "modules" / "worker" / "synthetic.tf").read_text()
     assert re.search(r'schedule_expression\s*=\s*"rate\(15 minutes\)"', schedule)
+
+
+def test_each_advisory_check_has_its_own_alarm() -> None:
+    tf = (OBSERVABILITY / "alarms_r28.tf").read_text()
+    assert set(emf.ADVISORY_METRICS) == set(checks.ADVISORY_CHECKS)
+    for metric in emf.ADVISORY_METRICS.values():
+        assert re.search(rf'metric_name\s*=\s*"{metric}"\n\s*statistic\s*=\s*"Maximum"\n\s*dimensions\s*=\s*\{{ Service = "{emf.SERVICE}" \}}', tf), metric
+    paging = (OBSERVABILITY / "alarms_r18h.tf").read_text()
+    assert f'metric_name         = "{emf.SUCCESS}"' in paging

@@ -130,7 +130,11 @@ def test_handler_writes_the_emf_line_when_the_deadline_is_hit(
     monkeypatch.setattr(checks, "RUN_DEADLINE_S", 0.3)
     monkeypatch.setattr(checks, "check_api_health", stalled)
     started = time.monotonic()
-    assert handler.lambda_handler({"job": "synthetic-check"}, None) == {"ok": False, "failed": list(CHECK_NAMES)}
+    assert handler.lambda_handler({"job": "synthetic-check"}, None) == {
+        "ok": False,
+        "failed": [name for name in CHECK_NAMES if name != "remote-config"],
+        "advisoryFailed": ["remote-config"],
+    }
     assert time.monotonic() - started < 1.5
     emf_lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if "_aws" in line]
     assert len(emf_lines) == 1

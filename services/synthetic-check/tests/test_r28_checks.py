@@ -78,6 +78,10 @@ def test_remote_config_passes_on_the_live_shape_and_on_empty_sections(fake_site:
         {"features": {"paywall": None, "sentry": {"enabled": None}}},
         # A flag only a newer app reads, and an unknown leaf on a known flag, are allowed.
         {"features": {"brandNewFlag": {"enabled": True}, "fsrs": {"enabled": True, "newLeaf": "x"}}},
+        # F3 (R28 review): latestVersion is trimmed and returned by resolveIosUpdate but never gates or shows
+        # anything, so a floor above it (1.9.0 over the live 1.3.0 after 2.0.0 ships) or any string is fine.
+        {"ios": {**remote_config()["ios"], "minSupportedVersion": "1.9.0", "latestVersion": "1.3.0"}},
+        {"ios": {**remote_config()["ios"], "latestVersion": "2.0.0 (24)"}},
     ):
         result = _config_result(fake_site, doc)
         assert result.ok, (doc, result)
@@ -93,7 +97,7 @@ def test_remote_config_rules(fake_site: FakeSite) -> None:
         ({"ios": {**ios, "minSupportedVersion": 2}}, "ios.minSupportedVersion"),
         ({"ios": {**ios, "minSupportedVersion": "two"}}, "ios.minSupportedVersion"),
         ({"ios": {**ios, "minSupportedVersion": "1.3.0-beta"}}, "ios.minSupportedVersion"),
-        ({"ios": {**ios, "latestVersion": "1.3.0.1"}}, "ios.latestVersion"),
+        ({"ios": {**ios, "latestVersion": 130}}, "ios.latestVersion"),
         ({"ios": {**ios, "updateUrl": "https://example.com/phish"}}, "ios.updateUrl"),
         ({"ios": {**ios, "updateUrl": "http://apps.apple.com/app/id1"}}, "ios.updateUrl"),
         ({"ios": {**ios, "updateUrl": "https://apps.apple.com.evil.example/app"}}, "ios.updateUrl"),
@@ -101,8 +105,6 @@ def test_remote_config_rules(fake_site: FakeSite) -> None:
         ({"ios": {**ios, "appStoreId": "id6756"}}, "ios.appStoreId"),
         ({"ios": {**ios, "appStoreId": 6756044885}}, "ios.appStoreId"),
         ({"ios": {**ios, "message": ["a"]}}, "ios.message"),
-        ({"ios": {**ios, "minSupportedVersion": "2.0.0", "latestVersion": "1.9.9"}}, "ios.minAboveLatest"),
-        ({"ios": {**ios, "minSupportedVersion": "1.10", "latestVersion": "1.9"}}, "ios.minAboveLatest"),
         ({"features": []}, "features"),
         ({"features": {"paywall": True}}, "features.paywall"),
         ({"features": {"paywall": {"hidden": "true"}}}, "features.paywall.hidden"),

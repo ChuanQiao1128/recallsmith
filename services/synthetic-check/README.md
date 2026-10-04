@@ -26,9 +26,11 @@ Synthetics canary: see H00 §5.1.
    budget, so a DNS stall or a slow-drip body cannot hold the run. A check still running at the
    deadline, and every check not yet started, is `TIMEOUT` (never-started checks with `ms` 0 and
    no request sent).
-4. One EMF line, one `synthetic-run` log line (`info` when all pass, else `warn`, with `ok` and
-   `failedChecks`), and the return value `{"ok": bool, "failed": [check names in order]}`.
-   The handler never raises.
+4. One EMF line, one `synthetic-run` log line (`info` when all pass, else `warn`, with `ok`,
+   `failedChecks` and `advisoryFailed`), and the return value
+   `{"ok": bool, "failed": [check names in order], "advisoryFailed": [...]}`. `ok` and `failed` leave out
+   the advisory check `remote-config` (below), so `scripts/smoke.sh` (`ok` true, `failed` empty) never
+   rolls a deploy back over GitHub raw. The handler never raises.
 
 ## The checks
 
@@ -54,14 +56,19 @@ with the first broken rule as `detail`:
 |---|---|
 | `json` | the body is a JSON object |
 | `ios` | `ios`, when present, is an object |
-| `ios.<key>` | each of `minSupportedVersion`, `latestVersion`, `updateUrl`, `appStoreId`, `message`, when present, is a string (the app calls `.trim()` on them); the two versions are 1–3 dot-separated numbers; `updateUrl`, when not blank, starts with `https://apps.apple.com/` (report G10: the only place a gated user may be sent); `appStoreId`, when not blank, is digits |
-| `ios.minAboveLatest` | `minSupportedVersion` is not above `latestVersion` (raise both together, or every gated user is sent to a version that does not exist) |
+| `ios.<key>` | each of `minSupportedVersion`, `latestVersion`, `updateUrl`, `appStoreId`, `message`, when present, is a string (the app calls `.trim()` on them); `minSupportedVersion`, when not blank, is 1–3 dot-separated numbers (the version gate compares it); `updateUrl`, when not blank, starts with `https://apps.apple.com/` (report G10: the only place a gated user may be sent); `appStoreId`, when not blank, is digits. `latestVersion` needs only to be a string: `resolveIosUpdate` returns it but nothing gates on it or shows it (the live document still says `1.3.0`), so it is not compared with `minSupportedVersion` |
 | `features` | `features`, when present, is an object |
 | `features.<flag>` / `features.<flag>.<leaf>` | each known flag is an object and each known leaf has the type `applyRemoteFeatures` accepts (booleans; `mcq.maxPerRun` a non-negative integer; `mistakeBook.relatedCount` 0–5) |
 | `features.unknown` | a flag this check does not know (a newer app's) is still an object |
 
 `null` counts as absent everywhere. `tests/test_remote_config_schema.py` fails when the app's readers
 (`featureFlags.ts`, `remoteConfig.ts`) and these rules drift apart.
+
+`remote-config` is an **advisory** check (`checks.ADVISORY_CHECKS`): a third party serves the document and
+the app keeps its last good copy, so its failure is not an outage of ours. It is left out of
+`SyntheticCheckSuccess`, of the handler's `ok` / `failed` and so of the paging alarm
+`developercards-prod-synthetic-check-failing` (which would otherwise sit in ALARM through a GitHub incident or
+a bad document and send nothing for a real outage meanwhile). It has its own metric and alarm (below).
 
 Every request: no proxy, **no redirect followed** (a 3xx is `HTTP_STATUS`), per-request timeout
 `CHECK_TIMEOUT_SECONDS`, **no retry**, only `User-Agent: CHECK_USER_AGENT` and `Accept` set, at
@@ -91,10 +98,11 @@ A failed R28 check may also carry `detail`: a remote-config rule id (above) or, 
 
 | Metric | Unit | Value |
 |---|---|---|
-| `SyntheticCheckSuccess` | Count | 1 only when every check passes, else 0 |
+| `SyntheticCheckSuccess` | Count | 1 only when every check except `remote-config` passes, else 0; alarm `developercards-prod-synthetic-check-failing` |
 | `SyntheticCheckLatency` | Milliseconds | wall time of the whole run |
+| `SyntheticRemoteConfigSuccess` | Count | 1 when `remote-config` passes, else 0 (since the R28 review, 2026-10-04); alarm `developercards-prod-synthetic-remote-config-failing` |
 
-The same line carries `failedChecks` (names in check order), `checks`
+The same line carries `failedChecks` (every failed check, `remote-config` included, in check order), `checks`
 (`{name: {ok, status, ms, code}}`, plus `detail` on a failed check that set one) and `xrayTraceId` when
 the invocation has an X-Ray root. Logs and metrics never carry a URL, a response body or a header value.
 
@@ -166,5 +174,6 @@ Once H05's schedule is enabled: 2,880 runs/month × ≈ 3 s × 256 MB ≈ 2.2k G
 ⇒ USD 0.00; 8,640 API Gateway requests ⇒ ≈ USD 0.01 (only the 2,880 `/health` requests invoke
 core-vpc; the token-less `/api/v1/me` and `/api/v1/sync/progress` requests stop at the JWT authorizer);
 2,880 deck downloads ≈ 0.6 GB CloudFront (free tier) ⇒ USD 0.00; the GitHub raw and Cognito discovery/JWKS
-reads are free; two custom metrics × USD 0.30 = USD 0.60; ≈ 8 MB of logs ⇒ ≈ USD 0.01.
-Total ≈ USD 0.62/month (R28 MONITOR adds no metric).
+reads are free; three custom metrics × USD 0.30 = USD 0.90; ≈ 8 MB of logs ⇒ ≈ USD 0.01.
+Total ≈ USD 0.92/month (R28 MONITOR's review added `SyntheticRemoteConfigSuccess`; its alarm is USD 0.10,
+counted in infra/RUNBOOK.md §7).

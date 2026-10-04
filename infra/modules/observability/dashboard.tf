@@ -340,6 +340,8 @@ locals {
         title   = "Synthetic check success"
         metrics = [
           [var.metrics_namespace, "SyntheticCheckSuccess", "Service", "synthetic-check", { stat = "Minimum", id = "success" }],
+          # R28 review F2: the advisory remote-config probe, kept out of SyntheticCheckSuccess (alarms_r28.tf).
+          [var.metrics_namespace, "SyntheticRemoteConfigSuccess", "Service", "synthetic-check", { stat = "Minimum", id = "remotecfg" }],
         ]
       }
     },
@@ -379,8 +381,8 @@ locals {
       }
     },
     {
-      # R28 MONITOR (alarms_r28.tf): the 4xx rate the api-4xx-rate alarm reads, beside the 429s and core-vpc's
-      # bearer rejects; hourly like that alarm.
+      # R28 MONITOR (alarms_r28.tf): the 4xx rate the api-4xx-rate alarm reads (three-hour sums, like that alarm),
+      # beside the 429s and core-vpc's bearer rejects (15 minutes, like theirs).
       type   = "metric"
       x      = 12
       y      = 48
@@ -390,12 +392,12 @@ locals {
         region  = var.region
         view    = "timeSeries"
         stacked = false
-        period  = 3600
+        period  = 900
         title   = "API 4xx rate (users) / 429 / core-vpc auth rejects"
         metrics = [
-          [var.metrics_namespace, "ApiUserRequests", { stat = "Sum", id = "req", visible = false }],
-          [var.metrics_namespace, "ApiUser4xx", { stat = "Sum", id = "e4xx", visible = false }],
-          [{ expression = "100 * FILL(e4xx, 0) / req", label = "4xx rate % (synthetic check, unmatched routes excluded)", id = "rate" }],
+          [var.metrics_namespace, "ApiUserRequests", { stat = "Sum", id = "req", period = 10800, visible = false }],
+          [var.metrics_namespace, "ApiUser4xx", { stat = "Sum", id = "e4xx", period = 10800, visible = false }],
+          [{ expression = "100 * FILL(e4xx, 0) / req", label = "4xx rate % in 3 h (app and console only)", id = "rate" }],
           [var.metrics_namespace, "Api429Responses", { stat = "Sum", id = "e429", yAxis = "right" }],
           [var.metrics_namespace, "CoreVpcAuthRejects", { stat = "Sum", id = "authrej", yAxis = "right" }],
         ]

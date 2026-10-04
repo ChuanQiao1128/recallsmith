@@ -495,6 +495,9 @@ if [ "$RC" = 1 ] && has "$T/err" "failed checks: cdn-deck, console-index"; then 
 setstate 's["invoke"]["developercards-synthetic-check"] = {"ok": True, "failed": ["api-auth-guard"]}'
 run SMOKE_ATTEMPTS=1 "$MIRROR/scripts/smoke.sh"
 if [ "$RC" = 1 ] && has "$T/err" "failed checks: api-auth-guard"; then ok "smoke: ok true with a non-empty failed list still fails"; else bad "smoke: ok true with a non-empty failed list still fails"; fi
+setstate 's["invoke"]["developercards-synthetic-check"] = {"ok": True, "failed": [], "advisoryFailed": ["remote-config"]}'
+run SMOKE_ATTEMPTS=1 "$MIRROR/scripts/smoke.sh"
+if [ "$RC" = 0 ] && has "$T/out" "SMOKE OK"; then ok "smoke: only the advisory remote-config check failing passes (R28 review F2; rc=$RC)"; else bad "smoke: only the advisory remote-config check failing passes (R28 review F2; rc=$RC)"; fi
 setstate 's["invoke"]["developercards-synthetic-check"] = {"ok": True, "failed": []}; s["invoke_error"] = "Unhandled"'
 run SMOKE_ATTEMPTS=1 "$MIRROR/scripts/smoke.sh"
 if [ "$RC" = 1 ] && has "$T/err" "FunctionError=Unhandled"; then ok "smoke: a FunctionError fails"; else bad "smoke: a FunctionError fails"; fi
