@@ -13,6 +13,7 @@ HARDEN.plan-allow.json on the plan HARDEN is expected to produce. The route thro
 infra/modules/api/gateway.tf (terraform validate) and its mutation test docs/delivery/r29-issues/HARDEN-route-guard-test.sh.
 """
 
+from html.parser import HTMLParser
 import json
 import pathlib
 import re
@@ -62,6 +63,24 @@ def env_production():
     return values
 
 
+
+class _TagCollector(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.tags = []
+
+    def handle_starttag(self, tag, attrs):
+        self.tags.append((tag, {k: (v or "") for k, v in attrs}))
+
+    handle_startendtag = handle_starttag
+
+
+def _collect_tags(html):
+    collector = _TagCollector()
+    collector.feed(html)
+    collector.close()
+    return collector.tags
+
 class ConsoleCspTest(unittest.TestCase):
     def setUp(self):
         self.csp = directives("console")
@@ -103,11 +122,15 @@ class ConsoleCspTest(unittest.TestCase):
         self.assertRegex(sentry[0], r"^https://o\d+\.ingest\.us\.sentry\.io$")
 
     def test_the_console_index_html_has_no_inline_script(self):
-        index = (REPO_ROOT / "frontend" / "index.html").read_text()
-        for tag in re.findall(r"<script\b[^>]*>", index):
-            self.assertRegex(tag, r'\bsrc="/', f"inline or cross-origin script in frontend/index.html: {tag}")
-        self.assertNotIn("<style", index)
-        self.assertNotRegex(index, r"\sstyle=")
+        # html.parser, not a regex: it lower-cases tag and attribute names, so <SCRIPT> or STYLE= cannot slip past.
+        tags = _collect_tags((REPO_ROOT / "frontend" / "index.html").read_text())
+        for name, attrs in tags:
+            if name == "script":
+                src = attrs.get("src") or ""
+                self.assertTrue(src.startswith("/") and not src.startswith("//"),
+                                f"inline or cross-origin script in frontend/index.html: {attrs}")
+            self.assertNotEqual(name, "style", "inline <style> in frontend/index.html")
+            self.assertNotIn("style", attrs, f"inline style attribute on <{name}> in frontend/index.html")
 
 
 class SiteCspTest(unittest.TestCase):
