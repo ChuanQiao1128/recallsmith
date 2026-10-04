@@ -130,8 +130,19 @@ default_ci_green() { ci_runs @SHA@ 500 > "$GHD/ci-runs.json"; jobs_green 500; }
 mkdir -p "$MIRROR"
 ( cd "$REPO" && tar -cf - .gitignore scripts src_C/deploy.sh src_C/package_lambda_zip.sh src_C/scripts/merge-env.sh \
     src_C/env/prod.env.json frontend/deploy.sh frontend/scripts/resolve-sentry-dsn.sh frontend/scripts/check-bundle-dsn.sh \
+    infra/modules/edge/security_headers.json \
     site services/deploy-python-lambda.sh services/lambda-release.sh services/synthetic-check/pyproject.toml \
     services/synthetic-check/env services/synthetic-check/src/synthetic_check ) | ( cd "$MIRROR" && tar -xf - )
+# The real console CSP plus the fake DSN's ingest origin in connect-src: check-bundle-dsn.sh refuses a DSN whose origin
+# the enforced CSP would block.
+python3 - "$MIRROR/infra/modules/edge/security_headers.json" "${DSN#*@}" <<'PY'
+import json, sys
+path, host = sys.argv[1], sys.argv[2].split("/")[0]
+d = json.load(open(path))
+d["content_security_policy"]["console"] = [
+    x + " https://" + host if x.startswith("connect-src ") else x for x in d["content_security_policy"]["console"]]
+json.dump(d, open(path, "w"), indent=2)
+PY
 git_m() { git -C "$MIRROR" -c user.name=test -c user.email=test@example.invalid -c commit.gpgsign=false "$@"; }
 git init -q --bare "$ORIGIN"
 git_m init -q -b main 2>/dev/null || { git_m init -q && git_m checkout -q -b main; }
@@ -284,7 +295,29 @@ check "console PREBUILT: ... before any upload" none '"s3", "sync"'
 setstate 's["dsn"] = ""'
 : > "$LOG"; run PREBUILT=1 GITHUB_ACTIONS=true "$MIRROR/frontend/deploy.sh"
 check "console PREBUILT: no DSN in SSM -> nothing to compare, deploys (rc=$RC)" [ "$RC" = 0 ]
+# R29-REV-01: a DSN in another Sentry org or region, carried by the bundle, whose ingest origin is not a connect-src
+# source of the enforced console CSP (infra/modules/edge/security_headers.json).
+OTHER_DSN='https://abc123@o2.ingest.example.invalid/42'
+printf 'const dsn="%s";\n' "$OTHER_DSN" > "$MIRROR/frontend/dist/assets/app-new.js"
+reset_state; setstate "s['dsn'] = '$OTHER_DSN'"
+run PREBUILT=1 GITHUB_ACTIONS=true "$MIRROR/frontend/deploy.sh"
+if [ "$RC" = 1 ] && has "$T/err" "https://o2.ingest.example.invalid is not in connect-src"; then ok "console PREBUILT: a DSN origin the CSP blocks refuses (rc=$RC)"; else bad "console PREBUILT: a DSN origin the CSP blocks refuses (rc=$RC)"; fi
+check "console PREBUILT: ... before any upload" none '"s3", "sync"'
+check "console PREBUILT: ... never printing the DSN" hasnt "$T/err" "abc123"
+# The origin must be a whole connect-src source, not a prefix of one.
+PREFIX_DSN='https://abc123@o1.ingest.example/42'
+printf 'const dsn="%s";\n' "$PREFIX_DSN" > "$MIRROR/frontend/dist/assets/app-new.js"
+reset_state; setstate "s['dsn'] = '$PREFIX_DSN'"
+run PREBUILT=1 GITHUB_ACTIONS=true "$MIRROR/frontend/deploy.sh"
+check "console PREBUILT: a DSN origin that is only a prefix of a CSP source refuses (rc=$RC)" [ "$RC" = 1 ]
+# The check reads the CSP file at the deployed commit; without it there is nothing to compare with: refuse.
+mv "$MIRROR/infra/modules/edge/security_headers.json" "$T/security_headers.json"
 printf 'const dsn="%s";\n' "$DSN" > "$MIRROR/frontend/dist/assets/app-new.js"
+reset_state; run PREBUILT=1 GITHUB_ACTIONS=true "$MIRROR/frontend/deploy.sh"
+if [ "$RC" = 1 ] && has "$T/err" "cannot read the console's connect-src" && none '"s3", "sync"'; then ok "console PREBUILT: no CSP file refuses before any upload (rc=$RC)"; else bad "console PREBUILT: no CSP file refuses before any upload (rc=$RC)"; fi
+mv "$T/security_headers.json" "$MIRROR/infra/modules/edge/security_headers.json"
+reset_state; run PREBUILT=1 GITHUB_ACTIONS=true "$MIRROR/frontend/deploy.sh"
+if [ "$RC" = 0 ] && has "$T/out" "connect-src allows the DSN's ingest origin"; then ok "console PREBUILT: a DSN origin listed in connect-src deploys (rc=$RC)"; else bad "console PREBUILT: a DSN origin listed in connect-src deploys (rc=$RC)"; fi
 
 reset_state; run DRY_RUN=1 PREBUILT=1 "$MIRROR/frontend/deploy.sh"
 if [ "$RC" = 0 ] && none '"argv"' && has "$T/out" "DRY: aws s3 sync"; then ok "console DRY_RUN: no AWS call at all, no SSM lookup of the DSN (rc=$RC)"; else bad "console DRY_RUN: no AWS call at all, no SSM lookup of the DSN (rc=$RC)"; fi

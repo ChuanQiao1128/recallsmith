@@ -1465,9 +1465,9 @@ before the first connection.
 
 | Who | statement_timeout | idle_in_transaction | Why this value |
 |---|---|---|---|
-| core-vpc (`PgSessionTimeouts.Api`, `VpcFunction`) | 20 s | 60 s | Every core-vpc call comes through API Gateway, which answers 503 after 30 s (`timeout_milliseconds = 30000`); a statement past that works for nobody. The slowest invocation in the 30 days took 7.4 s (p99.9 4.2 s, 31 209 invocations), the slowest route 9.1 s (`POST /api/internal/automation/tick`, whose own budget is 20 s; user routes ≤ 3.3 s, SLO sync latency 2 s). 20 s is that whole budget and twice the slowest route. Idle 60 s is twice the gateway timeout: it only ends a transaction whose caller already has its 503, and a dead function's locks go after a minute |
+| core-vpc (`PgSessionTimeouts.Api`, `VpcFunction`) | 20 s | 60 s | App and console calls come through API Gateway, which answers 503 after 30 s (`timeout_milliseconds = 30000`); a statement past that works for nobody. core-vpc is also invoked directly, without the gateway: `scripts/invoke-as-admin.sh` (bootstrap-roles, db ping, migrate) and the DR drill's copy of core-vpc (`infra/scripts/dr-restore-drill.sh`: `GET /api/v1/admin/db/migrations`, `/api/v1/admin/decks`). Those calls are bounded only by the 90 s Lambda timeout, so there the 20 s is the effective cap; every statement on them is small today (migrate lifts it, below), and a long admin statement added on that path needs its own `set local statement_timeout`. The slowest invocation in the 30 days took 7.4 s (p99.9 4.2 s, 31 209 invocations), the slowest route 9.1 s (`POST /api/internal/automation/tick`, whose own budget is 20 s; user routes ≤ 3.3 s, SLO sync latency 2 s). 20 s is that whole budget and twice the slowest route. Idle 60 s is twice the gateway timeout: on a gateway call it only ends a transaction whose caller already has its 503, and a dead function's locks go after a minute |
 | worker-lambda (`PgSessionTimeouts.Worker`, `WorkerFunction`) | 600 s | 600 s | The function may run 615 s (slowest job 4.6 s). Nothing a live job does is cut off; only what a dead worker left behind is ended |
-| Migration runner (`Vpc/Db/Migrate.cs`) | none | none | Each migration's transaction (and the `card_embeddings` vector block) starts with `set local statement_timeout = 0; set local idle_in_transaction_session_timeout = 0` (`Migrate.LiftTimeoutsSql`), for that transaction only. The advisory-lock wait before it keeps the 20 s: a second **Migrate** press while one runs now fails after 20 s (57014) instead of queueing behind it; press again when the first is done |
+| Migration runner (`Vpc/Db/Migrate.cs`) | none | none | Each migration's transaction (and the `card_embeddings` vector block) starts with `set local statement_timeout = 0; set local idle_in_transaction_session_timeout = 0` (`Migrate.LiftTimeoutsSql`), for that transaction only. The advisory-lock wait before it keeps the 20 s: a second **Migrate** press while one runs already failed before this change, at Npgsql's 30 s client Command Timeout; it now fails after 20 s on the server (57014) instead. Press again when the first is done |
 | `set local` inside code | lower | — | The usage rollup (3 s) and the anonymous-funnel retention (2 s) already set their own; a `set local` always wins for its transaction |
 
 - Why startup options and not `ALTER ROLE … SET`: no migration, the RDS role and parameter group stay as they are, the
@@ -1580,6 +1580,12 @@ stylesheet loaded with no violation; an injected `<style>` and an external image
   applies it (§15). A new API or sign-in host (a Cognito custom domain), a console DSN from another Sentry
   organisation, or a font or script from a CDN (better bundled) each needs a `connect-src` / `script-src` change
   first, or the browser refuses it.
+- The Sentry origin is checked at deploy time: `frontend/scripts/check-bundle-dsn.sh` (CD's deploy preflight, and
+  `frontend/deploy.sh` with `PREBUILT=1`) refuses a console whose DSN ingest origin (`https://<host after the @>` of
+  the SSM DSN) is not a `connect-src` source in `security_headers.json`, before anything is uploaded. Moving the DSN
+  to another Sentry organisation or region is therefore two steps in this order: the CSP change above (applied by
+  the pipeline), then the SSM parameter and the repository variable `CONSOLE_SENTRY_DSN`. The check reads the file
+  at the deployed commit, not the live distribution, so merge and apply the CSP change before changing the DSN.
 - Rollback: revert the change in a pull request; its allow file lists the two policies as `delete` and both
   distributions as `update` with keys `default_cache_behavior`.
 - Not covered: no CSP reporting endpoint, so a violation in production shows only in that browser's console (Sentry's

@@ -18,17 +18,23 @@ namespace RecallSmith.Lambda.Db;
 /// <para>
 /// Values, from the 30 days to 2026-10-04 (read-only CloudWatch; infra/RUNBOOK.md §16 "Database timeouts"):
 /// core-vpc's slowest invocation took 7.4 s (p99.9 4.2 s, 31 209 invocations) and the slowest route 9.1 s
-/// (<c>POST /api/internal/automation/tick</c>, whose own budget is 20 s); API Gateway gives up at 30 s; the worker's
-/// slowest job took 4.6 s and the function may run 615 s.
+/// (<c>POST /api/internal/automation/tick</c>, whose own budget is 20 s); API Gateway gives up at 30 s, a direct
+/// <c>aws lambda invoke</c> of core-vpc only at the function's 90 s; the worker's slowest job took 4.6 s and the
+/// function may run 615 s.
 /// </para>
 /// </summary>
 public sealed record PgSessionTimeouts(int StatementTimeoutMs, int IdleInTransactionTimeoutMs)
 {
   /// <summary>
   /// core-vpc. Statement 20 s: at least the automation tick's whole 20 s budget and twice the slowest route measured,
-  /// and below API Gateway's 30 s integration timeout, after which nobody receives the answer. Idle in transaction
-  /// 60 s: twice the gateway timeout, so it only ever ends a transaction whose caller already has its 503, and a dead
-  /// function's locks go after a minute instead of a day.
+  /// and below API Gateway's 30 s integration timeout, after which a gateway caller receives no answer. core-vpc is
+  /// also invoked directly, without the gateway (<c>scripts/invoke-as-admin.sh</c>: bootstrap-roles, db ping, migrate;
+  /// the DR drill's copy of core-vpc, <c>infra/scripts/dr-restore-drill.sh</c>), bounded only by the 90 s Lambda
+  /// timeout, so there 20 s is the effective cap: every statement on that path is small today and the migration
+  /// runner lifts the limit itself (<c>Vpc.Db.Migrate.LiftTimeoutsSql</c>); a long admin statement added there needs
+  /// its own <c>set local statement_timeout</c>. Idle in transaction 60 s: twice the gateway timeout, so on a gateway
+  /// call it only ever ends a transaction whose caller already has its 503, and a dead function's locks go after a
+  /// minute instead of a day.
   /// </summary>
   public static readonly PgSessionTimeouts Api = new(20_000, 60_000);
 
