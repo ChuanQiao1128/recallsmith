@@ -12,8 +12,9 @@ namespace RecallSmith.Lambda.IntegrationTests;
 /// R26X F01 (x-deploy-2): a migration whose header carries <c>-- destructive: true</c> (045) is never applied as a side
 /// effect of a migrate call. <see cref="Migrate.HandleDbMigrate"/> stops before the first pending destructive migration
 /// unless the query names its version in <c>confirmDestructive</c>, reports it as <c>blockedBy</c>, and applies nothing
-/// after it. Each case runs on a fresh scratch database against a copy of the real migrations plus two synthetic ones
-/// behind 045: 046 (additive) and 047 (destructive).
+/// after it. Each case runs on a fresh scratch database against a copy of the real migrations up to 045 plus two
+/// synthetic ones behind 045: 046 (additive) and 047 (destructive). Real migrations after 045 (046 from R28 on) are
+/// left out of the copy so the synthetic pair keeps its numbers.
 /// </summary>
 [Collection(PostgresCollection.Name)]
 public sealed class MigrateDestructiveGateTests
@@ -51,7 +52,9 @@ public sealed class MigrateDestructiveGateTests
       Directory.CreateDirectory(dir);
       foreach (var f in Directory.EnumerateFiles(Path.Combine(AppContext.BaseDirectory, "Db", "Migrations"), "*.sql"))
       {
-        File.Copy(f, Path.Combine(dir, Path.GetFileName(f)));
+        var file = Path.GetFileName(f);
+        if (int.Parse(file.Split('_')[0], NumberStyles.Integer, CultureInfo.InvariantCulture) > 45) continue;
+        File.Copy(f, Path.Combine(dir, file));
       }
       await File.WriteAllTextAsync(Path.Combine(dir, "046_it_f01_additive.sql"),
         "-- synthetic additive migration behind 045\ncreate table if not exists it_f01_m046 (id int);\n");
