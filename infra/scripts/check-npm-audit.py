@@ -8,7 +8,9 @@ advisory is the (GHSA id, package) pair of a `via` object. npm also lists every 
 depends on the vulnerable one, with the same advisory in its `via`, so each pair is counted once.
 
 The allowlist is a JSON object whose "entries" each have: id (GHSA-...), package, severity (high or
-critical), reason, expires (YYYY-MM-DD). An entry stops counting on its `expires` date (UTC).
+critical), reason, expires (YYYY-MM-DD), and inBundle (true or false: whether the package is in the
+exported app; check-bundle-packages.py fails CI when a false one is bundled). An entry stops counting
+on its `expires` date (UTC).
 
 Violations (exit 1):
   - a high or critical advisory that is not on the allowlist;
@@ -75,6 +77,8 @@ def load_allowlist(data: object) -> dict[tuple[str, str], dict]:
         missing = [f for f in ENTRY_FIELDS if not str(entry.get(f, "")).strip()]
         if missing:
             raise InputError(f"{where} ({entry.get('id')}) is missing {', '.join(missing)}")
+        if not isinstance(entry.get("inBundle"), bool):
+            raise InputError(f"{where} ({entry['id']}): inBundle must be true or false, not {json.dumps(entry.get('inBundle'))}")
         if not GHSA_RE.match(entry["id"]):
             raise InputError(f"{where}: id {entry['id']!r} is not a GHSA id")
         if entry["severity"] not in ("high", "critical"):

@@ -35,7 +35,15 @@ def report(*advisories):
 
 
 def entry(ghsa, package, severity="high", expires="2026-11-03", **overrides):
-    return {"id": ghsa, "package": package, "severity": severity, "reason": "build-time only", "expires": expires, **overrides}
+    return {
+        "id": ghsa,
+        "package": package,
+        "severity": severity,
+        "inBundle": False,
+        "reason": "build-time only",
+        "expires": expires,
+        **overrides,
+    }
 
 
 class GateTest(unittest.TestCase):
@@ -107,6 +115,10 @@ class GateTest(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("::warning::2 allowlist entries expire within 14 days, the first on 2026-11-03 (in 1 day)", out)
 
+    def test_an_entry_with_in_bundle_true_is_accepted(self):
+        code, out = self.run_gate(report(via(WS, "ws", "high")), [entry(WS, "ws", inBundle=True)])
+        self.assertEqual(code, 0, out)
+
     def test_an_npm_error_report_is_unreadable_input(self):
         code, out = self.run_gate({"error": {"code": "ENOTFOUND", "summary": "registry unreachable"}}, [])
         self.assertEqual(code, 2, out)
@@ -123,6 +135,10 @@ class GateTest(unittest.TestCase):
             [entry(WS, "ws", severity="moderate")],
             [entry("CVE-2026-1", "ws")],
             [entry(WS, "ws"), entry(WS, "ws")],
+            [{k: v for k, v in entry(WS, "ws").items() if k != "inBundle"}],
+            [entry(WS, "ws", inBundle="false")],
+            [entry(WS, "ws", inBundle=None)],
+            [entry(WS, "ws", inBundle=0)],
         ):
             with self.subTest(bad=bad):
                 self.assertEqual(self.run_gate(audit, bad)[0], 2)
