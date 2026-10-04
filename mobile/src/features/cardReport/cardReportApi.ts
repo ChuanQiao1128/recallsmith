@@ -44,7 +44,8 @@ export const CARD_REPORT_COPY = Object.freeze({
   entry: 'Report a problem',
   sessionEntry: 'Report',
   signedOut: 'Sign in to report a problem',
-  anonymousHint: "You're not signed in, so only this card and the reason are sent — nothing about you. Sign in to add a note.",
+  anonymousHint:
+    "You're not signed in, so we send only this card, the reason and the app version — nothing about you. Sign in to add a note.",
   anonymousBusy: 'Too many reports right now. Please try again later.',
   success: 'Thanks — the author will review it',
   duplicate: 'You already reported this card',
