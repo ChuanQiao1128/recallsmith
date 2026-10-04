@@ -1,6 +1,6 @@
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-native', () => {
   const React = require('react');
@@ -28,9 +28,14 @@ vi.mock('../../src/auth/authStore', () => ({ useAuthStore: { getState: () => aut
 import { apiJson } from '../../src/api/apiClient';
 import { getFreshAccessToken } from '../../src/auth/freshToken';
 import { FRIENDLY_ERROR_COPY } from '../../src/api/errorKind';
+import { applyRemoteFeatures } from '../../src/config/featureFlags';
+import { DEFAULT_API_BASE } from '../../src/config/hosts';
+import type { RemoteConfig } from '../../src/config/remoteConfig';
 import { ReportCardSheet } from '../../src/features/cardReport/ReportCardSheet';
-import { CARD_REPORT_REASONS } from '../../src/features/cardReport/cardReportApi';
+import { CARD_REPORT_COPY, CARD_REPORT_REASONS } from '../../src/features/cardReport/cardReportApi';
 import { CHROME_MAX_FONT_SCALE } from '../../src/theme/dynamicType';
+import { installFakeXhr } from '../setup/fakeXhr';
+import appJson from '../../app.json';
 
 beforeEach(() => {
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -251,5 +256,147 @@ describe('ReportCardSheet', () => {
     for (const text of tree.root.findAll((n) => (n.type as unknown) === 'Text')) {
       expect(text.props.maxFontSizeMultiplier).toBe(CHROME_MAX_FONT_SCALE);
     }
+  });
+});
+
+// R28 ANONREPORT (user-perspective review U2): the same sheet, signed out.
+describe('ReportCardSheet — signed out', () => {
+  let xhr: ReturnType<typeof installFakeXhr>;
+  const anonymousOn = () =>
+    applyRemoteFeatures({ features: { cardReport: { enabled: true, anonymous: true } } } as unknown as RemoteConfig);
+
+  beforeEach(() => {
+    xhr = installFakeXhr();
+    authState.status = 'anonymous';
+    vi.mocked(getFreshAccessToken).mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    xhr.restore();
+    applyRemoteFeatures(null);
+  });
+
+  it('with the anonymous flag on, shows the reason chips and the anonymous hint, but no note field', async () => {
+    anonymousOn();
+    const tree = await renderSheet();
+    expect(hosts(tree, 'report-card-signed-out')).toHaveLength(0);
+    expect(hosts(tree, 'report-card-form')).toHaveLength(1);
+    for (const reason of CARD_REPORT_REASONS) expect(hosts(tree, `report-reason-${reason.value}`)).toHaveLength(1);
+    expect(hosts(tree, 'report-card-note')).toHaveLength(0);
+    expect(hosts(tree, 'report-card-note-counter')).toHaveLength(0);
+    const hint = one(tree, 'report-card-anonymous-hint');
+    expect(textOf(hint)).toBe(CARD_REPORT_COPY.anonymousHint);
+    expect(hint.props.maxFontSizeMultiplier).toBe(CHROME_MAX_FONT_SCALE);
+    expect(one(tree, 'report-card-submit').props.disabled).toBe(true);
+  });
+
+  it('sends the structured report to the public route without a token and thanks the learner', async () => {
+    anonymousOn();
+    const tree = await renderSheet();
+    await press(one(tree, 'report-reason-wrong_answer'));
+    await press(one(tree, 'report-card-submit'));
+    await settle();
+
+    expect(apiJson).not.toHaveBeenCalled();
+    expect(xhr.sent).toHaveLength(1);
+    const [request] = xhr.sent;
+    expect(request.url).toBe(`${DEFAULT_API_BASE}/api/v1/public/card-reports`);
+    expect(request.headers).toEqual({ 'content-type': 'application/json' });
+    expect(JSON.parse(request.body)).toEqual({
+      deckSlug: 'csharp',
+      stableUid: 'cs-1',
+      reason: 'wrong_answer',
+      appVersion: appJson.expo.version,
+    });
+    expect(textOf(one(tree, 'report-card-success'))).toBe('Thanks — the author will review it');
+    expect(hosts(tree, 'report-card-form')).toHaveLength(0);
+    expect(hosts(tree, 'report-card-duplicate')).toHaveLength(0);
+    expect(one(tree, 'report-card-cancel').props.accessibilityLabel).toBe('Close');
+  });
+
+  it('keeps the form with copy that fits a global cap (429), an outage (503) and no network', async () => {
+    anonymousOn();
+    xhr.queue(429, 503, 'offline', 'offline');
+    const tree = await renderSheet();
+    await press(one(tree, 'report-reason-typo'));
+
+    await press(one(tree, 'report-card-submit'));
+    await settle();
+    const error = one(tree, 'report-card-error');
+    expect(textOf(error)).toBe('Too many reports right now. Please try again later.');
+    expect(error.props.accessibilityRole).toBe('alert');
+    expect(hosts(tree, 'report-card-form')).toHaveLength(1);
+    expect(one(tree, 'report-reason-typo').props.accessibilityState.selected).toBe(true);
+
+    await press(one(tree, 'report-card-submit'));
+    await settle();
+    expect(textOf(one(tree, 'report-card-error'))).toBe('Reporting is unavailable right now');
+
+    // Both hosts unreachable.
+    await press(one(tree, 'report-card-submit'));
+    await settle();
+    expect(textOf(one(tree, 'report-card-error'))).toBe(FRIENDLY_ERROR_COPY.offline);
+    expect(xhr.sent).toHaveLength(4);
+
+    // And a retry that gets through ends on the thank-you state.
+    await press(one(tree, 'report-card-submit'));
+    await settle();
+    expect(hosts(tree, 'report-card-success')).toHaveLength(1);
+  });
+
+  it('sends one report when Submit is tapped twice in the same frame', async () => {
+    anonymousOn();
+    const tree = await renderSheet();
+    await press(one(tree, 'report-reason-outdated'));
+    const submit = one(tree, 'report-card-submit');
+    await act(async () => {
+      submit.props.onPress();
+      submit.props.onPress();
+    });
+    await settle();
+    expect(xhr.sent).toHaveLength(1);
+    expect(hosts(tree, 'report-card-success')).toHaveLength(1);
+  });
+
+  it('with the anonymous flag off (the default), still asks the learner to sign in and sends nothing', async () => {
+    applyRemoteFeatures({ features: { cardReport: { enabled: true } } } as unknown as RemoteConfig);
+    const tree = await renderSheet();
+    expect(textOf(one(tree, 'report-card-signed-out'))).toBe('Sign in to report a problem');
+    expect(hosts(tree, 'report-card-form')).toHaveLength(0);
+    expect(hosts(tree, 'report-card-anonymous-hint')).toHaveLength(0);
+    expect(xhr.sent).toHaveLength(0);
+  });
+
+  it('signed out between opening and Submit: switches to the anonymous form, keeps the reason and drops the note', async () => {
+    anonymousOn();
+    authState.status = 'signed_in';
+    vi.mocked(getFreshAccessToken).mockResolvedValue('tok-abc');
+    const tree = await renderSheet();
+    expect(hosts(tree, 'report-card-note')).toHaveLength(1);
+    await press(one(tree, 'report-reason-unclear'));
+    await act(async () => {
+      one(tree, 'report-card-note').props.onChangeText('A private note');
+    });
+
+    // The session ends before the POST.
+    vi.mocked(getFreshAccessToken).mockImplementation(async () => {
+      authState.status = 'anonymous';
+      return null;
+    });
+    await press(one(tree, 'report-card-submit'));
+    await settle();
+    expect(apiJson).not.toHaveBeenCalled();
+    expect(xhr.sent).toHaveLength(0);
+    expect(hosts(tree, 'report-card-signed-out')).toHaveLength(0);
+    expect(hosts(tree, 'report-card-note')).toHaveLength(0);
+    expect(hosts(tree, 'report-card-anonymous-hint')).toHaveLength(1);
+    expect(one(tree, 'report-reason-unclear').props.accessibilityState.selected).toBe(true);
+
+    await press(one(tree, 'report-card-submit'));
+    await settle();
+    expect(xhr.sent).toHaveLength(1);
+    expect(xhr.sent[0].body).not.toContain('A private note');
+    expect(JSON.parse(xhr.sent[0].body).reason).toBe('unclear');
+    expect(hosts(tree, 'report-card-success')).toHaveLength(1);
   });
 });

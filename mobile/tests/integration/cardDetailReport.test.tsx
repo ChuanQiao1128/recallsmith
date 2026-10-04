@@ -83,18 +83,26 @@ vi.mock('../../src/content/cardSource', () => ({
 
 vi.mock('../../src/api/apiClient', () => ({ apiJson: vi.fn() }));
 vi.mock('../../src/auth/freshToken', () => ({ getFreshAccessToken: vi.fn(async () => 'tok-1') }));
+const authState = vi.hoisted(() => ({ status: 'signed_in' as string }));
+vi.mock('../../src/auth/authStore', () => ({ useAuthStore: { getState: () => authState } }));
 
 import { apiJson } from '../../src/api/apiClient';
+import { getFreshAccessToken } from '../../src/auth/freshToken';
 import { CardDetailScreen } from '../../src/screens/CardDetailScreen';
 import { applyRemoteFeatures } from '../../src/config/featureFlags';
+import { DEFAULT_API_BASE } from '../../src/config/hosts';
 import type { RemoteConfig } from '../../src/config/remoteConfig';
 import { CHROME_MAX_FONT_SCALE } from '../../src/theme/dynamicType';
+import { installFakeXhr } from '../setup/fakeXhr';
 
 const flagOn = () => applyRemoteFeatures({ features: { cardReport: { enabled: true } } } as unknown as RemoteConfig);
 
 beforeEach(() => {
   ownedFixture = null;
   vi.mocked(apiJson).mockReset();
+  authState.status = 'signed_in';
+  vi.mocked(getFreshAccessToken).mockReset();
+  vi.mocked(getFreshAccessToken).mockResolvedValue('tok-1');
 });
 
 afterEach(() => {
@@ -257,3 +265,55 @@ describe('CardDetailScreen — report a problem', () => {
     });
   });
 });
+
+// R28 ANONREPORT (user-perspective review U2): the same entry point works for a learner who is not signed in.
+describe('CardDetailScreen — report a problem while signed out', () => {
+  let xhr: ReturnType<typeof installFakeXhr>;
+
+  beforeEach(() => {
+    xhr = installFakeXhr();
+    authState.status = 'anonymous';
+    vi.mocked(getFreshAccessToken).mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    xhr.restore();
+  });
+
+  it('sends the structured report for this card to the public route, with no token and no note', async () => {
+    applyRemoteFeatures({ features: { cardReport: { enabled: true, anonymous: true } } } as unknown as RemoteConfig);
+    ownedFixture = new Set(['cs-sourced']);
+    const tree = await renderScreen('cs-sourced');
+    await press(tree, 'card-detail-show-answer');
+    await press(tree, 'card-detail-report');
+    expect(byTestId(tree, 'report-card-signed-out')).toHaveLength(0);
+    expect(byTestId(tree, 'report-card-anonymous-hint')).toHaveLength(1);
+    expect(byTestId(tree, 'report-card-note')).toHaveLength(0);
+
+    await press(tree, 'report-reason-outdated');
+    await press(tree, 'report-card-submit');
+    await act(async () => {
+      for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(apiJson).not.toHaveBeenCalled();
+    expect(xhr.sent).toHaveLength(1);
+    expect(xhr.sent[0].url).toBe(`${DEFAULT_API_BASE}/api/v1/public/card-reports`);
+    expect(xhr.sent[0].headers).toEqual({ 'content-type': 'application/json' });
+    expect(JSON.parse(xhr.sent[0].body)).toMatchObject({ deckSlug: 'csharp', stableUid: 'cs-sourced', reason: 'outdated' });
+    expect(Object.keys(JSON.parse(xhr.sent[0].body)).sort()).toEqual(['appVersion', 'deckSlug', 'reason', 'stableUid']);
+    expect(byTestId(tree, 'report-card-success')).toHaveLength(1);
+  });
+
+  it('keeps the sign-in message when only cardReport.enabled is on', async () => {
+    flagOn();
+    ownedFixture = new Set(['cs-plain']);
+    const tree = await renderScreen('cs-plain');
+    await press(tree, 'card-detail-show-answer');
+    await press(tree, 'card-detail-report');
+    expect(byTestId(tree, 'report-card-signed-out')).toHaveLength(1);
+    expect(byTestId(tree, 'report-card-form')).toHaveLength(0);
+    expect(xhr.sent).toHaveLength(0);
+  });
+});
+

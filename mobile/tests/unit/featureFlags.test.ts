@@ -85,7 +85,7 @@ describe('feature flags', () => {
       mistakeBook: DEFAULT_FEATURE_FLAGS.mistakeBook,
       cardSource: DEFAULT_FEATURE_FLAGS.cardSource,
       sentry: DEFAULT_FEATURE_FLAGS.sentry,
-      cardReport: { enabled: false },
+      cardReport: { enabled: false, anonymous: false },
       fsrs: { enabled: true },
       anonFunnel: { enabled: false },
     });

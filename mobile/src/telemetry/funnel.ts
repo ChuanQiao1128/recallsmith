@@ -446,6 +446,20 @@ export function createFunnelXhrPost(opts: {
   getBases: () => ReadonlyArray<string | null | undefined>;
   timeoutMs?: number;
 }): FunnelDeps['post'] {
+  return createAnonymousXhrPost(opts);
+}
+
+/**
+ * The same plain POST for any JSON body: the funnel's, and the anonymous card report's (R28
+ * ANONREPORT, features/cardReport/cardReportApi.ts), which must not be joinable to other requests
+ * either. Resolves on any 2xx; rejects with `{ status }` on another status and `{ kind }` on a
+ * network failure or timeout.
+ */
+export function createAnonymousXhrPost(opts: {
+  createXhr: () => FunnelXhr;
+  getBases: () => ReadonlyArray<string | null | undefined>;
+  timeoutMs?: number;
+}): (path: string, body: unknown) => Promise<unknown> {
   return async (path, body) => {
     const bases: string[] = [];
     for (const raw of opts.getBases()) {
