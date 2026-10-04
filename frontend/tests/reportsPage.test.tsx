@@ -59,6 +59,7 @@ function report(overrides: Partial<CardReport> = {}): CardReport {
     clientVersion: '1.10.0',
     createdAt: '2026-09-30T10:00:00Z',
     resolvedAt: null,
+    anonymous: false,
     ...overrides,
   };
 }
@@ -137,6 +138,21 @@ describe('ReportsPage', () => {
     expect(within(row).getByText('Open')).toBeTruthy();
     const editor = within(row).getByRole('link', { name: /^Open in editor/ });
     expect(editor.getAttribute('href')).toBe('/decks/cards/edit?deckId=7&cardId=1203');
+  });
+
+  it('marks a report from a learner who was not signed in (R28), and only that one', async () => {
+    api.listCardReports.mockResolvedValue(
+      page([
+        report({ reportId: 51, question: 'Anonymous question?', anonymous: true, note: null }),
+        report({ reportId: 52, question: 'Signed-in question?' }),
+      ]),
+    );
+    await mountLoaded();
+    const anonymousRow = rowFor('Anonymous question?');
+    expect(within(anonymousRow).getByTestId('report-anonymous').textContent).toBe('Not signed in');
+    expect(within(anonymousRow).getByText('Outdated')).toBeTruthy();
+    expect(within(anonymousRow).getByRole('button', { name: 'Resolve report: Anonymous question?' })).toBeTruthy();
+    expect(within(rowFor('Signed-in question?')).queryByTestId('report-anonymous')).toBeNull();
   });
 
   it('renders a learner note as plain text, never as markup', async () => {

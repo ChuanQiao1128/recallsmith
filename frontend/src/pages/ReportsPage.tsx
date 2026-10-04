@@ -8,7 +8,8 @@
 //
 // A report note is learner-written text: it is rendered as a text node and
 // nothing else. The server never sends who reported a card, and this page
-// shows no reporter.
+// shows no reporter. A report from a learner who was not signed in (R28
+// ANONREPORT) carries no note and is marked "Not signed in" under its reason.
 //
 // A server whose database has no card_reports table yet answers 503 NOT_READY;
 // that is an owner step, not an error, so it gets a neutral callout.
@@ -253,7 +254,8 @@ export function ReportsPage() {
     <ConsoleShell title={CONSOLE_NAME} subtitle="Card reports" {...consoleNav()}>
       <h1 className={H1_CLASS}>Card reports</h1>
       <p className="text-sm text-slate-600">
-        Problems learners reported on published cards. Fix the card in the editor, then resolve the report.
+        Problems learners reported on published cards, signed in or not. Fix the card in the editor, then resolve the
+        report.
       </p>
 
       <div role="status" aria-live="polite" className="sr-only" data-testid="reports-live">
@@ -349,6 +351,11 @@ export function ReportsPage() {
                         </td>
                         <td className={TD_CLASS}>
                           <Badge tone={reason.tone}>{reason.label}</Badge>
+                          {r.anonymous ? (
+                            <div className="text-xs text-slate-500 mt-1" data-testid="report-anonymous">
+                              Not signed in
+                            </div>
+                          ) : null}
                         </td>
                         <td className={`${TD_CLASS} whitespace-pre-wrap break-words max-w-xs`}>
                           {r.note ?? <span className="text-slate-400">—</span>}

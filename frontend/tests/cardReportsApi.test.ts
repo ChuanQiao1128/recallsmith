@@ -31,6 +31,7 @@ const WIRE = {
   clientVersion: '1.10.0',
   createdAt: '2026-09-30T10:00:00Z',
   resolvedAt: null,
+  anonymous: false,
 };
 
 function httpError(status: number, data: unknown): AxiosError {
@@ -89,6 +90,24 @@ describe('src/api/cardReports', () => {
     expect(Object.keys(row)).not.toContain('userSub');
     expect(Object.keys(row)).not.toContain('email');
     expect(res.data!.nextCursor).toBeNull();
+  });
+
+  it('keeps the R28 anonymous marker only when the server says true', async () => {
+    httpMock.get.mockResolvedValueOnce({
+      data: ok({
+        items: [
+          { ...WIRE, reportId: 1, anonymous: true, note: null },
+          { ...WIRE, reportId: 2, anonymous: 'true' },
+          { ...WIRE, reportId: 3, anonymous: undefined },
+        ],
+      }),
+    });
+    const res = await api.listCardReports({ status: 'open' });
+    expect(res.data!.items.map(r => [r.reportId, r.anonymous, r.note])).toEqual([
+      [1, true, null],
+      [2, false, WIRE.note],
+      [3, false, WIRE.note],
+    ]);
   });
 
   it('turns a payload without an items array into BAD_RESPONSE', async () => {
