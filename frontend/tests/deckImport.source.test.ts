@@ -252,7 +252,7 @@ describe('deckImport SOURCE:', () => {
   });
 
   it('parses every project deck file with every card and no issues', () => {
-    for (const name of ['aws-saa-c03.md', 'claude-ccdv-f.md', 'csharp-basics.md']) {
+    for (const name of ['aws-saa-c03.md', 'aws-saa-fundamentals.md', 'claude-ccdv-f.md', 'csharp-basics.md']) {
       const text = readFileSync(new URL(`../../content/decks/${name}`, import.meta.url), 'utf8');
       const headers = text.match(/^## /gm) ?? [];
       const parsed = parseDeckMarkdown(text);

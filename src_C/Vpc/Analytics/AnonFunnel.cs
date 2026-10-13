@@ -67,8 +67,9 @@ public static class AnonFunnel
   /// <summary>The steps that carry a <c>deckSlug</c>; on any other step a slug is dropped.</summary>
   public static readonly string[] DeckEvents = ["goal_chosen", "starter_started", "starter_completed", "first_pack_opened"];
 
-  /// <summary>The three live decks a learner can choose (mobile <c>GOAL_CHOICES</c>).</summary>
-  public static readonly string[] LiveDeckSlugs = ["aws-saa-c03", "claude-ccdv-f", "csharp-basics"];
+  /// <summary>Every live deck: the three a learner can choose as a goal (mobile <c>GOAL_CHOICES</c>), plus any other
+  /// live deck a first pack can come from. A slug outside this list rejects the whole event, so add each new live deck.</summary>
+  public static readonly string[] LiveDeckSlugs = ["aws-saa-c03", "aws-saa-fundamentals", "claude-ccdv-f", "csharp-basics"];
 
   public static readonly string[] Platforms = ["ios", "android"];
 

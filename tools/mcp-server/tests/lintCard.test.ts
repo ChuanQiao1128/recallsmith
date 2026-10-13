@@ -162,6 +162,12 @@ describe('lint_card', () => {
     expect(claude.length).toBeGreaterThanOrEqual(8);
     expect(aws).not.toContain('`TOPIC:` label');
     expect(aws).not.toContain('TOPIC:');
-    expect([...vocabulary.keys()].sort()).toEqual(['aws-saa-c03', 'claude-ccdv-f', 'csharp-basics']);
+    expect(vocabulary.get('aws-saa-fundamentals')).toEqual([
+      '3.4 网络连接 · 基础',
+      '3.4 网络连接 · VPC 之间',
+      '3.4 网络连接 · 机房连 AWS',
+      '3.4 网络连接 · 收尾',
+    ]);
+    expect([...vocabulary.keys()].sort()).toEqual(['aws-saa-c03', 'aws-saa-fundamentals', 'claude-ccdv-f', 'csharp-basics']);
   });
 });
