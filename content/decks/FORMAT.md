@@ -417,7 +417,6 @@ task statement the family serves.
 | network connectivity | `3.4 网络连接 · 基础` |
 | network connectivity | `3.4 网络连接 · VPC 之间` |
 | network connectivity | `3.4 网络连接 · 机房连 AWS` |
-| network connectivity | `3.4 网络连接 · 收尾` |
 
 ---
 

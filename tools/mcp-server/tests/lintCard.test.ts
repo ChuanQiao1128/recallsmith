@@ -166,7 +166,6 @@ describe('lint_card', () => {
       '3.4 网络连接 · 基础',
       '3.4 网络连接 · VPC 之间',
       '3.4 网络连接 · 机房连 AWS',
-      '3.4 网络连接 · 收尾',
     ]);
     expect([...vocabulary.keys()].sort()).toEqual(['aws-saa-c03', 'aws-saa-fundamentals', 'claude-ccdv-f', 'csharp-basics']);
   });
