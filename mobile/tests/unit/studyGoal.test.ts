@@ -20,6 +20,7 @@ import {
   daysUntilExam,
   examReviewCapMs,
   getStudyGoal,
+  hasHiddenStudyGoal,
   localDayStartMs,
   setStudyGoal,
 } from '../../src/features/goal/studyGoal';
@@ -52,6 +53,16 @@ describe('study goal storage', () => {
     expect(asyncStore.get(STUDY_GOAL_KEY)).toBe(stored);
     await setStudyGoal({ deckSlug: 'aws-saa-fundamentals', examDate: null });
     expect(await getStudyGoal()).toEqual({ deckSlug: 'aws-saa-fundamentals', examDate: null });
+  });
+
+  it('2026-10-14 three decks: tells a goal on a hidden deck apart from no goal', async () => {
+    expect(await hasHiddenStudyGoal()).toBe(false);
+    asyncStore.set(STUDY_GOAL_KEY, JSON.stringify({ deckSlug: 'csharp-basics', examDate: null }));
+    expect(await hasHiddenStudyGoal()).toBe(true);
+    asyncStore.set(STUDY_GOAL_KEY, JSON.stringify({ deckSlug: 'aws-saa-c03', examDate: null }));
+    expect(await hasHiddenStudyGoal()).toBe(false);
+    asyncStore.set(STUDY_GOAL_KEY, '{not json');
+    expect(await hasHiddenStudyGoal()).toBe(false);
   });
 
   it('reads corrupt storage as no goal, and drops a corrupt date but keeps the deck', async () => {

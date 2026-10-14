@@ -54,6 +54,21 @@ export async function getStudyGoal(): Promise<StudyGoal | null> {
   }
 }
 
+/**
+ * 2026-10-14 three decks: true when the stored goal names a hidden deck, which getStudyGoal reads as
+ * no goal. Tells "chose a deck that is now hidden" apart from "chose nothing", so the starter lesson
+ * of such a learner moves to the first deck the app shows instead of closing. Never throws.
+ */
+export async function hasHiddenStudyGoal(): Promise<boolean> {
+  try {
+    const raw = await AsyncStorage.getItem(STUDY_GOAL_KEY);
+    const goal = raw ? normalize(JSON.parse(raw)) : null;
+    return goal != null && isHiddenDeck(goal.deckSlug);
+  } catch {
+    return false;
+  }
+}
+
 /** Saves a goal; throws on an invalid slug or date so a UI bug never stores garbage. */
 export async function setStudyGoal(goal: StudyGoal): Promise<StudyGoal> {
   const next = normalize(goal);

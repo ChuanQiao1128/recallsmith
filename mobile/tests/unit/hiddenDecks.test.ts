@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const fixtures = vi.hoisted(() => ({
   store: new Map<string, string>(),
-  manifest: [] as Array<{ slug: string; title?: string; availability?: string }>,
+  manifest: [] as Array<{ slug: string; title?: string; availability?: string; order?: number }>,
   installed: new Map<string, { Slug: string; Title: string; Version: string; Cards: unknown[] }>(),
 }));
 
@@ -34,10 +34,13 @@ vi.mock('../../src/content/deckCache', () => ({
 }));
 
 import {
-  DECK_FALLBACK_ORDER,
+  DECK_ORDER,
+  FIRST_DECK_SLUG,
   HIDDEN_DECK_SLUGS,
-  compareByFallbackOrder,
+  compareByDeckOrder,
+  deckOrderRank,
   isHiddenDeck,
+  sortByDeckOrder,
   visibleDeckSlug,
   withoutHiddenDecks,
 } from '../../src/content/hiddenDecks';
@@ -57,9 +60,15 @@ function install(slug: string) {
 }
 
 describe('hidden decks policy', () => {
-  it('hides exactly csharp-basics and orders the fallback fundamentals, SAA-C03, Claude', () => {
+  it('hides exactly csharp-basics and orders the decks fundamentals, SAA-C03, Claude', () => {
     expect(HIDDEN_DECK_SLUGS).toEqual(['csharp-basics']);
-    expect(DECK_FALLBACK_ORDER).toEqual(THREE);
+    expect(DECK_ORDER).toEqual(THREE);
+    // The first deck is where a learner whose deck is hidden lands; no ordered deck is hidden.
+    expect(FIRST_DECK_SLUG).toBe('aws-saa-fundamentals');
+    for (const slug of DECK_ORDER) expect(isHiddenDeck(slug)).toBe(false);
+    expect(deckOrderRank('aws-saa-fundamentals')).toBe(0);
+    expect(deckOrderRank('claude-ccdv-f')).toBe(2);
+    expect(deckOrderRank('zeta-deck')).toBe(3);
     expect(isHiddenDeck('csharp-basics')).toBe(true);
     expect(isHiddenDeck(' csharp-basics ')).toBe(true);
     for (const slug of THREE) expect(isHiddenDeck(slug)).toBe(false);
@@ -80,13 +89,26 @@ describe('hidden decks policy', () => {
 
   it('sorts the three decks first in the owner order, then any other deck by slug (not alphabetically overall)', () => {
     const slugs = ['zeta-deck', 'claude-ccdv-f', 'aws-saa-c03', 'alpha-deck', 'aws-saa-fundamentals'];
-    expect(slugs.map((slug) => ({ slug })).sort(compareByFallbackOrder).map((d) => d.slug)).toEqual([
+    expect(slugs.map((slug) => ({ slug })).sort(compareByDeckOrder).map((d) => d.slug)).toEqual([
       'aws-saa-fundamentals',
       'aws-saa-c03',
       'claude-ccdv-f',
       'alpha-deck',
       'zeta-deck',
     ]);
+  });
+
+  it('orders a manifest list by the owner order, keeping the manifest order of any other deck', () => {
+    const list = ['zeta-deck', 'claude-ccdv-f', 'alpha-deck', 'aws-saa-c03', 'aws-saa-fundamentals'].map((slug) => ({ slug }));
+    expect(sortByDeckOrder(list).map((d) => d.slug)).toEqual([
+      'aws-saa-fundamentals',
+      'aws-saa-c03',
+      'claude-ccdv-f',
+      'zeta-deck',
+      'alpha-deck',
+    ]);
+    // A copy: the input keeps its order.
+    expect(list.map((d) => d.slug)).toEqual(['zeta-deck', 'claude-ccdv-f', 'alpha-deck', 'aws-saa-c03', 'aws-saa-fundamentals']);
   });
 
   it('ships no starter pack for a hidden deck, so an offline first run can never install one', async () => {
@@ -123,7 +145,7 @@ describe('a device that still has csharp-basics', () => {
     expect(getActiveDeckSlugSync()).toBe('claude-ccdv-f');
   });
 
-  it('lists the manifest without csharp-basics, keeping the server order (a cached manifest can still name it)', async () => {
+  it('lists the manifest without csharp-basics, in the owner order (a cached manifest can still name it)', async () => {
     fixtures.manifest = [
       { slug: 'csharp-basics', availability: 'live' },
       { slug: 'aws-saa-fundamentals', availability: 'live' },
@@ -132,12 +154,31 @@ describe('a device that still has csharp-basics', () => {
     ];
     expect((await listVisibleManifestDecks()).map((d) => d.slug)).toEqual(THREE);
 
-    // Online, the manifest order wins over the fallback order.
+    // The owner order holds whatever order the server lists the decks in.
     fixtures.manifest = [{ slug: 'claude-ccdv-f' }, { slug: 'csharp-basics' }, { slug: 'aws-saa-c03' }];
     expect((await listVisibleManifestDecks({ preferRemote: true })).map((d) => d.slug)).toEqual([
-      'claude-ccdv-f',
       'aws-saa-c03',
+      'claude-ccdv-f',
     ]);
+  });
+
+  it("orders today's live manifest (SAA-C03 listed ahead of fundamentals, both at 1000) fundamentals, SAA-C03, Claude", async () => {
+    // The shape of manifest.json before the console sets manifest_order 10/20/30 and drops csharp-basics.
+    fixtures.manifest = [
+      { slug: 'csharp-basics', order: 1 },
+      { slug: 'aws-saa-c03', order: 1000 },
+      { slug: 'aws-saa-fundamentals', order: 1000 },
+      { slug: 'claude-ccdv-f', order: 1100 },
+    ];
+    expect((await listVisibleManifestDecks()).map((d) => d.slug)).toEqual(THREE);
+    // And after it, with a deck the app does not name yet: that deck goes after the three.
+    fixtures.manifest = [
+      { slug: 'new-deck', order: 5 },
+      { slug: 'aws-saa-fundamentals', order: 10 },
+      { slug: 'aws-saa-c03', order: 20 },
+      { slug: 'claude-ccdv-f', order: 30 },
+    ];
+    expect((await listVisibleManifestDecks()).map((d) => d.slug)).toEqual([...THREE, 'new-deck']);
   });
 
   it('leaves csharp-basics off the offline shelf and orders the installed decks fundamentals, SAA-C03, Claude', async () => {

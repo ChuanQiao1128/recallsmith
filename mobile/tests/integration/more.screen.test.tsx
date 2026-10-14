@@ -353,7 +353,11 @@ describe('Me tab · MoreScreen + Profile + Help real copy', () => {
     expect(blob).toContain('earn a draw');
     expect(blob).toContain('never sold');
     expect(blob).toContain('a rare card is guaranteed');
-    expect(blob).toContain('The first cards of each deck are in the app, so your first lesson works offline');
+    // 2026-10-14 three decks: only SAA-C03 and Claude ship starter cards; fundamentals needs the network.
+    expect(blob).toContain(
+      'The first cards of the SAA-C03 and Claude decks are in the app, so a first lesson on either works offline; AWS fundamentals downloads the first time your phone is online.',
+    );
+    expect(blob).not.toMatch(/first cards of each deck/i);
     expect(blob).toContain('official documentation');
     // 2.0: no record supports a developer spot-check; checks are automated + AI review passes.
     expect(blob).toContain(
@@ -372,8 +376,10 @@ describe('Me tab · MoreScreen + Profile + Help real copy', () => {
     // R24B §2: both disclaimer lines render as the screen's footer.
     expect(FAQ_DISCLAIMER).toEqual([
       'Not official exam material and not an exam simulator.',
-      'AWS is a trademark of Amazon.com, Inc. Claude and Anthropic are trademarks of Anthropic, PBC. .NET and C# are trademarks of Microsoft Corporation. DeveloperCards is not affiliated with, sponsored by, or endorsed by Amazon, Anthropic or Microsoft.',
+      'AWS is a trademark of Amazon.com, Inc. Claude and Anthropic are trademarks of Anthropic, PBC. DeveloperCards is not affiliated with, sponsored by, or endorsed by Amazon or Anthropic.',
     ]);
+    // 2026-10-14 three decks: the hidden C# deck is named nowhere on Help, footer included.
+    expect(blob).not.toMatch(/C#|\.NET|csharp|Microsoft/i);
     const disclaimer = tree.root.findAll(
       (node) => (node.type as any) === 'Text' && node.props.testID === 'help-faq-disclaimer',
     );

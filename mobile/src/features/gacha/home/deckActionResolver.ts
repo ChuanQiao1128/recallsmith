@@ -5,7 +5,7 @@ import {
   type UpdateInfo,
 } from '../../../content/deckRepository';
 import { getCachedDeck, installDeckAndInvalidate } from '../../../content/deckCache';
-import { compareByFallbackOrder, isHiddenDeck } from '../../../content/hiddenDecks';
+import { compareByDeckOrder, deckOrderRank, isHiddenDeck } from '../../../content/hiddenDecks';
 import { listInstalledDeckEntries } from '../../../content/starterOffline';
 import { listVisibleManifestDecks } from '../../../content/visibleManifest';
 import { syncDailyReminders } from '../../../notifications/reminders';
@@ -87,8 +87,8 @@ export function resetLastKnownDeckUpdatesForTests(): void {
 }
 
 // 2026-10-14 three decks: the update map can still name a hidden deck (a manifest cached before it
-// was hidden); it is left out, and with no manifest order the decks follow DECK_FALLBACK_ORDER
-// (fundamentals, SAA-C03, Claude) instead of the alphabet.
+// was hidden); it is left out. The decks follow DECK_ORDER (fundamentals, SAA-C03, Claude) first,
+// like the manifest list (visibleManifest.ts), then any other deck by its order, then by slug.
 function toDeckEntriesFromUpdates(rawUpdates: Record<string, unknown>): ManifestDeckEntry[] {
   return Object.entries(rawUpdates ?? {})
     .filter(([slug]) => !isHiddenDeck(slug))
@@ -114,11 +114,13 @@ function toDeckEntriesFromUpdates(rawUpdates: Record<string, unknown>): Manifest
       retiredAtMs: null,
     }))
     .sort((a, b) => {
+      const byRank = deckOrderRank(a.slug) - deckOrderRank(b.slug);
+      if (byRank !== 0) return byRank;
       const ao = typeof a.order === 'number' ? a.order : 9999;
       const bo = typeof b.order === 'number' ? b.order : 9999;
       if (ao !== bo) return ao - bo;
-      const byFallback = compareByFallbackOrder(a, b);
-      if (byFallback !== 0) return byFallback;
+      const bySlug = compareByDeckOrder(a, b);
+      if (bySlug !== 0) return bySlug;
       return a.title.localeCompare(b.title);
     });
 }

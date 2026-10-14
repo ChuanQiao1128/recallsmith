@@ -1,8 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { isHiddenDeck, visibleDeckSlug } from '../../../content/hiddenDecks';
+import { FIRST_DECK_SLUG, isHiddenDeck, visibleDeckSlug } from '../../../content/hiddenDecks';
 import type { CardProgress } from '../../../review/model';
-import { getStudyGoal } from '../../goal/studyGoal';
+import { getStudyGoal, hasHiddenStudyGoal } from '../../goal/studyGoal';
 import { normalizeMcq } from '../mcq/normalizeMcq';
 import { getOnboardingStage } from '../onboarding/onboardingPrefs';
 import { isLearnedProgress } from '../selectors/progressSelectors';
@@ -85,11 +85,19 @@ export async function loadStarterLesson(): Promise<StarterLesson | null> {
 
 /**
  * The deck the lesson teaches: the study goal's deck, else the caller's fallback (the active deck).
- * Never a hidden deck (2026-10-14 three decks): getStudyGoal already reads a hidden goal as none.
+ * Null only when the learner chose nothing at all.
+ *
+ * Never a hidden deck (2026-10-14 three decks): getStudyGoal reads a hidden goal as none and a hidden
+ * fallback is dropped. A learner who chose a now-hidden deck (onboarding stores it as both the goal
+ * and the active deck, so both read as none) keeps the lesson on FIRST_DECK_SLUG
+ * (aws-saa-fundamentals) instead of having it closed for good.
  */
 export async function resolveStarterSlug(fallback: string | null): Promise<string | null> {
   const goal = await getStudyGoal();
-  return goal?.deckSlug ?? visibleDeckSlug(fallback);
+  if (goal) return goal.deckSlug;
+  const visible = visibleDeckSlug(fallback);
+  if (visible) return visible;
+  return isHiddenDeck(fallback) || (await hasHiddenStudyGoal()) ? FIRST_DECK_SLUG : null;
 }
 
 /**

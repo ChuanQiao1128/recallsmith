@@ -16,7 +16,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { checkManifestForUpdates, type ManifestDeckEntry } from './deckRepository';
 import { getCachedDeck, installDeckAndInvalidate } from './deckCache';
-import { compareByFallbackOrder, isHiddenDeck } from './hiddenDecks';
+import { compareByDeckOrder, isHiddenDeck } from './hiddenDecks';
 import { STARTER_PACKS, type StarterSlug } from './starter';
 
 export type StarterInstallResult = 'installed-starter' | 'already-installed' | 'unavailable';
@@ -199,7 +199,8 @@ export function upgradeStarterDecks(): Promise<string[]> {
  * read from the installed deck metas and the decks themselves. Never throws.
  *
  * 2026-10-14 three decks: a hidden deck (hiddenDecks.ts) is left out even when it is installed, and
- * the entries follow DECK_FALLBACK_ORDER (fundamentals, SAA-C03, Claude) instead of the alphabet.
+ * the entries follow DECK_ORDER (fundamentals, SAA-C03, Claude, then the rest by slug) instead of the
+ * alphabet.
  */
 export async function listInstalledDeckEntries(): Promise<ManifestDeckEntry[]> {
   let keys: readonly string[] = [];
@@ -218,7 +219,7 @@ export async function listInstalledDeckEntries(): Promise<ManifestDeckEntry[]> {
   }
 
   const entries: ManifestDeckEntry[] = [];
-  const ordered = [...slugs].map((slug) => ({ slug })).sort(compareByFallbackOrder);
+  const ordered = [...slugs].map((slug) => ({ slug })).sort(compareByDeckOrder);
   // Metas of other users' decks are skipped here: getCachedDeck reads the current user's only.
   for (const { slug } of ordered) {
     let deck: Awaited<ReturnType<typeof getCachedDeck>> = null;

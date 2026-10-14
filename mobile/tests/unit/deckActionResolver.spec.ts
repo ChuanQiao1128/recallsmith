@@ -245,10 +245,34 @@ describe('deckActionResolver', () => {
       remoteSha256: null,
     });
 
-    it('shelves the manifest decks in manifest order and never csharp-basics, even when a cached manifest lists it', async () => {
+    it('shelves the manifest decks in the owner order and never csharp-basics, even when a cached manifest lists it', async () => {
       listManifestDecksMock.mockImplementationOnce(async () =>
         ['csharp-basics', 'aws-saa-fundamentals', 'aws-saa-c03', 'claude-ccdv-f'].map(entry) as any,
       );
+      const summary = await loadHomeDeckSummaries({ premium: false, remote: true });
+      expect(summary.deckSummaries.map((d) => d.slug)).toEqual(['aws-saa-fundamentals', 'aws-saa-c03', 'claude-ccdv-f']);
+    });
+
+    it("shelves today's live manifest (SAA-C03 listed ahead of fundamentals, both at 1000) fundamentals first", async () => {
+      const live: Array<[string, number]> = [
+        ['csharp-basics', 1],
+        ['aws-saa-c03', 1000],
+        ['aws-saa-fundamentals', 1000],
+        ['claude-ccdv-f', 1100],
+      ];
+      listManifestDecksMock.mockImplementationOnce(async () => live.map(([slug, order]) => ({ ...entry(slug), order })) as any);
+      const summary = await loadHomeDeckSummaries({ premium: false, remote: true });
+      expect(summary.deckSummaries.map((d) => d.slug)).toEqual(['aws-saa-fundamentals', 'aws-saa-c03', 'claude-ccdv-f']);
+    });
+
+    it('with no manifest, keeps the owner order over the update map order values', async () => {
+      const withOrder = (slug: string, order: number) => ({ ...update(slug), order });
+      checkManifestForUpdatesMock.mockResolvedValueOnce({
+        'claude-ccdv-f': withOrder('claude-ccdv-f', 5),
+        'aws-saa-c03': withOrder('aws-saa-c03', 1000),
+        'aws-saa-fundamentals': withOrder('aws-saa-fundamentals', 1000),
+        'csharp-basics': withOrder('csharp-basics', 1),
+      } as any);
       const summary = await loadHomeDeckSummaries({ premium: false, remote: true });
       expect(summary.deckSummaries.map((d) => d.slug)).toEqual(['aws-saa-fundamentals', 'aws-saa-c03', 'claude-ccdv-f']);
     });

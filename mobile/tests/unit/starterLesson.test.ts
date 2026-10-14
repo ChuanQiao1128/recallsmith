@@ -179,8 +179,10 @@ describe('starter lesson', () => {
     store.set(STARTER_LESSON_KEY, JSON.stringify({ slug: 'csharp-basics', uids: ['c1'] }));
     // The goal reads as none and the record as missing: the deck that opens becomes the lesson.
     expect(await resolveStarterSlug('aws-saa-fundamentals')).toBe('aws-saa-fundamentals');
-    expect(await resolveStarterSlug(null)).toBeNull();
-    expect(await resolveStarterSlug('csharp-basics')).toBeNull();
+    // With no visible deck to fall back on, the lesson moves to the first deck the app shows instead of
+    // closing: the learner did choose a deck, it is only hidden.
+    expect(await resolveStarterSlug(null)).toBe('aws-saa-fundamentals');
+    expect(await resolveStarterSlug('csharp-basics')).toBe('aws-saa-fundamentals');
     expect(await isStarterLessonDeck('csharp-basics')).toBe(false);
     expect(await loadStarterUids('csharp-basics')).toEqual(new Set());
     // The hidden deck is never recorded as the lesson, even when it opens first.
@@ -191,5 +193,26 @@ describe('starter lesson', () => {
     expect(await loadStarterUids('aws-saa-fundamentals')).toEqual(new Set(['f1', 'f2']));
     // Nothing about the hidden deck was deleted: its goal is still stored.
     expect(JSON.parse(store.get(GOAL_KEY)!)).toEqual({ deckSlug: 'csharp-basics', examDate: null });
+  });
+
+  it('2026-10-14 three decks: only a learner who chose nothing has no lesson deck', async () => {
+    await startStarterLesson();
+    // No goal, no active deck: nothing to teach (Home then closes the stage).
+    expect(await resolveStarterSlug(null)).toBeNull();
+    // No goal, a hidden active deck: the lesson goes to the first deck the app shows.
+    expect(await resolveStarterSlug('csharp-basics')).toBe('aws-saa-fundamentals');
+    // A visible goal always wins.
+    store.set(GOAL_KEY, JSON.stringify({ deckSlug: 'claude-ccdv-f', examDate: null }));
+    expect(await resolveStarterSlug(null)).toBe('claude-ccdv-f');
+    expect(await resolveStarterSlug('csharp-basics')).toBe('claude-ccdv-f');
+    // A hidden goal with a visible active deck: the active deck.
+    store.set(GOAL_KEY, JSON.stringify({ deckSlug: 'csharp-basics', examDate: null }));
+    expect(await resolveStarterSlug('aws-saa-c03')).toBe('aws-saa-c03');
+    // The fallback deck records the lesson as usual.
+    expect(await isStarterLessonDeck('aws-saa-fundamentals')).toBe(true);
+    expect(await ensureStarterLesson({ Slug: 'aws-saa-fundamentals', Cards: [qa('f1', 1)] })).toEqual({
+      slug: 'aws-saa-fundamentals',
+      uids: ['f1'],
+    });
   });
 });

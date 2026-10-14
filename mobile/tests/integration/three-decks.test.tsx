@@ -280,12 +280,12 @@ const DECKS: Record<string, FlatDeck> = {
 const deckPath = (slug: string) => `decks/${slug}/builds/${DECKS[slug].version}/deck.json`;
 
 // A manifest cached before csharp-basics was hidden: it still lists the deck, and first.
-const STALE_MANIFEST = {
+const manifestOf = (decks: Array<[slug: string, order: number]>) => ({
   schemaVersion: 2,
   generatedAtMs: 1,
   prefix: 'content',
-  decks: ['csharp-basics', ...THREE].map((slug, i) => ({
-    order: (i + 1) * 10,
+  decks: decks.map(([slug, order]) => ({
+    order,
     slug,
     title: DECKS[slug].title,
     locale: 'en-US',
@@ -299,7 +299,18 @@ const STALE_MANIFEST = {
     path: deckPath(slug),
     sha256: null,
   })),
-};
+});
+const STALE_MANIFEST = manifestOf(['csharp-basics', ...THREE].map((slug, i) => [slug, (i + 1) * 10]));
+// manifest.json as served on 2026-10-14, before the console change (manifest_order 10/20/30 and
+// csharp-basics dropped): csharp-basics first, then SAA-C03 listed AHEAD of fundamentals at the same
+// order 1000, then Claude. The app's own order must still put fundamentals first.
+const LIVE_MANIFEST_2026_10_14 = manifestOf([
+  ['csharp-basics', 1],
+  ['aws-saa-c03', 1000],
+  ['aws-saa-fundamentals', 1000],
+  ['claude-ccdv-f', 1100],
+]);
+let manifestBody: unknown = STALE_MANIFEST;
 
 let online = false;
 const fetchCalls: string[] = [];
@@ -308,7 +319,7 @@ const fetchMock = vi.fn(async (input: any) => {
   fetchCalls.push(url);
   if (!online) throw new TypeError('Network request failed');
   const slug = Object.keys(DECKS).find((s) => url === `${BASE}/content/${deckPath(s)}`);
-  const body = url === MANIFEST_URL ? STALE_MANIFEST : slug ? DECKS[slug] : null;
+  const body = url === MANIFEST_URL ? manifestBody : slug ? DECKS[slug] : null;
   if (!body) return new Response('not found', { status: 404 });
   return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
 });
@@ -363,6 +374,7 @@ describe('2026-10-14 three decks: csharp-basics is hidden everywhere', () => {
     dirs.clear();
     fetchCalls.length = 0;
     online = false;
+    manifestBody = STALE_MANIFEST;
     vi.stubGlobal('fetch', fetchMock);
     invalidateDeckCache();
     invalidateDrawStateCache();
@@ -383,7 +395,11 @@ describe('2026-10-14 three decks: csharp-basics is hidden everywhere', () => {
     logSpy.mockRestore();
   });
 
-  it('online with a stale manifest: Home, Library, Draw and SessionCard show the three decks in order and open fundamentals, never csharp-basics', async () => {
+  it.each([
+    ['a stale manifest that still lists csharp-basics', STALE_MANIFEST],
+    ["today's live manifest (SAA-C03 listed ahead of fundamentals, both at 1000)", LIVE_MANIFEST_2026_10_14],
+  ])('online with %s: Home, Library, Draw and SessionCard show the three decks in order and open fundamentals, never csharp-basics', async (_label, manifest) => {
+    manifestBody = manifest;
     await seedCsharpDevice();
     online = true;
 
@@ -392,7 +408,7 @@ describe('2026-10-14 three decks: csharp-basics is hidden everywhere', () => {
     expect(await getStudyGoal()).toBeNull();
     expect(store.get(ACTIVE_KEY)).toBe('csharp-basics');
 
-    // Home shelf: the manifest order, csharp-basics left out although the manifest lists it.
+    // Home shelf: the owner order, csharp-basics left out although the manifest lists it.
     const summary = await loadHomeDeckSummaries({ premium: false, remote: true });
     expect(summary.deckSummaries.map((d) => d.slug)).toEqual(THREE);
 
