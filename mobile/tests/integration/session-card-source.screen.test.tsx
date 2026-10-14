@@ -413,10 +413,14 @@ describe('SessionCardScreen source line (U3)', () => {
     expect(byTestID(tree, 'session-card-source')).toHaveLength(0);
   });
 
-  it('adds no second source to the study view, which shows its own SOURCE block', async () => {
+  it('adds no second source to the study view, which shows its own SOURCE block once the answer is open', async () => {
     serve([NEW_A], [fresh('new-a')], 1);
     const { tree } = await mount();
     expect(byTestID(tree, 'learning-study-view')).toHaveLength(1);
+    // Question first (2026-10-14 learning flow): no source of either kind before Show answer.
+    expect(byTestID(tree, 'learning-study-source')).toHaveLength(0);
+    expect(byTestID(tree, 'session-card-source')).toHaveLength(0);
+    await pressLabel(tree, 'Show answer');
     expect(byTestID(tree, 'learning-study-source')).toHaveLength(1);
     expect(byTestID(tree, 'session-card-source')).toHaveLength(0);
   });

@@ -60,7 +60,8 @@ describe('buildRatedSessionState schedules with FSRS', () => {
     expect(next).toMatchObject({ ...scheduleWithFsrs(fresh(), 'good', T), lastSeenRevision: 1 });
   });
 
-  it('a passed learning check (hard) is initState(hard) and due tomorrow', () => {
+  // 2026-10-14 learning flow: the study view's Got it sends hard with learningCheck.
+  it('Got it on the study view (hard, learningCheck) is initState(hard) and due tomorrow', () => {
     const next = rate(fresh(), 'hard', { learningCheck: true });
     expect(next.nextReviewAt).toBe(T + DAY_MS);
     expect(next.stage).toBe(0);
@@ -68,7 +69,7 @@ describe('buildRatedSessionState schedules with FSRS', () => {
     expect(next.fsrsDifficulty).toBeCloseTo(6.4883, 4);
   });
 
-  it('a failed learning check (again) keeps the 10 minute relearn step', () => {
+  it('an again with learningCheck still keeps the 10 minute relearn step', () => {
     const next = rate(fresh(), 'again', { learningCheck: true });
     expect(next.nextReviewAt).toBe(T + 10 * MINUTE_MS);
     expect(next.lapses).toBe(1);
@@ -93,7 +94,7 @@ describe('buildRatedSessionState schedules with FSRS', () => {
     expect(next).toEqual({ ...scheduleNextReview(fresh(), 'good', now), lastSeenRevision: 1 });
     expect(next.nextReviewAt).toBe(T + 2 * DAY_MS);
     expect(next.fsrsAnchorAt).toBeUndefined();
-    // The learning check is the ladder's hard too.
+    // Got it (the learning check) is the ladder's hard too.
     expect(rate(fresh(), 'hard', { learningCheck: true }).nextReviewAt).toBe(T + DAY_MS);
   });
 });

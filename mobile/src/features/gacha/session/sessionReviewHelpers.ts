@@ -64,11 +64,9 @@ export function buildRatedSessionState(params: {
   kindHint?: McqKindHint | null;
   /** A Mistake Book focus run: a card that is not due gets no scheduler credit (scheduleFocusReview). */
   focusRun?: boolean;
-  /** Cards studied this session (R22 §6): their recall check is dealt by the screen, never by the planner. */
-  excludeUids?: ReadonlySet<string> | null;
   /** The study goal's exam date (R22 §7): no review is scheduled after the start of the day before it. */
   examDate?: string | null;
-  /** The recall check of a card studied this session (R22 §6): a pass is scheduled as FSRS initState(hard), due tomorrow. */
+  /** Got it on the study view (R22 §6, 2026-10-14 learning flow): a pass is scheduled as FSRS initState(hard), due tomorrow. */
   learningCheck?: boolean;
 }): {
   updatedProgress: CardProgress[];
@@ -78,10 +76,11 @@ export function buildRatedSessionState(params: {
   prevLearnedCount: number;
   remainingDueCount: number;
 } {
-  const { current, progress, rating, mode, sessionDone, sessionLimit, now, cardIndex, ownedSet = null, kindHint = null, focusRun = false, excludeUids = null, examDate = null, learningCheck = false } = params;
+  const { current, progress, rating, mode, sessionDone, sessionLimit, now, cardIndex, ownedSet = null, kindHint = null, focusRun = false, examDate = null, learningCheck = false } = params;
 
   // R24 §4.3: FSRS behind features.fsrs.enabled (scheduleWithFsrs falls back to the ladder when it is off).
-  // Only a passed check is the learning-check schedule; a Forgot keeps the 10 minute relearn step.
+  // Only a pass is the learning-check schedule; an again keeps the 10 minute relearn step. (Got it
+  // always sends hard since the 2026-10-14 learning flow; the guard stays for any other caller.)
   const scheduled = focusRun
     ? scheduleFocusReview(current.progress, rating, now)
     : scheduleWithFsrs(current.progress, rating, now.getTime(), { learningCheck: learningCheck && rating !== 'again' });
@@ -107,7 +106,6 @@ export function buildRatedSessionState(params: {
           index: cardIndex,
           ownedSet,
           kindHint,
-          excludeUids,
         })
       : null;
   const remainingDueCount = countDueToday(updatedProgress, new Date(now.getTime()), ownedSet);

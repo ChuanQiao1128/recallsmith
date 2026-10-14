@@ -18,6 +18,8 @@ vi.mock('react-native', () => {
         typeof children === 'function' ? children({ pressed: false }) : children,
       ),
     StyleSheet: { create: (styles: any) => styles },
+    // CodeBlock (under CardAnswerSections) reads Platform.select at module scope.
+    Platform: { OS: 'ios', select: (o: any) => o.ios ?? o.default },
     useWindowDimensions: () => dims,
   };
 });
@@ -28,6 +30,8 @@ import {
   packSizeForWindowHeight,
 } from '../../src/theme/dynamicType';
 import { RatingBar } from '../../src/features/gacha/components/RatingBar';
+import { LearningStudyDock } from '../../src/features/gacha/components/LearningStudyView';
+import { CardAnswerSections } from '../../src/features/gacha/components/CardAnswerSections';
 
 function flatten(style: any): Record<string, any> {
   if (Array.isArray(style)) {
@@ -97,5 +101,49 @@ describe('dynamicType policy', () => {
       expect(text.props.maxFontSizeMultiplier).toBe(CHROME_MAX_FONT_SCALE);
     }
     dims.fontScale = 1.0;
+  });
+
+  // 2026-10-14 learning flow: the study dock is chrome (capped); the highlighted 答 line is card body
+  // text (never capped, never clamped), and the key-line hint is chrome like the plain one.
+  it('caps the study dock at CHROME_MAX_FONT_SCALE before and after Show answer', () => {
+    for (const revealed of [false, true]) {
+      let tree!: renderer.ReactTestRenderer;
+      act(() => {
+        tree = renderer.create(<LearningStudyDock revealed={revealed} onShowAnswer={() => {}} onGotIt={() => {}} />);
+      });
+      const texts = tree.root.findAll((node) => (node.type as any) === 'Text');
+      expect(texts).toHaveLength(2);
+      for (const text of texts) expect(text.props.maxFontSizeMultiplier).toBe(CHROME_MAX_FONT_SCALE);
+    }
+  });
+
+  it('never caps or clamps the highlighted key line or the lines after it', () => {
+    let tree!: renderer.ReactTestRenderer;
+    act(() => {
+      tree = renderer.create(
+        <CardAnswerSections
+          card={{ StableUid: 'k', OrderInDeck: 1, Difficulty: 1, Question: 'Q', Explanation: '答：结论。\n因为：原因。' } as any}
+        />,
+      );
+    });
+    const body = tree.root
+      .findAll((node) => (node.type as any) === 'Text')
+      .filter((node) => node.props.children !== 'EXPLANATION');
+    expect(body.map((node) => node.props.children)).toEqual(['答：结论。', '因为：原因。']);
+    for (const text of body) {
+      expect(text.props.maxFontSizeMultiplier).toBeUndefined();
+      expect(text.props.numberOfLines).toBeUndefined();
+    }
+  });
+
+  it('caps the key-line hint like every other RatingBar text', () => {
+    dims.fontScale = 1;
+    let tree!: renderer.ReactTestRenderer;
+    act(() => {
+      tree = renderer.create(<RatingBar onRate={() => {}} revealed keyLine />);
+    });
+    const hint = tree.root.find((node) => (node.type as any) === 'Text' && node.props.testID === 'review-rating-hint');
+    expect(hint.props.children).toBe('Did you get the highlighted line?');
+    expect(hint.props.maxFontSizeMultiplier).toBe(CHROME_MAX_FONT_SCALE);
   });
 });

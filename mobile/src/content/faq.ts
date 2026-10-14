@@ -13,7 +13,7 @@ export type FaqEntry = { q: string; a: string };
 export const FAQ_LIST: readonly FaqEntry[] = [
   {
     q: 'How do I earn draws?',
-    a: "Learn a new card to earn a draw for its pack: the first time you answer Remembered, Hard, Good or Easy, or get a multiple-choice card right. Clearing all of that pack's due cards adds one more, once a day. Every pack gets 3 draws the first time you open it, and your first lesson ends with 3 draws for its pack. A pack saves up to 60 draws, plus 5 extra draws waiting. Draws are never sold.",
+    a: "Learn a new card to earn a draw for its pack: the first time you finish it, by tapping Got it on a new card or answering Remembered, Hard, Good or Easy, or by getting a multiple-choice card right. Clearing all of that pack's due cards adds one more, once a day. Every pack gets 3 draws the first time you open it, and your first lesson ends with 3 draws for its pack. A pack saves up to 60 draws, plus 5 extra draws waiting. Draws are never sold.",
   },
   {
     q: 'Why is Draw locked?',

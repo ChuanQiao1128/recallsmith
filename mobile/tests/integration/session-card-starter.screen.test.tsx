@@ -170,7 +170,7 @@ vi.mock('../../src/features/gacha/mistakes/mistakeBook', () => ({
 import { SessionCardScreen } from '../../src/screens/SessionCardScreen';
 import { resetSessionStore } from '../../src/features/gacha/session/sessionStore';
 import { ensureDeckBootstrap, loadDeckWallet } from '../../src/features/gacha/rewards/deckWallet';
-import { loadDrawState } from '../../src/features/gacha/draw/drawStateStore';
+import { loadDrawState, saveDrawState } from '../../src/features/gacha/draw/drawStateStore';
 import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStateCache';
 import { recordReviewEvent } from '../../src/sync/progressSync';
 
@@ -286,25 +286,18 @@ describe('SessionCardScreen starter lesson', () => {
     await flush();
   }
 
-  // R22 §6 (S01/S02): a never-reviewed Q/A card opens on the study view with one Got it; it comes
-  // back at the end of the run as a recall check, asked with Forgot / Remembered.
+  // R22 §6, 2026-10-14 learning flow: a never-reviewed Q/A card opens on the study view with the
+  // question alone; Show answer opens the answer and Got it commits the card (no recall check later).
   async function studyGotIt(tree: renderer.ReactTestRenderer) {
-    await act(async () => {
-      tree.root.find((node) => node.props?.testID === 'learning-study-got-it' && (node.type as any) === 'Pressable').props.onPress();
-      await Promise.resolve();
-    });
-    await flush();
+    await pressLabel(tree, 'Show answer');
+    await pressLabel(tree, 'Got it');
   }
 
-  async function checkRemembered(tree: renderer.ReactTestRenderer) {
-    await pressLabel(tree, 'Reveal answer');
-    await pressLabel(tree, 'Remembered');
-  }
-
-  it('teaches the first 5 non-MCQ cards with nothing drawn, then opens Draw with the 3-pull bootstrap', async () => {
+  it('teaches the first 5 non-MCQ cards with nothing drawn, then opens Draw after the 5th Got it with the 3-pull bootstrap', async () => {
     const { tree, navigation } = await mount();
 
-    // Study: c1..c5 on the study view (the MCQ is skipped). Got it records nothing.
+    // Study: c1..c5 on the study view (the MCQ is skipped). Each Got it is the card's review; the
+    // lesson completes only on the 5th, and no R1 pull lands for any of them.
     const studied: string[] = [];
     for (const uid of ['c1', 'c2', 'c3', 'c4', 'c5']) {
       expect(hasText(tree, `Question ${uid}`)).toBe(true);
@@ -315,40 +308,51 @@ describe('SessionCardScreen starter lesson', () => {
       );
       expect(shown).toHaveLength(1);
       studied.push(String(shown[0].props.children).replace(/^Question /, ''));
-      await studyGotIt(tree);
-      expect(recordReviewEvent).not.toHaveBeenCalled();
+      expect(await loadDeckWallet('csharp')).toEqual({ availablePulls: 0, reservePulls: 0 });
       expect(navigation.replace).not.toHaveBeenCalled();
+      await studyGotIt(tree);
     }
     expect(studied).toEqual(['c1', 'c2', 'c3', 'c4', 'c5']);
 
-    // Checks, in study order. The lesson completes only on the 5th; no R1 pull for any of them.
-    const checked: string[] = [];
-    for (const uid of ['c1', 'c2', 'c3', 'c4', 'c5']) {
-      expect(hasText(tree, `Question ${uid}`)).toBe(true);
-      expect(await loadDeckWallet('csharp')).toEqual({ availablePulls: 0, reservePulls: 0 });
-      expect(navigation.replace).not.toHaveBeenCalled();
-      checked.push(uid);
-      await checkRemembered(tree);
-    }
-    expect(checked).toEqual(['c1', 'c2', 'c3', 'c4', 'c5']);
-
-    // One card_reviewed per check: reviewStage learning_check, Remembered → hard.
+    // One card_reviewed per Got it: reviewStage learning_study, rating hard.
     expect(vi.mocked(recordReviewEvent).mock.calls.map((call) => {
       const event = call[0] as any;
       return [event.stableUid, event.reviewStage, event.rating];
-    })).toEqual(['c1', 'c2', 'c3', 'c4', 'c5'].map((uid) => [uid, 'learning_check', 'hard']));
+    })).toEqual(['c1', 'c2', 'c3', 'c4', 'c5'].map((uid) => [uid, 'learning_study', 'hard']));
 
+    // The 5th Got it opens Draw: no recall check, no summary.
     expect(navigation.replace).toHaveBeenCalledTimes(1);
     expect(navigation.replace).toHaveBeenCalledWith('Draw', { slug: 'csharp', rewardPending: true });
     expect(navigation.replace).not.toHaveBeenCalledWith('SessionSummary', expect.anything());
+    expect(hasText(tree, 'Reveal answer')).toBe(false);
     expect(store.get(STAGE_KEY)).toBe('done');
     // Net 3 pulls: the bootstrap, and nothing for the five lesson cards.
     expect(await loadDeckWallet('csharp')).toEqual({ availablePulls: 3, reservePulls: 0 });
     // The reminder prompt is armed at completion; DrawResult's first Done shows it.
     expect(store.get(PROMPT_KEY)).toBe('1');
-    // The lesson cards keep their progress and were never written into the draw state.
+    // The lesson cards keep their progress (due tomorrow) and were never written into the draw state.
     expect((await loadDrawState('csharp')).owned).toEqual([]);
     expect(progressState.filter((p) => (p.lastReviewedAt ?? 0) > 0).map((p) => p.stableUid)).toEqual(['c1', 'c2', 'c3', 'c4', 'c5']);
+    for (const p of progressState.filter((entry) => (entry.lastReviewedAt ?? 0) > 0)) {
+      expect(p.nextReviewAt).toBe(FIXED_NOW_MS + 86_400_000);
+    }
+  });
+
+  it('after the lesson, Got it on a drawn new card pays its draw (R1) at once', async () => {
+    store.set(STAGE_KEY, 'done');
+    progressState = CARDS.map((c) => (['c1', 'c2', 'c3', 'c4', 'c5'].includes(c.StableUid) ? learned(c.StableUid) : untouched(c.StableUid)));
+    await saveDrawState('csharp', { owned: ['c6'], pity: null });
+    const { tree, navigation } = await mount();
+    const before = await loadDeckWallet('csharp');
+
+    expect(hasText(tree, 'Question c6')).toBe(true);
+    await studyGotIt(tree);
+
+    expect(await loadDeckWallet('csharp')).toEqual({ ...before, availablePulls: before.availablePulls + 1 });
+    expect(navigation.replace).toHaveBeenCalledWith(
+      'SessionSummary',
+      expect.objectContaining({ reward: expect.objectContaining({ newCardPulls: 1, newCardUids: ['c6'] }) }),
+    );
   });
 
   it('finishes straight away when every lesson card is already studied (closed before the reward)', async () => {

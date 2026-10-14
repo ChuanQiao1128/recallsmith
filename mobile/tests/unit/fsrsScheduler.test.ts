@@ -3,8 +3,8 @@
 // The memory model itself is pinned by fsrs.test.ts against ts-fsrs reference
 // vectors; this file pins what the adapter adds on top: which memory state a
 // progress row stands for, the 10 minute relearn step, the ladder fields old
-// clients and the server still read, the learning check, the horizon cap and
-// the kill switch.
+// clients and the server still read, the learning check (the study view's Got
+// it since the 2026-10-14 learning flow), the horizon cap and the kill switch.
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { applyRemoteFeatures } from '../../src/config/featureFlags';
@@ -229,7 +229,7 @@ describe('scheduleWithFsrs: ladder stage mapping', () => {
   });
 });
 
-describe('scheduleWithFsrs: learning check', () => {
+describe('scheduleWithFsrs: learning check (Got it on the study view)', () => {
   it('stores initState(hard) and promises tomorrow', () => {
     const next = scheduleWithFsrs(fresh(), 'hard', T0, { learningCheck: true });
     expect(next.fsrsStability).toBeCloseTo(1.1839, 4);

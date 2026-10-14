@@ -17,6 +17,8 @@ vi.mock('react-native', () => {
         typeof children === 'function' ? children({ pressed: false }) : children,
       ),
     ScrollView: ({ children, ...props }: any) => React.createElement('ScrollView', props, children),
+    // CodeBlock (under CardAnswerSections) reads Platform.select at module scope.
+    Platform: { OS: 'ios', select: (o: any) => o.ios ?? o.default },
     StyleSheet: { create: (styles: any) => styles },
   };
 });
@@ -42,6 +44,8 @@ import { LibraryCardTile, libraryTileA11yLabel } from '../../src/features/gacha/
 import type { LibraryCardRow } from '../../src/features/gacha/library/libraryMapper';
 import AppInfoScreen from '../../src/components/AppInfoScreen';
 import { ContentSection } from '../../src/features/gacha/settings/content/ContentSection';
+import { LearningStudyDock } from '../../src/features/gacha/components/LearningStudyView';
+import { CardAnswerSections } from '../../src/features/gacha/components/CardAnswerSections';
 
 function render(element: React.ReactElement) {
   let tree!: renderer.ReactTestRenderer;
@@ -86,6 +90,35 @@ describe('G34 VoiceOver pass', () => {
     expect(buttons.map((b) => b.props.accessibilityRole)).toEqual(['button', 'button']);
     expect(buttons.map((b) => b.props.accessibilityLabel)).toEqual(expectedLabels);
     for (const b of buttons) expect(b.props.accessibilityState.disabled).toBe(true);
+  });
+
+  // 2026-10-14 learning flow: the study dock's one action at a time is a labelled button.
+  it('LearningStudyDock speaks Show answer, then Got it, as buttons with their disabled state', () => {
+    for (const disabled of [false, true]) {
+      const before = pressables(render(<LearningStudyDock revealed={false} disabled={disabled} onShowAnswer={() => {}} onGotIt={() => {}} />));
+      expect(before.map((b) => b.props.testID)).toEqual(['learning-study-show-answer']);
+      expect(before[0].props.accessibilityRole).toBe('button');
+      expect(before[0].props.accessibilityState).toEqual({ disabled });
+      expect(before[0].findAll((n) => (n.type as any) === 'Text')[0].props.children).toBe('Show answer');
+
+      const after = pressables(render(<LearningStudyDock revealed disabled={disabled} onShowAnswer={() => {}} onGotIt={() => {}} />));
+      expect(after.map((b) => b.props.testID)).toEqual(['learning-study-got-it']);
+      expect(after[0].props.accessibilityRole).toBe('button');
+      expect(after[0].props.accessibilityState).toEqual({ disabled });
+      expect(after[0].findAll((n) => (n.type as any) === 'Text')[0].props.children).toBe('Got it');
+    }
+  });
+
+  it('the highlighted 答 line is read first in the answer and says it is the highlighted line', () => {
+    const tree = render(
+      <CardAnswerSections
+        card={{ StableUid: 'k', OrderInDeck: 1, Difficulty: 1, Question: 'Q', Explanation: '答：结论。\n因为：原因。\n考法：问法。' } as any}
+      />,
+    );
+    const spoken = tree.root
+      .findAll((n) => (n.type as any) === 'Text')
+      .map((n) => n.props.accessibilityLabel ?? n.props.children);
+    expect(spoken).toEqual(['EXPLANATION', 'Highlighted line, 答：结论。', '因为：原因。\n考法：问法。']);
   });
 
   it('BottomTabBar is a tablist whose active tab reports selected', () => {

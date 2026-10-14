@@ -350,18 +350,16 @@ describe('ownership gate — every entry point', () => {
         />,
       );
 
-      // The drawn card is new, so it is studied first (R22 §6) and checked at the end of the run;
-      // neither the study's next pick nor the check's may reach the stranger.
+      // The drawn card is new, so it opens on the study view (R22 §6); its Got it is the rating
+      // (2026-10-14 learning flow), and the pick after it must not reach the stranger.
+      expect(textBlob(tree)).toContain('Drawn question');
       await act(async () => {
-        pressText(tree, 'Got it');
+        pressText(tree, 'Show answer');
       });
       await flush();
       expect(textBlob(tree)).not.toContain('Stranger question');
       await act(async () => {
-        pressText(tree, 'Reveal answer');
-      });
-      await act(async () => {
-        pressText(tree, 'Remembered');
+        pressText(tree, 'Got it');
         await Promise.resolve();
       });
       await flush();

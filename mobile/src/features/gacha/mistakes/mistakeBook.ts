@@ -24,8 +24,9 @@ export type MistakeOutcome = {
   topic: string | null;
   rating: ReviewRating;
   mcqVerdict?: McqVerdict | null;
-  /** R22 §6: the end-of-session recall check of a card studied this session. Mistakes start once a
-   *  card is learned, so a check outcome — Forgot included — never writes the book. */
+  /** R22 §6: the study view's Got it on a never-reviewed card (2026-10-14 learning flow; it was the
+   *  end-of-session recall check before). Mistakes start once a card is learned, so this outcome
+   *  never writes the book. */
   learningCheck?: boolean;
   at: number;
 };

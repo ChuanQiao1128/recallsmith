@@ -10,13 +10,15 @@ vi.mock('react-native', () => {
     View: ({ children, ...props }: any) => React.createElement('View', props, children),
     Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
     Alert: { alert: () => {} },
-    Platform: { OS: 'ios' },
+    // CodeBlock (imported by CardAnswerSections) reads Platform.select at module scope.
+    Platform: { OS: 'ios', select: (o: any) => o.ios ?? o.default },
     StyleSheet: { create: (styles: any) => styles },
     useColorScheme: () => scheme.current,
   };
 });
 
 import { INLINE_CODE_TEST_ID, InlineCodeText } from '../../src/features/gacha/components/InlineCodeText';
+import { CardAnswerSections } from '../../src/features/gacha/components/CardAnswerSections';
 import { renderSimpleMarkdown } from '../../src/features/gacha/session/reviewContentHelpers';
 import { buildLibraryCardRows } from '../../src/features/gacha/library/libraryMapper';
 
@@ -78,6 +80,38 @@ describe('InlineCodeText', () => {
     expect((labelled.toJSON() as any).props.accessibilityLabel).toBe('custom');
     const stray = mount(<InlineCodeText text="a lone ` tick" />);
     expect((stray.toJSON() as any).children).toEqual(['a lone ` tick']);
+  });
+});
+
+// 2026-10-14 learning flow (B3): the highlighted 答 line is card text like any other, so its spans
+// render as code too, and its spoken label drops the backticks.
+describe('the answer key line', () => {
+  beforeEach(() => {
+    scheme.current = 'light';
+  });
+
+  const card = (explanation: string): any => ({ StableUid: 'k', OrderInDeck: 1, Difficulty: 1, Question: 'Q', Explanation: explanation });
+
+  it('renders inline code in the key line and in the lines after it, without backticks', () => {
+    const tree = mount(<CardAnswerSections card={card('答：用 `aws s3 sync` 同步。\n因为：它只传 `changed` 的文件。')} />);
+    const key = tree.root.findAll((node) => typeof node.type === 'string' && node.props.testID === 'answer-key-line');
+    expect(key).toHaveLength(1);
+    const keySegments = key[0].findAll((node) => typeof node.type === 'string' && node.props.testID === INLINE_CODE_TEST_ID);
+    expect(keySegments.map((node) => node.props.children)).toEqual(['aws s3 sync']);
+    expect(flatStyle(keySegments[0].props.style).fontFamily).toBe('Menlo');
+    const keyText = key[0].findAll((node) => (node.type as any) === 'Text' && node.props.accessibilityLabel !== undefined);
+    expect(keyText.map((node) => node.props.accessibilityLabel)).toEqual(['Highlighted line, 答：用 aws s3 sync 同步。']);
+    expect(codeSegments(tree).map((node) => node.props.children)).toEqual(['aws s3 sync', 'changed']);
+    expect(strings(tree.toJSON()).some((text) => text.includes('`'))).toBe(false);
+  });
+
+  it('keeps an English explanation with a span as one body Text, with no key line', () => {
+    const tree = mount(<CardAnswerSections card={card('Use `List<int>` here.')} />);
+    const body = tree.root.findAll((node) => typeof node.type === 'string' && node.props.accessibilityLabel === 'Use List<int> here.');
+    expect(body).toHaveLength(1);
+    expect(flatStyle(body[0].props.style)).toEqual({ fontSize: 15, lineHeight: 22, color: '#3A2C1F', fontWeight: '500' });
+    expect(codeSegments(tree).map((node) => node.props.children)).toEqual(['List<int>']);
+    expect(tree.root.findAll((node) => typeof node.type === 'string' && node.props.testID === 'answer-key-line')).toHaveLength(0);
   });
 });
 
