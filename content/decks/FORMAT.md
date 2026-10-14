@@ -52,7 +52,7 @@ Exactly once, before the first card. Slug: `^[a-z0-9]+(?:[-_][a-z0-9]+)*$`. Miss
 `DUPLICATE_DECK_HEADER`; bad slug → `BAD_DECK_SLUG`. The console additionally blocks the import
 when the file slug differs from the deck you opened (`slugMismatch`). Live slugs:
 `aws-saa-c03` (AWS deck), `claude-ccdv-f` (CCDV-F deck), `csharp-basics` (.NET 8 / C# 12 interview deck,
-rebuilt in R23).
+rebuilt in R23), `aws-saa-fundamentals` (Chinese AWS SAA foundation cards, Q/A only).
 
 Any non-blank line before the first card header that is not the deck header →
 `TEXT_BEFORE_CARD` (reported once per stretch). No prose, comments, or headings outside cards.
@@ -405,6 +405,18 @@ gets `D2 services` even when its service is also named by a task.
 | EF Core | `5.2 Transactions and Indexes` |
 | testing | `6.1 Unit and Integration Testing` |
 | design | `7.1 Design Principles` |
+
+### 5.4 AWS SAA fundamentals (`aws-saa-fundamentals`): one label per section of a family
+
+Chinese Q/A cards that teach the prerequisites of the `aws-saa-c03` scenarios: one condition per card,
+three answer lines (答 / 因为 / 考法), no exam-deck stems, options or numbers. The number is the SAA-C03
+task statement the family serves.
+
+| family | `TOPIC:` label |
+|---|---|
+| network connectivity | `3.4 网络连接 · 基础` |
+| network connectivity | `3.4 网络连接 · VPC 之间` |
+| network connectivity | `3.4 网络连接 · 机房连 AWS` |
 
 ---
 
