@@ -20,6 +20,7 @@ import {
   daysUntilExam,
   examReviewCapMs,
   getStudyGoal,
+  hasHiddenStudyGoal,
   localDayStartMs,
   setStudyGoal,
 } from '../../src/features/goal/studyGoal';
@@ -43,6 +44,25 @@ describe('study goal storage', () => {
     await expect(setStudyGoal({ deckSlug: 'AWS SAA', examDate: null })).rejects.toThrow();
     await expect(setStudyGoal({ deckSlug: 'aws-saa-c03', examDate: '2026-02-30' })).rejects.toThrow();
     expect(asyncStore.has(STUDY_GOAL_KEY)).toBe(false);
+  });
+
+  it('2026-10-14 three decks: reads a goal on hidden csharp-basics as no goal, and keeps the stored value', async () => {
+    const stored = JSON.stringify({ deckSlug: 'csharp-basics', examDate: '2026-11-15' });
+    asyncStore.set(STUDY_GOAL_KEY, stored);
+    expect(await getStudyGoal()).toBeNull();
+    expect(asyncStore.get(STUDY_GOAL_KEY)).toBe(stored);
+    await setStudyGoal({ deckSlug: 'aws-saa-fundamentals', examDate: null });
+    expect(await getStudyGoal()).toEqual({ deckSlug: 'aws-saa-fundamentals', examDate: null });
+  });
+
+  it('2026-10-14 three decks: tells a goal on a hidden deck apart from no goal', async () => {
+    expect(await hasHiddenStudyGoal()).toBe(false);
+    asyncStore.set(STUDY_GOAL_KEY, JSON.stringify({ deckSlug: 'csharp-basics', examDate: null }));
+    expect(await hasHiddenStudyGoal()).toBe(true);
+    asyncStore.set(STUDY_GOAL_KEY, JSON.stringify({ deckSlug: 'aws-saa-c03', examDate: null }));
+    expect(await hasHiddenStudyGoal()).toBe(false);
+    asyncStore.set(STUDY_GOAL_KEY, '{not json');
+    expect(await hasHiddenStudyGoal()).toBe(false);
   });
 
   it('reads corrupt storage as no goal, and drops a corrupt date but keeps the deck', async () => {

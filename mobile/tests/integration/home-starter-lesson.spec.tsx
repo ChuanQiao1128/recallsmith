@@ -85,10 +85,14 @@ async function refocus() {
   await flush();
 }
 
-vi.mock('../../src/content/activeDeck', () => ({
-  loadActiveDeckSlug: vi.fn(async () => activeSlugFixture),
-  setActiveDeckSlug: vi.fn(async (slug: string) => setActiveDeckSlugMock(slug)),
-}));
+// Like the real module, a stored hidden deck (2026-10-14 three decks) reads as no active deck.
+vi.mock('../../src/content/activeDeck', async () => {
+  const { visibleDeckSlug } = await import('../../src/content/hiddenDecks');
+  return {
+    loadActiveDeckSlug: vi.fn(async () => visibleDeckSlug(activeSlugFixture)),
+    setActiveDeckSlug: vi.fn(async (slug: string) => setActiveDeckSlugMock(slug)),
+  };
+});
 
 // R24 §2.2: Home asks the starter module (lazily imported) to upgrade an installed starter pack and
 // listens for upgrades. Like the real module, a run that upgraded something tells every listener.
@@ -265,7 +269,7 @@ describe('HomeScreen starter lesson', () => {
     store.clear();
     walletFixture = { availablePulls: 0, reservePulls: 0 };
     activeSlugFixture = 'aws-saa-c03';
-    deckSummariesFixture = [deck('aws-saa-c03', { newToday: 5 }), deck('csharp-basics')];
+    deckSummariesFixture = [deck('aws-saa-c03', { newToday: 5 }), deck('claude-ccdv-f')];
     updatesFixture = {};
     navigateMock.mockReset();
     recordFunnelEventMock.mockReset();
@@ -317,9 +321,36 @@ describe('HomeScreen starter lesson', () => {
 
   it('falls back to the active deck when no study goal is stored', async () => {
     store.set(STAGE_KEY, 'starter');
-    activeSlugFixture = 'csharp-basics';
+    activeSlugFixture = 'claude-ccdv-f';
     await renderHome();
-    expect(sessionCalls()).toEqual([['SessionCard', { slug: 'csharp-basics', mode: 'learn-new' }]]);
+    expect(sessionCalls()).toEqual([['SessionCard', { slug: 'claude-ccdv-f', mode: 'learn-new' }]]);
+  });
+
+  it('2026-10-14 three decks: never opens the lesson on hidden csharp-basics, whether goal or active deck', async () => {
+    store.set(STAGE_KEY, 'starter');
+    store.set(GOAL_KEY, JSON.stringify({ deckSlug: 'csharp-basics', examDate: null }));
+    activeSlugFixture = 'claude-ccdv-f';
+    await renderHome();
+    // The hidden goal reads as no goal: the lesson falls back to the active deck.
+    expect(sessionCalls()).toEqual([['SessionCard', { slug: 'claude-ccdv-f', mode: 'learn-new' }]]);
+  });
+
+  it('2026-10-14 three decks: a learner who chose csharp-basics (goal and active deck) keeps the lesson, on aws-saa-fundamentals', async () => {
+    // Onboarding stores the chosen deck as both the study goal and the active deck.
+    store.set(STAGE_KEY, 'starter');
+    store.set(GOAL_KEY, JSON.stringify({ deckSlug: 'csharp-basics', examDate: null }));
+    activeSlugFixture = 'csharp-basics';
+    deckSummariesFixture = [deck('aws-saa-fundamentals'), deck('aws-saa-c03'), deck('claude-ccdv-f')];
+
+    const tree = await renderHome();
+
+    expect(sessionCalls()).toEqual([['SessionCard', { slug: 'aws-saa-fundamentals', mode: 'learn-new' }]]);
+    expect(recordFunnelEventMock.mock.calls).toEqual([['starter_started', 'aws-saa-fundamentals']]);
+    // The lesson stays open (not skipped): the stage is still 'starter' and Home offers to continue it.
+    expect(store.get(STAGE_KEY)).toBe('starter');
+    expect(tree.root.findAll((node) => node.props?.testID === 'home-starter-cta').length).toBeGreaterThan(0);
+    // Hidden, not rewritten: the stored goal still names csharp-basics.
+    expect(JSON.parse(store.get(GOAL_KEY)!)).toEqual({ deckSlug: 'csharp-basics', examDate: null });
   });
 
   it('ends a lesson that has no deck to teach (no study goal, no active deck) instead of locking every pack', async () => {

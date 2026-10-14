@@ -130,9 +130,13 @@ describe('phase A onboarding screens', () => {
     expect(blob).not.toContain('Which lane should new content favor?');
     expect(blob).not.toContain('Stretch');
 
-    // AWS first and pre-selected (highlighted).
+    // 2026-10-14 three decks, in order: AWS fundamentals first and pre-selected (highlighted), no C#.
     const radios = tree.root.findAll((node) => (node.type as any) === 'Pressable' && node.props.accessibilityRole === 'radio');
-    expect(radios.map((r) => r.props.testID)).toEqual(['goal-choice-aws-saa-c03', 'goal-choice-claude-ccdv-f', 'goal-choice-csharp-basics']);
+    expect(radios.map((r) => r.props.testID)).toEqual([
+      'goal-choice-aws-saa-fundamentals',
+      'goal-choice-aws-saa-c03',
+      'goal-choice-claude-ccdv-f',
+    ]);
     expect(radios[0].props.accessibilityState.selected).toBe(true);
   });
 
@@ -148,8 +152,8 @@ describe('phase A onboarding screens', () => {
 
     await press(tree, 'Finish setup');
 
-    expect(goal()).toEqual({ deckSlug: 'aws-saa-c03', examDate: null });
-    expect(store.get('active-deck-slug')).toBe('aws-saa-c03');
+    expect(goal()).toEqual({ deckSlug: 'aws-saa-fundamentals', examDate: null });
+    expect(store.get('active-deck-slug')).toBe('aws-saa-fundamentals');
     // Onboarding no longer asks the lane: nothing written, Settings default stays Balanced.
     expect(store.get('recallsmith:audience-preference:v1')).toBeUndefined();
     // R22 §4: the goal step opens the starter lesson; the first pack and the reminder prompt wait
@@ -192,7 +196,7 @@ describe('phase A onboarding screens', () => {
     expect(store.get('recallsmith:onboarding:stage:v1')).toBe('starter');
     expect(replace).toHaveBeenCalledWith('Home');
     expect(recordFunnelEventMock).toHaveBeenCalledTimes(1);
-    expect(recordFunnelEventMock).toHaveBeenCalledWith('goal_chosen', 'aws-saa-c03');
+    expect(recordFunnelEventMock).toHaveBeenCalledWith('goal_chosen', 'aws-saa-fundamentals');
     expect(tree.root.findAll((node) => (node.type as any) === 'Text' && node.props.testID === 'goal-finish-error')).toHaveLength(0);
   });
 
@@ -216,7 +220,7 @@ describe('phase A onboarding screens', () => {
       const replace = vi.fn();
       const tree = await renderWelcomeThenGoal(replace);
 
-      await press(tree, '.NET interview questions');
+      await press(tree, 'Claude Developer (CCDV-F)');
       await press(tree, 'Continue');
       await press(tree, 'In 1 month');
       expect(textBlob(tree)).toContain('Mon, Nov 2, 2026');
@@ -228,11 +232,11 @@ describe('phase A onboarding screens', () => {
 
       await press(tree, 'Finish setup');
 
-      expect(goal()).toEqual({ deckSlug: 'csharp-basics', examDate: '2026-11-09' });
+      expect(goal()).toEqual({ deckSlug: 'claude-ccdv-f', examDate: '2026-11-09' });
       // R24 M01: finishing the goal step is the anonymous funnel's goal_chosen, with the deck only.
       expect(recordFunnelEventMock).toHaveBeenCalledTimes(1);
-      expect(recordFunnelEventMock).toHaveBeenCalledWith('goal_chosen', 'csharp-basics');
-      expect(store.get('active-deck-slug')).toBe('csharp-basics');
+      expect(recordFunnelEventMock).toHaveBeenCalledWith('goal_chosen', 'claude-ccdv-f');
+      expect(store.get('active-deck-slug')).toBe('claude-ccdv-f');
       expect(store.get('recallsmith:onboarding:stage:v1')).toBe('starter');
       expect(replace).toHaveBeenCalledWith('Home');
     } finally {

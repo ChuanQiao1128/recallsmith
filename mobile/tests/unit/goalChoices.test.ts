@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   DATE_PRESETS,
+  DEFAULT_GOAL_DECK_SLUG,
   GOAL_CHOICES,
   NO_DATE_LABEL,
   canStepExamDate,
   examDateForPreset,
   formatExamDate,
+  goalChoiceLabel,
   stepExamDate,
 } from '../../src/features/gacha/audience/goalChoices';
 
@@ -13,15 +15,24 @@ import {
 const NOW = new Date(2026, 9, 2, 15, 0, 0).getTime();
 
 describe('goal choices (R22 contract §3)', () => {
-  it('offers the three decks with AWS SAA-C03 first and highlighted', () => {
-    expect(GOAL_CHOICES.map((c) => c.deckSlug)).toEqual(['aws-saa-c03', 'claude-ccdv-f', 'csharp-basics']);
+  it('offers exactly the three decks, AWS fundamentals first, highlighted and the default', () => {
+    // 2026-10-14 three decks: fundamentals, SAA-C03, Claude; csharp-basics is hidden, so not offered.
+    expect(GOAL_CHOICES.map((c) => c.deckSlug)).toEqual(['aws-saa-fundamentals', 'aws-saa-c03', 'claude-ccdv-f']);
     expect(GOAL_CHOICES.map((c) => c.label)).toEqual([
+      'AWS fundamentals (Chinese)',
       'AWS Solutions Architect (SAA-C03)',
       'Claude Developer (CCDV-F)',
-      '.NET interview questions',
     ]);
+    expect(GOAL_CHOICES.some((c) => c.deckSlug === 'csharp-basics')).toBe(false);
     expect(GOAL_CHOICES[0].highlighted).toBe(true);
     expect(GOAL_CHOICES.slice(1).every((c) => !c.highlighted)).toBe(true);
+    expect(DEFAULT_GOAL_DECK_SLUG).toBe('aws-saa-fundamentals');
+  });
+
+  it('keeps the label of a hidden goal deck, so un-hiding it offers it again unchanged', () => {
+    expect(goalChoiceLabel('csharp-basics')).toBe('.NET interview questions');
+    expect(goalChoiceLabel('aws-saa-c03')).toBe('AWS Solutions Architect (SAA-C03)');
+    expect(goalChoiceLabel('no-such-deck')).toBeUndefined();
   });
 
   it("puts 'No date — I'm just learning' first, then the four presets", () => {

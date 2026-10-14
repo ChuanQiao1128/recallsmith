@@ -357,6 +357,12 @@ async function finishOnboarding() {
   await act(async () => {
     tree = renderer.create(<AudienceSurveyScreen navigation={{ replace } as any} route={{ key: 'audience', name: 'AudienceSurvey' } as any} />);
   });
+  // 2026-10-14 three decks: the default goal is AWS fundamentals, which ships no starter pack; this
+  // run picks SAA-C03, a bundled pack.
+  await act(async () => {
+    tree.root.find((node) => (node.type as any) === 'Pressable' && node.props.testID === `goal-choice-${SLUG}`).props.onPress();
+    await Promise.resolve();
+  });
   await pressLabel(tree, 'Continue');
   await pressLabel(tree, 'Finish setup');
   expect(replace).toHaveBeenCalledWith('Home');
@@ -570,10 +576,13 @@ describe('offline first run with the bundled starter pack (R24 §2.2)', () => {
   });
 
   it('ensureStarterDeckInstalled: installs once, then reports the installed deck; unknown slugs have no pack', async () => {
-    expect(await ensureStarterDeckInstalled('csharp-basics')).toBe('installed-starter');
-    expect(await ensureStarterDeckInstalled('csharp-basics')).toBe('already-installed');
-    expect((await getCachedDeck('csharp-basics'))!.Cards).toHaveLength(STARTER_PACKS['csharp-basics'].cards.length);
+    expect(await ensureStarterDeckInstalled('claude-ccdv-f')).toBe('installed-starter');
+    expect(await ensureStarterDeckInstalled('claude-ccdv-f')).toBe('already-installed');
+    expect((await getCachedDeck('claude-ccdv-f'))!.Cards).toHaveLength(STARTER_PACKS['claude-ccdv-f'].cards.length);
     expect(await ensureStarterDeckInstalled('not-a-bundled-deck')).toBe('unavailable');
+    // 2026-10-14 three decks: the hidden csharp-basics ships no pack, and fundamentals never had one.
+    expect(await ensureStarterDeckInstalled('csharp-basics')).toBe('unavailable');
+    expect(await ensureStarterDeckInstalled('aws-saa-fundamentals')).toBe('unavailable');
     // The temporary copy in the cache directory is cleaned up.
     expect([...files.keys()].filter((k) => k.startsWith('file:///cache/'))).toEqual([]);
   });
@@ -664,7 +673,7 @@ describe('offline first run with the bundled starter pack (R24 §2.2)', () => {
 
   it('SessionCard keeps the plain error offline for a bundled deck that is not the lesson deck', async () => {
     store.set(STAGE_KEY, 'starter');
-    store.set(STUDY_GOAL_KEY, JSON.stringify({ deckSlug: 'csharp-basics', examDate: null }));
+    store.set(STUDY_GOAL_KEY, JSON.stringify({ deckSlug: 'claude-ccdv-f', examDate: null }));
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(

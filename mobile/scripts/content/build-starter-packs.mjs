@@ -26,7 +26,10 @@ import { fileURLToPath } from 'node:url';
 
 const CDN_BASE = 'https://cdn.developercards.app';
 const MANIFEST_URL = `${CDN_BASE}/content/manifest.json`;
-export const STARTER_SLUGS = ['aws-saa-c03', 'claude-ccdv-f', 'csharp-basics'];
+// 2026-10-14 three decks: csharp-basics is hidden (src/content/hiddenDecks.ts) and gone from the live
+// manifest, so it has no pack; add it back here and re-run when the deck returns. aws-saa-fundamentals
+// has no pack (an offline first run on it waits for the network).
+export const STARTER_SLUGS = ['aws-saa-c03', 'claude-ccdv-f'];
 export const MIN_CARDS = 30;
 export const STARTER_LESSON_SIZE = 5;
 const MAX_TOTAL_BYTES = 300 * 1024;

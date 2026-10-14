@@ -199,6 +199,8 @@ export function HomeScreen({ navigation, route }: Props) {
         if (!slug) {
           // No study goal and no active deck: there is no lesson to teach, so the stage must not
           // keep every pack's bootstrap and floor on hold. Close it and re-prepare the wallets.
+          // (2026-10-14 three decks: a goal on a hidden deck is not "none" -- resolveStarterSlug
+          // moves that lesson to the first visible deck, so it never reaches this branch.)
           setStarterSlug(null);
           if (await skipStarterLesson()) {
             if (isMountedRef.current) void refreshHomeRef.current();

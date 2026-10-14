@@ -413,13 +413,14 @@ describe('DrawScreen v9', () => {
   });
 
   it('labels the neighbour rail with the short deck title, two lines allowed', async () => {
+    // 2026-10-14 three decks: csharp-basics is hidden, so the open pack here is SAA-C03.
     manifestFixture = [
-      { slug: 'csharp-basics', availability: 'live', title: 'C# / .NET' },
+      { slug: 'aws-saa-c03', availability: 'live', title: 'AWS Solutions Architect (SAA-C03)' },
       { slug: 'claude-ccdv-f', availability: 'live', title: 'Claude Developer Foundations (CCDV-F)' },
     ];
     resolveDeckFixture = (slug: string) => ({
       Slug: slug,
-      Title: slug === 'claude-ccdv-f' ? 'Claude Developer Foundations (CCDV-F)' : 'C# / .NET',
+      Title: slug === 'claude-ccdv-f' ? 'Claude Developer Foundations (CCDV-F)' : 'AWS Solutions Architect (SAA-C03)',
       Cards: [{ StableUid: `${slug}-1`, OrderInDeck: 1, Difficulty: 1, Question: 'Q' }],
     });
 
@@ -428,7 +429,7 @@ describe('DrawScreen v9', () => {
       tree = renderer.create(
         <DrawScreen
           navigation={{ goBack: vi.fn(), navigate: vi.fn() } as any}
-          route={{ key: 'draw', name: 'Draw', params: { slug: 'csharp-basics' } } as any}
+          route={{ key: 'draw', name: 'Draw', params: { slug: 'aws-saa-c03' } } as any}
         />,
       );
     });

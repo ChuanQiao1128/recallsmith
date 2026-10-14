@@ -1,7 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import { FIRST_DECK_SLUG, isHiddenDeck, visibleDeckSlug } from '../../../content/hiddenDecks';
 import type { CardProgress } from '../../../review/model';
-import { getStudyGoal } from '../../goal/studyGoal';
+import { getStudyGoal, hasHiddenStudyGoal } from '../../goal/studyGoal';
 import { normalizeMcq } from '../mcq/normalizeMcq';
 import { getOnboardingStage } from '../onboarding/onboardingPrefs';
 import { isLearnedProgress } from '../selectors/progressSelectors';
@@ -47,11 +48,15 @@ export function pickStarterUids(cards: ReadonlyArray<StarterCardLike>, size = ST
   return out;
 }
 
+// 2026-10-14 three decks: a lesson recorded on a hidden deck (content/hiddenDecks.ts) reads as no
+// lesson, so the open lesson picks its cards again from a deck the learner can see instead of
+// waiting forever on one they cannot open.
 function parseLesson(raw: string | null): StarterLesson | null {
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as Partial<StarterLesson> | null;
     if (!parsed || typeof parsed.slug !== 'string' || !parsed.slug || !Array.isArray(parsed.uids)) return null;
+    if (isHiddenDeck(parsed.slug)) return null;
     const uids = parsed.uids.filter((uid): uid is string => typeof uid === 'string' && uid.length > 0);
     return { slug: parsed.slug, uids };
   } catch {
@@ -78,10 +83,21 @@ export async function loadStarterLesson(): Promise<StarterLesson | null> {
   }
 }
 
-/** The deck the lesson teaches: the study goal's deck, else the caller's fallback (the active deck). */
+/**
+ * The deck the lesson teaches: the study goal's deck, else the caller's fallback (the active deck).
+ * Null only when the learner chose nothing at all.
+ *
+ * Never a hidden deck (2026-10-14 three decks): getStudyGoal reads a hidden goal as none and a hidden
+ * fallback is dropped. A learner who chose a now-hidden deck (onboarding stores it as both the goal
+ * and the active deck, so both read as none) keeps the lesson on FIRST_DECK_SLUG
+ * (aws-saa-fundamentals) instead of having it closed for good.
+ */
 export async function resolveStarterSlug(fallback: string | null): Promise<string | null> {
   const goal = await getStudyGoal();
-  return goal?.deckSlug ?? fallback;
+  if (goal) return goal.deckSlug;
+  const visible = visibleDeckSlug(fallback);
+  if (visible) return visible;
+  return isHiddenDeck(fallback) || (await hasHiddenStudyGoal()) ? FIRST_DECK_SLUG : null;
 }
 
 /**

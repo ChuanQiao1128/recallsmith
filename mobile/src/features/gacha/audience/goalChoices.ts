@@ -1,3 +1,4 @@
+import { isHiddenDeck } from '../../../content/hiddenDecks';
 import { localDayStartMs } from '../../goal/studyGoal';
 
 /**
@@ -11,11 +12,26 @@ export type GoalChoice = {
   highlighted: boolean;
 };
 
-export const GOAL_CHOICES: readonly GoalChoice[] = [
-  { deckSlug: 'aws-saa-c03', label: 'AWS Solutions Architect (SAA-C03)', highlighted: true },
+/**
+ * Every goal deck, in the 2026-10-14 three-decks order (owner): AWS fundamentals (the Chinese
+ * foundation cards), SAA-C03, Claude CCDV-F. A deck in content/hiddenDecks.ts HIDDEN_DECK_SLUGS
+ * (csharp-basics for now) keeps its entry here but is not offered: taking it off that list offers
+ * it again, with its label, in onboarding and Settings › Study goal.
+ */
+const ALL_GOAL_CHOICES: readonly GoalChoice[] = [
+  { deckSlug: 'aws-saa-fundamentals', label: 'AWS fundamentals (Chinese)', highlighted: true },
+  { deckSlug: 'aws-saa-c03', label: 'AWS Solutions Architect (SAA-C03)', highlighted: false },
   { deckSlug: 'claude-ccdv-f', label: 'Claude Developer (CCDV-F)', highlighted: false },
   { deckSlug: 'csharp-basics', label: '.NET interview questions', highlighted: false },
 ];
+
+/** The goal decks onboarding and Settings › Study goal offer, in order; the first is the default. */
+export const GOAL_CHOICES: readonly GoalChoice[] = ALL_GOAL_CHOICES.filter((choice) => !isHiddenDeck(choice.deckSlug));
+
+/** The label of a goal deck, offered or hidden; undefined for an unknown slug. */
+export function goalChoiceLabel(slug: string): string | undefined {
+  return ALL_GOAL_CHOICES.find((choice) => choice.deckSlug === slug)?.label;
+}
 
 export const DEFAULT_GOAL_DECK_SLUG = GOAL_CHOICES[0].deckSlug;
 

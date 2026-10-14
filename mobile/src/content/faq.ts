@@ -7,6 +7,12 @@
 // guarantee after 10 Commons (draw/), no repeat draws, iOS only. No score,
 // no claim of an offline first run without the bundled starter cards, and no
 // claim that the developer personally checks or spot-checks cards.
+//
+// 2026-10-14 three decks: the decks are named in the app's order (AWS
+// fundamentals, SAA-C03, Claude; content/hiddenDecks.ts) and the hidden C# deck
+// is not mentioned. Only SAA-C03 and Claude ship starter cards
+// (content/starter), so the offline answer names those two. No card counts:
+// they change with every deck build.
 
 export type FaqEntry = { q: string; a: string };
 
@@ -25,7 +31,7 @@ export const FAQ_LIST: readonly FaqEntry[] = [
   },
   {
     q: 'What do I study?',
-    a: 'Three free decks, in English: .NET & C# Interview (217 cards for .NET 8 and C# 12, junior to mid, each quoting Microsoft Learn), AWS Associate Architect (371 cards for SAA-C03) and Claude Developer Foundations (441 cards for CCDV-F across 8 domains). Multiple-choice cards in the .NET and AWS decks explain every wrong option. Reviews are scheduled with FSRS, the open-source spaced-repetition algorithm, never more than 90 days out, and a card is Mastered once its next review is 15 or more days away. The app is iOS only.',
+    a: 'Three free decks: AWS fundamentals (the basics behind SAA-C03, in Chinese), AWS Associate Architect (SAA-C03, in English) and Claude Developer Foundations (CCDV-F across 8 domains, in English). Multiple-choice cards in the SAA-C03 deck explain every wrong option. Reviews are scheduled with FSRS, the open-source spaced-repetition algorithm, never more than 90 days out, and a card is Mastered once its next review is 15 or more days away. The app is iOS only.',
   },
   {
     q: 'Why is a card locked in the Library?',
@@ -33,11 +39,11 @@ export const FAQ_LIST: readonly FaqEntry[] = [
   },
   {
     q: 'Does it work offline? Do I need an account?',
-    a: 'The first cards of each deck are in the app, so your first lesson works offline. The full deck downloads when your phone is online, and after that you can study offline. An account is optional: signing in adds cloud backup, Report a card and the Premium subscription. Premium is for future premium decks; there is nothing premium to unlock yet.',
+    a: 'The first cards of the SAA-C03 and Claude decks are in the app, so a first lesson on either works offline; AWS fundamentals downloads the first time your phone is online. The full deck downloads when your phone is online, and after that you can study offline. An account is optional: signing in adds cloud backup, Report a card and the Premium subscription. Premium is for future premium decks; there is nothing premium to unlock yet.',
   },
   {
     q: 'How are the cards made?',
-    a: 'Cards are drafted with AI assistance from official documentation and checked by automated checks and AI review passes. If a card looks wrong, sign in and use Report a problem. The sources are AWS, Anthropic and Microsoft Learn documentation, and you can also tell me through Support.',
+    a: 'Cards are drafted with AI assistance from official documentation and checked by automated checks and AI review passes. If a card looks wrong, sign in and use Report a problem. The sources are AWS and Anthropic documentation, and you can also tell me through Support.',
   },
 ];
 
@@ -45,5 +51,5 @@ export const FAQ_LIST: readonly FaqEntry[] = [
 // description).
 export const FAQ_DISCLAIMER: readonly [string, string] = [
   'Not official exam material and not an exam simulator.',
-  'AWS is a trademark of Amazon.com, Inc. Claude and Anthropic are trademarks of Anthropic, PBC. .NET and C# are trademarks of Microsoft Corporation. DeveloperCards is not affiliated with, sponsored by, or endorsed by Amazon, Anthropic or Microsoft.',
+  'AWS is a trademark of Amazon.com, Inc. Claude and Anthropic are trademarks of Anthropic, PBC. DeveloperCards is not affiliated with, sponsored by, or endorsed by Amazon or Anthropic.',
 ];

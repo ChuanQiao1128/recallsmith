@@ -6,6 +6,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../navigation/types';
 import type { CardExport, DeckExport } from '../types/deckExport';
+import { withoutHiddenDecks } from '../content/hiddenDecks';
 import { questionA11yLabel, splitQuestionCode } from '../content/questionCode';
 import { stripInlineCode } from '../content/inlineCode';
 import type { CardProgress } from '../review/model';
@@ -60,10 +61,11 @@ async function getCachedDeckSafe(slug: string): Promise<DeckExport | null> {
 // The installed decks' slugs, for the cross-deck lookup: a deep link can point
 // at a card that lives in a deck other than the active one. Same lazy, guarded
 // shape as the loaders above so the content stack stays out of import time.
+// 2026-10-14 three decks: hidden decks are not searched (hiddenDecks is pure, so a static import).
 async function listManifestSlugsSafe(): Promise<string[]> {
   try {
     const mod = await import('../content/deckRepository');
-    const decks = (await mod?.listManifestDecks?.()) ?? [];
+    const decks = withoutHiddenDecks((await mod?.listManifestDecks?.()) ?? []);
     return decks.map((d) => d.slug);
   } catch {
     return [];

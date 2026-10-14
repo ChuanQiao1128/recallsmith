@@ -10,6 +10,7 @@ import type { DeckExport } from '../types/deckExport';
 import { splitQuestionCode } from '../content/questionCode';
 import { stripInlineCode } from '../content/inlineCode';
 import { getCachedDeck } from '../content/deckCache';
+import { isHiddenDeck } from '../content/hiddenDecks';
 import { loadDeckProgress } from '../review/storage';
 import { resolveEffectiveOwned } from '../features/gacha/draw/effectiveOwned';
 import {
@@ -102,6 +103,8 @@ async function loadGroups(slug: string | undefined): Promise<DeckGroup[]> {
   const deckSlugs = new Set(activeMistakes(book, { deckSlug: slug, now }).map((entry) => entry.deckSlug));
   const groups: DeckGroup[] = [];
   for (const deckSlug of deckSlugs) {
+    // 2026-10-14 three decks: a hidden deck's mistakes stay in the book but get no section.
+    if (isHiddenDeck(deckSlug)) continue;
     let deck: DeckExport | null = null;
     try {
       deck = await getCachedDeck(deckSlug);
