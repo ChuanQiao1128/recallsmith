@@ -83,7 +83,8 @@ const stored = () => JSON.parse(asyncStore.get(STUDY_GOAL_KEY) ?? 'null');
 describe('study goal editor helpers', () => {
   it('labels decks like onboarding and keeps an unknown slug as itself', () => {
     expect(goalDeckLabel('aws-saa-c03')).toBe('AWS Solutions Architect (SAA-C03)');
-    // Hidden from new goals since 2026-10-14, but a learner who chose it keeps the label.
+    expect(goalDeckLabel('aws-saa-fundamentals')).toBe('AWS fundamentals (Chinese)');
+    // Hidden since 2026-10-14 (a stored csharp-basics goal reads as no goal), but the label is kept.
     expect(goalDeckLabel('csharp-basics')).toBe('.NET interview questions');
     expect(goalDeckLabel('some-future-deck')).toBe('some-future-deck');
   });
@@ -94,10 +95,12 @@ describe('study goal editor helpers', () => {
       date: { kind: 'date', examDate: '2026-11-15', preset: null },
     });
     expect(draftFromGoal(null, 'claude-ccdv-f')).toEqual({ deckSlug: 'claude-ccdv-f', date: { kind: 'none' } });
-    // A hidden goal deck is not offered, so an active csharp-basics starts the editor on the default.
-    expect(draftFromGoal(null, 'csharp-basics')).toEqual({ deckSlug: 'aws-saa-c03', date: { kind: 'none' } });
-    expect(draftFromGoal(null, 'premium-deck')).toEqual({ deckSlug: 'aws-saa-c03', date: { kind: 'none' } });
-    expect(draftFromGoal(null, null).deckSlug).toBe('aws-saa-c03');
+    // A hidden goal deck is not offered, so an active csharp-basics starts the editor on the default
+    // (2026-10-14 three decks: AWS fundamentals).
+    expect(draftFromGoal(null, 'csharp-basics')).toEqual({ deckSlug: 'aws-saa-fundamentals', date: { kind: 'none' } });
+    expect(draftFromGoal(null, 'premium-deck')).toEqual({ deckSlug: 'aws-saa-fundamentals', date: { kind: 'none' } });
+    expect(draftFromGoal(null, null).deckSlug).toBe('aws-saa-fundamentals');
+    expect(draftFromGoal(null, 'aws-saa-c03').deckSlug).toBe('aws-saa-c03');
     expect(goalFromDraft({ deckSlug: 'aws-saa-c03', date: { kind: 'none' } })).toEqual({ deckSlug: 'aws-saa-c03', examDate: null });
   });
 

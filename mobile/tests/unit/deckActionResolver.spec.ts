@@ -233,6 +233,34 @@ describe('deckActionResolver', () => {
     expect(checkManifestForUpdatesMock).toHaveBeenCalledTimes(1);
     expect(cached.updates).toEqual(remoteUpdates);
   });
+
+  describe('2026-10-14 three decks', () => {
+    const entry = (slug: string) => ({ slug, title: slug, version: 'b1', buildId: 'b1', path: null, sha256: null, availability: 'live' });
+    const update = (slug: string) => ({
+      slug,
+      installedVersion: null,
+      remoteVersion: 'b1',
+      hasUpdate: true,
+      remoteUrl: `https://example.com/${slug}/deck.json`,
+      remoteSha256: null,
+    });
+
+    it('shelves the manifest decks in manifest order and never csharp-basics, even when a cached manifest lists it', async () => {
+      listManifestDecksMock.mockImplementationOnce(async () =>
+        ['csharp-basics', 'aws-saa-fundamentals', 'aws-saa-c03', 'claude-ccdv-f'].map(entry) as any,
+      );
+      const summary = await loadHomeDeckSummaries({ premium: false, remote: true });
+      expect(summary.deckSummaries.map((d) => d.slug)).toEqual(['aws-saa-fundamentals', 'aws-saa-c03', 'claude-ccdv-f']);
+    });
+
+    it('with no manifest, shelves the update map in the owner order (fundamentals, SAA-C03, Claude), not alphabetically, without csharp-basics', async () => {
+      checkManifestForUpdatesMock.mockResolvedValueOnce(
+        Object.fromEntries(['csharp-basics', 'claude-ccdv-f', 'aws-saa-c03', 'aws-saa-fundamentals'].map((slug) => [slug, update(slug)])) as any,
+      );
+      const summary = await loadHomeDeckSummaries({ premium: false, remote: true });
+      expect(summary.deckSummaries.map((d) => d.slug)).toEqual(['aws-saa-fundamentals', 'aws-saa-c03', 'claude-ccdv-f']);
+    });
+  });
 });
 
 describe('free-deck auto-update', () => {

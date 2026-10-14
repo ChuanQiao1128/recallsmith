@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import { isHiddenDeck, visibleDeckSlug } from '../../../content/hiddenDecks';
 import type { CardProgress } from '../../../review/model';
 import { getStudyGoal } from '../../goal/studyGoal';
 import { normalizeMcq } from '../mcq/normalizeMcq';
@@ -47,11 +48,15 @@ export function pickStarterUids(cards: ReadonlyArray<StarterCardLike>, size = ST
   return out;
 }
 
+// 2026-10-14 three decks: a lesson recorded on a hidden deck (content/hiddenDecks.ts) reads as no
+// lesson, so the open lesson picks its cards again from a deck the learner can see instead of
+// waiting forever on one they cannot open.
 function parseLesson(raw: string | null): StarterLesson | null {
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as Partial<StarterLesson> | null;
     if (!parsed || typeof parsed.slug !== 'string' || !parsed.slug || !Array.isArray(parsed.uids)) return null;
+    if (isHiddenDeck(parsed.slug)) return null;
     const uids = parsed.uids.filter((uid): uid is string => typeof uid === 'string' && uid.length > 0);
     return { slug: parsed.slug, uids };
   } catch {
@@ -78,10 +83,13 @@ export async function loadStarterLesson(): Promise<StarterLesson | null> {
   }
 }
 
-/** The deck the lesson teaches: the study goal's deck, else the caller's fallback (the active deck). */
+/**
+ * The deck the lesson teaches: the study goal's deck, else the caller's fallback (the active deck).
+ * Never a hidden deck (2026-10-14 three decks): getStudyGoal already reads a hidden goal as none.
+ */
 export async function resolveStarterSlug(fallback: string | null): Promise<string | null> {
   const goal = await getStudyGoal();
-  return goal?.deckSlug ?? fallback;
+  return goal?.deckSlug ?? visibleDeckSlug(fallback);
 }
 
 /**

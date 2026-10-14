@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
@@ -16,8 +16,9 @@ import { STARTER_LESSON_SIZE, pickStarterUids } from '../../src/features/gacha/s
 import { normalizeMcq } from '../../src/features/gacha/mcq/normalizeMcq';
 import { STARTER_BUILD, STARTER_PACKS, type StarterPackCard } from '../../src/content/starter';
 
-// Contract R24-00 §2.1: the three goal decks a fresh install can start offline.
-const SLUGS = ['aws-saa-c03', 'claude-ccdv-f', 'csharp-basics'] as const;
+// Contract R24-00 §2.1: the goal decks a fresh install can start offline. 2026-10-14 three decks:
+// csharp-basics is hidden and ships no pack; aws-saa-fundamentals has none (it waits for the network).
+const SLUGS = ['aws-saa-c03', 'claude-ccdv-f'] as const;
 const STARTER_DIR = resolve(__dirname, '../../src/content/starter');
 const MAX_TOTAL_BYTES = 300 * 1024;
 const MIN_CARDS = 30;
@@ -32,12 +33,17 @@ function readPackFile(slug: string): unknown {
 }
 
 describe('bundled starter packs (R24 §2.1)', () => {
-  it('ships exactly the three goal decks', () => {
+  it('ships exactly the SAA-C03 and Claude packs', () => {
     expect(Object.keys(STARTER_PACKS).sort()).toEqual([...SLUGS].sort());
     expect(Object.keys(STARTER_BUILD).sort()).toEqual([...SLUGS].sort());
   });
 
-  it('keeps the three files under 300 KB combined', () => {
+  it('leaves no pack file the index does not ship (no csharp-basics pack in the bundle dir)', () => {
+    const files = readdirSync(STARTER_DIR).filter((name) => !name.startsWith('.'));
+    expect(files.sort()).toEqual(['index.ts', ...SLUGS.map((slug) => `${slug}.starter.json`)].sort());
+  });
+
+  it('keeps the files under 300 KB combined', () => {
     const total = SLUGS.reduce((sum, slug) => sum + statSync(resolve(STARTER_DIR, `${slug}.starter.json`)).size, 0);
     expect(total).toBeLessThan(MAX_TOTAL_BYTES);
   });

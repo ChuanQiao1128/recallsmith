@@ -130,9 +130,13 @@ describe('phase A onboarding screens', () => {
     expect(blob).not.toContain('Which lane should new content favor?');
     expect(blob).not.toContain('Stretch');
 
-    // AWS first and pre-selected (highlighted).
+    // 2026-10-14 three decks, in order: AWS fundamentals first and pre-selected (highlighted), no C#.
     const radios = tree.root.findAll((node) => (node.type as any) === 'Pressable' && node.props.accessibilityRole === 'radio');
-    expect(radios.map((r) => r.props.testID)).toEqual(['goal-choice-aws-saa-c03', 'goal-choice-claude-ccdv-f']);
+    expect(radios.map((r) => r.props.testID)).toEqual([
+      'goal-choice-aws-saa-fundamentals',
+      'goal-choice-aws-saa-c03',
+      'goal-choice-claude-ccdv-f',
+    ]);
     expect(radios[0].props.accessibilityState.selected).toBe(true);
   });
 
@@ -148,8 +152,8 @@ describe('phase A onboarding screens', () => {
 
     await press(tree, 'Finish setup');
 
-    expect(goal()).toEqual({ deckSlug: 'aws-saa-c03', examDate: null });
-    expect(store.get('active-deck-slug')).toBe('aws-saa-c03');
+    expect(goal()).toEqual({ deckSlug: 'aws-saa-fundamentals', examDate: null });
+    expect(store.get('active-deck-slug')).toBe('aws-saa-fundamentals');
     // Onboarding no longer asks the lane: nothing written, Settings default stays Balanced.
     expect(store.get('recallsmith:audience-preference:v1')).toBeUndefined();
     // R22 §4: the goal step opens the starter lesson; the first pack and the reminder prompt wait
@@ -192,7 +196,7 @@ describe('phase A onboarding screens', () => {
     expect(store.get('recallsmith:onboarding:stage:v1')).toBe('starter');
     expect(replace).toHaveBeenCalledWith('Home');
     expect(recordFunnelEventMock).toHaveBeenCalledTimes(1);
-    expect(recordFunnelEventMock).toHaveBeenCalledWith('goal_chosen', 'aws-saa-c03');
+    expect(recordFunnelEventMock).toHaveBeenCalledWith('goal_chosen', 'aws-saa-fundamentals');
     expect(tree.root.findAll((node) => (node.type as any) === 'Text' && node.props.testID === 'goal-finish-error')).toHaveLength(0);
   });
 

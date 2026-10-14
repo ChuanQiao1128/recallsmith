@@ -1,5 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import { isHiddenDeck } from '../../content/hiddenDecks';
+
 /**
  * R22 shared contract (R22-00 §2): what the learner is preparing for, and when.
  *
@@ -37,10 +39,16 @@ function normalize(raw: unknown): StudyGoal | null {
   return { deckSlug: r.deckSlug, examDate };
 }
 
+/**
+ * The stored goal, or null when none is set. 2026-10-14 three decks: a goal on a hidden deck
+ * (content/hiddenDecks.ts) reads as no goal, so the starter lesson, Home and Settings › Study goal
+ * never show or open it. The stored value is kept; saving a new goal overwrites it.
+ */
 export async function getStudyGoal(): Promise<StudyGoal | null> {
   try {
     const raw = await AsyncStorage.getItem(STUDY_GOAL_KEY);
-    return raw ? normalize(JSON.parse(raw)) : null;
+    const goal = raw ? normalize(JSON.parse(raw)) : null;
+    return goal && !isHiddenDeck(goal.deckSlug) ? goal : null;
   } catch {
     return null;
   }

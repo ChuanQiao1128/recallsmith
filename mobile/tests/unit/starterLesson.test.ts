@@ -35,6 +35,7 @@ import {
   isStarterLessonOpen,
   loadStarterUids,
   pickStarterUids,
+  resolveStarterSlug,
 } from '../../src/features/gacha/starter/starterGate';
 import { completeStarterLesson, skipStarterLesson } from '../../src/features/gacha/starter/starterLesson';
 import { ensureDeckBootstrap } from '../../src/features/gacha/rewards/deckWallet';
@@ -161,14 +162,34 @@ describe('starter lesson', () => {
     await startStarterLesson();
     // No goal, no record: whichever deck opens first becomes the lesson (ensureStarterLesson's rule).
     expect(await isStarterLessonDeck('aws')).toBe(true);
-    store.set(GOAL_KEY, JSON.stringify({ deckSlug: 'csharp-basics', examDate: null }));
+    store.set(GOAL_KEY, JSON.stringify({ deckSlug: 'claude-ccdv-f', examDate: null }));
     expect(await isStarterLessonDeck('aws')).toBe(false);
-    expect(await isStarterLessonDeck('csharp-basics')).toBe(true);
+    expect(await isStarterLessonDeck('claude-ccdv-f')).toBe(true);
     // A recorded lesson wins over the goal.
     store.set(STARTER_LESSON_KEY, JSON.stringify({ slug: 'aws', uids: ['a1'] }));
     expect(await isStarterLessonDeck('aws')).toBe(true);
-    expect(await isStarterLessonDeck('csharp-basics')).toBe(false);
+    expect(await isStarterLessonDeck('claude-ccdv-f')).toBe(false);
     store.set(STAGE_KEY, 'done');
     expect(await isStarterLessonDeck('aws')).toBe(false);
+  });
+
+  it('2026-10-14 three decks: a goal or a recorded lesson on hidden csharp-basics never teaches it', async () => {
+    await startStarterLesson();
+    store.set(GOAL_KEY, JSON.stringify({ deckSlug: 'csharp-basics', examDate: null }));
+    store.set(STARTER_LESSON_KEY, JSON.stringify({ slug: 'csharp-basics', uids: ['c1'] }));
+    // The goal reads as none and the record as missing: the deck that opens becomes the lesson.
+    expect(await resolveStarterSlug('aws-saa-fundamentals')).toBe('aws-saa-fundamentals');
+    expect(await resolveStarterSlug(null)).toBeNull();
+    expect(await resolveStarterSlug('csharp-basics')).toBeNull();
+    expect(await isStarterLessonDeck('csharp-basics')).toBe(false);
+    expect(await loadStarterUids('csharp-basics')).toEqual(new Set());
+    // The hidden deck is never recorded as the lesson, even when it opens first.
+    expect(await ensureStarterLesson({ Slug: 'csharp-basics', Cards: [qa('c1', 1)] })).toBeNull();
+    expect(await isStarterLessonDeck('aws-saa-fundamentals')).toBe(true);
+    const lesson = await ensureStarterLesson({ Slug: 'aws-saa-fundamentals', Cards: [qa('f1', 1), qa('f2', 2)] });
+    expect(lesson).toEqual({ slug: 'aws-saa-fundamentals', uids: ['f1', 'f2'] });
+    expect(await loadStarterUids('aws-saa-fundamentals')).toEqual(new Set(['f1', 'f2']));
+    // Nothing about the hidden deck was deleted: its goal is still stored.
+    expect(JSON.parse(store.get(GOAL_KEY)!)).toEqual({ deckSlug: 'csharp-basics', examDate: null });
   });
 });

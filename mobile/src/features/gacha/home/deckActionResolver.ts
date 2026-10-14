@@ -1,12 +1,13 @@
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../../../content/activeDeck';
 import {
   checkManifestForUpdates,
-  listManifestDecks,
   type ManifestDeckEntry,
   type UpdateInfo,
 } from '../../../content/deckRepository';
 import { getCachedDeck, installDeckAndInvalidate } from '../../../content/deckCache';
+import { compareByFallbackOrder, isHiddenDeck } from '../../../content/hiddenDecks';
 import { listInstalledDeckEntries } from '../../../content/starterOffline';
+import { listVisibleManifestDecks } from '../../../content/visibleManifest';
 import { syncDailyReminders } from '../../../notifications/reminders';
 import { loadDeckProgress } from '../../../review/storage';
 import { applyCachedRemoteProgress } from '../../../sync/progressSync';
@@ -85,8 +86,12 @@ export function resetLastKnownDeckUpdatesForTests(): void {
   lastKnownUpdates = {};
 }
 
+// 2026-10-14 three decks: the update map can still name a hidden deck (a manifest cached before it
+// was hidden); it is left out, and with no manifest order the decks follow DECK_FALLBACK_ORDER
+// (fundamentals, SAA-C03, Claude) instead of the alphabet.
 function toDeckEntriesFromUpdates(rawUpdates: Record<string, unknown>): ManifestDeckEntry[] {
   return Object.entries(rawUpdates ?? {})
+    .filter(([slug]) => !isHiddenDeck(slug))
     .map(([slug, info]) => ({
       slug,
       title: String((info as any)?.title ?? slug),
@@ -112,6 +117,8 @@ function toDeckEntriesFromUpdates(rawUpdates: Record<string, unknown>): Manifest
       const ao = typeof a.order === 'number' ? a.order : 9999;
       const bo = typeof b.order === 'number' ? b.order : 9999;
       if (ao !== bo) return ao - bo;
+      const byFallback = compareByFallbackOrder(a, b);
+      if (byFallback !== 0) return byFallback;
       return a.title.localeCompare(b.title);
     });
 }
@@ -140,7 +147,7 @@ export async function loadHomeDeckSummaries(params: {
   }
 
   try {
-    manifestDecks = await listManifestDecks();
+    manifestDecks = await listVisibleManifestDecks();
   } catch {
     manifestDecks = [];
   }

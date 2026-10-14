@@ -10,9 +10,11 @@ import type { RootStackParamList } from '../navigation/types';
 import { errorToMessage } from '../api/errorKind';
 import { goHome } from '../navigation/tabNavigation';
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
-import { checkManifestForUpdates, listManifestDecks } from '../content/deckRepository';
+import { checkManifestForUpdates } from '../content/deckRepository';
 import { getCachedDeck, installDeckAndInvalidate } from '../content/deckCache';
+import { visibleDeckSlug } from '../content/hiddenDecks';
 import { ensureStarterDeckInstalled } from '../content/starterOffline';
+import { listVisibleManifestDecks } from '../content/visibleManifest';
 import { deckShortTitle } from '../content/deckShortTitle';
 import { commitDraw } from '../features/gacha/draw/drawCommit';
 import { loadDrawStatus } from '../features/gacha/draw/drawPool';
@@ -297,12 +299,15 @@ function pityCardIndexFor(
 }
 
 export function DrawScreen({ navigation, route }: Props) {
+  // 2026-10-14 three decks: a hidden deck in the route (a recallsmith://draw/<slug> link) is never
+  // opened; the active deck read already leaves it out.
+  const routeSlug = visibleDeckSlug(route.params?.slug);
   const [loadState, setLoadState] = useState<DrawLoadState>('loading');
   const [ready, setReady] = useState<DrawReady | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
   const [retryToken, setRetryToken] = useState(0);
-  const [selectedSlug, setSelectedSlug] = useState<string | null>(route.params?.slug ?? null);
+  const [selectedSlug, setSelectedSlug] = useState<string | null>(routeSlug);
   const [swipePrimed, setSwipePrimed] = useState(false);
   const [swipeDelta, setSwipeDelta] = useState(0);
   // Bumped on every successful load() so the auto-arm effect re-runs even when
@@ -331,17 +336,17 @@ export function DrawScreen({ navigation, route }: Props) {
   const packSize = packSizeForWindowHeight(useWindowHeight());
 
   useEffect(() => {
-    if (route.params?.slug) {
-      setSelectedSlug(route.params.slug);
+    if (routeSlug) {
+      setSelectedSlug(routeSlug);
     }
-  }, [route.params?.slug]);
+  }, [routeSlug]);
 
   useEffect(() => {
     readyRef.current = ready;
   }, [ready]);
 
-  const palette = useMemo(() => packPaletteFromSlug(ready?.slug ?? selectedSlug ?? route.params?.slug ?? ''), [ready?.slug, route.params?.slug, selectedSlug]);
-  const coverImage = useMemo(() => packImageForSlug(ready?.slug ?? selectedSlug ?? route.params?.slug ?? ''), [ready?.slug, route.params?.slug, selectedSlug]);
+  const palette = useMemo(() => packPaletteFromSlug(ready?.slug ?? selectedSlug ?? routeSlug ?? ''), [ready?.slug, routeSlug, selectedSlug]);
+  const coverImage = useMemo(() => packImageForSlug(ready?.slug ?? selectedSlug ?? routeSlug ?? ''), [ready?.slug, routeSlug, selectedSlug]);
   const neighbors = useMemo(() => findNeighbors(ready?.deckOptions ?? [], ready?.slug ?? ''), [ready?.deckOptions, ready?.slug]);
 
   const clearSwipeResetTimer = useCallback(() => {
@@ -449,11 +454,11 @@ export function DrawScreen({ navigation, route }: Props) {
           // to decide which packs to list, a question this device already
           // had a good enough answer to. The revalidation below still runs;
           // it just no longer holds the tab hostage.
-          const manifest = await listManifestDecks();
+          const manifest = await listVisibleManifestDecks();
           const deckOptions = buildDeckOptions(manifest);
 
           const firstSlug = deckOptions[0]?.slug ?? null;
-          let slug = selectedSlug ?? route.params?.slug ?? (await loadActiveDeckSlug()) ?? firstSlug;
+          let slug = selectedSlug ?? routeSlug ?? (await loadActiveDeckSlug()) ?? firstSlug;
           if (!slug) {
             if (!cancelled) {
               setReady(null);
@@ -507,7 +512,7 @@ export function DrawScreen({ navigation, route }: Props) {
           const revalidatedSlug = slug;
           void (async () => {
             try {
-              const fresh = await listManifestDecks({ preferRemote: true });
+              const fresh = await listVisibleManifestDecks({ preferRemote: true });
               if (cancelled) return;
               const freshOptions = buildDeckOptions(fresh);
               if (freshOptions.length === 0) return;
@@ -557,7 +562,7 @@ export function DrawScreen({ navigation, route }: Props) {
       return () => {
         cancelled = true;
       };
-    }, [retryToken, route.params?.slug, selectedSlug]),
+    }, [retryToken, routeSlug, selectedSlug]),
   );
 
   const switchDeck = useCallback(

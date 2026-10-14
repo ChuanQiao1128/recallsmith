@@ -265,7 +265,7 @@ describe('HomeScreen starter lesson', () => {
     store.clear();
     walletFixture = { availablePulls: 0, reservePulls: 0 };
     activeSlugFixture = 'aws-saa-c03';
-    deckSummariesFixture = [deck('aws-saa-c03', { newToday: 5 }), deck('csharp-basics')];
+    deckSummariesFixture = [deck('aws-saa-c03', { newToday: 5 }), deck('claude-ccdv-f')];
     updatesFixture = {};
     navigateMock.mockReset();
     recordFunnelEventMock.mockReset();
@@ -317,9 +317,18 @@ describe('HomeScreen starter lesson', () => {
 
   it('falls back to the active deck when no study goal is stored', async () => {
     store.set(STAGE_KEY, 'starter');
-    activeSlugFixture = 'csharp-basics';
+    activeSlugFixture = 'claude-ccdv-f';
     await renderHome();
-    expect(sessionCalls()).toEqual([['SessionCard', { slug: 'csharp-basics', mode: 'learn-new' }]]);
+    expect(sessionCalls()).toEqual([['SessionCard', { slug: 'claude-ccdv-f', mode: 'learn-new' }]]);
+  });
+
+  it('2026-10-14 three decks: never opens the lesson on hidden csharp-basics, whether goal or active deck', async () => {
+    store.set(STAGE_KEY, 'starter');
+    store.set(GOAL_KEY, JSON.stringify({ deckSlug: 'csharp-basics', examDate: null }));
+    activeSlugFixture = 'claude-ccdv-f';
+    await renderHome();
+    // The hidden goal reads as no goal: the lesson falls back to the active deck.
+    expect(sessionCalls()).toEqual([['SessionCard', { slug: 'claude-ccdv-f', mode: 'learn-new' }]]);
   });
 
   it('ends a lesson that has no deck to teach (no study goal, no active deck) instead of locking every pack', async () => {

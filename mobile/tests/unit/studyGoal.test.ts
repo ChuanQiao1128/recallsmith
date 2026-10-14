@@ -45,6 +45,15 @@ describe('study goal storage', () => {
     expect(asyncStore.has(STUDY_GOAL_KEY)).toBe(false);
   });
 
+  it('2026-10-14 three decks: reads a goal on hidden csharp-basics as no goal, and keeps the stored value', async () => {
+    const stored = JSON.stringify({ deckSlug: 'csharp-basics', examDate: '2026-11-15' });
+    asyncStore.set(STUDY_GOAL_KEY, stored);
+    expect(await getStudyGoal()).toBeNull();
+    expect(asyncStore.get(STUDY_GOAL_KEY)).toBe(stored);
+    await setStudyGoal({ deckSlug: 'aws-saa-fundamentals', examDate: null });
+    expect(await getStudyGoal()).toEqual({ deckSlug: 'aws-saa-fundamentals', examDate: null });
+  });
+
   it('reads corrupt storage as no goal, and drops a corrupt date but keeps the deck', async () => {
     asyncStore.set(STUDY_GOAL_KEY, '{not json');
     expect(await getStudyGoal()).toBeNull();

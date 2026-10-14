@@ -17,9 +17,11 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import type { CardExport, DeckExport } from '../types/deckExport';
 import { errorToMessage } from '../api/errorKind';
-import { checkManifestForUpdates, listManifestDecks } from '../content/deckRepository';
+import { checkManifestForUpdates } from '../content/deckRepository';
 import { getCachedDeck, installDeckAndInvalidate } from '../content/deckCache';
+import { visibleDeckSlug } from '../content/hiddenDecks';
 import { ensureStarterDeckInstalled } from '../content/starterOffline';
+import { listVisibleManifestDecks } from '../content/visibleManifest';
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
 import { deckShortTitle } from '../content/deckShortTitle';
 import { hasKeyLine } from '../content/answerKeyLine';
@@ -201,7 +203,9 @@ function useLatestCallback<A extends unknown[], R>(fn: (...args: A) => R): (...a
 }
 
 export function SessionCardScreen({ navigation, route }: Props) {
-  const slugFromRoute = route.params?.slug ?? null;
+  // 2026-10-14 three decks: a hidden deck in the route is never opened; the active deck read already
+  // leaves it out, so the session falls back to the first listed deck.
+  const slugFromRoute = visibleDeckSlug(route.params?.slug);
   const { mode = 'mixed' } = route.params ?? {};
   // Route-supplied limit is now optional. When the caller doesn't
   // explicitly pass one, sessionLimit derives from planChallengeRoute
@@ -348,7 +352,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
           setSlug(stored);
           return;
         }
-        const manifest = await listManifestDecks();
+        const manifest = await listVisibleManifestDecks();
         if (cancelled) return;
         if (manifest[0]?.slug) {
           setSlug(manifest[0].slug);
@@ -478,9 +482,9 @@ export function SessionCardScreen({ navigation, route }: Props) {
         let failure: 'unavailable' | 'download' | null = null;
         try {
           const wantsTrial = previewLimit > 0;
-          let manifest: Awaited<ReturnType<typeof listManifestDecks>>;
+          let manifest: Awaited<ReturnType<typeof listVisibleManifestDecks>>;
           try {
-            manifest = await listManifestDecks();
+            manifest = await listVisibleManifestDecks();
           } catch (err) {
             failure = 'download';
             throw err;

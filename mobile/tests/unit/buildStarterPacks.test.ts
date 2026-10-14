@@ -1,5 +1,5 @@
 // O01 generator (scripts/content/build-starter-packs.mjs): a refresh writes either every file (the
-// three packs and index.ts) or none of them. A size or validation failure part way through must not
+// packs and index.ts) or none of them. A size or validation failure part way through must not
 // leave new packs next to an old index.ts, whose STARTER_BUILD would then disagree with their versions.
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -19,7 +19,8 @@ type BuilderModule = {
 
 const SCRIPT = resolve(__dirname, '../../scripts/content/build-starter-packs.mjs');
 const CDN = 'https://cdn.developercards.app';
-const SLUGS = ['aws-saa-c03', 'claude-ccdv-f', 'csharp-basics'];
+// 2026-10-14 three decks: csharp-basics is hidden and has no pack; aws-saa-fundamentals never had one.
+const SLUGS = ['aws-saa-c03', 'claude-ccdv-f'];
 const BUILD = '20261001T000000Z-abc123';
 
 async function loadBuilder(): Promise<BuilderModule> {
@@ -91,8 +92,8 @@ describe('build-starter-packs: all files or none', () => {
   it('leaves every old file untouched when the packs go over 300 KB', async () => {
     const { buildStarterPacks } = await loadBuilder();
     const before = snapshot(outDir);
-    // 3 decks x 30 cards x ~4 KB each is about 360 KB.
-    const decks = Object.fromEntries(SLUGS.map((slug) => [slug, makeDeck(slug, 4000)]));
+    // 2 decks x 30 cards x ~6 KB each is about 360 KB.
+    const decks = Object.fromEntries(SLUGS.map((slug) => [slug, makeDeck(slug, 6000)]));
     await expect(buildStarterPacks({ fetchBytes: makeFetch(decks), outDir, log: () => {} })).rejects.toThrow(/limit/);
     expect(snapshot(outDir)).toEqual(before);
   });
@@ -101,12 +102,12 @@ describe('build-starter-packs: all files or none', () => {
     const { buildStarterPacks } = await loadBuilder();
     const before = snapshot(outDir);
     const decks: Record<string, unknown> = Object.fromEntries(SLUGS.map((slug) => [slug, makeDeck(slug, 10)]));
-    decks['csharp-basics'] = { ...makeDeck('csharp-basics', 10), slug: 'something-else' };
-    await expect(buildStarterPacks({ fetchBytes: makeFetch(decks), outDir, log: () => {} })).rejects.toThrow(/csharp-basics/);
+    decks['claude-ccdv-f'] = { ...makeDeck('claude-ccdv-f', 10), slug: 'something-else' };
+    await expect(buildStarterPacks({ fetchBytes: makeFetch(decks), outDir, log: () => {} })).rejects.toThrow(/claude-ccdv-f/);
     expect(snapshot(outDir)).toEqual(before);
   });
 
-  it('writes the three packs and an index.ts that names their build when everything passes', async () => {
+  it('writes the packs and an index.ts that names their build when everything passes', async () => {
     const { buildStarterPacks, STARTER_SLUGS } = await loadBuilder();
     expect(STARTER_SLUGS).toEqual(SLUGS);
     const decks = Object.fromEntries(SLUGS.map((slug) => [slug, makeDeck(slug, 10)]));

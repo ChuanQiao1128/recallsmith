@@ -19,9 +19,11 @@ import { errorToMessage } from '../api/errorKind';
 import { goHome } from '../navigation/tabNavigation';
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
 import { getFeatureFlags } from '../config/featureFlags';
-import { checkManifestForUpdates, listManifestDecks } from '../content/deckRepository';
+import { checkManifestForUpdates } from '../content/deckRepository';
 import { getCachedDeck, installDeckAndInvalidate } from '../content/deckCache';
+import { visibleDeckSlug } from '../content/hiddenDecks';
 import { ensureStarterDeckInstalled } from '../content/starterOffline';
+import { listVisibleManifestDecks } from '../content/visibleManifest';
 import { loadDeckProgress } from '../review/storage';
 import {
   buildLibraryVM,
@@ -169,15 +171,17 @@ export function LibraryScreen({ navigation, route }: Props) {
       setError(null);
       let requestedSlug: string | null = null;
       try {
-        const manifest = await listManifestDecks();
+        const manifest = await listVisibleManifestDecks();
         const options = manifest
           .filter((entry) => String(entry.availability ?? 'live').toLowerCase() !== 'retired')
           .map((entry) => ({ slug: entry.slug, title: entry.title ?? entry.slug }));
 
         setDeckOptions(options);
 
+        // 2026-10-14 three decks: a hidden deck asked for by slug (a stale route param) is not opened;
+        // the active deck read already leaves it out.
         const currentSlug =
-          preferredSlug ?? selectedSlug ?? (await loadActiveDeckSlug()) ?? options[0]?.slug ?? null;
+          visibleDeckSlug(preferredSlug) ?? selectedSlug ?? (await loadActiveDeckSlug()) ?? options[0]?.slug ?? null;
 
         if (!currentSlug) {
           throw friendlyError('No deck available yet. Install one first.');

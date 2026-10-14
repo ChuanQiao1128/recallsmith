@@ -3,7 +3,7 @@
 // Contract R24-00 §2.1: bundled starter packs (a verbatim orderInDeck prefix of each goal deck's live
 // build). Static requires keep the JSON inside the JS bundle, so the packs ship over OTA.
 
-export type StarterSlug = 'aws-saa-c03' | 'claude-ccdv-f' | 'csharp-basics';
+export type StarterSlug = 'aws-saa-c03' | 'claude-ccdv-f';
 
 /** One card, copied verbatim from the published deck.json (flat v3 card shape). */
 export type StarterPackCard = {
@@ -36,12 +36,10 @@ export type StarterPack = {
 export const STARTER_PACKS: Record<StarterSlug, StarterPack> = {
   'aws-saa-c03': require('./aws-saa-c03.starter.json') as StarterPack,
   'claude-ccdv-f': require('./claude-ccdv-f.starter.json') as StarterPack,
-  'csharp-basics': require('./csharp-basics.starter.json') as StarterPack,
 };
 
 /** The live buildId each pack was cut from. */
 export const STARTER_BUILD: Record<StarterSlug, string> = {
   'aws-saa-c03': '20261001T043805Z-7c5e904e',
   'claude-ccdv-f': '20261001T043814Z-5364099a',
-  'csharp-basics': '20261001T230339Z-689d6340',
 };
