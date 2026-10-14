@@ -132,7 +132,7 @@ describe('phase A onboarding screens', () => {
 
     // AWS first and pre-selected (highlighted).
     const radios = tree.root.findAll((node) => (node.type as any) === 'Pressable' && node.props.accessibilityRole === 'radio');
-    expect(radios.map((r) => r.props.testID)).toEqual(['goal-choice-aws-saa-c03', 'goal-choice-claude-ccdv-f', 'goal-choice-csharp-basics']);
+    expect(radios.map((r) => r.props.testID)).toEqual(['goal-choice-aws-saa-c03', 'goal-choice-claude-ccdv-f']);
     expect(radios[0].props.accessibilityState.selected).toBe(true);
   });
 
@@ -216,7 +216,7 @@ describe('phase A onboarding screens', () => {
       const replace = vi.fn();
       const tree = await renderWelcomeThenGoal(replace);
 
-      await press(tree, '.NET interview questions');
+      await press(tree, 'Claude Developer (CCDV-F)');
       await press(tree, 'Continue');
       await press(tree, 'In 1 month');
       expect(textBlob(tree)).toContain('Mon, Nov 2, 2026');
@@ -228,11 +228,11 @@ describe('phase A onboarding screens', () => {
 
       await press(tree, 'Finish setup');
 
-      expect(goal()).toEqual({ deckSlug: 'csharp-basics', examDate: '2026-11-09' });
+      expect(goal()).toEqual({ deckSlug: 'claude-ccdv-f', examDate: '2026-11-09' });
       // R24 M01: finishing the goal step is the anonymous funnel's goal_chosen, with the deck only.
       expect(recordFunnelEventMock).toHaveBeenCalledTimes(1);
-      expect(recordFunnelEventMock).toHaveBeenCalledWith('goal_chosen', 'csharp-basics');
-      expect(store.get('active-deck-slug')).toBe('csharp-basics');
+      expect(recordFunnelEventMock).toHaveBeenCalledWith('goal_chosen', 'claude-ccdv-f');
+      expect(store.get('active-deck-slug')).toBe('claude-ccdv-f');
       expect(store.get('recallsmith:onboarding:stage:v1')).toBe('starter');
       expect(replace).toHaveBeenCalledWith('Home');
     } finally {

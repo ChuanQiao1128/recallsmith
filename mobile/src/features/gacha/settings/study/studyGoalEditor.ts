@@ -4,6 +4,7 @@ import {
   GOAL_CHOICES,
   examDateForPreset,
   formatExamDate,
+  goalChoiceLabel,
   type DatePresetKey,
 } from '../../audience/goalChoices';
 
@@ -39,7 +40,7 @@ export const STUDY_GOAL_COPY = {
 
 /** The onboarding label for a goal deck; an unknown slug shows as itself. */
 export function goalDeckLabel(slug: string): string {
-  return GOAL_CHOICES.find((choice) => choice.deckSlug === slug)?.label ?? slug;
+  return goalChoiceLabel(slug) ?? slug;
 }
 
 /**

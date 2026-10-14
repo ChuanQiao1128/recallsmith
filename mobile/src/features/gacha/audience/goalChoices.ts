@@ -14,8 +14,21 @@ export type GoalChoice = {
 export const GOAL_CHOICES: readonly GoalChoice[] = [
   { deckSlug: 'aws-saa-c03', label: 'AWS Solutions Architect (SAA-C03)', highlighted: true },
   { deckSlug: 'claude-ccdv-f', label: 'Claude Developer (CCDV-F)', highlighted: false },
+];
+
+/**
+ * 2026-10-14: csharp-basics is hidden from the manifest for now (owner), so it is no longer offered as
+ * a new goal: picking it online would find no deck and skip the starter lesson. A learner whose goal
+ * already is csharp-basics keeps its label. Move it back into GOAL_CHOICES when the deck returns.
+ */
+const HIDDEN_GOAL_CHOICES: readonly GoalChoice[] = [
   { deckSlug: 'csharp-basics', label: '.NET interview questions', highlighted: false },
 ];
+
+/** The label of a goal deck, offered or hidden; undefined for an unknown slug. */
+export function goalChoiceLabel(slug: string): string | undefined {
+  return [...GOAL_CHOICES, ...HIDDEN_GOAL_CHOICES].find((choice) => choice.deckSlug === slug)?.label;
+}
 
 export const DEFAULT_GOAL_DECK_SLUG = GOAL_CHOICES[0].deckSlug;
 
