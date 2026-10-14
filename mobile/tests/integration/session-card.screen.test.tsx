@@ -886,6 +886,14 @@ describe('SessionCardScreen', () => {
     expect(code[0].props.code).toBe('var xs = new[]{1,2,3};\nConsole.WriteLine(xs.Length);');
     expect(code[0].props.label).toBe('C#');
     expect(anyBackticks(tree)).toHaveLength(0);
+    // Question first (2026-10-14 learning flow): the answer opens on Show answer, under the code.
+    expect(hostByTestID(tree, 'learning-study-answer')).toHaveLength(0);
+    await act(async () => {
+      findPressableByLabel(tree, 'Show answer').props.onPress();
+      await Promise.resolve();
+    });
+    expect(codeBlocks(tree)).toHaveLength(1);
+    expect(anyBackticks(tree)).toHaveLength(0);
     // The code sits between the question and the answer sections.
     const order = tree.root
       .findAll(
@@ -1004,6 +1012,15 @@ describe('SessionCardScreen', () => {
     expect(question).toHaveLength(1);
     expect(textOf(question[0])).toBe('Why prefer ConfigureAwait(false) in a library?');
     expect(question[0].props.accessibilityLabel).toBe('Why prefer ConfigureAwait(false) in a library?');
+    // Question first: only the question's span until Show answer (2026-10-14 learning flow).
+    expect(inlineCode(tree).map((node) => node.props.children)).toEqual(['ConfigureAwait(false)']);
+    expect(renderedStrings(tree).some((text) => text.includes('`'))).toBe(false);
+
+    await act(async () => {
+      findPressableByLabel(tree, 'Show answer').props.onPress();
+      await Promise.resolve();
+    });
+
     expect(inlineCode(tree).map((node) => node.props.children)).toEqual([
       'ConfigureAwait(false)',
       'SynchronizationContext',

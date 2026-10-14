@@ -3,6 +3,8 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import CodeBlock from '../../../components/CodeBlock';
 import type { CardExport } from '../../../types/deckExport';
+import { splitKeyLine, type AnswerKeyLine } from '../../../content/answerKeyLine';
+import { stripInlineCode } from '../../../content/inlineCode';
 import { normalizeCodeLanguage, renderSimpleMarkdown } from '../session/reviewContentHelpers';
 import { InlineCodeText } from './InlineCodeText';
 import { colors } from '../../../theme/colors';
@@ -56,12 +58,41 @@ export function friendlyCodeLanguage(raw: string): string {
   return map[lower] ?? raw;
 }
 
-// The answer renderer shared by the session's ReviewBody (after reveal) and
-// CardDetail's "Show answer" toggle: EXPLANATION / CODING SAMPLE / REAL USAGE,
-// in card order, separated by hairline dividers, with the empty-state hint when
-// a card carries no answer body. Extracted from ReviewBody so both surfaces
-// render byte-for-byte the same sections — the same labels, order, CodeBlock
-// wiring and empty hint — instead of drifting apart.
+export const ANSWER_KEY_LINE_TEST_ID = 'answer-key-line';
+
+// Spoken label for the highlighted key line: VoiceOver cannot see the highlight
+// the rating hint points at, so the line says what it is before its text.
+export function keyLineA11yLabel(keyLine: string): string {
+  return `Highlighted line, ${stripInlineCode(keyLine)}`;
+}
+
+// 2026-10-14 learning flow (B3): an answer that opens with 答： shows that line
+// first, bold, in a tinted block with an accent rule, then the remaining lines
+// exactly as the plain explanation renders them. It is the first thing read
+// after the EXPLANATION caption, on screen and by VoiceOver.
+function ExplanationWithKeyLine(props: { split: AnswerKeyLine }) {
+  const { split } = props;
+  return (
+    <View>
+      <View style={styles.keyLineBlock} testID={ANSWER_KEY_LINE_TEST_ID}>
+        <InlineCodeText
+          style={styles.keyLineText}
+          accessibilityLabel={keyLineA11yLabel(split.keyLine)}
+          text={split.keyLine}
+        />
+      </View>
+      {split.rest ? <InlineCodeText style={styles.sectionBody} text={split.rest} /> : null}
+    </View>
+  );
+}
+
+// The answer renderer shared by the session's ReviewBody (after reveal), the
+// study view (after Show answer) and CardDetail's "Show answer" toggle:
+// EXPLANATION / CODING SAMPLE / REAL USAGE, in card order, separated by hairline
+// dividers, with the empty-state hint when a card carries no answer body.
+// Extracted from ReviewBody so every surface renders byte-for-byte the same
+// sections — the same labels, order, CodeBlock wiring and empty hint — instead
+// of drifting apart.
 export function CardAnswerSections(props: { card: CardExport; testID?: string }) {
   const { card, testID } = props;
 
@@ -71,10 +102,16 @@ export function CardAnswerSections(props: { card: CardExport; testID?: string })
 
   const sections: Array<{ key: string; label: string; node: React.ReactNode }> = [];
   if (card.Explanation) {
+    // Null for every answer that does not open with 答： (all English decks): rendered as before.
+    const keySplit = splitKeyLine(card.Explanation);
     sections.push({
       key: 'explanation',
       label: 'EXPLANATION',
-      node: <InlineCodeText style={styles.sectionBody} text={card.Explanation} />,
+      node: keySplit ? (
+        <ExplanationWithKeyLine split={keySplit} />
+      ) : (
+        <InlineCodeText style={styles.sectionBody} text={card.Explanation} />
+      ),
     });
   }
   if (card.CodeSnippet) {
@@ -158,6 +195,24 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     color: colors.inkSoft,
     fontWeight: '500',
+  },
+  // The 答 line: a soft peach tint with a gold rule on the left, set apart from
+  // the lines below it without leaving the card's palette.
+  keyLineBlock: {
+    borderLeftWidth: 3,
+    borderLeftColor: colors.gold,
+    backgroundColor: colors.softPeach,
+    borderTopRightRadius: 6,
+    borderBottomRightRadius: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    marginBottom: 8,
+  },
+  keyLineText: {
+    fontSize: typography.body,
+    lineHeight: 22,
+    color: colors.ink,
+    fontWeight: '800',
   },
   codeContainer: {
     marginTop: 2,

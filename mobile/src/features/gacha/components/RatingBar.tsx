@@ -34,22 +34,18 @@ export const TWO_RATING_ITEMS: ReadonlyArray<RatingItem> = [
   { key: 'good', title: 'Remembered', subtitle: 'Normal gap', styleKey: 'ratingGood' },
 ];
 
-// R22 §6: the recall check after a study view. Remembered schedules as `hard` (stage 0, due in a
-// day), so it sends `hard` and says so; borrowing 'Normal gap' from the dock above promised a
-// longer gap than the card gets. Two buttons get half the width each, so three words fit.
-export const LEARNING_CHECK_ITEMS: ReadonlyArray<RatingItem> = [
-  { key: 'again', title: 'Forgot', subtitle: 'Show soon', styleKey: 'ratingAgain' },
-  { key: 'hard', title: 'Remembered', subtitle: 'See it tomorrow', styleKey: 'ratingGood' },
-];
-
 // The hint changes with the face. Before reveal it asks for the recall
 // attempt; after reveal the old sentence ("…before seeing the answer") kept
 // describing a moment that had already passed, so it now asks the question
-// the buttons answer: yes/no for two buttons, how well for four.
+// the buttons answer: yes/no for two buttons, how well for four. An answer
+// that opens with a highlighted 答 line (2026-10-14 learning flow, B3) is
+// judged on that line alone, so the question names it.
 export const RATING_HINT = {
   beforeReveal: 'Try to recall the answer, then reveal it.',
   afterReveal: 'How well did you recall it?',
   afterRevealTwo: 'Did you remember it?',
+  afterRevealKeyLine: 'How well did you get the highlighted line?',
+  afterRevealTwoKeyLine: 'Did you get the highlighted line?',
 } as const;
 
 // Spoken label for a rating button: "Again, show soon" — the title plus the
@@ -64,15 +60,21 @@ export function RatingBar(props: {
   revealed?: boolean;
   /** Show Again/Hard/Good/Easy instead of the two-button default (the study setting). */
   fourButtons?: boolean;
-  /** The recall check of a card studied this session: Forgot / Remembered whatever `fourButtons` says. */
-  learningCheck?: boolean;
+  /** The answer opens with a highlighted key line (答：…): the after-reveal hint asks about that line. */
+  keyLine?: boolean;
   testID?: string;
   onRate: (rating: ReviewRating) => void;
 }) {
-  const { disabled = false, revealed = false, learningCheck = false, testID = 'review-rating-bar', onRate } = props;
-  const fourButtons = !learningCheck && props.fourButtons === true;
-  const items = learningCheck ? LEARNING_CHECK_ITEMS : fourButtons ? RATING_ITEMS : TWO_RATING_ITEMS;
-  const afterReveal = fourButtons ? RATING_HINT.afterReveal : RATING_HINT.afterRevealTwo;
+  const { disabled = false, revealed = false, keyLine = false, testID = 'review-rating-bar', onRate } = props;
+  const fourButtons = props.fourButtons === true;
+  const items = fourButtons ? RATING_ITEMS : TWO_RATING_ITEMS;
+  const afterReveal = keyLine
+    ? fourButtons
+      ? RATING_HINT.afterRevealKeyLine
+      : RATING_HINT.afterRevealTwoKeyLine
+    : fourButtons
+      ? RATING_HINT.afterReveal
+      : RATING_HINT.afterRevealTwo;
 
   // At accessibility text sizes a fixed 4-up row clips the labels; reflow to a
   // 2x2 grid instead so each button gets ~half the width and the full title +

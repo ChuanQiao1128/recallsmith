@@ -123,7 +123,27 @@ const DOTNET_DECK = {
   ],
 };
 
-const DECKS: Record<string, any> = { csharp: CSHARP_DECK, aws: AWS_DECK, dotnet: DOTNET_DECK };
+// 2026-10-14 learning flow (B3): the Chinese fundamentals deck answers 答：/因为：/考法：.
+const KEY_LINE = '答：一整片连续的 IP 地址。';
+const FUNDAMENTALS_DECK = {
+  Slug: 'aws-saa-fundamentals',
+  Title: 'AWS SAA Fundamentals',
+  Locale: 'zh-CN',
+  Version: '1',
+  DeckType: 1,
+  TotalCards: 1,
+  Cards: [
+    {
+      StableUid: 'awsf-net-01-cidr',
+      OrderInDeck: 1,
+      Difficulty: 1,
+      Question: 'IP 段（CIDR）是什么？',
+      Explanation: `${KEY_LINE}\n因为：10.0.0.0/16 约有 6.5 万个地址。\n考法：比较 /16 和 /24 → ✅ /24 范围更小`,
+    },
+  ],
+};
+
+const DECKS: Record<string, any> = { csharp: CSHARP_DECK, aws: AWS_DECK, dotnet: DOTNET_DECK, 'aws-saa-fundamentals': FUNDAMENTALS_DECK };
 
 let ownedFixture: Set<string> | null = null;
 
@@ -136,6 +156,7 @@ vi.mock('../../src/content/deckRepository', () => ({
     { slug: 'csharp', title: 'C# Interview', locale: 'en-US', version: '1', deckType: 1, availability: 'live' },
     { slug: 'aws', title: 'AWS', locale: 'en-US', version: '1', deckType: 2, availability: 'live' },
     { slug: 'dotnet', title: '.NET Interview', locale: 'en-US', version: '1', deckType: 1, availability: 'live' },
+    { slug: 'aws-saa-fundamentals', title: 'AWS SAA Fundamentals', locale: 'zh-CN', version: '1', deckType: 1, availability: 'live' },
   ]),
   resolveDeckBySlug: vi.fn(async (slug: string) => DECKS[slug] ?? null),
 }));
@@ -218,6 +239,31 @@ describe('CardDetailScreen — show answer', () => {
     expect(blob).toContain('REAL USAGE');
     expect(blob).toContain('It disposes the resource at the end of the block.');
     expect(blob).toContain('Hide answer');
+  });
+
+  it('highlights the 答 line of a fundamentals answer, and no line of an English one (B3)', async () => {
+    ownedFixture = new Set(['awsf-net-01-cidr']);
+    const tree = await renderScreen('awsf-net-01-cidr');
+    expect(byTestId(tree, 'answer-key-line')).toHaveLength(0);
+
+    await press(tree, 'card-detail-show-answer');
+
+    const key = byTestId(tree, 'answer-key-line');
+    expect(key).toHaveLength(1);
+    const keyText = key[0].findAll((n) => (n.type as any) === 'Text');
+    expect(keyText.map((n) => n.props.children)).toEqual([KEY_LINE]);
+    expect(keyText[0].props.accessibilityLabel).toBe(`Highlighted line, ${KEY_LINE}`);
+    const blob = textBlob(tree);
+    expect(blob).toContain('因为：10.0.0.0/16 约有 6.5 万个地址。\n考法：比较 /16 和 /24 → ✅ /24 范围更小');
+    // The key line comes first in the answer, right under the EXPLANATION caption.
+    expect(blob.indexOf('EXPLANATION')).toBeLessThan(blob.indexOf(KEY_LINE));
+    expect(blob.indexOf(KEY_LINE)).toBeLessThan(blob.indexOf('因为：'));
+
+    ownedFixture = new Set(['cs-owned']);
+    const english = await renderScreen('cs-owned');
+    await press(english, 'card-detail-show-answer');
+    expect(byTestId(english, 'answer-key-line')).toHaveLength(0);
+    expect(textBlob(english)).toContain('It disposes the resource at the end of the block.');
   });
 
   it('renders a fenced question as prose plus a code block in the question card (Y01)', async () => {

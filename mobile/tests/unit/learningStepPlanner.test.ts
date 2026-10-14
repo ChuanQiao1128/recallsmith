@@ -1,73 +1,84 @@
 import { describe, expect, it } from 'vitest';
 import type { CardProgress } from '../../src/review/model';
-import { pickNextCard } from '../../src/features/gacha/planner/sessionPlanner';
+import { countDueToday, pickNextCard } from '../../src/features/gacha/planner/sessionPlanner';
 import { buildRatedSessionState } from '../../src/features/gacha/session/sessionReviewHelpers';
 
-// R22 §6: a card studied this session waits for its recall check at the end of the run, so the
-// planner must not deal it again (it is still new until the check rates it).
+// 2026-10-14 learning flow: Got it on the study view commits the card as hard on the learning-check
+// schedule, due in exactly one day. The planner needs no exclusion list to keep a studied card out of
+// the rest of the run (the R22 §6 excludeUids is gone): the card is learned and not due today, so no
+// pick deals it again. (Review all / sweep deals learned cards, but it never deals a new card, so a
+// sweep has no study view.)
 
 const NOW = new Date('2026-09-27T09:00:00.000Z');
 const NOW_MS = NOW.getTime();
+const DAY_MS = 86_400_000;
 const qa = (order: number): any => ({ StableUid: `q${order}`, OrderInDeck: order, Difficulty: 1, Question: `Q${order}`, Revision: 1 });
 const deckOf = (cards: any[]): any => ({ Slug: 'aws', Title: 'AWS', Locale: 'en-US', Version: '1', DeckType: 1, TotalCards: cards.length, Cards: cards });
+const indexOf = (cards: any[]) => ({ cards, cardMap: new Map(cards.map((c) => [c.StableUid, c])) });
 const fresh = (uid: string): CardProgress => ({ stableUid: uid, stage: 0, nextReviewAt: 0 });
-const due = (uid: string): CardProgress => ({ stableUid: uid, stage: 2, lastReviewedAt: NOW_MS - 3 * 86_400_000, nextReviewAt: NOW_MS - 86_400_000, lastSeenRevision: 1 });
+const STUDY_MODES = ['review-due', 'learn-new', 'mixed'] as const;
 
-const cards = [qa(1), qa(2), qa(3)];
-const deck = deckOf(cards);
+/** Got it on `uid`, through the session's save path. */
+function gotIt(cards: any[], progress: CardProgress[], uid: string, mode: (typeof STUDY_MODES)[number], examDate: string | null = null) {
+  const current = progress.find((p) => p.stableUid === uid)!;
+  return buildRatedSessionState({
+    current: { card: cards.find((c) => c.StableUid === uid), progress: current },
+    progress,
+    rating: 'hard',
+    mode,
+    sessionDone: 0,
+    sessionLimit: 5,
+    now: NOW,
+    cardIndex: indexOf(cards),
+    examDate,
+    learningCheck: true,
+  });
+}
 
-describe('learning step: the planner skips studied cards', () => {
-  it('pickNextCard deals the next new card, not one in excludeUids', () => {
-    const progress = cards.map((c) => fresh(c.StableUid));
-    expect(pickNextCard({ deck, progress, now: NOW, mode: 'learn-new' })?.card.StableUid).toBe('q1');
-    expect(
-      pickNextCard({ deck, progress, now: NOW, mode: 'learn-new', avoidUid: 'q1', excludeUids: new Set(['q1']) })?.card.StableUid,
-    ).toBe('q2');
-    // avoidUid alone falls back to the avoided card when nothing else is left; excludeUids never does.
-    const onlyOne = [fresh('q1')];
-    const single = deckOf([qa(1)]);
-    expect(pickNextCard({ deck: single, progress: onlyOne, now: NOW, mode: 'learn-new', avoidUid: 'q1' })?.card.StableUid).toBe('q1');
-    expect(
-      pickNextCard({ deck: single, progress: onlyOne, now: NOW, mode: 'learn-new', avoidUid: 'q1', excludeUids: new Set(['q1']) }),
-    ).toBeNull();
+/** The local calendar date `days` after NOW, as the study goal stores it. */
+function localDateKey(days: number): string {
+  const d = new Date(NOW_MS);
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+describe('learning step: a studied card is not dealt again in the same run', () => {
+  it('Got it leaves the card due tomorrow, so the next pick is the next new card', () => {
+    const cards = [qa(1), qa(2), qa(3)];
+    const state = gotIt(cards, cards.map((c) => fresh(c.StableUid)), 'q1', 'learn-new');
+
+    expect(state.updatedOne).toEqual(expect.objectContaining({ stage: 0, lastReviewedAt: NOW_MS, nextReviewAt: NOW_MS + DAY_MS }));
+    expect(state.nextCurrent?.card.StableUid).toBe('q2');
+    expect(countDueToday(state.updatedProgress, NOW)).toBe(0);
   });
 
-  it('an empty or absent excludeUids changes nothing', () => {
-    const progress = [due('q1'), fresh('q2'), fresh('q3')];
-    for (const mode of ['review-due', 'learn-new', 'mixed', 'sweep'] as const) {
-      const plain = pickNextCard({ deck, progress, now: NOW, mode });
-      expect(pickNextCard({ deck, progress, now: NOW, mode, excludeUids: new Set() })).toEqual(plain);
-      expect(pickNextCard({ deck, progress, now: NOW, mode, excludeUids: null })).toEqual(plain);
+  it('a run whose only card was studied ends instead of dealing it again, in every mode but Review all', () => {
+    const cards = [qa(1)];
+    for (const mode of STUDY_MODES) {
+      const state = gotIt(cards, [fresh('q1')], 'q1', mode);
+      // avoidUid falls back to the avoided card when nothing else is left; the studied card is
+      // neither due nor new, so even that fallback finds nothing.
+      expect(state.nextCurrent).toBeNull();
+      expect(pickNextCard({ deck: deckOf(cards), progress: state.updatedProgress, now: NOW, mode })).toBeNull();
     }
   });
 
-  it('buildRatedSessionState forwards excludeUids to its next pick', () => {
-    const progress = [due('q1'), fresh('q2'), fresh('q3')];
-    const index = { cards, cardMap: new Map(cards.map((c) => [c.StableUid, c])) };
-    const state = buildRatedSessionState({
-      current: { card: cards[0], progress: progress[0] },
-      progress,
-      rating: 'good',
-      mode: 'mixed',
-      sessionDone: 1,
-      sessionLimit: 3,
-      now: NOW,
-      cardIndex: index,
-      excludeUids: new Set(['q2']),
-    });
-    expect(state.nextCurrent?.card.StableUid).toBe('q3');
+  it('a mixed run moves on to the next new card, never back to the studied one', () => {
+    const cards = [qa(1), qa(2)];
+    const first = gotIt(cards, cards.map((c) => fresh(c.StableUid)), 'q1', 'mixed');
+    expect(first.nextCurrent?.card.StableUid).toBe('q2');
+    const second = gotIt(cards, first.updatedProgress, 'q2', 'mixed');
+    expect(second.nextCurrent).toBeNull();
+    expect(countDueToday(second.updatedProgress, NOW)).toBe(0);
+  });
 
-    const last = buildRatedSessionState({
-      current: { card: cards[0], progress: progress[0] },
-      progress,
-      rating: 'good',
-      mode: 'mixed',
-      sessionDone: 1,
-      sessionLimit: 3,
-      now: NOW,
-      cardIndex: index,
-      excludeUids: new Set(['q2', 'q3']),
-    });
-    expect(last.nextCurrent).toBeNull();
+  it('the exam cap never pulls a studied card back into today', () => {
+    // Exam the day after tomorrow: no review after the start of tomorrow, which is still not today.
+    const cards = [qa(1)];
+    const state = gotIt(cards, [fresh('q1')], 'q1', 'mixed', localDateKey(2));
+    expect(state.updatedOne.nextReviewAt).toBeGreaterThan(NOW_MS);
+    expect(state.updatedOne.nextReviewAt).toBeLessThanOrEqual(NOW_MS + DAY_MS);
+    expect(countDueToday(state.updatedProgress, NOW)).toBe(0);
+    expect(state.nextCurrent).toBeNull();
   });
 });

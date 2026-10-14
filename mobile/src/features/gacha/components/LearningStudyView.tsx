@@ -16,13 +16,16 @@ import { typography } from '../../../theme/typography';
 import { CHROME_MAX_FONT_SCALE } from '../../../theme/dynamicType';
 
 // R22 §1.3, §6 — the learning step. The first time a learner meets a Q/A card
-// the session teaches it instead of testing it: question, answer sections and
-// (when the cardSource flag is on) the citation, all at once, with one action,
-// "Got it". No rating, no review event, no Mistake Book entry; the screen
-// re-queues the card as a recall check at the end of the same session.
+// the session teaches it instead of testing it. 2026-10-14 learning flow: the
+// question comes first, alone; "Show answer" opens the answer sections and
+// (when the cardSource flag is on) the citation; "Got it" then commits the card
+// as a passed first review (hard, back tomorrow). There is no same-session
+// recall check any more.
 export const LEARNING_STUDY_COPY = {
   caption: 'NEW CARD',
-  hint: 'Read it once. You will try to recall it at the end of this session.',
+  hintBeforeReveal: 'Think of your answer, then show it.',
+  hintAfterReveal: 'Read it once. It comes back tomorrow.',
+  showAnswer: 'Show answer',
   gotIt: 'Got it',
 } as const;
 
@@ -55,10 +58,12 @@ export type LearningStudyViewProps = {
   card: CardExport;
   deckSlug: string;
   rank?: number | null;
+  /** The learner tapped "Show answer": the answer sections and the source are on screen. */
+  revealed?: boolean;
 };
 
 export const LearningStudyView = React.memo(function LearningStudyView(props: LearningStudyViewProps) {
-  const { card, deckSlug, rank = null } = props;
+  const { card, deckSlug, rank = null, revealed = false } = props;
   const orderBadge = typeof rank === 'number' && rank > 0 ? `#${formatRank(rank)}` : `#${card.OrderInDeck}`;
   const [source, setSource] = useState<LoadedSource | null>(null);
   const uid = card.StableUid;
@@ -95,10 +100,14 @@ export const LearningStudyView = React.memo(function LearningStudyView(props: Le
         text={question.text}
       />
       {question.code ? <QuestionCodeBlock code={question.code} /> : null}
-      <View style={styles.answerWrap}>
-        <CardAnswerSections card={card} testID="learning-study-answer" />
-      </View>
-      {source ? (
+      {/* Question first: the answer and its source stay off screen until "Show answer". The source
+          is still read on mount, so it is ready by the time the answer opens. */}
+      {revealed ? (
+        <View style={styles.answerWrap}>
+          <CardAnswerSections card={card} testID="learning-study-answer" />
+        </View>
+      ) : null}
+      {revealed && source ? (
         <Pressable
           testID="learning-study-source"
           accessibilityRole="link"
@@ -124,25 +133,37 @@ export const LearningStudyView = React.memo(function LearningStudyView(props: Le
   );
 });
 
-// The study view's one action, rendered in the session's pinned dock where the
-// rating buttons sit for every other card.
-export function LearningGotItDock(props: { disabled?: boolean; onGotIt: () => void }) {
-  const { disabled = false, onGotIt } = props;
+// The study view's one action at a time, rendered in the session's pinned dock where the rating
+// buttons sit for every other card: "Show answer" until the answer is open, then "Got it". Got it
+// is never offered before the learner has seen the answer.
+export function LearningStudyDock(props: {
+  revealed: boolean;
+  disabled?: boolean;
+  onShowAnswer: () => void;
+  onGotIt: () => void;
+}) {
+  const { revealed, disabled = false, onShowAnswer, onGotIt } = props;
   return (
     <View style={styles.dock} testID="learning-study-dock">
-      <Text style={styles.hint} numberOfLines={2} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
-        {LEARNING_STUDY_COPY.hint}
+      <Text
+        style={styles.hint}
+        numberOfLines={2}
+        testID="learning-study-hint"
+        maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}
+      >
+        {revealed ? LEARNING_STUDY_COPY.hintAfterReveal : LEARNING_STUDY_COPY.hintBeforeReveal}
       </Text>
       <Pressable
-        testID="learning-study-got-it"
+        key={revealed ? 'got-it' : 'show-answer'}
+        testID={revealed ? 'learning-study-got-it' : 'learning-study-show-answer'}
         accessibilityRole="button"
         accessibilityState={{ disabled }}
         disabled={disabled}
         style={({ pressed }) => [styles.gotIt, pressed && styles.pressed, disabled && styles.disabled]}
-        onPress={onGotIt}
+        onPress={revealed ? onGotIt : onShowAnswer}
       >
         <Text style={styles.gotItText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
-          {LEARNING_STUDY_COPY.gotIt}
+          {revealed ? LEARNING_STUDY_COPY.gotIt : LEARNING_STUDY_COPY.showAnswer}
         </Text>
       </Pressable>
     </View>

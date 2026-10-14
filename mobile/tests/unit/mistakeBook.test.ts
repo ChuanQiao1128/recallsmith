@@ -100,6 +100,7 @@ describe('mistakeBook', () => {
     expect(await loadMistakeBook()).toEqual({ v: 1, entries: { 'csharp::c1': entry() } });
   });
 
+  // 2026-10-14 learning flow: the flag now marks the study view's Got it (it was the recall check).
   it('never writes a learning-check outcome: mistakes start once a card is learned (R22 §6)', async () => {
     const failedCheck = outcome({ rating: 'again', learningCheck: true });
     expect(applyOutcome(EMPTY, failedCheck)).toBe(EMPTY);

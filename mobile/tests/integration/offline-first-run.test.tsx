@@ -381,9 +381,12 @@ async function runStarterLesson() {
   expect(hasText(tree, STARTER_COPY.offlineTitle)).toBe(false);
   expect(hasText(tree, STARTER_COPY.offlineStarterNotice)).toBe(true);
 
+  // Five studies (2026-10-14 learning flow): Show answer, then Got it; the 5th opens Draw.
   const studied: string[] = [];
   for (let i = 0; i < 5; i += 1) {
     studied.push(shownStudyQuestion(tree));
+    expect(navigation.replace).not.toHaveBeenCalled();
+    await pressLabel(tree, 'Show answer');
     await act(async () => {
       tree.root.find((node) => node.props?.testID === 'learning-study-got-it' && (node.type as any) === 'Pressable').props.onPress();
       await Promise.resolve();
@@ -391,11 +394,7 @@ async function runStarterLesson() {
     await flush(1);
   }
   expect(studied).toEqual(LESSON_UIDS.map(questionOf));
-
-  for (let i = 0; i < 5; i += 1) {
-    await pressLabel(tree, 'Reveal answer');
-    await pressLabel(tree, 'Remembered');
-  }
+  expect(navigation.replace).toHaveBeenCalledTimes(1);
   expect(navigation.replace).toHaveBeenCalledWith('Draw', { slug: SLUG, rewardPending: true });
   act(() => tree.unmount());
 }

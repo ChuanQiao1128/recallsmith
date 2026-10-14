@@ -1,6 +1,6 @@
-// F03 (contract R24-00 §4.3), end to end below the screen: a new Q/A card passes
-// its learning check, is rated Good on its due day, then Good again on the next
-// due day. Each rating goes through the session's real save path
+// F03 (contract R24-00 §4.3), end to end below the screen: a new Q/A card is
+// studied (Got it on the study view, 2026-10-14 learning flow), is rated Good on
+// its due day, then Good again on the next due day. Each rating goes through the session's real save path
 // (buildRatedSessionState) and the real event recorder, and the test reads the
 // events back out of the offline queue as they would be pushed.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -66,7 +66,7 @@ async function rateAndRecord(
   progress: CardProgress,
   rating: ReviewRating,
   atMs: number,
-  reviewStage: 'learning_check' | 'repeat_review',
+  reviewStage: 'learning_study' | 'repeat_review',
 ): Promise<CardProgress> {
   const { updatedOne } = buildRatedSessionState({
     current: { card: CARD, progress },
@@ -77,7 +77,7 @@ async function rateAndRecord(
     sessionLimit: 5,
     now: new Date(atMs),
     cardIndex: null,
-    learningCheck: reviewStage === 'learning_check',
+    learningCheck: reviewStage === 'learning_study',
   });
   const id = await recordReviewEvent({
     deckSlug: 'aws',
@@ -98,19 +98,19 @@ function queuedEvents(): ProgressEvent[] {
   return JSON.parse(store.get(keys[0])!) as ProgressEvent[];
 }
 
-describe('FSRS review flow: learning check, then Good on each due day', () => {
+describe('FSRS review flow: Got it on the study view, then Good on each due day', () => {
   it('schedules 1, 3 then 9 days and stamps every queued event fsrs-5', async () => {
     const fresh: CardProgress = { stableUid: 'qa-1', stage: 0, nextReviewAt: 0 };
 
-    // The recall check at the end of the first session: Remembered = hard, due tomorrow.
-    const afterCheck = await rateAndRecord(fresh, 'hard', T0, 'learning_check');
-    expect(afterCheck.nextReviewAt).toBe(T0 + DAY_MS);
-    expect(afterCheck.fsrsStability).toBeCloseTo(1.1839, 4);
-    expect(afterCheck.fsrsDifficulty).toBeCloseTo(6.4883, 4);
+    // Got it on the study view: hard, due tomorrow.
+    const afterGotIt = await rateAndRecord(fresh, 'hard', T0, 'learning_study');
+    expect(afterGotIt.nextReviewAt).toBe(T0 + DAY_MS);
+    expect(afterGotIt.fsrsStability).toBeCloseTo(1.1839, 4);
+    expect(afterGotIt.fsrsDifficulty).toBeCloseTo(6.4883, 4);
 
     // Good on the due day: FSRS from that state after one day, 3 days (the ladder said 2).
-    const day1 = afterCheck.nextReviewAt;
-    const afterGood = await rateAndRecord(afterCheck, 'good', day1, 'repeat_review');
+    const day1 = afterGotIt.nextReviewAt;
+    const afterGood = await rateAndRecord(afterGotIt, 'good', day1, 'repeat_review');
     expect(afterGood.nextReviewAt).toBe(day1 + 3 * DAY_MS);
     expect(afterGood.fsrsStability).toBeCloseTo(3.4452, 4);
     expect(afterGood.fsrsDifficulty).toBeCloseTo(6.4733, 4);
@@ -127,7 +127,7 @@ describe('FSRS review flow: learning check, then Good on each due day', () => {
 
     const events = queuedEvents();
     expect(events.map((e) => e.schedulerVersion)).toEqual(['fsrs-5', 'fsrs-5', 'fsrs-5']);
-    expect(events.map((e) => e.reviewStage)).toEqual(['learning_check', 'repeat_review', 'repeat_review']);
+    expect(events.map((e) => e.reviewStage)).toEqual(['learning_study', 'repeat_review', 'repeat_review']);
     expect(events.map((e) => e.rating)).toEqual([2, 3, 3]);
     expect(events.map((e) => (e.progressAfter!.nextReviewAt - e.reviewedAtMs) / DAY_MS)).toEqual([1, 3, 9]);
     expect(events[2].progressAfter).toEqual(afterGood2);
@@ -137,8 +137,8 @@ describe('FSRS review flow: learning check, then Good on each due day', () => {
     applyRemoteFeatures({ features: { fsrs: { enabled: false } } } as unknown as RemoteConfig);
     const fresh: CardProgress = { stableUid: 'qa-1', stage: 0, nextReviewAt: 0 };
 
-    const afterCheck = await rateAndRecord(fresh, 'hard', T0, 'learning_check');
-    const afterGood = await rateAndRecord(afterCheck, 'good', afterCheck.nextReviewAt, 'repeat_review');
+    const afterGotIt = await rateAndRecord(fresh, 'hard', T0, 'learning_study');
+    const afterGood = await rateAndRecord(afterGotIt, 'good', afterGotIt.nextReviewAt, 'repeat_review');
     await rateAndRecord(afterGood, 'good', afterGood.nextReviewAt, 'repeat_review');
 
     const events = queuedEvents();

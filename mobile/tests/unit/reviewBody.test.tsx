@@ -32,6 +32,7 @@ vi.mock('react-native', () => {
 
 import { ReviewBody } from '../../src/features/gacha/components/ReviewBody';
 import type { CardExport } from '../../src/types/deckExport';
+import { colors } from '../../src/theme/colors';
 
 // ~420 chars, shaped like an SAA-C03 / CCDV-F scenario stem: several
 // sentences, a qualifier, no newline. Long enough that any numberOfLines
@@ -276,5 +277,98 @@ describe('ReviewBody — no empty ANSWER heading (R22 §5)', () => {
     expect(hasText(tree, 'ANSWER')).toBe(false);
     expect(hasText(tree, 'No answer body for this card yet.')).toBe(true);
     expect(hasText(tree, 'Hide')).toBe(true);
+  });
+});
+
+// 2026-10-14 learning flow (B3): the aws-saa-fundamentals answers open with a one-line conclusion,
+// 答：…, then 因为：… and 考法：…. That line is what the learner judges themselves against, so it is
+// set apart; every other answer renders exactly as before.
+describe('ReviewBody — the 答 key line', () => {
+  const KEY = '答：一整片连续的 IP 地址。';
+  const REST = '因为：10.0.0.0/16 约有 6.5 万个地址；"/" 后面的数字越大，范围越小。\n考法：比较 10.0.0.0/16 和 10.0.0.0/24 → ✅ /24 范围更小（约 256 个地址）；❌ 以为数字越大范围越大';
+  const fundamentalsCard: CardExport = {
+    StableUid: 'awsf-net-01-cidr',
+    OrderInDeck: 1,
+    Difficulty: 1,
+    Question: 'IP 段（CIDR）是什么？',
+    Explanation: `${KEY}\n${REST}`,
+  };
+  const englishCard: CardExport = {
+    StableUid: 'explanation-only',
+    OrderInDeck: 1,
+    Difficulty: 1,
+    Question: 'What is a record type?',
+    Explanation: 'A reference type with value-based equality.\nTwo records with the same values are equal.',
+  };
+  const flat = (style: any): Record<string, any> => Object.assign({}, ...[style].flat(Infinity).filter(Boolean));
+  const keyBlocks = (tree: renderer.ReactTestRenderer) =>
+    tree.root.findAll((node) => (node.type as any) === 'View' && node.props.testID === 'answer-key-line');
+
+  it('shows the 答 line bold in a tinted block with a 3pt accent rule, then the other lines as body text', () => {
+    const tree = render(fundamentalsCard, true);
+    const blocks = keyBlocks(tree);
+    expect(blocks).toHaveLength(1);
+    const block = flat(blocks[0].props.style);
+    expect(block.borderLeftWidth).toBe(3);
+    expect(block.borderLeftColor).toBe(colors.gold);
+    expect(block.backgroundColor).toBe(colors.softPeach);
+
+    const keyTexts = blocks[0].findAll((node) => (node.type as any) === 'Text');
+    expect(keyTexts).toHaveLength(1);
+    expect(keyTexts[0].props.children).toBe(KEY);
+    expect(flat(keyTexts[0].props.style).fontWeight).toBe('800');
+    expect(flat(keyTexts[0].props.style).color).toBe(colors.ink);
+    // VoiceOver cannot see the highlight the rating hint points at: the label names it.
+    expect(keyTexts[0].props.accessibilityLabel).toBe(`Highlighted line, ${KEY}`);
+    // Card body text: never clamped, never capped (dynamic type policy).
+    expect(keyTexts[0].props.numberOfLines).toBeUndefined();
+    expect(keyTexts[0].props.maxFontSizeMultiplier).toBeUndefined();
+
+    // The rest is one body Text, without the key line.
+    const rest = texts(tree).filter((node) => node.props.children === REST);
+    expect(rest).toHaveLength(1);
+    expect(flat(rest[0].props.style)).toEqual({ fontSize: 15, lineHeight: 22, color: colors.inkSoft, fontWeight: '500' });
+    expect(hasText(tree, fundamentalsCard.Explanation!)).toBe(false);
+  });
+
+  it('puts the key line first: right after the EXPLANATION caption, before the other lines', () => {
+    const tree = render(fundamentalsCard, true);
+    const order = texts(tree).map((node) => node.props.children);
+    const caption = order.indexOf('EXPLANATION');
+    expect(caption).toBeGreaterThanOrEqual(0);
+    expect(order[caption + 1]).toBe(KEY);
+    expect(order[caption + 2]).toBe(REST);
+  });
+
+  it('keeps a one-line 答 answer to the highlighted block alone', () => {
+    const tree = render({ ...fundamentalsCard, Explanation: KEY }, true);
+    expect(keyBlocks(tree)).toHaveLength(1);
+    const order = texts(tree).map((node) => node.props.children);
+    expect(order[order.indexOf('EXPLANATION') + 1]).toBe(KEY);
+    expect(order.indexOf('EXPLANATION') + 2).toBe(order.length);
+  });
+
+  it('renders an English answer exactly as before: one plain body Text, no key line', () => {
+    const tree = render(englishCard, true);
+    expect(keyBlocks(tree)).toHaveLength(0);
+    const body = texts(tree).filter((node) => node.props.children === englishCard.Explanation);
+    expect(body).toHaveLength(1);
+    expect(flat(body[0].props.style)).toEqual({ fontSize: 15, lineHeight: 22, color: colors.inkSoft, fontWeight: '500' });
+    expect(body[0].props.accessibilityLabel).toBeUndefined();
+    // Directly under the section block, beside its caption, with no wrapper of its own.
+    let section = body[0].parent!;
+    while ((section.type as any) !== 'View') section = section.parent!;
+    expect(section.findAll((node) => (node.type as any) === 'Text').map((node) => node.props.children)).toEqual([
+      'EXPLANATION',
+      englishCard.Explanation,
+    ]);
+    // A 答 that is not the first line is not a key line.
+    expect(keyBlocks(render({ ...englishCard, Explanation: `Summary first.\n${KEY}` }, true))).toHaveLength(0);
+  });
+
+  it('shows nothing of the answer, key line included, before reveal', () => {
+    const tree = render(fundamentalsCard, false);
+    expect(keyBlocks(tree)).toHaveLength(0);
+    expect(hasText(tree, KEY)).toBe(false);
   });
 });

@@ -18,7 +18,6 @@ vi.mock('react-native', () => {
 });
 
 import {
-  LEARNING_CHECK_ITEMS,
   RATING_HINT,
   RATING_ITEMS,
   RatingBar,
@@ -26,7 +25,7 @@ import {
   TWO_RATING_ITEMS,
 } from '../../src/features/gacha/components/RatingBar';
 
-function render(props: { revealed?: boolean; disabled?: boolean; fourButtons?: boolean; learningCheck?: boolean }) {
+function render(props: { revealed?: boolean; disabled?: boolean; fourButtons?: boolean; keyLine?: boolean }) {
   let tree!: renderer.ReactTestRenderer;
   act(() => {
     tree = renderer.create(<RatingBar onRate={() => {}} {...props} />);
@@ -150,36 +149,65 @@ describe('RatingBar two-button default', () => {
   });
 });
 
-// F02 s-correctness-1: the recall check schedules Remembered as 'hard' (stage 0, due in a day), so
-// its dock must not borrow the two-button 'Normal gap' wording, on screen or in VoiceOver.
-describe('RatingBar learning-check dock', () => {
-  it('says what the check schedules: Forgot shows soon, Remembered comes back tomorrow', () => {
-    expect(LEARNING_CHECK_ITEMS.map((item) => [item.key, item.title, item.subtitle])).toEqual([
-      ['again', 'Forgot', 'Show soon'],
-      ['hard', 'Remembered', 'See it tomorrow'],
-    ]);
-    const tree = render({ revealed: true, learningCheck: true });
-    const buttons = tree.root.findAll((node) => (node.type as any) === 'Pressable');
-    expect(buttons.map((b) => b.props.accessibilityLabel)).toEqual(['Forgot, show soon', 'Remembered, see it tomorrow']);
-    const rendered = texts(tree).map((node) => node.props.children);
-    expect(rendered).toContain('See it tomorrow');
-    expect(rendered).not.toContain('Normal gap');
-    expect(ratingA11yLabel(LEARNING_CHECK_ITEMS[1])).not.toMatch(/normal/i);
+// 2026-10-14 learning flow (B3): an answer that opens with a highlighted 答 line is judged on that
+// line, so the after-reveal question names it. Nothing else about the dock changes.
+describe('RatingBar key-line hint', () => {
+  const hintOf = (tree: renderer.ReactTestRenderer) =>
+    texts(tree).find((node) => node.props.testID === 'review-rating-hint')?.props.children;
+
+  it('asks about the highlighted line after reveal: yes/no for two buttons, how well for four', () => {
+    expect(hintOf(render({ revealed: true, keyLine: true }))).toBe('Did you get the highlighted line?');
+    expect(RATING_HINT.afterRevealTwoKeyLine).toBe('Did you get the highlighted line?');
+    expect(hintOf(render({ revealed: true, keyLine: true, fourButtons: true }))).toBe('How well did you get the highlighted line?');
+    expect(RATING_HINT.afterRevealKeyLine).toBe('How well did you get the highlighted line?');
   });
 
-  it('wins over the four-button setting and sends again / hard', () => {
+  it('keeps the plain questions without a key line, and the pre-reveal hint either way', () => {
+    expect(hintOf(render({ revealed: true }))).toBe('Did you remember it?');
+    expect(hintOf(render({ revealed: true, keyLine: false, fourButtons: true }))).toBe('How well did you recall it?');
+    for (const keyLine of [false, true]) {
+      for (const fourButtons of [false, true]) {
+        expect(hintOf(render({ revealed: false, keyLine, fourButtons }))).toBe('Try to recall the answer, then reveal it.');
+      }
+    }
+  });
+
+  it('changes only the hint: the same buttons, labels and ratings', () => {
+    for (const fourButtons of [false, true]) {
+      const onRate = vi.fn();
+      let tree!: renderer.ReactTestRenderer;
+      act(() => {
+        tree = renderer.create(<RatingBar onRate={onRate} revealed fourButtons={fourButtons} keyLine />);
+      });
+      const buttons = tree.root.findAll((node) => (node.type as any) === 'Pressable');
+      const items = fourButtons ? RATING_ITEMS : TWO_RATING_ITEMS;
+      expect(buttons.map((b) => b.props.accessibilityLabel)).toEqual(items.map((item) => ratingA11yLabel(item)));
+      act(() => {
+        buttons.forEach((button) => button.props.onPress());
+      });
+      expect(onRate.mock.calls.map((call) => call[0])).toEqual(items.map((item) => item.key));
+    }
+  });
+});
+
+// 2026-10-14 learning flow (B2): the end-of-session recall check is gone, and with it the dock that
+// sent hard for Remembered. Remembered is good wherever the rating bar shows.
+describe('RatingBar has no recall-check dock', () => {
+  it('sends good for Remembered and offers no "See it tomorrow" button', () => {
     const onRate = vi.fn();
     let tree!: renderer.ReactTestRenderer;
     act(() => {
-      tree = renderer.create(<RatingBar onRate={onRate} revealed fourButtons learningCheck />);
+      tree = renderer.create(<RatingBar onRate={onRate} revealed />);
     });
-    const buttons = tree.root.findAll((node) => (node.type as any) === 'Pressable');
-    expect(buttons).toHaveLength(2);
+    const rendered = texts(tree).map((node) => node.props.children);
+    expect(rendered).not.toContain('See it tomorrow');
+    const remembered = tree.root.find(
+      (node) => (node.type as any) === 'Pressable' && node.props.testID === 'review-rating-good',
+    );
+    expect(remembered.props.accessibilityLabel).toBe('Remembered, normal gap');
     act(() => {
-      buttons.forEach((button) => button.props.onPress());
+      remembered.props.onPress();
     });
-    expect(onRate.mock.calls.map((call) => call[0])).toEqual(['again', 'hard']);
-    const hint = texts(tree).find((node) => node.props.testID === 'review-rating-hint');
-    expect(hint?.props.children).toBe(RATING_HINT.afterRevealTwo);
+    expect(onRate).toHaveBeenCalledWith('good');
   });
 });

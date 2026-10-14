@@ -4,7 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { invalidateDeckCache } from '../../src/content/deckCache';
 
-// R22 contract §1.3, §6 — a Q/A card is taught before it is tested.
+// R22 contract §1.3, §6 — a Q/A card is taught before it is tested. 2026-10-14 learning flow: the
+// study view shows the question first ("Show answer", then "Got it"), and Got it commits the card
+// (hard, due tomorrow); there is no recall check later in the same session.
 
 // deckCache memoizes deck reads at module scope; clear it between tests (G30).
 beforeEach(() => {
@@ -184,6 +186,11 @@ vi.mock('../../src/features/gacha/mistakes/mistakeBook', async (importOriginal) 
   return { ...actual, recordMistakeOutcome: vi.fn(actual.recordMistakeOutcome) };
 });
 
+// Observed, not run: the screen's haptic calls are what the tests read.
+vi.mock('../../src/features/gacha/session/studyHaptics', () => ({
+  studyHaptic: vi.fn(),
+}));
+
 vi.mock('../../src/content/cardSource', () => ({
   getCardSource: vi.fn(async () => ({ url: 'https://docs.aws.amazon.com/sqs/', quote: 'Queues decouple producers.' })),
   sourceHostLabel: vi.fn(() => 'docs.aws.amazon.com'),
@@ -195,7 +202,8 @@ import { loadDeckProgress, saveDeckProgress } from '../../src/review/storage';
 import { recordReviewEvent } from '../../src/sync/progressSync';
 import { pickNextCard, planChallengeRoute } from '../../src/features/gacha/planner/sessionPlanner';
 import { settleRatingReward } from '../../src/features/gacha/rewards/sessionRewards';
-import { resetSessionStore } from '../../src/features/gacha/session/sessionStore';
+import { resetSessionStore, useSessionStore } from '../../src/features/gacha/session/sessionStore';
+import { studyHaptic } from '../../src/features/gacha/session/studyHaptics';
 import { MISTAKE_BOOK_KEY, recordMistakeOutcome, withMistakeBookLock } from '../../src/features/gacha/mistakes/mistakeBook';
 import { getCardSource } from '../../src/content/cardSource';
 import { STUDY_PREFS_KEY } from '../../src/features/gacha/study/studyPrefs';
@@ -204,12 +212,13 @@ const FIXED_NOW_MS = Date.UTC(2026, 8, 27, 9, 0, 0);
 const DAY_MS = 86_400_000;
 const MISTAKES_STORAGE_KEY = `test:${MISTAKE_BOOK_KEY}`;
 
-function flags(overrides: { mcq?: Record<string, unknown>; cardSource?: boolean } = {}) {
+function flags(overrides: { mcq?: Record<string, unknown>; cardSource?: boolean; cardReport?: boolean } = {}) {
   return {
     mcq: { enabled: true, recallFirst: true, maxPerRun: 2, answerTelemetry: false, ...(overrides.mcq ?? {}) },
     paywall: { hidden: false },
     ceremony: { seamOfLight: true, forceFallback: false },
     cardSource: { enabled: overrides.cardSource ?? true },
+    cardReport: { enabled: overrides.cardReport ?? false },
   };
 }
 
@@ -275,6 +284,16 @@ const fresh = (uid: string) => ({ stableUid: uid, stage: 0, nextReviewAt: 0 });
 const learnedDue = (uid: string) => ({ stableUid: uid, stage: 2, lastReviewedAt: FIXED_NOW_MS - 3 * DAY_MS, nextReviewAt: FIXED_NOW_MS - DAY_MS });
 
 const LEARNED_2 = { StableUid: 'old-e', OrderInDeck: 5, Difficulty: 1, Question: 'What is a shard?', Explanation: 'A slice of a stream.', Topic: 'kinesis' };
+// The aws-saa-fundamentals answer shape (B3): 答：/因为：/考法：.
+const KEY_LINE = '答：一整片连续的 IP 地址。';
+const KEYED = {
+  StableUid: 'awsf-cidr',
+  OrderInDeck: 0,
+  Difficulty: 1,
+  Question: 'IP 段（CIDR）是什么？',
+  Explanation: `${KEY_LINE}\n因为：10.0.0.0/16 约有 6.5 万个地址。\n考法：比较 /16 和 /24 → ✅ /24 范围更小`,
+  Topic: 'vpc',
+};
 
 type RouteNode = { id: string; role: string; title: string; subtitle: string };
 
@@ -326,13 +345,23 @@ function subtitle(tree: renderer.ReactTestRenderer): string | undefined {
   return texts(tree).find((t) => /^Card \d+ of \d+$/.test(t));
 }
 
+// The study view, one card: Show answer, then Got it.
+async function study(tree: renderer.ReactTestRenderer) {
+  await press(tree, 'Show answer');
+  await press(tree, 'Got it');
+}
+
+function studyHint(tree: renderer.ReactTestRenderer): string | undefined {
+  return byTestID(tree, 'learning-study-hint')[0]?.props.children;
+}
+
 async function storedMistakes(): Promise<Record<string, unknown>> {
   await withMistakeBookLock(async () => undefined);
   const raw = store.get(MISTAKES_STORAGE_KEY);
   return raw ? JSON.parse(raw).entries : {};
 }
 
-describe('SessionCardScreen learning step (R22 §6: teach before testing)', () => {
+describe('SessionCardScreen learning step (R22 §6: teach before testing; 2026-10-14 learning flow)', () => {
   let errorSpy: ReturnType<typeof vi.spyOn>;
   let warnSpy: ReturnType<typeof vi.spyOn>;
 
@@ -356,149 +385,203 @@ describe('SessionCardScreen learning step (R22 §6: teach before testing)', () =
     warnSpy.mockRestore();
   });
 
-  it('opens a never-reviewed Q/A card on the study view: question, answer, source, one Got it', async () => {
+  it('opens a never-reviewed Q/A card on the study view with the question alone and Show answer', async () => {
     serve([NEW_A], [fresh('new-a')], 1);
     const { tree } = await mount();
 
     expect(byTestID(tree, 'learning-study-view')).toHaveLength(1);
+    expect(texts(tree)).toContain('NEW CARD');
     expect(questionShown(tree)).toBe('What is a queue?');
-    // The answer is shown up front, no reveal step.
-    expect(texts(tree)).toContain('A buffer between producer and consumer.');
+    // Question first: no answer, no source yet.
+    expect(texts(tree)).not.toContain('A buffer between producer and consumer.');
+    expect(byTestID(tree, 'learning-study-answer')).toHaveLength(0);
+    expect(byTestID(tree, 'learning-study-source')).toHaveLength(0);
+    expect(studyHint(tree)).toBe('Think of your answer, then show it.');
+    // One action, Show answer; Got it is not offered before the answer is seen, and no rating buttons.
+    const show = byTestID(tree, 'learning-study-show-answer');
+    expect(show).toHaveLength(1);
+    expect(show[0].props.accessibilityRole).toBe('button');
+    expect(pressables(tree, 'Show answer')).toHaveLength(1);
+    expect(pressables(tree, 'Got it')).toHaveLength(0);
+    expect(byTestID(tree, 'learning-study-got-it')).toHaveLength(0);
     expect(pressables(tree, 'Reveal answer')).toHaveLength(0);
-    // One action and no rating buttons.
-    expect(pressables(tree, 'Got it')).toHaveLength(1);
     expect(pressables(tree, 'Forgot')).toHaveLength(0);
     expect(pressables(tree, 'Remembered')).toHaveLength(0);
-    // The card's source, with the cardSource flag on.
+    // The source is read on mount, ready for the reveal.
     expect(getCardSource).toHaveBeenCalledWith('csharp', 'new-a');
+  });
+
+  it('Show answer opens the answer and the source, fires the reveal haptic, swaps in Got it and writes nothing', async () => {
+    serve([NEW_A], [fresh('new-a')], 1);
+    const { tree, navigation } = await mount();
+
+    await press(tree, 'Show answer');
+
+    expect(studyHaptic).toHaveBeenCalledTimes(1);
+    expect(studyHaptic).toHaveBeenCalledWith('reveal');
+    expect(questionShown(tree)).toBe('What is a queue?');
+    expect(texts(tree)).toContain('A buffer between producer and consumer.');
     expect(byTestID(tree, 'learning-study-source-host')[0].props.children).toBe('docs.aws.amazon.com');
     expect(byTestID(tree, 'learning-study-source-quote')[0].props.children).toBe('Queues decouple producers.');
+    expect(studyHint(tree)).toBe('Read it once. It comes back tomorrow.');
+    expect(pressables(tree, 'Show answer')).toHaveLength(0);
+    const gotIt = byTestID(tree, 'learning-study-got-it');
+    expect(gotIt).toHaveLength(1);
+    expect(gotIt[0].props.accessibilityRole).toBe('button');
+    // Revealing is not a rating.
+    expect(recordReviewEvent).not.toHaveBeenCalled();
+    expect(saveDeckProgress).not.toHaveBeenCalled();
+    expect(settleRatingReward).not.toHaveBeenCalled();
+    expect(navigation.replace).not.toHaveBeenCalled();
   });
 
   it('shows no source with the cardSource flag off', async () => {
     featureFlagsMock.mockReturnValue(flags({ cardSource: false }));
     serve([NEW_A], [fresh('new-a')], 1);
     const { tree } = await mount();
+    await press(tree, 'Show answer');
 
     expect(byTestID(tree, 'learning-study-view')).toHaveLength(1);
+    expect(texts(tree)).toContain('A buffer between producer and consumer.');
     expect(getCardSource).not.toHaveBeenCalled();
     expect(byTestID(tree, 'learning-study-source')).toHaveLength(0);
   });
 
-  it('Got it sends no rating, no event, no mistake and no reward, and re-queues the card as a check', async () => {
+  it('never shows the Report button on the study view, even after Show answer', async () => {
+    featureFlagsMock.mockReturnValue(flags({ cardReport: true }));
+    serve([NEW_A, LEARNED], [fresh('new-a'), learnedDue('old-c')], 2);
+    const { tree } = await mount('mixed');
+    // The learned card first: its review shows Report once revealed.
+    await press(tree, 'Reveal answer');
+    expect(byTestID(tree, 'session-card-report')).toHaveLength(1);
+    await press(tree, 'Remembered');
+
+    expect(byTestID(tree, 'learning-study-view')).toHaveLength(1);
+    expect(byTestID(tree, 'session-card-report')).toHaveLength(0);
+    await press(tree, 'Show answer');
+    expect(texts(tree)).toContain('A buffer between producer and consumer.');
+    expect(byTestID(tree, 'session-card-report')).toHaveLength(0);
+  });
+
+  it('Got it commits hard, due in one day, as learning_study: reward, streak, saved progress, no mistake', async () => {
+    vi.mocked(settleRatingReward).mockResolvedValueOnce({
+      newCardPaid: true,
+      dueClearPaid: false,
+      pulls: 1,
+      walletBefore: { availablePulls: 0, reservePulls: 0 },
+      walletAfter: { availablePulls: 1, reservePulls: 0 },
+      applied: null,
+      newCardsLearnedToday: 1,
+    } as any);
     serve([NEW_A], [fresh('new-a')], 1);
     const { tree, navigation } = await mount();
-    // The run's length counts the check from the first card (F02 s-correctness-3).
-    expect(subtitle(tree)).toBe('Card 1 of 2');
+    expect(subtitle(tree)).toBe('Card 1 of 1');
 
-    await press(tree, 'Got it');
+    await study(tree);
 
-    expect(recordReviewEvent).not.toHaveBeenCalled();
-    expect(recordMistakeOutcome).not.toHaveBeenCalled();
-    expect(saveDeckProgress).not.toHaveBeenCalled();
-    expect(settleRatingReward).not.toHaveBeenCalled();
-    expect(navigation.replace).not.toHaveBeenCalled();
-    // The recall check: the same card, question first, with its own slot in the count.
-    expect(byTestID(tree, 'learning-study-view')).toHaveLength(0);
-    expect(questionShown(tree)).toBe('What is a queue?');
-    expect(pressables(tree, 'Reveal answer')).toHaveLength(1);
-    expect(subtitle(tree)).toBe('Card 2 of 2');
-  });
-
-  it('deals the checks at the end of the run, in study order, and counts them in the run', async () => {
-    serve([NEW_A, NEW_B], [fresh('new-a'), fresh('new-b')], 2);
-    const { tree, navigation } = await mount('learn-new');
-    const seen: string[] = [];
-
-    expect(questionShown(tree)).toBe('What is a queue?');
-    expect(subtitle(tree)).toBe('Card 1 of 4');
-    await press(tree, 'Got it');
-    // The planner deals the next new card, never the one just studied.
-    expect(byTestID(tree, 'learning-study-view')).toHaveLength(1);
-    expect(questionShown(tree)).toBe('What is a topic?');
-    expect(pickNextCard).toHaveBeenLastCalledWith(
-      expect.objectContaining({ excludeUids: new Set(['new-a']) }),
+    // The light rating haptic, after the reveal tick.
+    expect(vi.mocked(studyHaptic).mock.calls.map((call) => call[0])).toEqual(['reveal', 'rate']);
+    expect(recordReviewEvent).toHaveBeenCalledTimes(1);
+    const event = vi.mocked(recordReviewEvent).mock.calls[0][0] as any;
+    expect(event).toEqual(
+      expect.objectContaining({ deckSlug: 'csharp', stableUid: 'new-a', rating: 'hard', reviewStage: 'learning_study', reviewedAtMs: FIXED_NOW_MS }),
     );
-    expect(subtitle(tree)).toBe('Card 2 of 4');
-    await press(tree, 'Got it');
-    expect(subtitle(tree)).toBe('Card 3 of 4');
-
-    for (const answer of ['Remembered', 'Forgot']) {
-      seen.push(questionShown(tree) ?? '');
-      expect(byTestID(tree, 'learning-study-view')).toHaveLength(0);
-      await press(tree, 'Reveal answer');
-      await press(tree, answer);
-    }
-
-    expect(seen).toEqual(['What is a queue?', 'What is a topic?']);
-    expect(navigation.replace).toHaveBeenCalledWith(
-      'SessionSummary',
-      expect.objectContaining({ sessionDone: 4, sessionLimit: 4 }),
-    );
-  });
-
-  it('sends one card_reviewed per check with reviewStage learning_check: Remembered → hard (1 day), Forgot → again (10 min)', async () => {
-    serve([NEW_A, NEW_B], [fresh('new-a'), fresh('new-b')], 2);
-    const { tree } = await mount('learn-new');
-    await press(tree, 'Got it');
-    await press(tree, 'Got it');
-    await press(tree, 'Reveal answer');
-    await press(tree, 'Remembered');
-    await press(tree, 'Reveal answer');
-    await press(tree, 'Forgot');
-
-    expect(recordReviewEvent).toHaveBeenCalledTimes(2);
-    const [passed, failed] = vi.mocked(recordReviewEvent).mock.calls.map((call) => call[0] as any);
-    expect(passed).toEqual(
-      expect.objectContaining({ stableUid: 'new-a', rating: 'hard', reviewStage: 'learning_check' }),
-    );
-    expect(passed.progressAfter).toEqual(
+    expect(event.sessionId).toEqual(expect.any(String));
+    expect(event.progressAfter).toEqual(
       expect.objectContaining({ stage: 0, lastReviewedAt: FIXED_NOW_MS, nextReviewAt: FIXED_NOW_MS + DAY_MS }),
     );
-    expect(failed).toEqual(
-      expect.objectContaining({ stableUid: 'new-b', rating: 'again', reviewStage: 'learning_check' }),
-    );
-    expect(failed.progressAfter).toEqual(
-      expect.objectContaining({ stage: 0, lastReviewedAt: FIXED_NOW_MS, nextReviewAt: FIXED_NOW_MS + 10 * 60 * 1000 }),
-    );
-    // The rating reward and the saved progress follow the mapped rating.
-    expect(vi.mocked(settleRatingReward).mock.calls.map((call) => (call[0] as any).rating)).toEqual(['hard', 'again']);
+    // FSRS initState(hard), the learning-check schedule.
+    expect(event.progressAfter.fsrsStability).toBeCloseTo(1.1839, 4);
     const saved = vi.mocked(saveDeckProgress).mock.calls.at(-1)?.[1] as any[];
-    expect(saved.find((p) => p.stableUid === 'new-a')).toEqual(expect.objectContaining({ stage: 0, nextReviewAt: FIXED_NOW_MS + DAY_MS }));
-  });
-
-  it('records no Mistake Book entry when the recall check fails', async () => {
-    serve([NEW_A], [fresh('new-a')], 1);
-    const { tree, navigation } = await mount();
-    await press(tree, 'Got it');
-    await press(tree, 'Reveal answer');
-    await press(tree, 'Forgot');
-
+    expect(saved.find((p) => p.stableUid === 'new-a')).toEqual(
+      expect.objectContaining({ stage: 0, lastReviewedAt: FIXED_NOW_MS, nextReviewAt: FIXED_NOW_MS + DAY_MS }),
+    );
+    // The new-card reward is settled at Got it, from the progress before it.
+    expect(settleRatingReward).toHaveBeenCalledTimes(1);
+    expect(settleRatingReward).toHaveBeenCalledWith(
+      expect.objectContaining({ slug: 'csharp', stableUid: 'new-a', rating: 'hard', newCardEligible: true, progressBefore: [fresh('new-a')] }),
+    );
+    // The streak counts it.
+    expect(useSessionStore.getState().sessionRatings).toEqual([{ stableUid: 'new-a', rating: 'hard' }]);
+    expect(useSessionStore.getState().streakEarned).toBe(true);
+    // Mistakes start once a card is learned: the book is told it is the study, and stays empty.
     expect(recordMistakeOutcome).toHaveBeenCalledTimes(1);
     expect(recordMistakeOutcome).toHaveBeenCalledWith(
-      expect.objectContaining({ stableUid: 'new-a', rating: 'again', learningCheck: true }),
+      expect.objectContaining({ stableUid: 'new-a', rating: 'hard', learningCheck: true }),
     );
     expect(await storedMistakes()).toEqual({});
-    expect(navigation.replace).toHaveBeenCalledWith('SessionSummary', expect.objectContaining({ sessionDone: 2, sessionLimit: 2 }));
+    // The one-card run is over: straight to the summary, with the reward it paid.
+    expect(navigation.replace).toHaveBeenCalledTimes(1);
+    expect(navigation.replace).toHaveBeenCalledWith(
+      'SessionSummary',
+      expect.objectContaining({
+        sessionId: expect.any(String),
+        sessionDone: 1,
+        sessionLimit: 1,
+        streakEarned: true,
+        reward: expect.objectContaining({ newCardPulls: 1, newCardUids: ['new-a'] }),
+      }),
+    );
   });
 
-  it('asks the check with Forgot / Remembered even when four rating buttons are on', async () => {
+  it('runs a two-card learn-new run as two studies and ends with no recall check', async () => {
+    serve([NEW_A, NEW_B], [fresh('new-a'), fresh('new-b')], 2);
+    const { tree, navigation } = await mount('learn-new');
+
+    expect(questionShown(tree)).toBe('What is a queue?');
+    expect(subtitle(tree)).toBe('Card 1 of 2');
+    await study(tree);
+
+    // The next new card, back on the question alone: the reveal does not carry over.
+    expect(byTestID(tree, 'learning-study-view')).toHaveLength(1);
+    expect(questionShown(tree)).toBe('What is a topic?');
+    expect(subtitle(tree)).toBe('Card 2 of 2');
+    expect(texts(tree)).not.toContain('A fan-out channel.');
+    expect(pressables(tree, 'Show answer')).toHaveLength(1);
+    expect(pressables(tree, 'Got it')).toHaveLength(0);
+    expect(studyHint(tree)).toBe('Think of your answer, then show it.');
+    expect(navigation.replace).not.toHaveBeenCalled();
+    await study(tree);
+
+    // No card comes back: the run ends on its planned slots.
+    expect(navigation.replace).toHaveBeenCalledWith('SessionSummary', expect.objectContaining({ sessionDone: 2, sessionLimit: 2 }));
+    expect(vi.mocked(recordReviewEvent).mock.calls.map((call) => [(call[0] as any).stableUid, (call[0] as any).reviewStage, (call[0] as any).rating])).toEqual([
+      ['new-a', 'learning_study', 'hard'],
+      ['new-b', 'learning_study', 'hard'],
+    ]);
+    expect(vi.mocked(settleRatingReward).mock.calls.map((call) => [(call[0] as any).stableUid, (call[0] as any).rating])).toEqual([
+      ['new-a', 'hard'],
+      ['new-b', 'hard'],
+    ]);
+    // The planner deals without an exclusion list: a studied card is simply not due today.
+    for (const call of vi.mocked(pickNextCard).mock.calls) expect(call[0]).not.toHaveProperty('excludeUids');
+  });
+
+  it('deals no recall check even when the planner has slots left over', async () => {
+    // The route plans 3 slots but the deck has 2 new cards: once both are studied nothing is due,
+    // so the run ends early instead of re-asking them.
+    serve([NEW_A, NEW_B], [fresh('new-a'), fresh('new-b')], 3);
+    const { tree, navigation } = await mount('learn-new');
+    expect(subtitle(tree)).toBe('Card 1 of 3');
+    await study(tree);
+    await study(tree);
+
+    expect(pressables(tree, 'Reveal answer')).toHaveLength(0);
+    expect(recordReviewEvent).toHaveBeenCalledTimes(2);
+    expect(navigation.replace).toHaveBeenCalledWith('SessionSummary', expect.objectContaining({ sessionDone: 2, sessionLimit: 3 }));
+  });
+
+  it('keeps the study view on Show answer / Got it with four rating buttons on, and Got it still sends hard', async () => {
     store.set(STUDY_PREFS_KEY, JSON.stringify({ fourButtons: true }));
     serve([NEW_A], [fresh('new-a')], 1);
     const { tree } = await mount();
-    await press(tree, 'Got it');
-    await press(tree, 'Reveal answer');
 
-    expect(pressables(tree, 'Forgot')).toHaveLength(1);
-    expect(pressables(tree, 'Remembered')).toHaveLength(1);
-    expect(pressables(tree, 'Hard')).toHaveLength(0);
-    // Remembered is worded as what it schedules (hard: due tomorrow), not the two-button 'Normal gap'.
-    expect(pressables(tree, 'Remembered')[0].props.accessibilityLabel).toBe('Remembered, see it tomorrow');
-    expect(texts(tree)).toContain('See it tomorrow');
-    expect(texts(tree)).not.toContain('Normal gap');
-    await press(tree, 'Remembered');
+    for (const title of ['Again', 'Hard', 'Good', 'Easy', 'Forgot', 'Remembered']) expect(pressables(tree, title)).toHaveLength(0);
+    await press(tree, 'Show answer');
+    for (const title of ['Again', 'Hard', 'Good', 'Easy', 'Forgot', 'Remembered']) expect(pressables(tree, title)).toHaveLength(0);
+    await press(tree, 'Got it');
     expect(vi.mocked(recordReviewEvent).mock.calls[0][0]).toEqual(
-      expect.objectContaining({ rating: 'hard', reviewStage: 'learning_check' }),
+      expect.objectContaining({ rating: 'hard', reviewStage: 'learning_study' }),
     );
   });
 
@@ -508,6 +591,7 @@ describe('SessionCardScreen learning step (R22 §6: teach before testing)', () =
 
     expect(byTestID(tree, 'learning-study-view')).toHaveLength(0);
     expect(pressables(tree, 'Got it')).toHaveLength(0);
+    expect(pressables(tree, 'Show answer')).toHaveLength(0);
     expect(pressables(tree, 'Reveal answer')).toHaveLength(1);
     await press(tree, 'Reveal answer');
     await press(tree, 'Forgot');
@@ -539,6 +623,7 @@ describe('SessionCardScreen learning step (R22 §6: teach before testing)', () =
     expect(byTestID(tree, 'learning-study-view')).toHaveLength(0);
     // (The one-time MCQ coach line has a "Got it" of its own; the study dock's is absent.)
     expect(byTestID(tree, 'learning-study-got-it')).toHaveLength(0);
+    expect(byTestID(tree, 'learning-study-show-answer')).toHaveLength(0);
     expect(byTestID(tree, 'mcq-show-options')).toHaveLength(1);
     await act(async () => {
       byTestID(tree, 'mcq-show-options')[0].props.onPress();
@@ -557,69 +642,36 @@ describe('SessionCardScreen learning step (R22 §6: teach before testing)', () =
     expect(vi.mocked(recordReviewEvent).mock.calls[0][0]).toEqual(
       expect.objectContaining({ stableUid: 'mcq-d', rating: 'again', reviewStage: 'first_review' }),
     );
-    // No check slot: the run ends after the one card.
     expect(navigation.replace).toHaveBeenCalledWith('SessionSummary', expect.objectContaining({ sessionDone: 1, sessionLimit: 1 }));
   });
 
-  it('runs a mixed session: learned card rated directly, new card studied, its check last', async () => {
+  it('runs a mixed session: learned card rated directly, new card studied, and the run ends there', async () => {
     serve([NEW_A, LEARNED], [fresh('new-a'), learnedDue('old-c')], 2);
     const { tree, navigation } = await mount('mixed');
     const order: string[] = [];
-    for (let step = 0; step < 3; step += 1) {
-      const study = byTestID(tree, 'learning-study-view').length > 0;
-      order.push(`${study ? 'study' : 'rate'}:${questionShown(tree)}`);
-      if (study) {
-        await press(tree, 'Got it');
+    for (let step = 0; step < 2; step += 1) {
+      const isStudy = byTestID(tree, 'learning-study-view').length > 0;
+      order.push(`${isStudy ? 'study' : 'rate'}:${questionShown(tree)}:${subtitle(tree)}`);
+      if (isStudy) {
+        await study(tree);
       } else {
         await press(tree, 'Reveal answer');
         await press(tree, 'Remembered');
       }
     }
 
-    expect(order).toEqual(['rate:What is a stream?', 'study:What is a queue?', 'rate:What is a queue?']);
+    expect(order).toEqual(['rate:What is a stream?:Card 1 of 2', 'study:What is a queue?:Card 2 of 2']);
     expect(vi.mocked(recordReviewEvent).mock.calls.map((call) => [(call[0] as any).stableUid, (call[0] as any).reviewStage])).toEqual([
       ['old-c', 'repeat_review'],
-      ['new-a', 'learning_check'],
+      ['new-a', 'learning_study'],
     ]);
-    expect(navigation.replace).toHaveBeenCalledWith('SessionSummary', expect.objectContaining({ sessionDone: 3, sessionLimit: 3 }));
+    expect(navigation.replace).toHaveBeenCalledTimes(1);
+    expect(navigation.replace).toHaveBeenCalledWith('SessionSummary', expect.objectContaining({ sessionDone: 2, sessionLimit: 2 }));
   });
 
-  // F02 s-correctness-3: the total is the run's real length from the first card — the planned
-  // cards plus one recall check per new Q/A card the planner will deal — not a number that grows
-  // by one at every Got it.
-  it('shows the run length, checks included, from the first card and keeps it', async () => {
-    serve([NEW_A, NEW_B], [fresh('new-a'), fresh('new-b')], 2);
-    const { tree, navigation } = await mount('learn-new');
-    const seen: Array<string | undefined> = [subtitle(tree)];
-    await press(tree, 'Got it');
-    seen.push(subtitle(tree));
-    await press(tree, 'Got it');
-    seen.push(subtitle(tree));
-    await press(tree, 'Reveal answer');
-    await press(tree, 'Remembered');
-    seen.push(subtitle(tree));
-    await press(tree, 'Reveal answer');
-    await press(tree, 'Remembered');
-
-    expect(seen).toEqual(['Card 1 of 4', 'Card 2 of 4', 'Card 3 of 4', 'Card 4 of 4']);
-    expect(navigation.replace).toHaveBeenCalledWith('SessionSummary', expect.objectContaining({ sessionDone: 4, sessionLimit: 4 }));
-  });
-
-  it('counts only the new Q/A cards in a mixed run (a learned card gets no check)', async () => {
-    serve([NEW_A, LEARNED], [fresh('new-a'), learnedDue('old-c')], 2);
-    const { tree } = await mount('mixed');
-    expect(subtitle(tree)).toBe('Card 1 of 3');
-    await press(tree, 'Reveal answer');
-    await press(tree, 'Remembered');
-    expect(subtitle(tree)).toBe('Card 2 of 3');
-    await press(tree, 'Got it');
-    expect(subtitle(tree)).toBe('Card 3 of 3');
-  });
-
-  // F02 s-correctness-2 / s-tests-1: the role badge belongs to the planner slot of an ordinary
-  // card. A study view and its recall check are not the planned elite or boss card, so they carry
-  // no badge, and a study must not leave the badge one card behind.
-  it('keeps the route role badge on its planned card across a study and its check', async () => {
+  // The route's role badge is a test's badge: the study view carries none, and a study uses one
+  // planner slot like any card, so the badges stay on their planned cards.
+  it('keeps the route role badges on their planned cards and none on the study view', async () => {
     serve(
       [NEW_A, LEARNED, LEARNED_2],
       [fresh('new-a'), learnedDue('old-c'), learnedDue('old-e')],
@@ -630,13 +682,16 @@ describe('SessionCardScreen learning step (R22 §6: teach before testing)', () =
         { id: 'boss-2', role: 'boss', title: 'Final check', subtitle: '' },
       ],
     );
-    const { tree } = await mount('mixed');
+    const { tree, navigation } = await mount('mixed');
     const steps: string[] = [];
     const badge = () => texts(tree).find((t) => t === 'Harder recall' || t === 'Final check') ?? '-';
-    for (let step = 0; step < 4; step += 1) {
-      const study = byTestID(tree, 'learning-study-view').length > 0;
-      steps.push(`${study ? 'study' : 'rate'}:${questionShown(tree)}:${badge()}`);
-      if (study) {
+    for (let step = 0; step < 3; step += 1) {
+      const isStudy = byTestID(tree, 'learning-study-view').length > 0;
+      steps.push(`${isStudy ? 'study' : 'rate'}:${questionShown(tree)}:${badge()}`);
+      if (isStudy) {
+        await press(tree, 'Show answer');
+        // Still none once the answer is open.
+        expect(badge()).toBe('-');
         await press(tree, 'Got it');
       } else {
         await press(tree, 'Reveal answer');
@@ -648,7 +703,45 @@ describe('SessionCardScreen learning step (R22 §6: teach before testing)', () =
       'rate:What is a stream?:-',
       'rate:What is a shard?:Harder recall',
       'study:What is a queue?:-',
-      'rate:What is a queue?:-',
     ]);
+    expect(navigation.replace).toHaveBeenCalledWith('SessionSummary', expect.objectContaining({ sessionDone: 3, sessionLimit: 3 }));
+  });
+
+  // B3: the rating hint names the highlighted 答 line only when the card has one.
+  it('points the rating hint at the highlighted 答 line on a key-line card, and only there', async () => {
+    serve([KEYED, LEARNED], [learnedDue('awsf-cidr'), learnedDue('old-c')], 2);
+    const { tree } = await mount('review-due');
+    const hint = () => byTestID(tree, 'review-rating-hint')[0]?.props.children;
+
+    expect(questionShown(tree)).toBe('IP 段（CIDR）是什么？');
+    expect(hint()).toBe('Try to recall the answer, then reveal it.');
+    await press(tree, 'Reveal answer');
+    expect(byTestID(tree, 'answer-key-line')).toHaveLength(1);
+    expect(hint()).toBe('Did you get the highlighted line?');
+    await press(tree, 'Remembered');
+
+    expect(questionShown(tree)).toBe('What is a stream?');
+    await press(tree, 'Reveal answer');
+    expect(byTestID(tree, 'answer-key-line')).toHaveLength(0);
+    expect(hint()).toBe('Did you remember it?');
+  });
+
+  it('asks how well the highlighted line went with four rating buttons on', async () => {
+    store.set(STUDY_PREFS_KEY, JSON.stringify({ fourButtons: true }));
+    serve([KEYED], [learnedDue('awsf-cidr')], 1);
+    const { tree } = await mount('review-due');
+    await press(tree, 'Reveal answer');
+    expect(byTestID(tree, 'review-rating-hint')[0].props.children).toBe('How well did you get the highlighted line?');
+  });
+
+  it('highlights the 答 line on the study view once the answer is open', async () => {
+    serve([KEYED], [fresh('awsf-cidr')], 1);
+    const { tree } = await mount();
+    expect(byTestID(tree, 'answer-key-line')).toHaveLength(0);
+    await press(tree, 'Show answer');
+    expect(byTestID(tree, 'answer-key-line')).toHaveLength(1);
+    expect(texts(tree)).toContain(KEY_LINE);
+    // The study dock keeps its own hint: there is nothing to rate yet.
+    expect(studyHint(tree)).toBe('Read it once. It comes back tomorrow.');
   });
 });
