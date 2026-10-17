@@ -157,4 +157,47 @@ describe('DrawResultScreen pulls-left selector (MGACHA-21)', () => {
 
     expect(collectText(tree)).toContain('Go to Library');
   });
+
+  // 2026-10-17 batch open: the open that took the pack's last missing cards leaves nothing to draw,
+  // so the primary goes to the Library even though the wallet still holds draws.
+  it('sends a completed pack to the Library even with draws left', async () => {
+    walletFixture = { availablePulls: 3, reservePulls: 0 };
+    const navigate = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawResultScreen
+          navigation={{ navigate } as any}
+          route={{ key: 'result', name: 'DrawResult', params: makeParams({ packComplete: true }) } as any}
+        />,
+      );
+    });
+    await flush();
+
+    const text = collectText(tree);
+    expect(text).toContain('Go to Library  ·  collection complete');
+    expect(text).not.toContain('Continue drawing');
+    const cta = tree.root.findByProps({ testID: 'screen-draw-result-primary-cta' });
+    await act(async () => {
+      cta.props.onPress();
+    });
+    expect(navigate).toHaveBeenCalledWith('Library', expect.objectContaining({ focusSlug: 'csharp' }));
+    expect(navigate).not.toHaveBeenCalledWith('Draw', expect.anything());
+  });
+
+  it('keeps Continue drawing when the pack still has cards to draw', async () => {
+    walletFixture = { availablePulls: 3, reservePulls: 0 };
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <DrawResultScreen
+          navigation={{ navigate: vi.fn() } as any}
+          route={{ key: 'result', name: 'DrawResult', params: makeParams({ packComplete: false }) } as any}
+        />,
+      );
+    });
+    await flush();
+
+    expect(collectText(tree)).toContain('Continue drawing  ·  3 draws left');
+  });
 });

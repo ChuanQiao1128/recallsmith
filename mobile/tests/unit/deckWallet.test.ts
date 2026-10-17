@@ -36,6 +36,7 @@ import {
   saveRewardWalletState,
 } from '../../src/features/gacha/rewards/rewardWallet';
 import {
+  DECK_BOOTSTRAP_GRANT,
   DECK_WALLETS_KEY,
   adoptAnonDeckWallets,
   consumeDeckPulls,
@@ -111,20 +112,24 @@ describe('deckWallet per-pack wallets', () => {
     expect(await loadDeckWallet('aws')).toEqual({ availablePulls: 18, reservePulls: 0 });
   });
 
-  it('bootstraps 3 pulls once for a pack with no owned cards, no pity and no pulls', async () => {
+  it('starts a pack with 5 draws, one five-card batch (2026-10-17 batch open)', () => {
+    expect(DECK_BOOTSTRAP_GRANT).toBe(5);
+  });
+
+  it('bootstraps DECK_BOOTSTRAP_GRANT pulls once for a pack with no owned cards, no pity and no pulls', async () => {
     const first = await ensureDeckBootstrap('aws');
-    expect(first.granted).toBe(3);
-    expect(first.wallet).toEqual({ availablePulls: 3, reservePulls: 0 });
+    expect(first.granted).toBe(DECK_BOOTSTRAP_GRANT);
+    expect(first.wallet).toEqual({ availablePulls: DECK_BOOTSTRAP_GRANT, reservePulls: 0 });
 
     // Spend them, then re-run: it never grants a second time.
-    await consumeDeckPulls('aws', 3);
+    await consumeDeckPulls('aws', DECK_BOOTSTRAP_GRANT);
     const second = await ensureDeckBootstrap('aws');
     expect(second.granted).toBe(0);
     expect(await loadDeckWallet('aws')).toEqual({ availablePulls: 0, reservePulls: 0 });
   });
 
   // R22 §4: the first pack is the reward for the starter lesson, so no pack bootstraps while it is open
-  // (Home, Draw and Library all call ensureDeckBootstrap); completing the lesson grants the 3 pulls.
+  // (Home, Draw and Library all call ensureDeckBootstrap); completing the lesson grants the bootstrap pulls.
   it('grants the bootstrap only after the starter lesson completes', async () => {
     store.set('recallsmith:onboarding:stage:v1', 'starter');
     store.set('recallsmith:starter-lesson:v1', JSON.stringify({ slug: 'aws', uids: ['s1'] }));
@@ -135,19 +140,19 @@ describe('deckWallet per-pack wallets', () => {
     expect(readRecord()?.bootstrappedAtMs?.aws).toBeUndefined();
 
     const done = await completeStarterLesson('aws');
-    expect(done).toMatchObject({ completed: true, granted: 3 });
-    expect(await loadDeckWallet('aws')).toEqual({ availablePulls: 3, reservePulls: 0 });
+    expect(done).toMatchObject({ completed: true, granted: DECK_BOOTSTRAP_GRANT });
+    expect(await loadDeckWallet('aws')).toEqual({ availablePulls: DECK_BOOTSTRAP_GRANT, reservePulls: 0 });
     expect(store.get('recallsmith:onboarding:stage:v1')).toBe('done');
     expect(store.get('notifications:permission-prompt:pending:v1')).toBe('1');
 
-    // Net 3 pulls, as before the lesson existed: a second completion grants nothing.
+    // Net one bootstrap grant, as before the lesson existed: a second completion grants nothing.
     expect((await completeStarterLesson('aws')).granted).toBe(0);
-    expect(await loadDeckWallet('aws')).toEqual({ availablePulls: 3, reservePulls: 0 });
+    expect(await loadDeckWallet('aws')).toEqual({ availablePulls: DECK_BOOTSTRAP_GRANT, reservePulls: 0 });
   });
 
   it('existing users (stage done) bootstrap exactly as before', async () => {
     store.set('recallsmith:onboarding:stage:v1', 'done');
-    expect((await ensureDeckBootstrap('aws')).granted).toBe(3);
+    expect((await ensureDeckBootstrap('aws')).granted).toBe(DECK_BOOTSTRAP_GRANT);
     // completeStarterLesson is a no-op for them: no stage change, no prompt armed.
     expect((await completeStarterLesson('aws')).completed).toBe(false);
     expect(store.get('notifications:permission-prompt:pending:v1')).toBeUndefined();
@@ -178,17 +183,18 @@ describe('deckWallet per-pack wallets', () => {
       store.set(walletsKey, JSON.stringify({ migratedAtMs: 1, decks: {}, bootstrappedAtMs: { 'csharp-basics': 5 } }));
     });
 
-    it('grants 3 pulls once when every owned card left the deck and the wallet is empty', async () => {
+    // 2026-10-17 batch open: the re-grant is the bootstrap grant, so it rose to 5 with it (accepted).
+    it('grants DECK_BOOTSTRAP_GRANT pulls once when every owned card left the deck and the wallet is empty', async () => {
       await saveDrawState('csharp-basics', { owned: ['c-001', 'c-002'], pity: { draws: 3, threshold: 10 } });
 
       const first = await ensureDeckBootstrap('csharp-basics');
-      expect(first).toEqual({ granted: 3, wallet: { availablePulls: 3, reservePulls: 0 } });
+      expect(first).toEqual({ granted: DECK_BOOTSTRAP_GRANT, wallet: { availablePulls: DECK_BOOTSTRAP_GRANT, reservePulls: 0 } });
       expect(readRecord().rebootstrappedAtMs['csharp-basics']).toEqual(expect.any(Number));
       // The first-visit mark is left as it was.
       expect(readRecord().bootstrappedAtMs['csharp-basics']).toBe(5);
 
       // Spent, then asked again: never a second time.
-      await consumeDeckPulls('csharp-basics', 3);
+      await consumeDeckPulls('csharp-basics', DECK_BOOTSTRAP_GRANT);
       expect((await ensureDeckBootstrap('csharp-basics')).granted).toBe(0);
       expect(await loadDeckWallet('csharp-basics')).toEqual({ availablePulls: 0, reservePulls: 0 });
     });
@@ -198,7 +204,7 @@ describe('deckWallet per-pack wallets', () => {
         { stableUid: 'c-003', stage: 1, lastReviewedAt: 111, nextReviewAt: 222 },
         { stableUid: 'net-types-01', stage: 0, nextReviewAt: 0 }, // untouched: not held
       ]));
-      expect((await ensureDeckBootstrap('csharp-basics')).granted).toBe(3);
+      expect((await ensureDeckBootstrap('csharp-basics')).granted).toBe(DECK_BOOTSTRAP_GRANT);
     });
 
     it('never re-bootstraps a pack where one held card is still in the deck', async () => {
@@ -230,10 +236,10 @@ describe('deckWallet per-pack wallets', () => {
     it('leaves the brand-new learner path unchanged', async () => {
       liveDecks.set('aws', ['a-1', 'a-2']);
       const first = await ensureDeckBootstrap('aws');
-      expect(first).toEqual({ granted: 3, wallet: { availablePulls: 3, reservePulls: 0 } });
+      expect(first).toEqual({ granted: DECK_BOOTSTRAP_GRANT, wallet: { availablePulls: DECK_BOOTSTRAP_GRANT, reservePulls: 0 } });
       expect(readRecord().bootstrappedAtMs.aws).toEqual(expect.any(Number));
       expect(readRecord().rebootstrappedAtMs).toBeUndefined();
-      await consumeDeckPulls('aws', 3);
+      await consumeDeckPulls('aws', DECK_BOOTSTRAP_GRANT);
       await saveDrawState('aws', { owned: ['a-1'], pity: null });
       expect((await ensureDeckBootstrap('aws')).granted).toBe(0);
     });

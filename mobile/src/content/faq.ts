@@ -1,10 +1,11 @@
 // The user-facing FAQ shown on the Help tab. Every answer states what the
 // shipping app does (R24B contract §4), in the plain words of §1: draws belong
 // to the pack that earned them (deckWallet.ts), 1 per new card learned and 1 a
-// day for clearing that pack's due cards (sessionRewards.ts), 3 the first time
-// a pack is opened and 3 at the end of the starter lesson, 60 saved + 5 waiting
-// per pack, a 1-draw daily floor per starved pack (economyFloor.ts), the rare
-// guarantee after 10 Commons (draw/), no repeat draws, iOS only. No score,
+// day for clearing that pack's due cards (sessionRewards.ts), 5 the first time
+// a pack is opened and 5 at the end of the starter lesson (DECK_BOOTSTRAP_GRANT),
+// 60 saved + 5 waiting per pack, a 1-draw daily floor per starved pack
+// (economyFloor.ts), the rare guarantee after 10 Commons (draw/), opening up to
+// 5 cards at once (drawBatch.ts), no repeat draws, iOS only. No score,
 // no claim of an offline first run without the bundled starter cards, and no
 // claim that the developer personally checks or spot-checks cards.
 //
@@ -19,7 +20,7 @@ export type FaqEntry = { q: string; a: string };
 export const FAQ_LIST: readonly FaqEntry[] = [
   {
     q: 'How do I earn draws?',
-    a: "Learn a new card to earn a draw for its pack: the first time you finish it, by tapping Got it on a new card or answering Remembered, Hard, Good or Easy, or by getting a multiple-choice card right. Clearing all of that pack's due cards adds one more, once a day. Every pack gets 3 draws the first time you open it, and your first lesson ends with 3 draws for its pack. A pack saves up to 60 draws, plus 5 extra draws waiting. Draws are never sold.",
+    a: "Learn a new card to earn a draw for its pack: the first time you finish it, by tapping Got it on a new card or answering Remembered, Hard, Good or Easy, or by getting a multiple-choice card right. Clearing all of that pack's due cards adds one more, once a day. Every pack gets 5 draws the first time you open it, and your first lesson ends with 5 draws for its pack. A pack saves up to 60 draws, plus 5 extra draws waiting. Draws are never sold.",
   },
   {
     q: 'Why is Draw locked?',
@@ -27,7 +28,7 @@ export const FAQ_LIST: readonly FaqEntry[] = [
   },
   {
     q: 'When is a rare card guaranteed?',
-    a: "After 10 Commons in a row, the next card is Rare or better, so a rare card is guaranteed within 11 cards while the pack still has a Rare or Legendary you don't own. There are no repeat draws: a card you have drawn never comes up again. Open 1 or Open 10: you only spend draws for the cards you receive.",
+    a: "After 10 Commons in a row, the next card is Rare or better, so a rare card is guaranteed within 11 cards while the pack still has a Rare or Legendary you don't own. There are no repeat draws: a card you have drawn never comes up again. Open up to 5 cards at once, or just 1: you only spend draws for the cards you receive.",
   },
   {
     q: 'What do I study?',

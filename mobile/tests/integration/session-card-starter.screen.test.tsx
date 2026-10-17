@@ -169,7 +169,7 @@ vi.mock('../../src/features/gacha/mistakes/mistakeBook', () => ({
 
 import { SessionCardScreen } from '../../src/screens/SessionCardScreen';
 import { resetSessionStore } from '../../src/features/gacha/session/sessionStore';
-import { ensureDeckBootstrap, loadDeckWallet } from '../../src/features/gacha/rewards/deckWallet';
+import { DECK_BOOTSTRAP_GRANT, ensureDeckBootstrap, loadDeckWallet } from '../../src/features/gacha/rewards/deckWallet';
 import { loadDrawState, saveDrawState } from '../../src/features/gacha/draw/drawStateStore';
 import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStateCache';
 import { recordReviewEvent } from '../../src/sync/progressSync';
@@ -326,8 +326,8 @@ describe('SessionCardScreen starter lesson', () => {
     expect(navigation.replace).not.toHaveBeenCalledWith('SessionSummary', expect.anything());
     expect(hasText(tree, 'Reveal answer')).toBe(false);
     expect(store.get(STAGE_KEY)).toBe('done');
-    // Net 3 pulls: the bootstrap, and nothing for the five lesson cards.
-    expect(await loadDeckWallet('csharp')).toEqual({ availablePulls: 3, reservePulls: 0 });
+    // Net one bootstrap grant (5 draws, 2026-10-17 batch open), and nothing for the five lesson cards.
+    expect(await loadDeckWallet('csharp')).toEqual({ availablePulls: DECK_BOOTSTRAP_GRANT, reservePulls: 0 });
     // The reminder prompt is armed at completion; DrawResult's first Done shows it.
     expect(store.get(PROMPT_KEY)).toBe('1');
     // The lesson cards keep their progress (due tomorrow) and were never written into the draw state.
@@ -360,7 +360,7 @@ describe('SessionCardScreen starter lesson', () => {
     const { navigation } = await mount();
     expect(navigation.replace).toHaveBeenCalledWith('Draw', { slug: 'csharp', rewardPending: true });
     expect(store.get(STAGE_KEY)).toBe('done');
-    expect(await loadDeckWallet('csharp')).toEqual({ availablePulls: 3, reservePulls: 0 });
+    expect(await loadDeckWallet('csharp')).toEqual({ availablePulls: DECK_BOOTSTRAP_GRANT, reservePulls: 0 });
   });
 
   it('downloads the deck first when it is not installed, showing the installing state', async () => {
@@ -418,7 +418,7 @@ describe('SessionCardScreen starter lesson', () => {
     expect(store.has(LESSON_KEY)).toBe(false);
     expect(store.get(PROMPT_KEY)).toBe('1');
     // Any never-drawn pack now gets the ordinary first-visit bootstrap.
-    expect((await ensureDeckBootstrap('aws-saa-c03')).granted).toBe(3);
+    expect((await ensureDeckBootstrap('aws-saa-c03')).granted).toBe(DECK_BOOTSTRAP_GRANT);
   }
 
   it('a premium goal deck ends the lesson before the paywall, so the other packs are not locked', async () => {

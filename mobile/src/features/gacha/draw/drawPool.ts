@@ -33,7 +33,27 @@ export async function loadDrawPoolOwned(slug: string): Promise<Set<string>> {
   return resolveEffectiveOwned(slug, progress);
 }
 
-export type DrawStatus = { pityLabel: string; collectionComplete: boolean; pityThreshold: number };
+export type DrawStatus = {
+  pityLabel: string;
+  collectionComplete: boolean;
+  pityThreshold: number;
+  /** 2026-10-17 batch open: the distinct deck cards not in the effective owned set -- the pool a
+   *  draw picks from (same dedupe by StableUid as poolSelection), so the screen never offers a
+   *  batch bigger than the pool can fill. */
+  undrawnCount: number;
+};
+
+// Distinct StableUids among the deck cards not in `owned`: the size of the pool selectDrawCards
+// builds from the same inputs.
+function countUndrawn(deckCards: any[], owned: ReadonlySet<string>): number {
+  const seen = new Set<string>();
+  for (const card of deckCards) {
+    const uid = card?.StableUid;
+    if (owned.has(uid) || seen.has(uid)) continue;
+    seen.add(uid);
+  }
+  return seen.size;
+}
 
 // The guarantee's whole product value is that a player can see it coming.
 // buildPityProgressLabelV9 shipped with the counter persisted, capped and
@@ -63,11 +83,20 @@ export async function loadDrawStatus(slug: string, deckCards: any[]): Promise<Dr
       pityLabel: buildPityProgressLabelV9(normalizePityState(state.pity), missingLegCount),
       collectionComplete,
       pityThreshold: normalizePityState(state.pity).threshold,
+      undrawnCount: countUndrawn(deckCards, owned),
     };
   } catch {
     // A storage failure must not cost the user the pack. A missing progress
     // line is a smaller loss than an unopenable draw screen, and claiming
-    // "complete" on a failed read would lock the pack for no reason.
-    return { pityLabel: '', collectionComplete: false, pityThreshold: DEFAULT_PITY_STATE.threshold };
+    // "complete" on a failed read would lock the pack for no reason. The
+    // undrawn count falls back to the whole deck for the same reason: the
+    // selection still draws only missing cards, and the charge is the cards
+    // received, so over-offering a batch costs nothing.
+    return {
+      pityLabel: '',
+      collectionComplete: false,
+      pityThreshold: DEFAULT_PITY_STATE.threshold,
+      undrawnCount: countUndrawn(deckCards, new Set()),
+    };
   }
 }

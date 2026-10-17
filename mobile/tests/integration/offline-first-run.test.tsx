@@ -244,7 +244,7 @@ import { STUDY_GOAL_KEY } from '../../src/features/goal/studyGoal';
 import { pickStarterUids, STARTER_LESSON_KEY } from '../../src/features/gacha/starter/starterGate';
 import { STARTER_COPY } from '../../src/features/gacha/starter/starterCopy';
 import { resetSessionStore } from '../../src/features/gacha/session/sessionStore';
-import { loadDeckWallet } from '../../src/features/gacha/rewards/deckWallet';
+import { DECK_BOOTSTRAP_GRANT, loadDeckWallet } from '../../src/features/gacha/rewards/deckWallet';
 import { loadDrawState } from '../../src/features/gacha/draw/drawStateStore';
 import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStateCache';
 import { loadDeckProgress } from '../../src/review/storage';
@@ -422,9 +422,12 @@ async function openFirstPack() {
     swipeZone.props.onResponderGrant({ nativeEvent: { pageX: 10 } });
     swipeZone.props.onResponderRelease({ nativeEvent: { pageX: 120 } });
   });
-  // The first pack is three single draws; Open 1 is the secondary action.
+  // 2026-10-17 batch open: the first pack is five draws, opened as one five-card batch (the
+  // primary action); Open 1 sits beside it.
+  const primary = tree.root.findByProps({ testID: 'screen-draw-primary-cta' });
+  expect(primary.findAll((node) => (node.type as any) === 'Text' && node.props.children === `Open ${DECK_BOOTSTRAP_GRANT}`)).toHaveLength(1);
   await act(async () => {
-    tree.root.findByProps({ testID: 'screen-draw-secondary-cta' }).props.onPress();
+    primary.props.onPress();
     await Promise.resolve();
   });
   await flush();
@@ -474,7 +477,8 @@ describe('offline first run with the bundled starter pack (R24 §2.2)', () => {
     // The bundled pack is installed through the normal repository install, under its own version.
     expect(JSON.parse(store.get(META_KEY)!)).toMatchObject({ buildId: PACK.version, cardCount: PACK.cards.length });
     expect(store.get(STAGE_KEY)).toBe('done');
-    expect(await loadDeckWallet(SLUG)).toEqual({ availablePulls: 3, reservePulls: 0 });
+    expect(DECK_BOOTSTRAP_GRANT).toBe(5);
+    expect(await loadDeckWallet(SLUG)).toEqual({ availablePulls: DECK_BOOTSTRAP_GRANT, reservePulls: 0 });
 
     const navigate = await openFirstPack();
     expect(navigate).toHaveBeenCalledWith('DrawCeremony', expect.objectContaining({ slug: SLUG }));
@@ -486,9 +490,12 @@ describe('offline first run with the bundled starter pack (R24 §2.2)', () => {
       expect(packUids.has(uid)).toBe(true);
       expect(LESSON_UIDS).not.toContain(uid);
     }
-    expect(drawn).toHaveLength(1);
+    // One ceremony, five distinct cards, all five draws spent on them.
+    expect(drawn).toHaveLength(DECK_BOOTSTRAP_GRANT);
+    expect(new Set(drawn).size).toBe(DECK_BOOTSTRAP_GRANT);
+    expect(navigate.mock.calls.filter((call) => call[0] === 'DrawCeremony')).toHaveLength(1);
     expect((await loadDrawState(SLUG)).owned.sort()).toEqual([...drawn].sort());
-    expect(await loadDeckWallet(SLUG)).toEqual({ availablePulls: 2, reservePulls: 0 });
+    expect(await loadDeckWallet(SLUG)).toEqual({ availablePulls: 0, reservePulls: 0 });
 
     // The manifest was tried (and failed) before the bundled pack; nothing reached the deck download.
     expect(fetchCalls).toContain(MANIFEST_URL);

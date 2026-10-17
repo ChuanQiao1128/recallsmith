@@ -166,7 +166,7 @@ export async function applyEconomyFloorIfStarved(
  * (3) read every pack wallet; (4) apply the daily floor to each studiable pack
  * whose collection is not complete; (5) return the wallets.
  *
- * Bootstrap runs BEFORE the floor so a never-drawn pack gets its 3 pulls, not a
+ * Bootstrap runs BEFORE the floor so a never-drawn pack gets its DECK_BOOTSTRAP_GRANT pulls, not a
  * single floor pull. Never throws: on any error it returns whatever
  * loadDeckWallets() gives.
  *

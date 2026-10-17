@@ -51,6 +51,22 @@ export const TO_TABLE_CAP_MS = Object.freeze({ single: 3300, multi: 5500 });
 // draw_committed's pull + draw-state sync (network / JSON / AsyncStorage) is deferred past the
 // longest possible ceremony so its work never lands on the JS thread mid-ceremony (MGACHA-03).
 export const DRAW_COMMITTED_SYNC_DELAY_MS = TO_TABLE_CAP_MS.multi + 1000;
+// 2026-10-17 batch open: a multi-card open does not end at the table. The reveal then walks every
+// card through the spotlight (entrance 420 ms + flip up to 950 ms + an auto-advance hold of up to
+// 900 ms, a Legendary waiting for its tap), about 9-12 s for five cards, so a delay sized only to
+// reach the table landed the sync mid-reveal. Each card gets this allowance on top.
+export const REVEAL_ALLOWANCE_PER_CARD_MS = 1800;
+
+/**
+ * The draw_committed sync delay for a ceremony of `cardCount` cards: past the table and past the
+ * whole spotlight reveal (toTableMs cap + cardCount × REVEAL_ALLOWANCE_PER_CARD_MS + 1000 ms), and
+ * never shorter than DRAW_COMMITTED_SYNC_DELAY_MS, which a single card keeps unchanged.
+ */
+export function drawCommittedSyncDelayMs(cardCount: number): number {
+  const count = Number.isFinite(cardCount) ? Math.max(1, Math.floor(cardCount)) : 1;
+  if (count <= 1) return DRAW_COMMITTED_SYNC_DELAY_MS;
+  return Math.max(DRAW_COMMITTED_SYNC_DELAY_MS, TO_TABLE_CAP_MS.multi + count * REVEAL_ALLOWANCE_PER_CARD_MS + 1000);
+}
 export const REDUCED_MOTION_FLASH_MS = 180;
 export const REDUCED_MOTION_SETTLE_MS = 240;
 export const SWIPE_TRIGGER_DISTANCE = 72;
