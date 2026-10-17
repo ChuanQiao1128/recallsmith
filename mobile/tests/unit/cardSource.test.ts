@@ -181,6 +181,25 @@ describe('cardSource', () => {
     });
   });
 
+  it('reads the moved file when a binary update left the meta pointing at the previous container', async () => {
+    const fileUri = install('user-1', 'aws-saa-c03', 'build-1', FLAT_DECK);
+    const staleUri = 'file:///Containers/Data/Application/OLD-UUID/Documents/devcards-decks-v2/user-1/aws-saa-c03.json';
+    const meta = { slug: 'aws-saa-c03', buildId: 'build-1', installedAtMs: 1, fileUri: staleUri, cardCount: 3 };
+    store.set(metaKey('user-1', 'aws-saa-c03'), JSON.stringify(meta));
+    const { getCardSource } = await loadModule();
+    const read = vi.mocked(FileSystem.readAsStringAsync);
+
+    expect((await getCardSource('aws-saa-c03', 'aws-s3-storage-classes'))?.url).toBe(S3_URL);
+    expect(read.mock.calls.map(([uri]) => uri)).toEqual([staleUri, fileUri]);
+    // Read-only: repointing the meta is the deck repository's job.
+    expect(JSON.parse(store.get(metaKey('user-1', 'aws-saa-c03'))!).fileUri).toBe(staleUri);
+
+    // Gone from this launch's container too: no source (a new build id skips the cached read).
+    files.delete(fileUri);
+    store.set(metaKey('user-1', 'aws-saa-c03'), JSON.stringify({ ...meta, buildId: 'build-2' }));
+    expect(await getCardSource('aws-saa-c03', 'aws-s3-storage-classes')).toBeNull();
+  });
+
   it('returns null for a legacy card, a missing meta key or an unreadable file', async () => {
     const { getCardSource } = await loadModule();
 

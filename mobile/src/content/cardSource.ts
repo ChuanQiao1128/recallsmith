@@ -9,8 +9,8 @@ import { fetchAuthSession } from 'aws-amplify/auth';
  * so `cards[].source` (written by the deck build, contract §5.4) never reaches
  * DeckExport. This reader looks it up in the file the repository installed,
  * found through the same per-user meta key. The repository is frozen and its
- * helpers are private, so the key and user-key rules are mirrored here;
- * tests/unit/cardSourceContract.test.ts fails if the originals drift.
+ * helpers are private, so the key, user-key and deck-file rules are mirrored
+ * here; tests/unit/cardSourceContract.test.ts fails if the originals drift.
  */
 
 export const CARD_SOURCE_URL_MAX_LENGTH = 2048;
@@ -86,6 +86,26 @@ async function getCurrentUserKey(): Promise<string> {
   }
 }
 
+// Mirrors deckRepository.ts currentDeckFileUri (getDeckDirForUser + slugToFileName).
+function currentDeckFileUri(userKey: string, slug: string): string | null {
+  const base = (FileSystem as any).documentDirectory ?? (FileSystem as any).cacheDirectory;
+  if (!base || typeof base !== 'string') return null;
+  return `${base}devcards-decks-v2/${sanitizeUserKey(userKey)}/${slug.replace(/[^a-zA-Z0-9._-]+/g, '_')}.json`;
+}
+
+// A binary update moves the app's data container, so the meta's absolute fileUri can name the
+// previous one until deckRepository's next read repoints it (locateInstalledDeckFile). Same rule:
+// a file missing at the stored URI is read from the same name in this launch's deck directory.
+async function readInstalledDeckText(userKey: string, slug: string, fileUri: string): Promise<string> {
+  try {
+    return await FileSystem.readAsStringAsync(fileUri, { encoding: UTF8_ENCODING });
+  } catch (err) {
+    const current = currentDeckFileUri(userKey, slug);
+    if (!current || current === fileUri || !fileUri.endsWith(current.slice(current.lastIndexOf('/')))) throw err;
+    return await FileSystem.readAsStringAsync(current, { encoding: UTF8_ENCODING });
+  }
+}
+
 type CachedDeck = { key: string; sources: Map<string, CardSource> };
 
 // Oldest first; at most MAX_CACHED_DECKS entries.
@@ -121,7 +141,7 @@ export async function getCardSource(deckSlug: string, stableUid: string): Promis
     const key = JSON.stringify([slug, fileUri, buildId]);
     let entry = cache.find((c) => c.key === key);
     if (!entry) {
-      const text = await FileSystem.readAsStringAsync(fileUri, { encoding: UTF8_ENCODING });
+      const text = await readInstalledDeckText(userKey, slug, fileUri);
       entry = { key, sources: buildSourceMap(text) };
       cache.push(entry);
       while (cache.length > MAX_CACHED_DECKS) cache.shift();

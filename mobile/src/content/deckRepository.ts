@@ -1220,11 +1220,7 @@ function applyDelta(deck: RawDeckJsonFlat, delta: DeckDelta): RawDeckJsonFlat {
 async function purgeLocalDeckForGate(slug: string, userKey: string): Promise<void> {
   try {
     const meta = await getDeckMeta(slug, userKey);
-    if (meta?.fileUri) {
-      try {
-        await FileSystem.deleteAsync(meta.fileUri, { idempotent: true });
-      } catch {}
-    }
+    await deleteInstalledDeckFiles(slug, userKey, meta);
     await removeDeckMeta(slug, userKey);
     console.log('[content] gatedDeckLocalState', {
       slug,
@@ -1292,11 +1288,7 @@ async function purgeLocalDeckForRetired(
   const retiredAt = Number(retiredAtMs);
   try {
     const meta = await getDeckMeta(slug, userKey);
-    if (meta?.fileUri) {
-      try {
-        await FileSystem.deleteAsync(meta.fileUri, { idempotent: true });
-      } catch {}
-    }
+    await deleteInstalledDeckFiles(slug, userKey, meta);
 
     await removeDeckMeta(slug, userKey);
 
@@ -1422,6 +1414,18 @@ async function removeDeckMeta(slug: string, userKey?: string) {
 }
 
 /**
+ * Where this launch keeps `slug`'s installed file: the one name every install writes, in the user's
+ * deck directory. Null when there is no writable directory. cardSource.ts mirrors this rule.
+ */
+function currentDeckFileUri(slug: string, userKey: string): string | null {
+  try {
+    return `${getDeckDirForUser(userKey)}${slugToFileName(slug)}.json`;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The installed deck file for `meta`, or null when it is gone.
  *
  * meta.fileUri is absolute, and iOS moves the app's data container to a new path whenever a new
@@ -1437,26 +1441,46 @@ async function locateInstalledDeckFile(
   const info = await FileSystem.getInfoAsync(meta.fileUri);
   if (info.exists) return meta.fileUri;
 
-  const fileName = `${slugToFileName(slug)}.json`;
   // Every install writes this exact name; a meta pointing anywhere else is not one of ours to move.
-  if (!meta.fileUri.endsWith(`/${fileName}`)) return null;
-  let current: string;
-  try {
-    current = `${getDeckDirForUser(userKey)}${fileName}`;
-  } catch {
-    return null;
-  }
-  if (current === meta.fileUri) return null;
+  if (!meta.fileUri.endsWith(`/${slugToFileName(slug)}.json`)) return null;
+  const current = currentDeckFileUri(slug, userKey);
+  if (!current || current === meta.fileUri) return null;
   const moved = await FileSystem.getInfoAsync(current);
   if (!moved.exists) return null;
 
   try {
-    const repointed: DeckInstallMeta = { ...meta, fileUri: current };
-    await AsyncStorage.setItem(deckMetaKey(slug, userKey), JSON.stringify(repointed));
+    // Re-read right before the write: an install that finished after `meta` was read (an
+    // auto-update on this same launch) has already written a newer meta for this path, and
+    // repointing the old snapshot would roll its buildId back over the new file.
+    const latest = await getDeckMeta(slug, userKey);
+    if (latest && latest.fileUri === meta.fileUri) {
+      const repointed: DeckInstallMeta = { ...latest, fileUri: current };
+      await AsyncStorage.setItem(deckMetaKey(slug, userKey), JSON.stringify(repointed));
+    }
   } catch {
     // The file is still readable this launch; the next read repoints again.
   }
   return current;
+}
+
+/**
+ * Deletes `slug`'s installed file for a purge: the stored URI, and this launch's path for it, which
+ * is where the file really is when a binary update moved the container since the meta was written.
+ */
+async function deleteInstalledDeckFiles(
+  slug: string,
+  userKey: string,
+  meta: DeckInstallMeta | null,
+): Promise<void> {
+  const uris = new Set<string>();
+  if (meta?.fileUri) uris.add(meta.fileUri);
+  const current = currentDeckFileUri(slug, userKey);
+  if (current) uris.add(current);
+  for (const uri of uris) {
+    try {
+      await FileSystem.deleteAsync(uri, { idempotent: true });
+    } catch {}
+  }
 }
 
 async function loadManifestPreferRemote(): Promise<RawManifest | null> {

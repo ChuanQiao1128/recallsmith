@@ -15,7 +15,10 @@ vi.hoisted(() => {
 
 const OLD_DOCS = 'file:///Containers/Data/Application/OLD-UUID/Documents/';
 const NEW_DOCS = 'file:///Containers/Data/Application/NEW-UUID/Documents/';
-const fsState = vi.hoisted(() => ({ documentDirectory: '' }));
+const fsState = vi.hoisted(() => ({
+  documentDirectory: '',
+  onGetInfo: null as null | ((uri: string) => void),
+}));
 
 const store = new Map<string, string>();
 vi.mock('@react-native-async-storage/async-storage', () => ({
@@ -66,6 +69,7 @@ vi.mock('expo-file-system/legacy', () => ({
     files.delete(from);
   }),
   getInfoAsync: vi.fn(async (uri: string) => {
+    fsState.onGetInfo?.(uri);
     if (files.has(uri)) return { exists: true, isDirectory: false, uri };
     const dirUri = asDirUri(uri);
     const isDir = dirs.has(dirUri) || [...files.keys()].some((k) => k.startsWith(dirUri));
@@ -177,12 +181,13 @@ const MANIFEST = {
 };
 
 let online = true;
+let manifestBody: typeof MANIFEST = MANIFEST;
 const fetchCalls: string[] = [];
 const fetchMock = vi.fn(async (input: any) => {
   const url = String(typeof input === 'string' ? input : input?.url ?? input);
   fetchCalls.push(url);
   if (!online) throw new TypeError('Network request failed');
-  const body = url === MANIFEST_URL ? MANIFEST : url === DECK_URL ? DECK : null;
+  const body = url === MANIFEST_URL ? manifestBody : url === DECK_URL ? DECK : null;
   if (!body) return new Response('not found', { status: 404 });
   return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
 });
@@ -230,6 +235,8 @@ describe('first launch after a new binary moves the app container', () => {
     dirs.clear();
     fetchCalls.length = 0;
     online = true;
+    manifestBody = MANIFEST;
+    fsState.onGetInfo = null;
     vi.stubGlobal('fetch', fetchMock);
     invalidateDeckCache();
     resetAutoUpdateAttemptsForTests();
@@ -259,6 +266,56 @@ describe('first launch after a new binary moves the app container', () => {
     // The repaired meta holds on the next launch too (a fresh deck cache reads it directly).
     invalidateDeckCache();
     expect((await getCachedDeck(SLUG))?.Cards).toHaveLength(CARDS.length);
+  });
+
+  it('does not roll back a newer install that lands while the moved file is being repointed', async () => {
+    await installUnderOldContainer();
+    installNewBinary();
+    const movedUri = `${NEW_DOCS}${DECK_DIR}${SLUG}.json`;
+    const NEXT_BUILD = '20261018T000000Z-0000next';
+    // An auto-update finishes after resolveDeckBySlug read the stale meta and before it repoints:
+    // the installer has written the next build to this launch's path, with a meta of its own.
+    fsState.onGetInfo = (uri) => {
+      if (uri !== movedUri) return;
+      fsState.onGetInfo = null;
+      files.set(movedUri, JSON.stringify({ ...DECK, version: NEXT_BUILD }));
+      store.set(
+        META_KEY,
+        JSON.stringify({ slug: SLUG, buildId: NEXT_BUILD, installedAtMs: 2, fileUri: movedUri, cardCount: CARDS.length }),
+      );
+    };
+
+    expect((await getCachedDeck(SLUG))?.Version).toBe(NEXT_BUILD);
+    expect(readMeta()).toMatchObject({ buildId: NEXT_BUILD, installedAtMs: 2, fileUri: movedUri });
+  });
+
+  it('a retire purge deletes the moved file, not only the stale path', async () => {
+    await installUnderOldContainer();
+    installNewBinary();
+    online = true;
+    manifestBody = { ...MANIFEST, decks: [{ ...MANIFEST.decks[0], availability: 'retired', retiredAtMs: 1 } as any] };
+
+    await loadHomeDeckSummaries({ premium: false, remote: true });
+    expect([...files.keys()].filter((uri) => uri.endsWith(`/${SLUG}.json`))).toEqual([]);
+    expect(readMeta()).toBeNull();
+  });
+
+  it('forgets an install whose file was deleted where the meta says (no container move)', async () => {
+    await installUnderOldContainer();
+    files.delete(`${OLD_DOCS}${DECK_DIR}${SLUG}.json`);
+    invalidateDeckCache();
+
+    expect(await getCachedDeck(SLUG)).toBeNull();
+    expect(readMeta()).toBeNull();
+  });
+
+  it('does not repoint a meta that names a file no install writes', async () => {
+    await installUnderOldContainer();
+    installNewBinary();
+    store.set(META_KEY, JSON.stringify({ ...readMeta(), fileUri: `${OLD_DOCS}elsewhere/${SLUG}-copy.json` }));
+
+    expect(await getCachedDeck(SLUG)).toBeNull();
+    expect(readMeta()).toBeNull();
   });
 
   it('still forgets an install whose file is gone from the new container as well', async () => {
