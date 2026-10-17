@@ -63,6 +63,7 @@ import { FeaturedCard, type FeaturedCardProps } from '../components/ceremony/Fea
 import { SpillSampler, shouldMountSpillSampler } from '../components/ceremony/SpillSampler';
 import { SwipeHint } from '../components/ceremony/SwipeHint';
 import { ceremonyStyles as styles } from '../components/ceremony/ceremonyStyles';
+import { tableOverlayFrame } from '../components/ceremony/tableOverlayFrame';
 import { prefetchCeremonyImages } from '../components/ceremony/imagePrefetch';
 import { DROPPED_FRAME_MS, perfNow, startCeremonyPerf, type CeremonyPerfSession, type UiFrameStats } from '../features/gacha/draw/ceremonyPerf';
 import { isDrawStateSyncInFlight } from '../sync/syncActivity';
@@ -1061,7 +1062,14 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
             {enableTapFlow && cards.length > 1 && (tablePhase || tableWarm) ? (
               <View
                 testID={phase === 'cards-on-table' ? 'draw-ceremony-cards-on-table' : undefined}
-                style={phase === 'cards-on-table' ? styles.tapTable : tablePhase ? styles.tapTableFrom : styles.tapTableWarm}
+                style={[
+                  phase === 'cards-on-table' ? styles.tapTable : tablePhase ? styles.tapTableFrom : styles.tapTableWarm,
+                  // 2026-10-17 batch open: the stage is 280 pt wide, but a row of five cards (and the
+                  // five-column summary grid) needs the screen's width. Inside the narrow stage the row
+                  // overflowed off-centre and clipped the first card on a 402-pt phone. Size the table
+                  // to the window and centre it on the stage instead.
+                  tableOverlayFrame(windowWidth),
+                ]}
                 pointerEvents={tablePhase ? undefined : 'none'}
                 accessibilityElementsHidden={!tablePhase}
                 importantForAccessibility={tablePhase ? undefined : 'no-hide-descendants'}

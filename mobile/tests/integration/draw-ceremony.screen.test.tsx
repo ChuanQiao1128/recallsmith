@@ -138,6 +138,11 @@ function armCeremonySwipe(tree: renderer.ReactTestRenderer) {
   });
 }
 
+/** A host View's style as one object, whether it was passed as an object or an array. */
+function flatStyle(style: any): Record<string, any> {
+  return Array.isArray(style) ? Object.assign({}, ...style.flat(Infinity).filter(Boolean)) : style ?? {};
+}
+
 describe('DrawCeremonyScreen v9', () => {
   beforeEach(() => {
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -1202,7 +1207,9 @@ describe('DrawCeremonyScreen v9', () => {
     expect(warm.props.accessibilityElementsHidden).toBe(true);
     expect(warm.props.importantForAccessibility).toBe('no-hide-descendants');
     expect(warm.props.testID).toBeUndefined();
-    expect(warm.props.style.opacity).toBe(0);
+    // The container's style is [phase style, window-wide table frame] since the 2026-10-17 batch open.
+    expect(flatStyle(warm.props.style).opacity).toBe(0);
+    expect(flatStyle(warm.props.style).width).toBeGreaterThan(280);
     expect(warmCards[0].props.disabled).toBe(true);
     expect(warmCards[0].props.accessibilityLabel).toBe('Card 1 of 2, face down');
     expect(tree.root.findAllByProps({ testID: 'draw-ceremony-cards-on-table' })).toHaveLength(0);
@@ -1217,7 +1224,7 @@ describe('DrawCeremonyScreen v9', () => {
     // flash-reveal: the same container turns visible and interactive-ready (cards still disabled)
     const shown = tree.root.find((n) => (n.type as any) === 'View' && n.findAll((c) => c.props?.testID === 'tap-card-0').length > 0 && n.props.accessibilityElementsHidden === false);
     expect(shown.props.pointerEvents).toBeUndefined();
-    expect(shown.props.style.opacity).toBeUndefined();
+    expect(flatStyle(shown.props.style).opacity).toBeUndefined();
     expect(tree.root.findByProps({ testID: 'tap-card-0' }).props.disabled).toBe(true);
 
     await act(async () => {
