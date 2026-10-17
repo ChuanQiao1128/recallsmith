@@ -643,4 +643,39 @@ describe('HomeScreen cover carousel', () => {
     expect(textOf(tree, 'home-header-subtitle')).toBe('Caught up');
     expect(primaryCtaLabel(tree)).toBe('Open library');
   });
+
+  // 2026-10-18 owner: swiping the cover must not move the button under it. The header line comes
+  // and goes, the title is one line or two, and the Today card is a grid or one line, depending on
+  // the pack: each keeps a fixed slot (an invisible spacer in the same style when it is short).
+  it('keeps the header line, the two-line title box and the draw line on every page', async () => {
+    // Claude with new cards and nothing due: no header status, so its line is the spacer.
+    deckSummariesFixture = [
+      BASICS(),
+      SAA(),
+      deck('claude-ccdv-f', 'Claude Developer Foundations (CCDV-F)', { newToday: 3, plannedToday: 3 }),
+    ];
+    const tree = await renderHome();
+    const seen = new Set<string>();
+    for (const page of [0, 1, 2]) {
+      if (page > 0) await swipeEnd(tree, page * HOME_PACK_PAGE_WIDTH);
+      const status = hostNodes(tree, (node) => node.props?.testID === 'home-header-subtitle');
+      const spacer = hostNodes(tree, (node) => node.props?.testID === 'home-header-subtitle-spacer');
+      expect(status.length + spacer.length).toBe(1);
+      if (spacer.length) {
+        expect(spacer[0].props.accessibilityElementsHidden).toBe(true);
+        seen.add('spacer');
+      } else {
+        seen.add('status');
+      }
+      const titleSpacers = hostNodes(
+        tree,
+        (node) => (node.type as any) === 'Text' && node.props?.children === '\u00A0\n\u00A0',
+      );
+      expect(titleSpacers).toHaveLength(1);
+      expect(titleSpacers[0].props.accessibilityElementsHidden).toBe(true);
+      expect(textOf(tree, 'home-hero-title')?.trim().length).toBeGreaterThan(0);
+      expect(textOf(tree, 'home-draw-status-badge')?.length).toBeGreaterThan(0);
+    }
+    expect([...seen].sort()).toEqual(['spacer', 'status']);
+  });
 });

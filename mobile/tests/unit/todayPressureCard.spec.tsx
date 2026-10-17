@@ -70,4 +70,23 @@ describe('TodayPressureCard', () => {
     const oneOwned = await render(counts({ selectedOwned: 1 }));
     expect(tileValues(oneOwned)).toEqual({ Due: '0', New: '0', Learned: '0', Collected: '1' });
   });
+
+  it('keeps the grid height on the empty card with an invisible, unlabelled copy of the tiles', async () => {
+    // 2026-10-18 owner: swiping between packs on Home must not move anything; the empty card is as
+    // tall as the grid, and the copy under the line is hidden from VoiceOver and from probes.
+    const empty = await render(counts());
+    const spacers = empty.root.findAll(
+      (node) => (node.type as any) === 'View' && node.props?.accessibilityElementsHidden === true,
+    );
+    expect(spacers).toHaveLength(1);
+    expect(spacers[0].props.importantForAccessibility).toBe('no-hide-descendants');
+    const texts = spacers[0].findAll((node) => (node.type as any) === 'Text').map((node) => String(node.props.children));
+    expect(texts).toEqual(['0', 'Due', '0', 'New', '0', 'Learned', '0', 'Collected']);
+    expect(spacers[0].findAll((node) => node.props?.testID != null)).toHaveLength(0);
+
+    const full = await render(counts({ selectedNew: 2, selectedOwned: 2 }));
+    expect(
+      full.root.findAll((node) => (node.type as any) === 'View' && node.props?.accessibilityElementsHidden === true),
+    ).toHaveLength(0);
+  });
 });

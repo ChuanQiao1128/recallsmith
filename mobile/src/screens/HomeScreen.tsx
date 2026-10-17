@@ -762,7 +762,19 @@ export function HomeScreen({ navigation, route }: Props) {
                   <Text testID="home-header-subtitle" style={styles.headerStatusSubtitle} numberOfLines={1}>
                     {headerStatus}
                   </Text>
-                ) : null}
+                ) : (
+                  // The status line comes and goes with the selected pack; an empty line of the same
+                  // style keeps its height so a swipe never moves the cover and the button below it.
+                  <Text
+                    testID="home-header-subtitle-spacer"
+                    style={styles.headerStatusSubtitle}
+                    numberOfLines={1}
+                    accessibilityElementsHidden
+                    importantForAccessibility="no-hide-descendants"
+                  >
+                    {'\u00A0'}
+                  </Text>
+                )}
                 {/* U5: the goal deck's daily target under the countdown (one line, only with a date). */}
                 {examCountdownLabel && examPaceLine ? (
                   <Text testID="home-exam-pace" style={styles.headerStatusSubtitle} numberOfLines={1}>
@@ -894,16 +906,31 @@ export function HomeScreen({ navigation, route }: Props) {
                     {/* Action-driven title — never duplicates the pack
                         name. "12 cards waiting" beats "C#" every time; the
                         count is the selected pack's.
-                        R22 §5: two lines, shrinking rather than cutting off. */}
-                    <Text
-                      testID="home-hero-title"
-                      style={styles.heroTitle}
-                      numberOfLines={2}
-                      adjustsFontSizeToFit
-                      minimumFontScale={0.75}
-                    >
-                      {heroTitle}
-                    </Text>
+                        R22 §5: two lines, shrinking rather than cutting off.
+                        The box is always two lines tall (an invisible two-line
+                        spacer in the same style, so it follows Dynamic Type)
+                        and a one-line title sits centred in it: swiping
+                        between packs never moves the button below. */}
+                    <View style={styles.heroTitleBox}>
+                      <Text
+                        style={[styles.heroTitle, styles.heroTitleSpacer]}
+                        accessibilityElementsHidden
+                        importantForAccessibility="no-hide-descendants"
+                      >
+                        {'\u00A0\n\u00A0'}
+                      </Text>
+                      <View style={styles.heroTitleCentre}>
+                        <Text
+                          testID="home-hero-title"
+                          style={styles.heroTitle}
+                          numberOfLines={2}
+                          adjustsFontSizeToFit
+                          minimumFontScale={0.75}
+                        >
+                          {heroTitle}
+                        </Text>
+                      </View>
+                    </View>
                   </View>
 
                   {/* ─── PRIMARY CTA — directly under the hero so it is on
@@ -932,7 +959,7 @@ export function HomeScreen({ navigation, route }: Props) {
                     style={styles.rewardStatusText}
                     numberOfLines={1}
                   >
-                    {homeState.vm.draw.label}
+                    {homeState.vm.draw.label || '\u00A0'}
                   </Text>
 
                   {/* ─── TODAY GROUP — pressure card + update notice + goal ──── */}
@@ -1151,8 +1178,20 @@ const styles = StyleSheet.create({
     paddingTop: 4,
     paddingBottom: spacing.md,
   },
-  heroTitle: {
+  heroTitleBox: {
+    alignSelf: 'stretch',
     marginTop: 6,
+  },
+  heroTitleSpacer: { opacity: 0 },
+  heroTitleCentre: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    justifyContent: 'center',
+  },
+  heroTitle: {
     fontSize: typography.title1,
     lineHeight: 34,
     fontWeight: '900',
