@@ -353,6 +353,26 @@ describe('HomeScreen cover carousel', () => {
     expect(executeDeckAction).not.toHaveBeenCalled();
   });
 
+  // 2026-10-18 simulator check: on a 402-pt phone the cover sat 24 pt left of centre because the
+  // window-wide scroller was centred by alignSelf inside Home's padded column. It is now pulled out
+  // by exactly half the measured difference.
+  it('centres the window-wide scroller on the measured column', async () => {
+    const tree = await renderHome();
+    const scroller = () => {
+      const style = tree.root.findByProps({ testID: 'home-pack-carousel' }).props.style;
+      return Array.isArray(style) ? Object.assign({}, ...style.flat(Infinity).filter(Boolean)) : style;
+    };
+    expect(scroller().width).toBe(390);
+    expect(scroller().marginLeft).toBe(0);
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'home-pack-visual' }).props.onLayout({ nativeEvent: { layout: { width: 354, height: 300 } } });
+    });
+    // Home's column is 390 - 2 x 18 = 354 wide: the scroller starts 18 pt to its left, at the window edge.
+    expect(scroller().marginLeft).toBe(-18);
+    expect(scroller().width).toBe(390);
+  });
+
   it('lays the pages and dots out in DECK_ORDER and stops at both ends', async () => {
     // Out of order on arrival; the active deck (SAA-C03) is the second page in DECK_ORDER.
     deckSummariesFixture = [SAA(), CLAUDE(), BASICS()];

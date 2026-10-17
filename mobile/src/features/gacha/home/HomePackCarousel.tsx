@@ -175,6 +175,12 @@ export default function HomePackCarousel({
   const windowWidth =
     typeof rawWidth === 'number' && Number.isFinite(rawWidth) && rawWidth > 0 ? rawWidth : FALLBACK_WINDOW_WIDTH;
   const sideInset = Math.max(0, (windowWidth - HOME_PACK_PAGE_WIDTH) / 2);
+  // The carousel spans the window while Home lays it out inside its padded column. A child wider
+  // than its parent is not reliably centred by alignSelf on device (seen on a 402-pt simulator:
+  // the cover sat 24 pt left of centre), so measure the column and pull the scroller out by
+  // exactly the difference.
+  const [columnWidth, setColumnWidth] = useState<number | null>(null);
+  const scrollerOffset = columnWidth === null ? 0 : (columnWidth - windowWidth) / 2;
   const reduceMotion = useReduceMotion();
   const floatY = usePackFloat(reduceMotion);
 
@@ -251,7 +257,14 @@ export default function HomePackCarousel({
     : undefined;
 
   return (
-    <View testID="home-pack-visual" style={styles.root}>
+    <View
+      testID="home-pack-visual"
+      style={styles.root}
+      onLayout={(event: any) => {
+        const w = event?.nativeEvent?.layout?.width;
+        if (typeof w === 'number' && Number.isFinite(w) && w > 0 && w !== columnWidth) setColumnWidth(w);
+      }}
+    >
       {/* Gold halo behind the current cover: faint ambient light, no frame. */}
       <View pointerEvents="none" style={styles.halo} />
       <ScrollView
@@ -264,7 +277,7 @@ export default function HomePackCarousel({
         disableIntervalMomentum
         showsHorizontalScrollIndicator={false}
         contentOffset={initialOffsetRef.current}
-        style={[styles.scroller, { width: windowWidth }]}
+        style={[styles.scroller, { width: windowWidth, marginLeft: scrollerOffset }]}
         contentContainerStyle={{ paddingHorizontal: sideInset }}
         onScrollBeginDrag={() => {
           // The learner took over: whatever scrollTo was under way, this is a swipe now.
@@ -387,7 +400,9 @@ export default function HomePackCarousel({
 }
 
 const styles = StyleSheet.create({
+  // Stretches across Home's column so its measured width is the column's (see scrollerOffset).
   root: {
+    alignSelf: 'stretch',
     alignItems: 'center',
   },
   // Same halo as the single hero pack had, centred behind the current cover.
@@ -401,7 +416,7 @@ const styles = StyleSheet.create({
   },
   // Full window width (the page has 18pt side padding), so the neighbours peek in from the edges.
   scroller: {
-    alignSelf: 'center',
+    alignSelf: 'flex-start',
     flexGrow: 0,
   },
   page: {
