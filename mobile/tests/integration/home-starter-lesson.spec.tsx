@@ -319,6 +319,60 @@ describe('HomeScreen starter lesson', () => {
     expect(recordFunnelEventMock.mock.calls).toEqual(Array(3).fill(['starter_started', 'aws-saa-c03']));
   });
 
+  // 2026-10-18 home carousel: while the lesson is open the cover carousel holds the lesson's pack
+  // alone -- no swipe, no dots, no pack actions -- even when another pack is the active deck, so the
+  // cover and the one instruction under it name the same pack.
+  it('locks the cover carousel to the lesson pack while the lesson is open', async () => {
+    store.set(STAGE_KEY, 'starter');
+    store.set(GOAL_KEY, JSON.stringify({ deckSlug: 'claude-ccdv-f', examDate: null }));
+    activeSlugFixture = 'aws-saa-c03';
+
+    const tree = await renderHome();
+    expect(sessionCalls()).toEqual([['SessionCard', { slug: 'claude-ccdv-f', mode: 'learn-new' }]]);
+
+    const visual = tree.root.findByProps({ testID: 'home-pack-visual' });
+    const dots = () =>
+      tree.root.findByProps({ testID: 'home-pack-visual' }).findAll(
+        (node) =>
+          (node.type as any) === 'Pressable'
+          && typeof node.props.accessibilityLabel === 'string'
+          && node.props.accessibilityLabel.includes(' pack — '),
+      );
+    const pages = () =>
+      tree.root.findAll(
+        (node) =>
+          typeof node.type === 'string'
+          && typeof node.props?.testID === 'string'
+          && node.props.testID.startsWith('home-pack-page-'),
+      ).map((node) => node.props.testID);
+    const carousel = () => tree.root.findByProps({ testID: 'home-pack-carousel' });
+
+    // The active deck is aws-saa-c03, but the cover is the lesson's pack, and only that.
+    expect(featuredTitle(tree)).toBe('claude-ccdv-f');
+    expect(pages()).toEqual(['home-pack-page-claude-ccdv-f']);
+    expect(carousel().props.scrollEnabled).toBe(false);
+    expect(dots()).toHaveLength(0);
+    expect(visual.findAllByProps({ testID: 'home-pack-dots' })).toHaveLength(0);
+    expect(tree.root.findByProps({ testID: 'home-featured-pack' }).props.accessibilityActions).toBeUndefined();
+    expect(
+      tree.root.find((node) => (node.type as any) === 'Text' && node.props?.testID === 'home-pack-caption').props.children,
+    ).toBe('Claude CCDV-F');
+
+    // The cover opens that same lesson.
+    await act(async () => {
+      tree.root.findByProps({ testID: 'home-featured-pack' }).props.onPress();
+    });
+    expect(sessionCalls()[1]).toEqual(['SessionCard', { slug: 'claude-ccdv-f', mode: 'learn-new' }]);
+
+    // Lesson finished: the carousel opens up to every pack again.
+    store.set(STAGE_KEY, 'done');
+    await refocus();
+    expect(pages()).toEqual(['home-pack-page-aws-saa-c03', 'home-pack-page-claude-ccdv-f']);
+    expect(carousel().props.scrollEnabled).toBe(true);
+    expect(dots()).toHaveLength(2);
+    expect(featuredTitle(tree)).toBe('aws-saa-c03');
+  });
+
   it('falls back to the active deck when no study goal is stored', async () => {
     store.set(STAGE_KEY, 'starter');
     activeSlugFixture = 'claude-ccdv-f';

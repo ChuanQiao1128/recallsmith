@@ -355,7 +355,7 @@ describe('Me tab · MoreScreen + Profile + Help real copy', () => {
     expect(blob).toContain('a rare card is guaranteed');
     // 2026-10-14 three decks: only SAA-C03 and Claude ship starter cards; fundamentals needs the network.
     expect(blob).toContain(
-      'The first cards of the SAA-C03 and Claude decks are in the app, so a first lesson on either works offline; AWS fundamentals downloads the first time your phone is online.',
+      'The first cards of the SAA-C03 and Claude decks are in the app, so a first lesson on either works offline; AWS Architect Basics downloads the first time your phone is online.',
     );
     expect(blob).not.toMatch(/first cards of each deck/i);
     expect(blob).toContain('official documentation');

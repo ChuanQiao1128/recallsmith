@@ -1,8 +1,9 @@
-// Short display titles for the narrow surfaces (Home 72pt pack tiles, the Draw
-// 60pt neighbour rail, the session header) where the manifest title truncates
-// to "AWS As…" / "Claude…". The manifest title stays the canonical name
-// everywhere there is room for it; this is a display alias, derived in one
-// place so the three surfaces never disagree about what a pack is called.
+// Short display titles for the narrow surfaces (the caption and dots under
+// Home's cover carousel, the Draw 60pt neighbour rail, the session header)
+// where the manifest title truncates to "AWS As…" / "Claude…". The manifest
+// title stays the canonical name everywhere there is room for it; this is a
+// display alias, derived in one place so the three surfaces never disagree
+// about what a pack is called.
 //
 // Keyed by the exact manifest slug on purpose: the palette/cover canonicaliser
 // in theme/packArt.ts folds "aws-*" and "claude-*" families together, which is
@@ -10,7 +11,7 @@
 // "Claude CCDV-F"). Unknown slugs fall back to the title they came with.
 const SHORT_TITLES: Readonly<Record<string, string>> = {
   'aws-saa-c03': 'AWS SAA-C03',
-  'aws-saa-fundamentals': 'AWS Basics',
+  'aws-saa-fundamentals': 'AWS Architect Basics',
   'claude-ccdv-f': 'Claude CCDV-F',
   'csharp-basics': 'C# / .NET',
 };

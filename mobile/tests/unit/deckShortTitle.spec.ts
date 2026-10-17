@@ -4,7 +4,7 @@ import { deckShortTitle } from '../../src/content/deckShortTitle';
 describe('deckShortTitle', () => {
   it('maps the three live decks to the names that fit a 60–72pt tile', () => {
     expect(deckShortTitle('aws-saa-c03', 'AWS Associate Architect')).toBe('AWS SAA-C03');
-    expect(deckShortTitle('aws-saa-fundamentals', 'AWS SAA Fundamentals')).toBe('AWS Basics');
+    expect(deckShortTitle('aws-saa-fundamentals', 'AWS SAA Fundamentals')).toBe('AWS Architect Basics');
     expect(deckShortTitle('claude-ccdv-f', 'Claude Developer Foundations (CCDV-F)')).toBe('Claude CCDV-F');
     expect(deckShortTitle('csharp-basics', 'C# / .NET')).toBe('C# / .NET');
   });

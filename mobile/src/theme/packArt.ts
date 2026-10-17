@@ -77,6 +77,20 @@ const PALETTES: readonly PackPalette[] = [
     badgeBg: '#251628',
     badgeInk: '#FFD6A0',
   },
+  // 6 — white marble steps to a blush-pink dawn (AWS Architect Basics deck,
+  // 2026-10-18 cover). Same method as 5: rose and blush stops from a
+  // median-cut of the scene in assets/packs/aws-basics.png, the glow stop is
+  // the sunlit pink of the sky, the ring and badge ink are the dawn's cream.
+  // Kept far from the aws (orange) and claude (plum and coral) palettes so the
+  // two AWS packs never match.
+  {
+    cover: ['#A16D6B', '#C99390', '#E5B3AB', '#5A352E'] as const,
+    halo: 'rgba(229,179,171,0.30)',
+    ring: 'rgba(250,228,214,0.55)',
+    titleInk: '#FFFFFF',
+    badgeBg: '#5A352E',
+    badgeInk: '#FAE4D6',
+  },
 ];
 
 // Stable slug → palette index map for the canonical pack slugs we ship.
@@ -88,6 +102,7 @@ const CANONICAL_PALETTE_INDEX: Record<string, number> = {
   ai: 3, // mint
   cloud: 2, // pastel rainbow
   aws: 1, // orange
+  'aws-basics': 6, // jade / sunrise gold
   claude: 5, // coral / violet
   'premium-deck': 4, // gold
   default: 0,
@@ -95,10 +110,10 @@ const CANONICAL_PALETTE_INDEX: Record<string, number> = {
 
 // Fuzzy slug → canonical pack key. Real backend manifest slugs differ from
 // the registered PNG keys ('cs-dotnet' / 'c-sharp' → csharp, 'aws-saa-c03'
-// → aws, 'claude-ccdv-f' → claude). ONE function feeds both the palette
-// and the PNG lookups so they can never disagree again — the previous
-// inline duplicate is how aws-saa-c03 once got the aws PNG but the cloud
-// palette. Order matters: aws is tested before cloud because the cloud rule
+// → aws, 'aws-saa-fundamentals' → aws-basics, 'claude-ccdv-f' → claude).
+// ONE function feeds both the palette and the PNG lookups so they can never
+// disagree again — the previous inline duplicate is how aws-saa-c03 once got
+// the aws PNG but the cloud palette. Order matters: aws is tested before cloud because the cloud rule
 // also matches anything containing 'aws'.
 function canonicalPackSlug(slug: string): string {
   const s = slug.toLowerCase().trim();
@@ -113,6 +128,10 @@ function canonicalPackSlug(slug: string): string {
     return 'csharp';
   }
   if (s === 'ai' || s.startsWith('ai-') || s.endsWith('-ai')) return 'ai';
+  // 2026-10-18 AWS Basics cover: aws-saa-fundamentals (shown as "AWS Basics")
+  // has its own cover, back and palette. Exact slugs only, and before the
+  // aws-* rule below, which would otherwise fold it onto the SAA-C03 art.
+  if (s === 'aws-saa-fundamentals' || s === 'aws-basics') return 'aws-basics';
   // aws-saa-c03 is a live deck with its own cover, docs/aws-saa-demo-deck-plan-2026-09-16.md
   if (s === 'aws' || s.startsWith('aws-')) return 'aws';
   // claude-ccdv-f is a live deck (Claude Code developer cert); any future
@@ -186,12 +205,13 @@ export function rarityAccentColor(rarity: 'COM' | 'RAR' | 'LEG'): string {
 // a fallback for any slug that isn't explicitly registered.
 //
 // ai/cloud/premium-deck/default: scripts/gen_packs.py placeholders.
-// csharp/aws/claude: illustrated covers, see assets/packs/README.md.
+// csharp/aws/aws-basics/claude: illustrated covers, see assets/packs/README.md.
 
 import csharpPack from '../../assets/packs/csharp.png';
 import aiPack from '../../assets/packs/ai.png';
 import cloudPack from '../../assets/packs/cloud.png';
 import awsPack from '../../assets/packs/aws.png';
+import awsBasicsPack from '../../assets/packs/aws-basics.png';
 import claudePack from '../../assets/packs/claude.png';
 import premiumPack from '../../assets/packs/premium-deck.png';
 import defaultPack from '../../assets/packs/default.png';
@@ -207,6 +227,7 @@ import csharpCardBack from '../../assets/packs/csharp-back.png';
 import aiCardBack from '../../assets/packs/ai-back.png';
 import cloudCardBack from '../../assets/packs/cloud-back.png';
 import awsCardBack from '../../assets/packs/aws-back.png';
+import awsBasicsCardBack from '../../assets/packs/aws-basics-back.png';
 import claudeCardBack from '../../assets/packs/claude-back.png';
 import premiumCardBack from '../../assets/packs/premium-deck-back.png';
 // Generic back for callers that want one (exported as DEFAULT_CARD_BACK); it
@@ -225,9 +246,11 @@ import particleSheet from '../../assets/ui/particles.png';
 import glowNineSlice from '../../assets/ui/glow-9slice.png';
 
 const PACK_IMAGES: Record<string, ImageSourcePropType> = {
-  // Live decks with illustrated covers (csharp, aws-saa-c03, claude-ccdv-f)
+  // Live decks with illustrated covers (csharp, aws-saa-c03,
+  // aws-saa-fundamentals, claude-ccdv-f)
   csharp: csharpPack,
   aws: awsPack,
+  'aws-basics': awsBasicsPack,
   claude: claudePack,
   // Placeholder covers (gen_packs.py) — still registered so the slugs resolve
   ai: aiPack,
@@ -243,6 +266,7 @@ const PACK_IMAGES: Record<string, ImageSourcePropType> = {
 const CARD_BACK_IMAGES: Record<string, ImageSourcePropType> = {
   csharp: csharpCardBack,
   aws: awsCardBack,
+  'aws-basics': awsBasicsCardBack,
   claude: claudeCardBack,
   ai: aiCardBack,
   cloud: cloudCardBack,
