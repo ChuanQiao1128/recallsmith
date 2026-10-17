@@ -975,8 +975,13 @@ export function HomeScreen({ navigation, route }: Props) {
                         line. Both come and go with the pack, so the slot keeps the
                         height of the taller one (an invisible notice pill in the
                         same style, so it follows Dynamic Type) and a swipe never
-                        moves anything below it. The notice wins while it lasts;
-                        the goal line is back once the update settles. */}
+                        moves anything below it. The notice wins: "Updating …" for
+                        the few seconds the auto-update runs, and the "tap the pack
+                        to install" fallback (home-auto-update.spec pins it) after a
+                        failed or skipped one. The free-deck auto-update is tried
+                        once per pack per session, so the goal line comes back when
+                        the update is installed, from the cover or on the next
+                        launch. */}
                     <View testID="home-below-today-slot" style={styles.belowTodaySlot}>
                       <Text
                         style={[styles.updateNotice, styles.belowTodaySpacer]}
