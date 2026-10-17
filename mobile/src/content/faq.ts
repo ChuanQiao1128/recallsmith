@@ -32,7 +32,7 @@ export const FAQ_LIST: readonly FaqEntry[] = [
   },
   {
     q: 'What do I study?',
-    a: 'Three free decks: AWS fundamentals (the basics behind SAA-C03, in Chinese), AWS Associate Architect (SAA-C03, in English) and Claude Developer Foundations (CCDV-F across 8 domains, in English). Multiple-choice cards in the SAA-C03 deck explain every wrong option. Reviews are scheduled with FSRS, the open-source spaced-repetition algorithm, never more than 90 days out, and a card is Mastered once its next review is 15 or more days away. The app is iOS only.',
+    a: 'Three free decks: AWS Architect Basics (the basics behind SAA-C03, in Chinese), AWS Associate Architect (SAA-C03, in English) and Claude Developer Foundations (CCDV-F across 8 domains, in English). Multiple-choice cards in the SAA-C03 deck explain every wrong option. Reviews are scheduled with FSRS, the open-source spaced-repetition algorithm, never more than 90 days out, and a card is Mastered once its next review is 15 or more days away. The app is iOS only.',
   },
   {
     q: 'Why is a card locked in the Library?',
@@ -40,7 +40,7 @@ export const FAQ_LIST: readonly FaqEntry[] = [
   },
   {
     q: 'Does it work offline? Do I need an account?',
-    a: 'The first cards of the SAA-C03 and Claude decks are in the app, so a first lesson on either works offline; AWS fundamentals downloads the first time your phone is online. The full deck downloads when your phone is online, and after that you can study offline. An account is optional: signing in adds cloud backup, Report a card and the Premium subscription. Premium is for future premium decks; there is nothing premium to unlock yet.',
+    a: 'The first cards of the SAA-C03 and Claude decks are in the app, so a first lesson on either works offline; AWS Architect Basics downloads the first time your phone is online. The full deck downloads when your phone is online, and after that you can study offline. An account is optional: signing in adds cloud backup, Report a card and the Premium subscription. Premium is for future premium decks; there is nothing premium to unlock yet.',
   },
   {
     q: 'How are the cards made?',

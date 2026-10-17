@@ -311,7 +311,7 @@ describe('HomeScreen cover carousel', () => {
     const tree = await renderHome();
     scrollToMock.mockClear();
     expect(featuredTitle(tree)).toBe('AWS Fundamentals');
-    expect(textOf(tree, 'home-pack-caption')).toBe('AWS Basics');
+    expect(textOf(tree, 'home-pack-caption')).toBe('AWS Architect Basics');
     const loadsBefore = vi.mocked(loadHomeDeckSummaries).mock.calls.length;
     setActiveDeckSlugMock.mockClear();
 
@@ -381,7 +381,7 @@ describe('HomeScreen cover carousel', () => {
 
     expect(pageSlugs(tree)).toEqual([...DECK_ORDER]);
     expect(dots(tree).map((node) => node.props.accessibilityLabel)).toEqual([
-      'AWS Basics pack — 1 due',
+      'AWS Architect Basics pack — 1 due',
       'AWS SAA-C03 pack — 4 due',
       'Claude CCDV-F pack — Ready',
     ]);
@@ -453,7 +453,7 @@ describe('HomeScreen cover carousel', () => {
     scrollToMock.mockClear();
     expect(featured(tree).props.accessibilityRole).toBe('button');
     expect(featured(tree).props.accessibilityActions).toEqual([{ name: 'nextPack', label: 'Next pack' }]);
-    expect(featured(tree).props.accessibilityValue).toEqual({ text: 'AWS Basics, 1 of 3' });
+    expect(featured(tree).props.accessibilityValue).toEqual({ text: 'AWS Architect Basics, 1 of 3' });
     setActiveDeckSlugMock.mockClear();
 
     await act(async () => {
@@ -502,7 +502,7 @@ describe('HomeScreen cover carousel', () => {
 
     // The current pack's dot still selects (and persists) it; nothing changed, so nothing is announced.
     setActiveDeckSlugMock.mockClear();
-    await press(dot(tree, 'AWS Basics'));
+    await press(dot(tree, 'AWS Architect Basics'));
     expect(setActiveDeckSlugMock.mock.calls).toEqual([['aws-saa-fundamentals']]);
     expect(announceMock).not.toHaveBeenCalled();
     expect(scrollToMock).not.toHaveBeenCalled();
@@ -522,12 +522,12 @@ describe('HomeScreen cover carousel', () => {
     setActiveDeckSlugMock.mockClear();
     scrollToMock.mockClear();
 
-    // From AWS Basics, a 375-pt page scroll would round to Claude and skip SAA-C03.
+    // From AWS Architect Basics, a 375-pt page scroll would round to Claude and skip SAA-C03.
     await swipeEnd(tree, 375);
     expect(setActiveDeckSlugMock.mock.calls).toEqual([['aws-saa-c03']]);
     expect(scrollToMock).toHaveBeenLastCalledWith({ x: HOME_PACK_PAGE_WIDTH, y: 0, animated: false });
 
-    // Back the other way, stopping 41 pt off the first page: settles on AWS Basics, centred.
+    // Back the other way, stopping 41 pt off the first page: settles on AWS Architect Basics, centred.
     await act(async () => {
       tree.root.findByProps({ testID: 'home-pack-carousel' }).props.onScrollBeginDrag();
     });
@@ -599,7 +599,7 @@ describe('HomeScreen cover carousel', () => {
     expect(Alert.alert).not.toHaveBeenCalled();
 
     // The dot does the same.
-    await press(dot(tree, 'AWS Basics'));
+    await press(dot(tree, 'AWS Architect Basics'));
     expect(setActiveDeckSlugMock.mock.calls).toEqual([['aws-saa-fundamentals']]);
     await press(dot(tree, 'Claude CCDV-F'));
     expect(setActiveDeckSlugMock.mock.calls).toEqual([['aws-saa-fundamentals']]);
@@ -629,7 +629,7 @@ describe('HomeScreen cover carousel', () => {
 
   it('counts only the selected pack in the hero headline and the header line', async () => {
     const tree = await renderHome();
-    // AWS Basics has 1 due; SAA-C03 has 4; the three packs together have 5.
+    // AWS Architect Basics has 1 due; SAA-C03 has 4; the three packs together have 5.
     expect(textOf(tree, 'home-hero-title')).toBe('1 card waiting');
     expect(textOf(tree, 'home-header-subtitle')).toBe('1 card waiting today');
 

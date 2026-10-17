@@ -93,7 +93,7 @@ type HomeState = {
   vm: HomeViewModel;
 };
 // 2026-10-18 home carousel: one cover page per pack row. `status` is what the pack's dot reads
-// (VoiceOver: "AWS Basics pack — Ready"), the same words the old YOUR PACKS tiles used.
+// (VoiceOver: "AWS Architect Basics pack — Ready"), the same words the old YOUR PACKS tiles used.
 function toPackPage(row: HomeDeckVM): HomePackPage {
   const slug = row.deck.slug;
   const dueCount = (row.deck as any)?.dueCount ?? (row.deck as any)?.dueToday ?? 0;

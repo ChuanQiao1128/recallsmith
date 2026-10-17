@@ -15,11 +15,11 @@ import {
 const NOW = new Date(2026, 9, 2, 15, 0, 0).getTime();
 
 describe('goal choices (R22 contract §3)', () => {
-  it('offers exactly the three decks, AWS fundamentals first, highlighted and the default', () => {
+  it('offers exactly the three decks, AWS Architect Basics first, highlighted and the default', () => {
     // 2026-10-14 three decks: fundamentals, SAA-C03, Claude; csharp-basics is hidden, so not offered.
     expect(GOAL_CHOICES.map((c) => c.deckSlug)).toEqual(['aws-saa-fundamentals', 'aws-saa-c03', 'claude-ccdv-f']);
     expect(GOAL_CHOICES.map((c) => c.label)).toEqual([
-      'AWS fundamentals (Chinese)',
+      'AWS Architect Basics (Chinese)',
       'AWS Solutions Architect (SAA-C03)',
       'Claude Developer (CCDV-F)',
     ]);

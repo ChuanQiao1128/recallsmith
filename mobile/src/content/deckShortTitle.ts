@@ -11,7 +11,7 @@
 // "Claude CCDV-F"). Unknown slugs fall back to the title they came with.
 const SHORT_TITLES: Readonly<Record<string, string>> = {
   'aws-saa-c03': 'AWS SAA-C03',
-  'aws-saa-fundamentals': 'AWS Basics',
+  'aws-saa-fundamentals': 'AWS Architect Basics',
   'claude-ccdv-f': 'Claude CCDV-F',
   'csharp-basics': 'C# / .NET',
 };

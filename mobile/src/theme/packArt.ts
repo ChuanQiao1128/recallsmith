@@ -77,18 +77,19 @@ const PALETTES: readonly PackPalette[] = [
     badgeBg: '#251628',
     badgeInk: '#FFD6A0',
   },
-  // 6 — jade stairway to a pale-gold sunrise (AWS Basics deck, 2026-10-18
-  // AWS Basics cover). Same method as 5: forest and moss stops from a
-  // median-cut of assets/packs/aws-basics.png, the glow stop is the lit jade
-  // of the steps, the ring and badge ink are the sunrise gold. Kept far from
-  // the aws (orange) and ai (teal) palettes so the two AWS packs never match.
+  // 6 — white marble steps to a blush-pink dawn (AWS Architect Basics deck,
+  // 2026-10-18 cover). Same method as 5: rose and blush stops from a
+  // median-cut of the scene in assets/packs/aws-basics.png, the glow stop is
+  // the sunlit pink of the sky, the ring and badge ink are the dawn's cream.
+  // Kept far from the aws (orange) and claude (plum and coral) palettes so the
+  // two AWS packs never match.
   {
-    cover: ['#365129', '#5B7844', '#83C251', '#213216'] as const,
-    halo: 'rgba(131,194,81,0.30)',
-    ring: 'rgba(244,226,153,0.55)',
+    cover: ['#A16D6B', '#C99390', '#E5B3AB', '#5A352E'] as const,
+    halo: 'rgba(229,179,171,0.30)',
+    ring: 'rgba(250,228,214,0.55)',
     titleInk: '#FFFFFF',
-    badgeBg: '#213216',
-    badgeInk: '#F4E299',
+    badgeBg: '#5A352E',
+    badgeInk: '#FAE4D6',
   },
 ];
 

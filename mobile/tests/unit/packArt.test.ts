@@ -155,13 +155,13 @@ describe('packArt — AWS Basics deck (aws-saa-fundamentals)', () => {
     expect(back).not.toBe(DEFAULT_CARD_BACK);
   });
 
-  it('gives aws-saa-fundamentals the jade palette sampled from its cover', () => {
+  it('gives aws-saa-fundamentals the blush-pink palette sampled from its cover', () => {
     const palette = packPaletteFromSlug('aws-saa-fundamentals');
     expect(palette).toEqual(packPaletteFromSlug('aws-basics'));
     expect(packPaletteFromSlug('AWS-SAA-FUNDAMENTALS')).toEqual(palette);
-    // Jade glow stop sampled from aws-basics.png — proves index 6 is wired, not a
+    // Blush glow stop sampled from aws-basics.png — proves index 6 is wired, not a
     // hash-fallback collision with one of the older palettes.
-    expect(palette.cover[2]).toBe('#83C251');
+    expect(palette.cover[2]).toBe('#E5B3AB');
     for (const other of ['aws', 'aws-saa-c03', 'default', 'cloud', 'csharp', 'claude', 'ai', 'premium-deck']) {
       expect(palette).not.toEqual(packPaletteFromSlug(other));
     }
