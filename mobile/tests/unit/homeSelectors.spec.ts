@@ -4,6 +4,7 @@ import {
   buildHomeVM,
   EMPTY_DECK_CTA_LABEL,
   HERO_HEADLINE_MAX_CHARS,
+  homeCarouselRows,
   ownedCountOf,
   type HomeCtaKind,
 } from '../../src/features/gacha/selectors/homeSelectors';
@@ -699,5 +700,59 @@ describe('deck update chip and notice', () => {
       'JavaScript Core Basics',
     ]);
     expect(vm.decks.rows.map((row) => row.deck.title)[1]).toBe('Claude Developer Foundations (CCDV-F)');
+  });
+});
+
+// 2026-10-18 home carousel: the pages of Home's cover carousel.
+describe('homeCarouselRows', () => {
+  const rowsFor = (decks: DeckSummary[], selectedSlug: string | null = null) =>
+    buildHomeVM({ deckSummaries: decks, selectedSlug, hasSignedInUser: false }).decks.rows;
+  const slugs = (rows: Array<{ deck: DeckSummary }>) => rows.map((row) => row.deck.slug);
+
+  it('pages through the packs in DECK_ORDER, then any other pack in the order it came', () => {
+    const rows = rowsFor([
+      makeDeck({ slug: 'claude-ccdv-f' }),
+      makeDeck({ slug: 'zz-extra' }),
+      makeDeck({ slug: 'aws-saa-c03' }),
+      makeDeck({ slug: 'aa-extra' }),
+      makeDeck({ slug: 'aws-saa-fundamentals' }),
+    ]);
+    expect(slugs(homeCarouselRows({ rows, selectedSlug: null, lockedSlug: null }))).toEqual([
+      'aws-saa-fundamentals',
+      'aws-saa-c03',
+      'claude-ccdv-f',
+      'zz-extra',
+      'aa-extra',
+    ]);
+  });
+
+  it('gives a coming deck no page', () => {
+    const rows = rowsFor([
+      makeDeck({ slug: 'aws-saa-fundamentals' }),
+      makeDeck({ slug: 'aws-saa-c03', availability: 'coming', canStudy: false }),
+      makeDeck({ slug: 'claude-ccdv-f' }),
+    ]);
+    expect(slugs(homeCarouselRows({ rows, selectedSlug: null, lockedSlug: null }))).toEqual([
+      'aws-saa-fundamentals',
+      'claude-ccdv-f',
+    ]);
+  });
+
+  it('holds the starter lesson pack alone while the lesson is open, whatever is selected', () => {
+    const rows = rowsFor(
+      [makeDeck({ slug: 'aws-saa-fundamentals' }), makeDeck({ slug: 'aws-saa-c03' }), makeDeck({ slug: 'claude-ccdv-f' })],
+      'aws-saa-c03',
+    );
+    expect(slugs(homeCarouselRows({ rows, selectedSlug: 'aws-saa-c03', lockedSlug: 'claude-ccdv-f' }))).toEqual([
+      'claude-ccdv-f',
+    ]);
+    // A lesson pack that is not on the shelf: the selected pack, then the first.
+    expect(slugs(homeCarouselRows({ rows, selectedSlug: 'aws-saa-c03', lockedSlug: 'csharp-basics' }))).toEqual([
+      'aws-saa-c03',
+    ]);
+    expect(slugs(homeCarouselRows({ rows, selectedSlug: null, lockedSlug: 'csharp-basics' }))).toEqual([
+      'aws-saa-fundamentals',
+    ]);
+    expect(homeCarouselRows({ rows: [], selectedSlug: null, lockedSlug: 'claude-ccdv-f' })).toEqual([]);
   });
 });

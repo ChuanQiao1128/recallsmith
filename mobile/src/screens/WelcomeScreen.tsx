@@ -25,7 +25,7 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Welcome'>;
 
 // Welcome v3 — single page. Drops the 3-swipe carousel + internal jargon
 // ("v6", "phase A"). New users see one value proposition + the featured
-// pack (the first goal choice: AWS fundamentals since 2026-10-14), and reach the goal step
+// pack (the first goal choice: AWS Architect Basics since 2026-10-14), and reach the goal step
 // ("What do you want to learn?") in one tap.
 export function WelcomeScreen({ navigation }: Props) {
   const featuredSlug = DEFAULT_GOAL_DECK_SLUG;

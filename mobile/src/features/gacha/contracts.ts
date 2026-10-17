@@ -36,8 +36,9 @@ export type DeckSummary = {
 };
 
 export type TodayCounts = {
-  /** Due today summed across every studiable deck. Feeds reminders and the header line, never
-   *  a tile: on a 441-card deck with nothing due it read "0 Total" and was taken for the deck. */
+  /** Due today summed across every studiable deck. Feeds reminders, never a tile: on a 441-card
+   *  deck with nothing due it read "0 Total" and was taken for the deck. Home's hero and header
+   *  count the selected pack only (2026-10-18 home carousel). */
   totalDueAllDecks: number;
   selectedDue: number;
   selectedNew: number;

@@ -126,6 +126,7 @@ vi.mock('../../src/features/goal/studyGoal', async (importActual) => ({
 
 import { Alert } from 'react-native';
 import { HomeScreen } from '../../src/screens/HomeScreen';
+import TodayPressureCard from '../../src/features/gacha/components/TodayPressureCard';
 import { loadHomeDeckSummaries } from '../../src/features/gacha/home/deckActionResolver';
 import { resetSessionStore, useSessionStore } from '../../src/features/gacha/session/sessionStore';
 
@@ -160,6 +161,11 @@ function featuredTitle(tree: renderer.ReactTestRenderer): string {
     .findAll((node) => (node.type as any) === 'Text')
     .map((node) => String(node.props.children ?? ''))
     .join('');
+}
+
+// The deck the Today card names (the full manifest title of the selected deck).
+function todayDeckTitle(tree: renderer.ReactTestRenderer): string | null {
+  return tree.root.findByType(TodayPressureCard).props.selectedDeckTitle;
 }
 
 const textBlob = (tree: renderer.ReactTestRenderer) =>
@@ -393,7 +399,9 @@ describe('HomeScreen v9', () => {
     });
   });
 
-  it('lists only real packs under Your packs', async () => {
+  // 2026-10-18 home carousel: the packs are pages of the cover carousel at the
+  // top, each with a dot; the YOUR PACKS shelf at the bottom is gone.
+  it('gives each real pack one carousel page and one dot, with no Your packs shelf', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(
@@ -402,16 +410,25 @@ describe('HomeScreen v9', () => {
     });
     await flush();
 
-    const tiles = tree.root.findByProps({ testID: 'home-pack-visual' }).findAll(
+    const visual = tree.root.findByProps({ testID: 'home-pack-visual' });
+    const tiles = visual.findAll(
       (node) =>
         (node.type as any) === 'Pressable'
         && typeof node.props.accessibilityLabel === 'string'
         && node.props.accessibilityLabel.includes(' pack — '),
     );
+    const pages = visual.findAll(
+      (node) =>
+        typeof node.type === 'string'
+        && typeof node.props?.testID === 'string'
+        && node.props.testID.startsWith('home-pack-page-'),
+    );
     const copy = textBlob(tree);
 
     expect(tiles).toHaveLength(2);
-    expect(copy).toContain('Your packs');
+    expect(tiles.map((tile) => tile.props.accessibilityRole)).toEqual(['button', 'button']);
+    expect(pages.map((page) => page.props.testID)).toEqual(['home-pack-page-csharp', 'home-pack-page-aws']);
+    expect(copy).not.toContain('Your packs');
     expect(copy).not.toContain('Choose a pack');
     expect(tiles.every((tile) => !tile.props.accessibilityLabel.includes('Coming'))).toBe(true);
   });
@@ -550,7 +567,9 @@ describe('HomeScreen v9', () => {
     expect(navigateMock).not.toHaveBeenCalled();
   });
 
-  it('renders a manifest coming deck as a disabled Soon tile', async () => {
+  // 2026-10-18 home carousel: a coming deck has nothing to open, so it gets no
+  // carousel page and no dot (it used to be a disabled "Soon" tile).
+  it('gives a manifest coming deck no carousel page and no dot', async () => {
     deckSummariesFixture.push({
       slug: 'aws-saa-c03',
       title: 'AWS SAA-C03',
@@ -583,13 +602,13 @@ describe('HomeScreen v9', () => {
         && typeof node.props.accessibilityLabel === 'string'
         && node.props.accessibilityLabel.includes(' pack — '),
     );
-    const comingTile = tiles.find(
-      (tile) => tile.props.accessibilityLabel === 'AWS SAA-C03 pack — Soon',
-    );
 
-    expect(tiles).toHaveLength(3);
-    expect(comingTile).toBeTruthy();
-    expect(comingTile!.props.disabled).toBe(true);
+    expect(tiles.map((tile) => tile.props.accessibilityLabel)).toEqual([
+      'C# Interview pack — 1 due',
+      'AWS Core pack — 2 due',
+    ]);
+    expect(tiles.some((tile) => tile.props.accessibilityLabel.startsWith('AWS SAA-C03'))).toBe(false);
+    expect(tree.root.findAllByProps({ testID: 'home-pack-page-aws-saa-c03' })).toHaveLength(0);
   });
 
   it('centers the draw status label under the CTA', async () => {
@@ -746,7 +765,7 @@ describe('HomeScreen v9', () => {
     expect(String(goal.props.children)).toBe('Today: 5 cards');
   });
 
-  it('labels the tiles with the short deck title on two lines', async () => {
+  it('labels the dots and the caption under the carousel with the short deck title', async () => {
     deckSummariesFixture = [
       { ...deckSummariesFixture[0], slug: 'claude-ccdv-f', title: 'Claude Developer Foundations (CCDV-F)' },
       { ...deckSummariesFixture[1], slug: 'aws-saa-c03', title: 'AWS Associate Architect' },
@@ -761,30 +780,33 @@ describe('HomeScreen v9', () => {
     });
     await flush();
 
-    const tiles = tree.root.findByProps({ testID: 'home-pack-visual' }).findAll(
-      (node) =>
-        (node.type as any) === 'Pressable'
-        && typeof node.props.accessibilityLabel === 'string'
-        && node.props.accessibilityLabel.includes(' pack — '),
-    );
-    const labels = tiles.map((tile) => tile.props.accessibilityLabel);
+    const tiles = () =>
+      tree.root.findByProps({ testID: 'home-pack-visual' }).findAll(
+        (node) =>
+          (node.type as any) === 'Pressable'
+          && typeof node.props.accessibilityLabel === 'string'
+          && node.props.accessibilityLabel.includes(' pack — '),
+      );
+    const labels = tiles().map((tile) => tile.props.accessibilityLabel);
     expect(labels).toContain('Claude CCDV-F pack — 1 due');
     expect(labels).toContain('AWS SAA-C03 pack — 2 due');
 
-    // The tile label under the thumbnail gets two lines (the thumbnail's own
-    // fallback monogram stays at one).
-    const titleNodes = tiles.flatMap((tile) =>
-      tile.findAll(
-        (node) =>
-          (node.type as any) === 'Text'
-          && node.props.numberOfLines === 2
-          && (node.props.children === 'Claude CCDV-F' || node.props.children === 'AWS SAA-C03'),
-      ),
-    );
-    expect(titleNodes.map((node) => node.props.children).sort()).toEqual(['AWS SAA-C03', 'Claude CCDV-F']);
-
+    // One caption under the carousel names the current pack by its short
+    // title, on one line, and follows the selection.
+    const caption = () =>
+      tree.root.find((node) => (node.type as any) === 'Text' && node.props?.testID === 'home-pack-caption');
+    expect(caption().props.children).toBe('Claude CCDV-F');
+    expect(caption().props.numberOfLines).toBe(1);
     // The Today card keeps the full title: that is where there is room for it.
-    expect(textBlob(tree)).toContain('Claude Developer Foundations (CCDV-F)');
+    expect(todayDeckTitle(tree)).toBe('Claude Developer Foundations (CCDV-F)');
+
+    const awsDot = tiles().find((tile) => tile.props.accessibilityLabel.startsWith('AWS SAA-C03 pack'));
+    await act(async () => {
+      awsDot!.props.onPress();
+      await Promise.resolve();
+    });
+    expect(caption().props.children).toBe('AWS SAA-C03');
+    expect(todayDeckTitle(tree)).toBe('AWS Associate Architect');
   });
 
   it('shows the update chip and a one-line notice for a stale installed deck', async () => {
