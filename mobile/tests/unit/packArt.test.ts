@@ -57,6 +57,7 @@ describe('packArt — aws and stage assets', () => {
   });
 
   it('registers a card back for every shipped deck and a separate default', () => {
+    expect(cardBackImageForSlug('aws-basics')).toBeDefined();
     expect(cardBackImageForSlug('ai')).toBeDefined();
     expect(cardBackImageForSlug('cloud')).toBeDefined();
     expect(cardBackImageForSlug('premium-deck')).toBeDefined();
@@ -97,7 +98,7 @@ describe('packArt — claude deck (claude-ccdv-f)', () => {
     // Coral glow stop sampled from claude.png — proves index 5 is wired, not a
     // hash-fallback collision with one of the older palettes.
     expect(palette.cover[2]).toBe('#F0864A');
-    for (const other of ['csharp', 'aws', 'cloud', 'ai', 'premium-deck', 'default']) {
+    for (const other of ['csharp', 'aws', 'aws-basics', 'cloud', 'ai', 'premium-deck', 'default']) {
       expect(palette).not.toEqual(packPaletteFromSlug(other));
     }
   });
@@ -115,6 +116,8 @@ describe('packArt — claude deck (claude-ccdv-f)', () => {
     const pairs: Array<[string, string]> = [
       ['claude-ccdv-f', 'claude'],
       ['aws-saa-c03', 'aws'],
+      ['aws-saa-fundamentals', 'aws-basics'],
+      ['AWS-SAA-FUNDAMENTALS', 'aws-basics'],
       ['cs-dotnet', 'csharp'],
       ['c#', 'csharp'],
       ['ai-fundamentals', 'ai'],
@@ -125,5 +128,53 @@ describe('packArt — claude deck (claude-ccdv-f)', () => {
       expect(packPaletteFromSlug(fuzzy)).toEqual(packPaletteFromSlug(canonical));
       expect(cardBackImageForSlug(fuzzy)).toBe(cardBackImageForSlug(canonical));
     }
+  });
+});
+
+// 2026-10-18 AWS Basics cover: aws-saa-fundamentals is shown as "AWS Basics" and
+// sits next to aws-saa-c03 in the Home carousel, so it must not share the SAA-C03 art.
+describe('packArt — AWS Basics deck (aws-saa-fundamentals)', () => {
+  it('routes aws-saa-fundamentals (any case) to its own cover', () => {
+    const basics = packImageForSlug('aws-basics');
+    expect(basics).toBeDefined();
+    expect(packImageForSlug('aws-saa-fundamentals')).toBe(basics);
+    expect(packImageForSlug('AWS-SAA-FUNDAMENTALS')).toBe(basics);
+    expect(packImageForSlug('  Aws-Saa-Fundamentals  ')).toBe(basics);
+    for (const other of ['aws', 'aws-saa-c03', 'default', 'cloud', 'csharp', 'claude', 'ai']) {
+      expect(basics).not.toBe(packImageForSlug(other));
+    }
+  });
+
+  it('gives aws-saa-fundamentals its own card back', () => {
+    const back = cardBackImageForSlug('aws-basics');
+    expect(back).toBeDefined();
+    expect(cardBackImageForSlug('aws-saa-fundamentals')).toBe(back);
+    expect(cardBackImageForSlug('AWS-SAA-FUNDAMENTALS')).toBe(back);
+    expect(back).not.toBe(cardBackImageForSlug('aws'));
+    expect(back).not.toBe(cardBackImageForSlug('cloud'));
+    expect(back).not.toBe(DEFAULT_CARD_BACK);
+  });
+
+  it('gives aws-saa-fundamentals the jade palette sampled from its cover', () => {
+    const palette = packPaletteFromSlug('aws-saa-fundamentals');
+    expect(palette).toEqual(packPaletteFromSlug('aws-basics'));
+    expect(packPaletteFromSlug('AWS-SAA-FUNDAMENTALS')).toEqual(palette);
+    // Jade glow stop sampled from aws-basics.png — proves index 6 is wired, not a
+    // hash-fallback collision with one of the older palettes.
+    expect(palette.cover[2]).toBe('#83C251');
+    for (const other of ['aws', 'aws-saa-c03', 'default', 'cloud', 'csharp', 'claude', 'ai', 'premium-deck']) {
+      expect(palette).not.toEqual(packPaletteFromSlug(other));
+    }
+  });
+
+  it('leaves aws-saa-c03 on the aws art and ai-fundamentals on ai', () => {
+    expect(packImageForSlug('aws-saa-c03')).toBe(packImageForSlug('aws'));
+    expect(cardBackImageForSlug('aws-saa-c03')).toBe(cardBackImageForSlug('aws'));
+    expect(packPaletteFromSlug('aws-saa-c03')).toEqual(packPaletteFromSlug('aws'));
+    // The rule is exact: other aws-* decks keep folding onto aws.
+    expect(packImageForSlug('aws-dva-c02')).toBe(packImageForSlug('aws'));
+    expect(packImageForSlug('ai-fundamentals')).toBe(packImageForSlug('ai'));
+    expect(packPaletteFromSlug('ai-fundamentals')).toEqual(packPaletteFromSlug('ai'));
+    expect(cardBackImageForSlug('ai-fundamentals')).toBe(cardBackImageForSlug('ai'));
   });
 });
