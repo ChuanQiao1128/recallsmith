@@ -11,7 +11,8 @@
 // function.
 
 export const CONSOLE_NAME = 'DeveloperCards Console';
-export const DEFAULT_DECK_AUTHOR = 'DeveloperCards';
+// New decks are authored by the company (owner, 2026-10-18), not the product.
+export const DEFAULT_DECK_AUTHOR = 'Time Awake';
 
 // Each known route's own short label. The document title is this label followed
 // by the console name, so a tab reads "Decks · DeveloperCards Console" rather

@@ -130,9 +130,9 @@ describe('one console name', () => {
     await waitFor(() => expect(document.title).toBe('Sign in · DeveloperCards Console'));
   });
 
-  it('defaults a new deck author to DeveloperCards', () => {
+  it('defaults a new deck author to Time Awake', () => {
     renderAt(<NewDeckPage />, ['/decks/new']);
-    expect((screen.getByLabelText(/^Author/) as HTMLInputElement).value).toBe('DeveloperCards');
+    expect((screen.getByLabelText(/^Author/) as HTMLInputElement).value).toBe('Time Awake');
   });
 });
 

@@ -276,7 +276,7 @@ describe('Me tab · MoreScreen + Profile + Help real copy', () => {
     const tree = await renderMore();
     const blob = textBlob(tree);
     expect(blob).toContain(MORE_BYLINE);
-    expect(blob).toContain('Made by one developer in Auckland');
+    expect(blob).toContain('Made by Time Awake in Auckland');
     expect(blob).toContain(`Version ${appJson.expo.version}`);
   });
 

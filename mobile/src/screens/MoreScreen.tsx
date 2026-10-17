@@ -23,7 +23,7 @@ export const MORE_LINKS = {
     'https://tartan-tortoise-e81.notion.site/DevCards-Spaced-Recall-Privacy-Policy-2bfa758eb54580db99a3ed89369f9a13?pvs=74',
 } as const;
 
-export const MORE_BYLINE = 'Made by one developer in Auckland';
+export const MORE_BYLINE = 'Made by Time Awake in Auckland';
 
 export function MoreScreen({ navigation }: Props) {
   const [snapshot, setSnapshot] = useState<StreakSnapshot | null>(null);

@@ -158,7 +158,7 @@ describe('the form a user is handed', () => {
 
     expect(titleBox().value).toBe('');
     expect(slugBox().value).toBe('');
-    expect(authorBox().value).toBe('DeveloperCards');
+    expect(authorBox().value).toBe('Time Awake');
     expect(versionBox().value).toBe('1');
     expect((screen.getByLabelText('Locale') as HTMLSelectElement).value).toBe('en-US');
   });
