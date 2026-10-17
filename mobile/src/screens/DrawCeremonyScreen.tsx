@@ -343,6 +343,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
       deckTitle: route.params.deckTitle,
       ownedAfter: route.params.ownedAfter,
       totalCards: route.params.totalCards,
+      packComplete: route.params.packComplete === true,
       revealedUids: [...flippedRef.current],
       ceremonyEcho: {
         rarity: peakRarity,

@@ -659,9 +659,18 @@ export function DrawScreen({ navigation, route }: Props) {
 
         const latestPulls = spendablePullsNow(spent.wallet);
         const received = result.cards.length;
+        // 2026-10-17 batch open: a batch that takes the pack's last missing cards completes the
+        // collection here and now, so the screen under the ceremony (seen again on the way back from
+        // DrawResult, before the focus reload) reads "Collection complete", not "Earn draws".
+        const undrawnAfter = Math.max(0, ready.undrawnCount - received);
         setReady((prev) =>
           prev
-            ? { ...prev, walletPulls: latestPulls, undrawnCount: Math.max(0, prev.undrawnCount - received) }
+            ? {
+                ...prev,
+                walletPulls: latestPulls,
+                undrawnCount: Math.max(0, prev.undrawnCount - received),
+                collectionComplete: prev.collectionComplete || Math.max(0, prev.undrawnCount - received) === 0,
+              }
             : prev,
         );
 
@@ -678,6 +687,7 @@ export function DrawScreen({ navigation, route }: Props) {
           deckTitle: ready.deckTitle,
           ownedAfter: result.ownedAfter,
           totalCards: result.totalCards,
+          packComplete: undrawnAfter === 0,
           poolExhausted: result.poolExhausted,
           pityThreshold: ready.pityThreshold,
           pityCardIndex: pityCardIndexFor(result.cards, result.pityBefore, ready.pityThreshold, result.pityFiredFor),

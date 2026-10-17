@@ -395,6 +395,44 @@ describe('DrawScreen v9', () => {
     expect(consumeDeckPullsMock).toHaveBeenCalledWith('csharp', 3);
   });
 
+  // 2026-10-17 batch open: the batch that takes the last missing cards completes the pack at once:
+  // the ceremony (and so the result screen) learns it, and the screen under the ceremony reads
+  // "Collection complete" instead of offering "Earn draws".
+  it('marks the pack complete when a batch takes its last missing cards', async () => {
+    resolveDeckFixture = csharpDeck(3);
+    const navigate = vi.fn();
+    const tree = await renderDraw(navigate);
+    armPackSwipe(tree);
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'screen-draw-primary-cta' }).props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(navigate.mock.calls[0][0]).toBe('DrawCeremony');
+    expect(navigate.mock.calls[0][1].packComplete).toBe(true);
+    const blob = tree.root
+      .findAll((node) => (node.type as any) === 'Text')
+      .map((node) => (Array.isArray(node.props.children) ? node.props.children.join('') : String(node.props.children ?? '')))
+      .join('\n');
+    expect(blob).toContain('Collection complete');
+    expect(blob).not.toContain('Earn draws by studying');
+  });
+
+  it('does not mark the pack complete while cards are still missing', async () => {
+    resolveDeckFixture = csharpDeck(6);
+    const navigate = vi.fn();
+    const tree = await renderDraw(navigate);
+    armPackSwipe(tree);
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'screen-draw-primary-cta' }).props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(navigate.mock.calls[0][1].packComplete).toBe(false);
+  });
+
   it('counts the opened cards off the missing ones, so the next batch never outgrows the pack', async () => {
     resolveDeckFixture = csharpDeck(6);
     const tree = await renderDraw();
