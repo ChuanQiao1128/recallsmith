@@ -10,13 +10,24 @@ beforeEach(() => {
   invalidateDeckCache();
 });
 
+// 2026-10-17 batch open: the open buttons follow min(draws held, cards not yet owned), so the
+// default pack has 12 cards -- enough that 12 draws really can open a five-card batch. A test
+// that means a one-card pack builds one.
+function makeCards(count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    StableUid: String(index + 1),
+    OrderInDeck: index + 1,
+    Difficulty: 1,
+    Question: `Q${index + 1}`,
+  }));
+}
+function csharpDeck(cardCount = 12) {
+  return { Slug: 'csharp', Title: 'C# Interview', Cards: makeCards(cardCount) };
+}
+
 let walletFixture = { availablePulls: 12, reservePulls: 0 };
 let manifestFixture: any[] = [{ slug: 'csharp', availability: 'live', title: 'C# Interview' }];
-let resolveDeckFixture: any = {
-  Slug: 'csharp',
-  Title: 'C# Interview',
-  Cards: [{ StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1' }],
-};
+let resolveDeckFixture: any = csharpDeck();
 let installDeckOkFixture = false;
 let updatesFixture: Record<string, any> = {};
 
@@ -38,7 +49,7 @@ const saveRewardWalletStateMock = vi.fn(async (wallet: { availablePulls: number;
   walletFixture = { ...wallet };
 });
 
-const commitDrawMock = vi.fn(async (_slug: string, drawCount: 1 | 10) => ({
+const commitDrawMock = vi.fn(async (_slug: string, drawCount: number) => ({
   cards: Array.from({ length: drawCount }, (_, index) => ({
     stableUid: `card-${index + 1}`,
     question: `Q${index + 1}`,
@@ -144,7 +155,7 @@ vi.mock('../../src/features/gacha/rewards/deckWallet', () => ({
 }));
 
 vi.mock('../../src/features/gacha/draw/drawCommit', () => ({
-  commitDraw: vi.fn(async (slug: string, drawCount: 1 | 10) => commitDrawMock(slug, drawCount)),
+  commitDraw: vi.fn(async (slug: string, drawCount: number) => commitDrawMock(slug, drawCount)),
 }));
 
 // DrawScreen now schedules a sync when a draw commits. Mocked here for the
@@ -157,6 +168,10 @@ vi.mock('../../src/sync/progressSync', () => ({
 }));
 
 import { DrawScreen } from '../../src/screens/DrawScreen';
+import {
+  DRAW_COMMITTED_SYNC_DELAY_MS,
+  drawCommittedSyncDelayMs,
+} from '../../src/features/gacha/draw/ceremonyTimings';
 
 async function flush() {
   await act(async () => {
@@ -183,6 +198,29 @@ function collectText(tree: renderer.ReactTestRenderer): string {
     .join('\n');
 }
 
+// The text of the open buttons a learner can see: the hidden 0×0 probes carry no label.
+function footerLabels(tree: renderer.ReactTestRenderer): string[] {
+  return footerActions(tree)
+    .filter((node) => node.props.accessibilityElementsHidden !== true)
+    .map((node) =>
+      node
+        .findAll((child) => (child.type as any) === 'Text')
+        .map((child) => String(child.props.children ?? ''))
+        .join(''),
+    );
+}
+
+async function renderDraw(navigate = vi.fn()) {
+  let tree!: renderer.ReactTestRenderer;
+  await act(async () => {
+    tree = renderer.create(
+      <DrawScreen navigation={{ goBack: vi.fn(), navigate } as any} route={{ key: 'draw', name: 'Draw', params: { slug: 'csharp' } } as any} />,
+    );
+  });
+  await flush();
+  return tree;
+}
+
 function footerActions(tree: renderer.ReactTestRenderer) {
   return tree.root.findAll(
     (node) =>
@@ -196,11 +234,7 @@ describe('DrawScreen v9', () => {
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
     walletFixture = { availablePulls: 12, reservePulls: 0 };
     manifestFixture = [{ slug: 'csharp', availability: 'live', title: 'C# Interview' }];
-    resolveDeckFixture = {
-      Slug: 'csharp',
-      Title: 'C# Interview',
-      Cards: [{ StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1' }],
-    };
+    resolveDeckFixture = csharpDeck();
     installDeckOkFixture = false;
     updatesFixture = {};
     manifestCalls.length = 0;
@@ -208,6 +242,7 @@ describe('DrawScreen v9', () => {
     consumeDeckPullsMock.mockClear();
     saveRewardWalletStateMock.mockClear();
     commitDrawMock.mockClear();
+    scheduleProgressSyncMock.mockClear();
   });
 
   it('renders wallet-only top row and exactly two footer actions', async () => {
@@ -262,25 +297,25 @@ describe('DrawScreen v9', () => {
     expect(wrapper.findAll((n) => (n.type as any) === 'View' && n.props.style?.some?.((st: any) => st && st.borderRadius === 320))).toHaveLength(0);
   });
 
-  it('opens 10 cards and routes to ceremony', async () => {
+  it('opens 5 cards in one ceremony and routes to it', async () => {
     const navigate = vi.fn();
-
-    let tree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      tree = renderer.create(
-        <DrawScreen navigation={{ goBack: vi.fn(), navigate } as any} route={{ key: 'draw', name: 'Draw', params: { slug: 'csharp' } } as any} />,
-      );
-    });
-    await flush();
+    const tree = await renderDraw(navigate);
     armPackSwipe(tree);
 
+    const primary = tree.root.findByProps({ testID: 'screen-draw-primary-cta' });
+    expect(primary.props.accessibilityLabel).toBe('Open 5 cards from C# Interview');
+    expect(footerLabels(tree)).toEqual(['Open 5', 'Open 1']);
+
     await act(async () => {
-      tree.root.findByProps({ testID: 'screen-draw-primary-cta' }).props.onPress();
+      primary.props.onPress();
       await Promise.resolve();
     });
 
-    expect(consumeDeckPullsMock).toHaveBeenCalledWith('csharp', 10);
-    expect(commitDrawMock).toHaveBeenCalledWith('csharp', 10);
+    expect(commitDrawMock).toHaveBeenCalledTimes(1);
+    expect(commitDrawMock).toHaveBeenCalledWith('csharp', 5);
+    expect(consumeDeckPullsMock).toHaveBeenCalledWith('csharp', 5);
+    expect(walletFixture.availablePulls).toBe(7);
+    expect(navigate).toHaveBeenCalledTimes(1);
     expect(navigate).toHaveBeenCalledWith(
       'DrawCeremony',
       expect.objectContaining({
@@ -288,6 +323,10 @@ describe('DrawScreen v9', () => {
         drawResult: expect.objectContaining({ cards: expect.any(Array) }),
       }),
     );
+    expect(navigate.mock.calls[0][1].drawResult.cards).toHaveLength(5);
+    // The sync waits out the five-card reveal, not just the trip to the table.
+    expect(scheduleProgressSyncMock).toHaveBeenCalledWith({ delayMs: drawCommittedSyncDelayMs(5), reason: 'draw_committed' });
+    expect(drawCommittedSyncDelayMs(5)).toBeGreaterThan(DRAW_COMMITTED_SYNC_DELAY_MS);
   });
 
   it('opens 1 card with secondary action', async () => {
@@ -307,36 +346,158 @@ describe('DrawScreen v9', () => {
       await Promise.resolve();
     });
 
+    expect(tree.root.findByProps({ testID: 'screen-draw-secondary-cta' }).props.accessibilityLabel).toBe(
+      'Open 1 card from C# Interview',
+    );
     expect(consumeDeckPullsMock).toHaveBeenCalledWith('csharp', 1);
     expect(commitDrawMock).toHaveBeenCalledWith('csharp', 1);
     const params = (navigate.mock.calls.at(-1) ?? [])[1];
     expect(params.drawResult.cards).toHaveLength(1);
+    // A single card keeps the original sync delay.
+    expect(scheduleProgressSyncMock).toHaveBeenCalledWith({ delayMs: DRAW_COMMITTED_SYNC_DELAY_MS, reason: 'draw_committed' });
   });
 
-  it('disables Open 10 when only one pull remains', async () => {
-    walletFixture = { availablePulls: 1, reservePulls: 0 };
-
-    let tree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      tree = renderer.create(
-        <DrawScreen navigation={{ goBack: vi.fn(), navigate: vi.fn() } as any} route={{ key: 'draw', name: 'Draw', params: { slug: 'csharp' } } as any} />,
-      );
-    });
-    await flush();
+  it.each([
+    [2, 'Open 2'],
+    [3, 'Open 3'],
+    [4, 'Open 4'],
+    [5, 'Open 5'],
+    [6, 'Open 5'],
+    [9, 'Open 5'],
+    [10, 'Open 5'],
+    [12, 'Open 5'],
+  ])('holding %i draws offers %s beside Open 1, and never Open 10', async (held, label) => {
+    walletFixture = { availablePulls: held, reservePulls: 0 };
+    const tree = await renderDraw();
     armPackSwipe(tree);
 
-    const open10 = tree.root.findByProps({ testID: 'screen-draw-primary-cta' });
+    expect(footerLabels(tree)).toEqual([label, 'Open 1']);
+    const primary = tree.root.findByProps({ testID: 'screen-draw-primary-cta' });
+    const secondary = tree.root.findByProps({ testID: 'screen-draw-secondary-cta' });
+    expect(primary.props.disabled).toBe(false);
+    expect(secondary.props.disabled).toBe(false);
+    expect(primary.props.accessibilityLabel).toBe(`${label} cards from C# Interview`);
+    // No greyed bigger button and no "save up" hint, whatever the balance.
+    expect(collectText(tree)).not.toMatch(/Open 10|need \d+ draws|when you have/i);
+  });
+
+  it('sizes the batch by the cards still missing when they are fewer than the draws', async () => {
+    resolveDeckFixture = csharpDeck(3);
+    const tree = await renderDraw();
+    armPackSwipe(tree);
+    expect(footerLabels(tree)).toEqual(['Open 3', 'Open 1']);
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'screen-draw-primary-cta' }).props.onPress();
+      await Promise.resolve();
+    });
+    expect(commitDrawMock).toHaveBeenCalledWith('csharp', 3);
+    expect(consumeDeckPullsMock).toHaveBeenCalledWith('csharp', 3);
+  });
+
+  it('counts the opened cards off the missing ones, so the next batch never outgrows the pack', async () => {
+    resolveDeckFixture = csharpDeck(6);
+    const tree = await renderDraw();
+    armPackSwipe(tree);
+    expect(footerLabels(tree)).toEqual(['Open 5', 'Open 1']);
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'screen-draw-primary-cta' }).props.onPress();
+      await Promise.resolve();
+    });
+
+    // 7 draws left, 1 card missing: only Open 1 is left to offer.
+    expect(walletFixture.availablePulls).toBe(7);
+    expect(footerLabels(tree)).toEqual(['Open 1']);
+  });
+
+  it('re-reads the wallet right before the commit and opens only what the pack still holds', async () => {
+    const navigate = vi.fn();
+    const tree = await renderDraw(navigate);
+    armPackSwipe(tree);
+    expect(footerLabels(tree)).toEqual(['Open 5', 'Open 1']);
+
+    // Another screen (or a sync) spent ten of the twelve draws after the buttons were drawn.
+    walletFixture = { availablePulls: 2, reservePulls: 0 };
+    await act(async () => {
+      tree.root.findByProps({ testID: 'screen-draw-primary-cta' }).props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(commitDrawMock).toHaveBeenCalledWith('csharp', 2);
+    expect(consumeDeckPullsMock).toHaveBeenCalledWith('csharp', 2);
+    expect(walletFixture.availablePulls).toBe(0);
+    expect(navigate.mock.calls[0][1].drawResult.cards).toHaveLength(2);
+  });
+
+  it('opens nothing when the pack holds no draws at the moment of the press', async () => {
+    const navigate = vi.fn();
+    const tree = await renderDraw(navigate);
+    armPackSwipe(tree);
+
+    walletFixture = { availablePulls: 0, reservePulls: 0 };
+    await act(async () => {
+      tree.root.findByProps({ testID: 'screen-draw-primary-cta' }).props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(commitDrawMock).not.toHaveBeenCalled();
+    expect(consumeDeckPullsMock).not.toHaveBeenCalled();
+    expect(scheduleProgressSyncMock).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+    // The screen now shows the balance it just read: nothing to open, go and earn draws.
+    expect(collectText(tree)).toContain('× 0');
+    expect(tree.root.findByProps({ testID: 'draw-earn-pulls-cta' })).toBeTruthy();
+    expect(collectText(tree)).not.toContain('Draw unavailable right now');
+  });
+
+  it('offers a single Open 1 when one draw remains', async () => {
+    walletFixture = { availablePulls: 1, reservePulls: 0 };
+    const navigate = vi.fn();
+    const tree = await renderDraw(navigate);
+    armPackSwipe(tree);
+
+    // Both testIDs stay findable: the batch one as a hidden, disabled probe.
+    expect(footerActions(tree)).toHaveLength(2);
+    const batchProbe = tree.root.findByProps({ testID: 'screen-draw-primary-cta' });
     const open1 = tree.root.findByProps({ testID: 'screen-draw-secondary-cta' });
-    expect(open10.props.disabled).toBe(true);
+    expect(batchProbe.props.disabled).toBe(true);
+    expect(batchProbe.props.accessibilityElementsHidden).toBe(true);
     expect(open1.props.disabled).toBe(false);
+    expect(open1.props.accessibilityLabel).toBe('Open 1 card from C# Interview');
+    expect(footerLabels(tree)).toEqual(['Open 1']);
+    expect(collectText(tree)).not.toMatch(/Open 10|Open 5|need \d+ draws/);
+
+    // The probe opens nothing even if pressed; Open 1 opens one card.
+    await act(async () => {
+      batchProbe.props.onPress();
+      await Promise.resolve();
+    });
+    expect(commitDrawMock).not.toHaveBeenCalled();
+    await act(async () => {
+      open1.props.onPress();
+      await Promise.resolve();
+    });
+    expect(commitDrawMock).toHaveBeenCalledWith('csharp', 1);
+    expect(consumeDeckPullsMock).toHaveBeenCalledWith('csharp', 1);
+  });
+
+  it('offers a single Open 1 when one card is missing, however many draws are held', async () => {
+    resolveDeckFixture = csharpDeck(1);
+    const tree = await renderDraw();
+    armPackSwipe(tree);
+
+    expect(footerLabels(tree)).toEqual(['Open 1']);
+    expect(tree.root.findByProps({ testID: 'screen-draw-primary-cta' }).props.disabled).toBe(true);
+    expect(tree.root.findByProps({ testID: 'screen-draw-secondary-cta' }).props.disabled).toBe(false);
   });
 
   it('shows the earn-pulls escape CTA when no pulls remain', async () => {
     // When wallet is empty, the dead-end "two greyed-out Open buttons"
     // pattern is replaced with a prominent pokeBlue "Earn pulls by
     // studying" CTA that drops the user straight into a SessionCard run.
-    // The Open 10 / Open 1 buttons remain in the tree as 0×0 hidden
-    // probes (disabled) so the testID + disabled-state contract holds.
+    // The two open testIDs remain in the tree as 0×0 hidden probes
+    // (disabled) so the testID + disabled-state contract holds.
     walletFixture = { availablePulls: 0, reservePulls: 0 };
     const navigate = vi.fn();
 
@@ -354,6 +515,8 @@ describe('DrawScreen v9', () => {
     const open1 = tree.root.findByProps({ testID: 'screen-draw-secondary-cta' });
     expect(open10.props.disabled).toBe(true);
     expect(open1.props.disabled).toBe(true);
+    expect(footerLabels(tree)).toEqual([]);
+    expect(collectText(tree)).not.toMatch(/Open 10|Open 5/);
 
     // The per-pack "no pulls" text is preserved (hidden) for any
     // accessibility / collectText harness that checks for it.
@@ -472,23 +635,17 @@ describe('DrawScreen v9', () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 
-  it('keeps Open 10 disabled when only reserve pulls are present', async () => {
-    walletFixture = { availablePulls: 5, reservePulls: 5 };
-
-    let tree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      tree = renderer.create(
-        <DrawScreen navigation={{ goBack: vi.fn(), navigate: vi.fn() } as any} route={{ key: 'draw', name: 'Draw', params: { slug: 'csharp' } } as any} />,
-      );
-    });
-    await flush();
+  it('sizes the batch from spendable draws only, never the reserve', async () => {
+    // 3 spendable + 5 in reserve: counting the reserve would offer Open 5 for a wallet that can
+    // only pay for three right now.
+    walletFixture = { availablePulls: 3, reservePulls: 5 };
+    const tree = await renderDraw();
     armPackSwipe(tree);
 
-    const open10 = tree.root.findByProps({ testID: 'screen-draw-primary-cta' });
-    const open1 = tree.root.findByProps({ testID: 'screen-draw-secondary-cta' });
-    expect(open10.props.disabled).toBe(true);
-    expect(open1.props.disabled).toBe(false);
-    expect(collectText(tree)).toContain('× 5');
+    expect(footerLabels(tree)).toEqual(['Open 3', 'Open 1']);
+    expect(tree.root.findByProps({ testID: 'screen-draw-primary-cta' }).props.disabled).toBe(false);
+    expect(tree.root.findByProps({ testID: 'screen-draw-secondary-cta' }).props.disabled).toBe(false);
+    expect(collectText(tree)).toContain('× 3');
   });
 
   it('never charges the wallet when draw commit returns null', async () => {
@@ -517,7 +674,7 @@ describe('DrawScreen v9', () => {
       await Promise.resolve();
     });
 
-    expect(commitDrawMock).toHaveBeenCalledWith('csharp', 10);
+    expect(commitDrawMock).toHaveBeenCalledWith('csharp', 5);
     expect(consumeDeckPullsMock).not.toHaveBeenCalled();
     // No snapshot write either -- the old restore is what erased pulls that
     // arrived while the draw was in flight.
@@ -536,7 +693,7 @@ describe('DrawScreen v9', () => {
     walletFixture = { ...walletBeforeOpen };
     commitDrawMock.mockImplementationOnce(async () =>
       // `as any`: the mock's inferred return type is pinned to the happy-path
-      // fixture above (cards non-empty, ownedAfter 1|10). An exhausted pool is
+      // fixture above (cards non-empty). An exhausted pool is
       // exactly the shape that inference excludes, which is the bug.
       ({
         cards: [],
@@ -565,7 +722,7 @@ describe('DrawScreen v9', () => {
       await Promise.resolve();
     });
 
-    expect(commitDrawMock).toHaveBeenCalledWith('csharp', 10);
+    expect(commitDrawMock).toHaveBeenCalledWith('csharp', 5);
     expect(consumeDeckPullsMock).not.toHaveBeenCalled();
     expect(walletFixture).toEqual(walletBeforeOpen);
     expect(navigate).not.toHaveBeenCalled();
@@ -575,16 +732,17 @@ describe('DrawScreen v9', () => {
   it('charges only for the cards a partly-drained pool actually handed over', async () => {
     // The sibling test above covers the pool that is exactly empty. This is the
     // interior the previous fix skipped: `cards.length === 0` was promoted to an
-    // error, and 1..9 cards for an Open 10 stayed a success that billed ten.
+    // error, and 1..4 cards for an Open 5 stayed a success that billed five.
     // selectDrawCards stops at `remaining.length > 0` and reports the short pack
     // as `poolExhausted`, not as a failure, so nothing downstream objected.
     //
-    // Four cards left, twelve pulls banked. The wallet must fall by four.
+    // Two cards left (another device took the rest after this screen loaded),
+    // twelve draws banked. The wallet must fall by two.
     const navigate = vi.fn();
     walletFixture = { availablePulls: 12, reservePulls: 0 };
     commitDrawMock.mockImplementationOnce(async () =>
       ({
-        cards: Array.from({ length: 4 }, (_, index) => ({
+        cards: Array.from({ length: 2 }, (_, index) => ({
           stableUid: `card-${index + 1}`,
           question: `Q${index + 1}`,
           difficulty: 1,
@@ -615,14 +773,14 @@ describe('DrawScreen v9', () => {
       await Promise.resolve();
     });
 
-    expect(commitDrawMock).toHaveBeenCalledWith('csharp', 10);
-    // The number on the wire, not only the resulting balance. Charging ten
-    // against a wallet holding twelve leaves eight either way once the mock
-    // clamps, so a test watching the balance alone would pass on the bug.
-    expect(consumeDeckPullsMock).toHaveBeenCalledWith('csharp', 4);
-    expect(walletFixture.availablePulls).toBe(8);
+    expect(commitDrawMock).toHaveBeenCalledWith('csharp', 5);
+    // The number on the wire, not only the resulting balance.
+    expect(consumeDeckPullsMock).toHaveBeenCalledWith('csharp', 2);
+    expect(walletFixture.availablePulls).toBe(10);
     // A short pack is still a pack: real cards came out, so the ceremony runs.
     expect(navigate).toHaveBeenCalled();
+    // The sync waits for the reveal of the cards that actually came out.
+    expect(scheduleProgressSyncMock).toHaveBeenCalledWith({ delayMs: drawCommittedSyncDelayMs(2), reason: 'draw_committed' });
   });
 
   it('renders empty state when no active deck is available', async () => {
@@ -662,7 +820,7 @@ describe('DrawScreen v9', () => {
     await flush();
 
     expect(collectText(tree)).not.toContain('Preparing draw...');
-    expect(collectText(tree)).toContain('Open 10');
+    expect(footerLabels(tree)).toEqual(['Open 5', 'Open 1']);
     // The first read is cache-first; the revalidation still goes out.
     expect(manifestCalls[0]).toEqual({ preferRemote: false });
     expect(manifestCalls.some((call) => call.preferRemote)).toBe(true);
@@ -697,7 +855,7 @@ describe('DrawScreen v9', () => {
     expect(collectText(tree)).toContain('AWS Interview');
     // The open pack is untouched by the revalidation.
     expect(tree.root.findByProps({ testID: 'draw-header' })).toBeTruthy();
-    expect(collectText(tree)).toContain('Open 10');
+    expect(footerLabels(tree)).toEqual(['Open 5', 'Open 1']);
   });
 
   it('auto-installs live pack when slug exists but deck is not installed yet', async () => {
@@ -733,7 +891,8 @@ describe('DrawScreen v9', () => {
     await flush();
 
     expect(tree.root.findByProps({ testID: 'draw-header' })).toBeTruthy();
-    expect(collectText(tree)).toContain('Open 10');
+    // The installed pack holds one card: a single Open 1.
+    expect(footerLabels(tree)).toEqual(['Open 1']);
     expect(collectText(tree)).not.toContain('No active pack yet');
   });
 });

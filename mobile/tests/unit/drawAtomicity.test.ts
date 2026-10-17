@@ -59,7 +59,9 @@ vi.mock('../../src/review/storage', () => ({
   getUserScopedKey: vi.fn(async (baseKey: string) => `${SCOPE}${baseKey}`),
 }));
 
-import { commitDraw, flushDrawHistory, replayDraw } from '../../src/features/gacha/draw/drawCommit';
+import { commitDraw, flushDrawHistory, MAX_COMMIT_DRAW_COUNT, replayDraw } from '../../src/features/gacha/draw/drawCommit';
+// 2026-10-17 batch open: the multi-card commits below use the screen's batch size, 5.
+import { MAX_BATCH_OPEN } from '../../src/features/gacha/draw/drawBatch';
 import { loadDrawHistory, loadDrawState } from '../../src/features/gacha/draw/drawStateStore';
 // Clearing `store` below wipes the keys behind the store's back, the same way
 // the debug reset does in production -- and, like production, the in-memory
@@ -118,10 +120,10 @@ describe('draw commit atomicity', () => {
     // order. cardRank.test.ts pins the sparse-key case.
     store.set(STATE_KEY, JSON.stringify({ owned: [], pity: { draws: 0, threshold: 10 } }));
 
-    const result = await commitDraw(SLUG, 10);
+    const result = await commitDraw(SLUG, MAX_BATCH_OPEN);
 
     expect(result).not.toBeNull();
-    expect(result!.cards.length).toBeGreaterThan(0);
+    expect(result!.cards).toHaveLength(MAX_BATCH_OPEN);
     const orderOf = new Map(deckCards.map((card) => [card.StableUid, card.OrderInDeck]));
     for (const card of result!.cards) {
       expect(card.rank).toBe(orderOf.get(card.stableUid));
@@ -134,7 +136,7 @@ describe('draw commit atomicity', () => {
     store.set(STATE_KEY, JSON.stringify({ owned: ['c1'], pity: { draws: 3, threshold: 10 } }));
     failSetItemFor = (key) => key === STATE_KEY;
 
-    await expect(commitDraw(SLUG, 10)).rejects.toThrow(/storage write killed/);
+    await expect(commitDraw(SLUG, MAX_BATCH_OPEN)).rejects.toThrow(/storage write killed/);
     await flushDrawHistory();
 
     // The point of the merged key: a killed draw cannot half-apply. Owned
@@ -183,6 +185,53 @@ describe('draw commit atomicity', () => {
   });
 });
 
+// 2026-10-17 batch open: commitDraw takes any whole count from 1 to 10 (the screen offers 1..5;
+// 10 stays the internal ceiling), and anything else is refused before a byte is read or written.
+describe('draw commit count', () => {
+  beforeEach(async () => {
+    await flushDrawHistory();
+    store.clear();
+    invalidateDrawStateCache();
+    setItemCalls.length = 0;
+    failSetItemFor = null;
+  });
+
+  it.each([2, 3, 4, 5])('commits exactly %i cards and records that count', async (count) => {
+    store.set(STATE_KEY, JSON.stringify({ owned: [], pity: { draws: 0, threshold: 10 } }));
+
+    const result = await commitDraw(SLUG, count);
+    await flushDrawHistory();
+
+    expect(result!.cards).toHaveLength(count);
+    expect(new Set(result!.cards.map((card) => card.stableUid)).size).toBe(count);
+    expect((await loadOwnedSet(SLUG)).size).toBe(count);
+    const [record] = await loadDrawHistory(SLUG);
+    expect(record.drawCount).toBe(count);
+    expect(replayDraw(record, deckCards).matches).toBe(true);
+  });
+
+  it('keeps 10 as the ceiling: ten cards still commit', async () => {
+    expect(MAX_COMMIT_DRAW_COUNT).toBe(10);
+    const result = await commitDraw(SLUG, MAX_COMMIT_DRAW_COUNT);
+    expect(result!.cards).toHaveLength(10);
+  });
+
+  it.each([0, -1, 11, 2.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    'refuses a count of %s without touching storage',
+    async (count) => {
+      store.set(STATE_KEY, JSON.stringify({ owned: ['c1'], pity: { draws: 3, threshold: 10 } }));
+
+      await expect(commitDraw(SLUG, count)).rejects.toThrow(RangeError);
+      await flushDrawHistory();
+
+      expect(setItemCalls).toEqual([]);
+      expect([...(await loadOwnedSet(SLUG))]).toEqual(['c1']);
+      expect(await loadPityState(SLUG)).toEqual({ draws: 3, threshold: 10 });
+      expect(store.has(HISTORY_KEY)).toBe(false);
+    },
+  );
+});
+
 describe('gacha does not depend on review', () => {
   beforeEach(async () => {
     // Drain any fire-and-forget history append the previous test enqueued
@@ -199,10 +248,10 @@ describe('gacha does not depend on review', () => {
     const { loadDeckProgress } = await import('../../src/review/storage');
     vi.mocked(loadDeckProgress).mockClear();
 
-    const result = await commitDraw(SLUG, 10);
+    const result = await commitDraw(SLUG, MAX_BATCH_OPEN);
 
     // The draw still happened -- this is not passing because nothing ran.
-    expect(result!.cards).toHaveLength(10);
+    expect(result!.cards).toHaveLength(MAX_BATCH_OPEN);
     // The edge only ever pointed this way by accident: selectDrawCards
     // stopped reading `progress` when the review-history weighting was
     // deleted, but drawCommit went on loading it. Asserting the call
@@ -226,14 +275,14 @@ describe('draw replay', () => {
   });
 
   it('reproduces a recorded draw from its persisted seed and inputs', async () => {
-    const result = await commitDraw(SLUG, 10);
+    const result = await commitDraw(SLUG, MAX_BATCH_OPEN);
     await flushDrawHistory();
     const history = await loadDrawHistory(SLUG);
 
     expect(history).toHaveLength(1);
     const record = history[0];
     expect(record.slug).toBe(SLUG);
-    expect(record.drawCount).toBe(10);
+    expect(record.drawCount).toBe(MAX_BATCH_OPEN);
     expect(record.drawnUids).toEqual(result!.cards.map((card) => card.stableUid));
 
     const replay = replayDraw(record, deckCards);
@@ -243,7 +292,7 @@ describe('draw replay', () => {
   });
 
   it('detects a record whose seed no longer explains the outcome', async () => {
-    await commitDraw(SLUG, 10);
+    await commitDraw(SLUG, MAX_BATCH_OPEN);
     await flushDrawHistory();
     const [record] = await loadDrawHistory(SLUG);
 

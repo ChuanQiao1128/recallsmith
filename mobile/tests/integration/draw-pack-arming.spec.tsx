@@ -11,19 +11,30 @@ beforeEach(() => {
   invalidateDeckCache();
 });
 
+// 2026-10-17 batch open: the buttons follow min(draws held, cards not yet owned), so the default
+// pack holds 12 cards and the draws decide the batch.
+function csharpDeck(cardCount = 12) {
+  return {
+    Slug: 'csharp',
+    Title: 'C# Interview',
+    Cards: Array.from({ length: cardCount }, (_, index) => ({
+      StableUid: String(index + 1),
+      OrderInDeck: index + 1,
+      Difficulty: 1,
+      Question: `Q${index + 1}`,
+    })),
+  };
+}
+
 let walletFixture = { availablePulls: 2, reservePulls: 0 };
 let manifestFixture: any[] = [{ slug: 'csharp', availability: 'live', title: 'C# Interview' }];
-let resolveDeckFixture: any = {
-  Slug: 'csharp',
-  Title: 'C# Interview',
-  Cards: [{ StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1' }],
-};
+let resolveDeckFixture: any = csharpDeck();
 let updatesFixture: Record<string, any> = {};
 
 // Swappable async impls so a test can hold a specific call pending.
 let loadWalletImpl: () => Promise<any> = async () => walletFixture;
 let installDeckImpl: () => Promise<boolean> = async () => false;
-let commitDrawImpl: (slug: string, drawCount: 1 | 10, options?: any) => Promise<any> = async (
+let commitDrawImpl: (slug: string, drawCount: number, options?: any) => Promise<any> = async (
   _slug,
   drawCount,
 ) => ({
@@ -52,7 +63,7 @@ const consumeDeckPullsMock = vi.fn(async (_slug: string, count: number) => {
   walletFixture = nextWallet;
   return { wallet: nextWallet, spent, promotedFromReserve: 0 };
 });
-const commitDrawMock = vi.fn((slug: string, drawCount: 1 | 10, options?: any) =>
+const commitDrawMock = vi.fn((slug: string, drawCount: number, options?: any) =>
   commitDrawImpl(slug, drawCount, options),
 );
 const loadDrawStateMock = vi.fn(async () => ({ owned: [], pity: null }));
@@ -150,7 +161,7 @@ vi.mock('../../src/features/gacha/rewards/deckWallet', () => ({
 }));
 
 vi.mock('../../src/features/gacha/draw/drawCommit', () => ({
-  commitDraw: vi.fn((slug: string, drawCount: 1 | 10, options?: any) => commitDrawMock(slug, drawCount, options)),
+  commitDraw: vi.fn((slug: string, drawCount: number, options?: any) => commitDrawMock(slug, drawCount, options)),
 }));
 
 vi.mock('../../src/features/gacha/draw/drawStateStore', () => ({
@@ -227,11 +238,7 @@ describe('DrawScreen pack arming (I01)', () => {
     vi.useFakeTimers();
     walletFixture = { availablePulls: 2, reservePulls: 0 };
     manifestFixture = [{ slug: 'csharp', availability: 'live', title: 'C# Interview' }];
-    resolveDeckFixture = {
-      Slug: 'csharp',
-      Title: 'C# Interview',
-      Cards: [{ StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1' }],
-    };
+    resolveDeckFixture = csharpDeck();
     updatesFixture = {};
     loadWalletImpl = async () => walletFixture;
     installDeckImpl = async () => false;
@@ -321,17 +328,32 @@ describe('DrawScreen pack arming (I01)', () => {
     expect(tree.root.findByProps({ testID: 'screen-draw-secondary-cta' }).props.disabled).toBe(false);
   });
 
-  it('gives Open 1 the primary style when pulls are between 1 and 9', async () => {
+  // 2026-10-17 batch open: the batch is the loud primary whenever there is one; a lone Open 1
+  // takes the primary style itself. Nothing greyed out, nothing that says "need N draws".
+  it('gives the batch the primary style and a lone Open 1 the primary style when it is the only action', async () => {
+    walletFixture = { availablePulls: 1, reservePulls: 0 };
+    const single = renderDraw({ slug: 'csharp' });
+    await flush();
+    await advance(300);
+
+    const singleOpen1 = single.tree.root.findByProps({ testID: 'screen-draw-secondary-cta' });
+    expect(flattenStyle(singleOpen1.props.style).backgroundColor).toBe(colors.pokeBlue);
+    expect(singleOpen1.props.disabled).toBe(false);
+    expect(single.tree.root.findByProps({ testID: 'screen-draw-primary-cta' }).props.disabled).toBe(true);
+    expect(collectText(single.tree)).not.toMatch(/Open 10|need \d+ draws/);
+
     walletFixture = { availablePulls: 3, reservePulls: 0 };
     const mid = renderDraw({ slug: 'csharp' });
     await flush();
     await advance(300);
 
     const midOpen1 = mid.tree.root.findByProps({ testID: 'screen-draw-secondary-cta' });
-    const midOpen10 = mid.tree.root.findByProps({ testID: 'screen-draw-primary-cta' });
-    expect(flattenStyle(midOpen1.props.style).backgroundColor).toBe(colors.pokeBlue);
-    expect(flattenStyle(midOpen10.props.style).backgroundColor).toBe('transparent');
-    expect(collectText(mid.tree)).toContain('Open 10 · need 10 draws');
+    const midBatch = mid.tree.root.findByProps({ testID: 'screen-draw-primary-cta' });
+    expect(flattenStyle(midBatch.props.style).backgroundColor).toBe(colors.pokeBlue);
+    expect(flattenStyle(midOpen1.props.style).backgroundColor).toBe('transparent');
+    expect(midBatch.props.disabled).toBe(false);
+    expect(collectText(mid.tree)).toContain('Open 3');
+    expect(collectText(mid.tree)).not.toMatch(/Open 10|need \d+ draws/);
 
     walletFixture = { availablePulls: 12, reservePulls: 0 };
     const full = renderDraw({ slug: 'csharp' });
@@ -339,10 +361,34 @@ describe('DrawScreen pack arming (I01)', () => {
     await advance(300);
 
     const fullOpen1 = full.tree.root.findByProps({ testID: 'screen-draw-secondary-cta' });
-    const fullOpen10 = full.tree.root.findByProps({ testID: 'screen-draw-primary-cta' });
-    expect(flattenStyle(fullOpen10.props.style).backgroundColor).toBe(colors.pokeBlue);
+    const fullBatch = full.tree.root.findByProps({ testID: 'screen-draw-primary-cta' });
+    expect(flattenStyle(fullBatch.props.style).backgroundColor).toBe(colors.pokeBlue);
     expect(flattenStyle(fullOpen1.props.style).backgroundColor).toBe('transparent');
-    expect(collectText(full.tree)).not.toContain('need 10');
+    expect(collectText(full.tree)).toContain('Open 5');
+    expect(collectText(full.tree)).not.toMatch(/Open 10|need \d+ draws/);
+  });
+
+  it('opens the five-card batch on an auto-armed pack and stays disarmed until the next load', async () => {
+    walletFixture = { availablePulls: 12, reservePulls: 0 };
+    const navigate = vi.fn();
+    const { tree } = renderDraw({ slug: 'csharp' }, navigate);
+    await flush();
+    await advance(300);
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'screen-draw-primary-cta' }).props.onPress();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(commitDrawMock).toHaveBeenCalledWith('csharp', 5, expect.anything());
+    expect(consumeDeckPullsMock).toHaveBeenCalledWith('csharp', 5);
+    expect(navigate).toHaveBeenCalledWith('DrawCeremony', expect.objectContaining({ slug: 'csharp' }));
+    // 7 draws left and 7 cards still missing: the next batch is again five, disarmed until reload.
+    expect(walletFixture.availablePulls).toBe(7);
+    expect(collectText(tree)).toContain('Open 5');
+    expect(tree.root.findByProps({ testID: 'screen-draw-primary-cta' }).props.disabled).toBe(true);
   });
 
   it('says why the open buttons are disabled while a pack loads or opens', async () => {
@@ -391,11 +437,7 @@ describe('DrawScreen pack arming (I01)', () => {
 
     // (b) A held commitDraw after Open 1 is pressed → "Opening…".
     manifestFixture = [{ slug: 'csharp', availability: 'live', title: 'C# Interview' }];
-    resolveDeckFixture = {
-      Slug: 'csharp',
-      Title: 'C# Interview',
-      Cards: [{ StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1' }],
-    };
+    resolveDeckFixture = csharpDeck();
     let releaseCommit!: (result: any) => void;
     commitDrawImpl = () =>
       new Promise((resolve) => {

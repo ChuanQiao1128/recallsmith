@@ -28,8 +28,11 @@ import { isLearnedProgress } from '../selectors/progressSelectors';
  *  getUserScopedKey(), so a signed-in user and the anon period each get their own. */
 export const DECK_WALLETS_KEY = 'recallsmith:deck-wallets:v1';
 
-/** The first-visit bootstrap grant, replacing the global 3-pull starter grant. */
-export const DECK_BOOTSTRAP_GRANT = 3;
+/** The first-visit bootstrap grant, replacing the global 3-pull starter grant. 2026-10-17 batch
+ *  open: 5, so a new pack opens as one five-card batch. The same grant is the end-of-lesson reward
+ *  (completeStarterLesson) and the one-time re-grant after a content replacement, which rise to 5
+ *  with it. */
+export const DECK_BOOTSTRAP_GRANT = 5;
 
 export type DeckWalletsRecord = {
   migratedAtMs: number | null;

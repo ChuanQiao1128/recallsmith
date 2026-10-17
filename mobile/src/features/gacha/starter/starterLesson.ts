@@ -17,7 +17,7 @@ export type StarterLessonCompletion = {
  * Finishing the starter lesson (R22 §4), in this order:
  *  1. the onboarding stage goes to 'done' -- the owned gate stops unioning the lesson's cards (they stay
  *     studiable as learned cards) and ensureDeckBootstrap stops refusing;
- *  2. the existing first-visit bootstrap (3 pulls) is granted on the lesson's deck -- the first pack is
+ *  2. the existing first-visit bootstrap (DECK_BOOTSTRAP_GRANT pulls) is granted on the lesson's deck -- the first pack is
  *     the reward. The lesson's cards were never written into drawState.owned, so the pack still reads
  *     as never drawn and the bootstrap pays exactly as it did for a new learner before R22;
  *  3. the notification prompt is armed; it shows after the first DrawResult "Done".

@@ -22,7 +22,7 @@ import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStat
 import { saveDrawState } from '../../src/features/gacha/draw/drawStateStore';
 import type { DeckSummary } from '../../src/features/gacha/contracts';
 import { loadRewardWalletState } from '../../src/features/gacha/rewards/rewardWallet';
-import { loadDeckWallet } from '../../src/features/gacha/rewards/deckWallet';
+import { DECK_BOOTSTRAP_GRANT, loadDeckWallet } from '../../src/features/gacha/rewards/deckWallet';
 import { settleRatingReward } from '../../src/features/gacha/rewards/sessionRewards';
 import { applyEconomyFloorIfStarved, prepareHomeDeckWallets } from '../../src/features/gacha/rewards/economyFloor';
 
@@ -148,14 +148,14 @@ describe('per-pack economy rewards', () => {
   it('prepares Home wallets: migrate, bootstrap, then floor', async () => {
     const now = new Date(2026, 0, 15, 9, 0, 0);
     // A never-drawn installed pack: no legacy balance to migrate, no owned cards,
-    // no pulls. Bootstrap runs before the floor, so it ends with 3 -- not 1 (a
-    // lone floor pull) and not 4 (bootstrap + floor).
+    // no pulls. Bootstrap runs before the floor, so it ends with the bootstrap
+    // grant (5) -- not 1 (a lone floor pull) and not 6 (bootstrap + floor).
     const wallets = await prepareHomeDeckWallets({
       deckSummaries: [deckSummary({ slug: 'fresh', totalCards: 50, ownedCount: 0, newToday: 0, dueToday: 0 })],
       now,
     });
-    expect(wallets.fresh).toEqual({ availablePulls: 3, reservePulls: 0 });
-    expect(await loadDeckWallet('fresh')).toEqual({ availablePulls: 3, reservePulls: 0 });
+    expect(wallets.fresh).toEqual({ availablePulls: DECK_BOOTSTRAP_GRANT, reservePulls: 0 });
+    expect(await loadDeckWallet('fresh')).toEqual({ availablePulls: DECK_BOOTSTRAP_GRANT, reservePulls: 0 });
   });
 
   it('prepares Home wallets with no bootstrap and no floor while the starter lesson is open (R22 §4)', async () => {
@@ -172,8 +172,8 @@ describe('per-pack economy rewards', () => {
     // The lesson completes: the next Home load bootstraps every never-drawn pack as before.
     store.set('recallsmith:onboarding:stage:v1', 'done');
     const after = await prepareHomeDeckWallets({ deckSummaries: summaries, now });
-    expect(after.fresh).toEqual({ availablePulls: 3, reservePulls: 0 });
-    expect(after.other).toEqual({ availablePulls: 3, reservePulls: 0 });
+    expect(after.fresh).toEqual({ availablePulls: DECK_BOOTSTRAP_GRANT, reservePulls: 0 });
+    expect(after.other).toEqual({ availablePulls: DECK_BOOTSTRAP_GRANT, reservePulls: 0 });
   });
 });
 

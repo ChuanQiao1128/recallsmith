@@ -19,6 +19,8 @@ import {
   loadPityState,
   savePityState,
 } from '../../src/features/gacha/draw/pity';
+import { selectDrawCards } from '../../src/features/gacha/draw/poolSelection';
+import { rarityOfCard } from '../../src/features/gacha/draw/cardRarity';
 
 describe('pity helpers', () => {
   beforeEach(() => {
@@ -63,11 +65,60 @@ describe('pity helpers', () => {
     expect(buildPityProgressLabelV9({ draws: 10, threshold: 10 }, 1)).toBe('Next card guarantees a missing rare or better');
   });
 
+  // 2026-10-17 batch open: the countdown was one card short. The guarantee pays on the slot after
+  // the counter reaches the threshold, so from 7 of 10 three more Commons can come first and the
+  // fourth card is the guaranteed one.
   it('returns countdown label when pity has not reached threshold', () => {
-    expect(buildPityProgressLabelV9({ draws: 7, threshold: 10 }, 1)).toBe('A rare card is guaranteed within 3 cards');
+    expect(buildPityProgressLabelV9({ draws: 7, threshold: 10 }, 1)).toBe('A rare card is guaranteed within 4 cards');
   });
 
-  it('says "card" in the singular when one card is left before the guarantee', () => {
-    expect(buildPityProgressLabelV9({ draws: 9, threshold: 10 }, 1)).toBe('A rare card is guaranteed within 1 card');
+  it('counts the guaranteed card itself one Common before the threshold', () => {
+    expect(buildPityProgressLabelV9({ draws: 9, threshold: 10 }, 1)).toBe('A rare card is guaranteed within 2 cards');
+  });
+
+  it('reads within 11 cards from a fresh pack, as the Help FAQ says', () => {
+    expect(buildPityProgressLabelV9({ draws: 0, threshold: 10 }, 1)).toBe('A rare card is guaranteed within 11 cards');
+  });
+
+  it('promises the next card at or past the threshold', () => {
+    expect(buildPityProgressLabelV9({ draws: 12, threshold: 10 }, 1)).toBe('Next card guarantees a missing rare or better');
+  });
+});
+
+// 2026-10-17 batch open: the countdown is checked against the real selector, not only as a string.
+// Worst case for the guarantee: thirty Commons and a single missing Rare, in random order.
+describe('pity countdown matches the draw selector', () => {
+  const deckCards = [
+    ...Array.from({ length: 30 }, (_, i) => ({ StableUid: `com-${i}`, Question: `C${i}`, Difficulty: 1, OrderInDeck: i + 1 })),
+    { StableUid: 'rar-1', Question: 'R1', Difficulty: 2, OrderInDeck: 31 },
+  ];
+  const withinOf = (draws: number) => {
+    const label = buildPityProgressLabelV9({ draws, threshold: 10 }, 1);
+    const match = /within (\d+) cards/.exec(label);
+    return match ? Number(match[1]) : 1; // "Next card guarantees" = within 1
+  };
+  const hasRarePlus = (draws: number, drawCount: number, seed: number) =>
+    selectDrawCards({ deckCards, ownedSet: new Set(), drawCount, pityState: { draws, threshold: 10 }, seed }).cards.some(
+      (card) => rarityOfCard(card) !== 'COM',
+    );
+
+  it('always delivers the rare card within the promised count', () => {
+    for (let draws = 0; draws <= 10; draws += 1) {
+      const within = withinOf(draws);
+      for (let seed = 0; seed < 200; seed += 1) {
+        expect(hasRarePlus(draws, within, seed), `draws ${draws}, seed ${seed}`).toBe(true);
+      }
+    }
+  });
+
+  it('is not one card short: one card fewer than promised can still be all Commons', () => {
+    for (let draws = 0; draws < 10; draws += 1) {
+      const within = withinOf(draws);
+      let allCommons = false;
+      for (let seed = 0; seed < 200 && !allCommons; seed += 1) {
+        allCommons = !hasRarePlus(draws, within - 1, seed);
+      }
+      expect(allCommons, `draws ${draws}`).toBe(true);
+    }
   });
 });

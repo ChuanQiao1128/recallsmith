@@ -8,7 +8,7 @@ import { typography } from '../../theme/typography';
 // GhostButton — transparent secondary action with hairline border.
 // Brand language: ghost buttons are "I'm here if you need me, but
 // I'm not the path the product wants you to take" (Skip, Cancel,
-// Sign in instead, Open 1 vs Open 10).
+// Sign in instead, Open 1 beside Open 5).
 
 type Props = {
   label: string;

@@ -168,7 +168,7 @@ import { DrawScreen } from '../../src/screens/DrawScreen';
 import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStateCache';
 import { saveDrawState } from '../../src/features/gacha/draw/drawStateStore';
 import { flushDrawHistory } from '../../src/features/gacha/draw/drawCommit';
-import { DRAW_COMMITTED_SYNC_DELAY_MS } from '../../src/features/gacha/draw/ceremonyTimings';
+import { DRAW_COMMITTED_SYNC_DELAY_MS, drawCommittedSyncDelayMs } from '../../src/features/gacha/draw/ceremonyTimings';
 
 async function flush() {
   await act(async () => {
@@ -354,6 +354,29 @@ describe('draw screen · sync trigger', () => {
     expect(recordFunnelEventMock.mock.calls).toEqual([['first_pack_opened', SLUG]]);
   });
 
+  it('defers the sync past the whole reveal of a multi-card open (2026-10-17 batch open)', async () => {
+    seedWallet(12);
+    store.set(STATE_KEY, JSON.stringify({ owned: [], pity: { draws: 0, threshold: 10 } }));
+
+    const navigate = vi.fn();
+    const tree = await mountDraw(navigate);
+    armPackSwipe(tree);
+
+    // Three cards missing, twelve draws: the batch is Open 3.
+    expect(collectText(tree)).toContain('Open 3');
+    await act(async () => {
+      tree.root.findByProps({ testID: 'screen-draw-primary-cta' }).props.onPress();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(navigate.mock.calls[0][1].drawResult.cards).toHaveLength(3);
+    expect(readWallet().availablePulls).toBe(9);
+    expect(scheduleProgressSyncMock).toHaveBeenCalledTimes(1);
+    expect(scheduleProgressSyncMock).toHaveBeenCalledWith({ delayMs: drawCommittedSyncDelayMs(3), reason: 'draw_committed' });
+    expect(drawCommittedSyncDelayMs(3)).toBeGreaterThan(DRAW_COMMITTED_SYNC_DELAY_MS);
+  });
+
   it('does not ask for a sync when the pull bought nothing', async () => {
     seedWallet(12);
     store.set(STATE_KEY, JSON.stringify({ owned: ['c1', 'c2'], pity: { draws: 0, threshold: 10 } }));
@@ -442,6 +465,51 @@ describe('draw screen · wallet/draw-state ordering', () => {
     expect(recordFunnelEventMock).not.toHaveBeenCalled();
   });
 
+  // 2026-10-17 batch open: the buttons are sized from the focus-time wallet, so open() re-reads
+  // the real wallet right before the commit and never opens more than the pack holds by then.
+  it('opens only what the wallet holds at the press when draws were spent after the screen loaded', async () => {
+    seedWallet(12);
+    store.set(STATE_KEY, JSON.stringify({ owned: [], pity: { draws: 0, threshold: 10 } }));
+    const navigate = vi.fn();
+    const tree = await mountDraw(navigate);
+    armPackSwipe(tree);
+    expect(collectText(tree)).toContain('Open 3');
+
+    // Spent elsewhere after the buttons were drawn: one draw left.
+    seedWallet(1);
+    await act(async () => {
+      tree.root.findByProps({ testID: 'screen-draw-primary-cta' }).props.onPress();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(navigate.mock.calls[0][1].drawResult.cards).toHaveLength(1);
+    expect(JSON.parse(store.get(STATE_KEY)!).owned).toHaveLength(1);
+    expect(readWallet()).toEqual({ availablePulls: 0, reservePulls: 0 });
+  });
+
+  it('writes nothing when the wallet is empty by the time of the press', async () => {
+    seedWallet(12);
+    store.set(STATE_KEY, JSON.stringify({ owned: [], pity: { draws: 0, threshold: 10 } }));
+    const navigate = vi.fn();
+    const tree = await mountDraw(navigate);
+    armPackSwipe(tree);
+
+    seedWallet(0);
+    setItemCalls.length = 0;
+    await act(async () => {
+      tree.root.findByProps({ testID: 'screen-draw-primary-cta' }).props.onPress();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(setItemCalls).toEqual([]);
+    expect(JSON.parse(store.get(STATE_KEY)!).owned).toEqual([]);
+    expect(navigate).not.toHaveBeenCalled();
+    expect(scheduleProgressSyncMock).not.toHaveBeenCalled();
+    expect(tree.root.findByProps({ testID: 'draw-earn-pulls-cta' })).toBeTruthy();
+  });
+
   it('refunds incrementally, keeping pulls granted while the draw was in flight', async () => {
     // A settlement lands its reward between the debit and the failure. A
     // snapshot restore would write the pre-draw wallet back over it and the
@@ -471,8 +539,8 @@ describe('draw screen · wallet/draw-state ordering', () => {
       await Promise.resolve();
     });
 
-    // 12 - 10 spent = 2, +3 granted = 5, +10 refunded = 15. A snapshot
-    // restore would say 12 and eat the grant.
+    // Open 3 (three cards missing): 12 - 3 spent = 9, +3 granted = 12, +3
+    // refunded = 15. A snapshot restore would say 12 and eat the grant.
     expect(readWallet().availablePulls).toBe(15);
   });
 });

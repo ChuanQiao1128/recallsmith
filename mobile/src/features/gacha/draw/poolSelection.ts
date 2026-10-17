@@ -142,8 +142,8 @@ export function selectDrawCards(input: SelectionInput): SelectionOutput {
     // Cap at the threshold instead of incrementing forever. Once the last RAR
     // and LEG are owned the guarantee can never fire, so an uncapped counter
     // would grow without bound. That is not a cosmetic leak:
-    // buildPityProgressLabelV9 clamps `threshold - draws` at 0, so a player
-    // sitting at draws=57 reads "next card guarantees a reveal" on every pull
+    // buildPityProgressLabelV9 reads any draws >= threshold as "next card
+    // guarantees", so a player sitting at draws=57 reads it on every pull
     // while nothing is ever guaranteed. Capping keeps the counter armed rather
     // than resetting it, so the instant a RAR+ re-enters the pool (new deck
     // version, or an owned-set reset) the very next card pays the guarantee.

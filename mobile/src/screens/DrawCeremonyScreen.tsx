@@ -243,6 +243,8 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
       isMulti,
       tapFlow: enableTapFlow,
       slug: route.params.slug,
+      // 2026-10-17 batch open: flipped by the two skip controls below (local report only).
+      skippedAll: false,
     });
     perfRef.current = session;
     session.setUiSampler((): UiFrameStats | null => {
@@ -761,6 +763,7 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
   );
 
   const onSpotlightSkipAll = useCallback(() => {
+    perfRef.current?.updateMeta({ skippedAll: true });
     clearSpotAdvance();
     clearSpotCueTimers();
     // Play once the stinger of the highest rarity still owed a sting: the cards not yet revealed
@@ -838,7 +841,14 @@ export function DrawCeremonyScreen({ navigation, route }: Props) {
         ? CEREMONY_COPY_V10.continueCta
         : CEREMONY_COPY_V10.skipProgress(flippedSet.size, cards.length)
       : CEREMONY_COPY_V10.showResult;
-  const ctaPress = phase === 'cards-on-table' && allFlipped ? onContinue : goResult;
+  // On the table before every card is face up the CTA reads "Skip · n/N": leaving there skips the
+  // rest of the reveal, which the local perf report records (2026-10-17 batch open).
+  const skipRestOfTable = useCallback(() => {
+    perfRef.current?.updateMeta({ skippedAll: true });
+    goResult();
+  }, [goResult]);
+  const ctaPress =
+    phase === 'cards-on-table' ? (allFlipped ? onContinue : skipRestOfTable) : goResult;
 
   // Built once. For a single pull it rides inside the spotlight's footer; otherwise it sits in
   // the content column — exactly one instance in the tree at any time.

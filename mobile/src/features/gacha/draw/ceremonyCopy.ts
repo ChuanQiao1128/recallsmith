@@ -36,13 +36,13 @@ export const CEREMONY_COPY = {
     meta: 'Reward pack opening',
     finalHint: 'The highlight is ready. The spread follows.',
     featuredPrefix: 'Featured reward',
+    // 2026-10-17 batch open: no ten-card titles. A multi-card open is 2 to 5 cards now, and the
+    // 'orbit' title/body ("Drawing 10 cards...", "Your ten-card reward...") had no reader left.
     title: {
-      orbit: 'Drawing 10 cards...',
       charge: 'Hold for the highlight...',
       stabilize: 'Lining up your draws...',
     },
     body: {
-      orbit: 'Your ten-card reward is getting ready.',
       charge: 'The highlight takes the center.',
       stabilize: 'Your draw is ready to review.',
     },
@@ -83,7 +83,8 @@ export const CEREMONY_COPY_V9 = {
   },
   'tear-flip': {
     title: 'Opening carousel',
-    body: 'Ten cards are spinning into place.',
+    // 2026-10-17 batch open: a multi-card open is 2 to 5 cards, never a fixed ten.
+    body: 'Your cards are spinning into place.',
   },
   'flash-reveal': {
     title: 'Pack open',

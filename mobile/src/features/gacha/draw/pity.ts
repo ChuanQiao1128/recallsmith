@@ -90,13 +90,19 @@ export function buildMockDrawResult(params: {
 
 export function buildPityProgressLabelV9(state: PityState, missingLegCount: number): string {
   if (missingLegCount === 0) return '';
-  const remaining = Math.max(0, state.threshold - state.draws);
   // "card", not "draw": the counter advances per revealed card, so the very
   // next card is the one that pays out, whether it arrives in a single pull or
-  // as slot 3 of a ten-card pull.
+  // as slot 3 of a multi-card pull.
   // R22 §5: say what is guaranteed in plain words, not "guaranteed reveal".
-  if (remaining === 0) return 'Next card guarantees a missing rare or better';
-  return `A rare card is guaranteed within ${remaining} ${remaining === 1 ? 'card' : 'cards'}`;
+  if (state.draws >= state.threshold) return 'Next card guarantees a missing rare or better';
+  // 2026-10-17 batch open: the countdown was one card short. selectDrawCards
+  // guarantees the slot AFTER the counter reaches the threshold, so from
+  // `draws` the next (threshold - draws) cards can all be Commons and the
+  // guaranteed card is the one after them: within threshold - draws + 1.
+  // That is the same "within 11 cards" the Help FAQ states from a fresh pack.
+  // Below the threshold this is always 2 or more, so the word is always "cards".
+  const within = state.threshold - state.draws + 1;
+  return `A rare card is guaranteed within ${within} cards`;
 }
 
 /**

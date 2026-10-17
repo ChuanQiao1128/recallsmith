@@ -474,6 +474,39 @@ describe('DrawCeremonyScreen v9', () => {
     expect(copy).not.toContain('Ten cards are spinning into place.');
   });
 
+  // 2026-10-17 batch open: a multi-card open is 2 to 5 cards, so its tear copy no longer counts ten.
+  it('uses count-free tear copy for a five-card open', async () => {
+    const replace = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    const fiveCards = {
+      ...MULTI_DRAW_RESULT,
+      cards: Array.from({ length: 5 }, (_, i) => ({
+        stableUid: String(i + 1),
+        question: `Q${i + 1}`,
+        difficulty: 1,
+        rarity: 'COM' as const,
+      })),
+      highlightedRarity: null,
+    };
+
+    await act(async () => {
+      tree = renderer.create(
+        <DrawCeremonyScreen
+          navigation={{ replace } as any}
+          route={{ key: 'ceremony', name: 'DrawCeremony', params: { slug: 'csharp', drawResult: fiveCards } } as any}
+        />,
+      );
+    });
+    armCeremonySwipe(tree);
+
+    await act(async () => {
+      vi.advanceTimersByTime(MULTI_TIMING.approach + MULTI_TIMING.hold + 10);
+    });
+
+    expect(phaseBody(tree)).toBe('Your cards are spinning into place.');
+    expect(collectText(tree)).not.toMatch(/Ten cards|ten-card|10 cards/i);
+  });
+
   it('uses a dedicated single-pack approach path without multi side lanes', async () => {
     const replace = vi.fn();
     let tree!: renderer.ReactTestRenderer;
@@ -1262,6 +1295,8 @@ describe('DrawCeremonyScreen v9', () => {
     expect(byPhase['flash-reveal']).toBe(280);
     expect(byPhase.settle).toBe(800);
     expect(report.meta).toEqual(expect.objectContaining({ renderer: 'fallback', cardCount: 2, peakRarity: 'LEG', isMulti: true, tapFlow: true, slug: 'csharp', reduceMotion: false }));
+    // 2026-10-17 batch open: the table was left without a skip, so the reveal was not skipped.
+    expect(report.meta.skippedAll).toBe(false);
     // Node has no requestAnimationFrame: no JS samples, and frame sampling was armed at approach.
     expect(report.js).toBeNull();
     expect(report.ui).toBeNull();

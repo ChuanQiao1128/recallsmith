@@ -36,6 +36,11 @@ export type CeremonyPerfMeta = {
   isMulti: boolean; tapFlow: boolean; slug?: string;
   // v2, optional so stored v1 reports and the existing test literals still type-check.
   audioWarmAtTear?: boolean; syncInFlightAtTear?: boolean;
+  // 2026-10-17 batch open: whether the learner skipped the rest of the card reveal (the
+  // spotlight's Skip all, or the table's Skip before every card was face up), read next to
+  // cardCount to see whether batches get skipped. Local only (DebugMenu); never sent anywhere.
+  // Optional so stored reports from before it still parse.
+  skippedAll?: boolean;
 };
 export type CeremonyPerfDeviceInfo = {
   platform: string; osVersion: string | null; model: string | null; jsEngine: string;
@@ -449,7 +454,7 @@ export async function loadCeremonyPerfHistory(): Promise<CeremonyPerfReport[]> {
 export function formatCeremonyPerfReport(report: CeremonyPerfReport): string[] {
   const lines: string[] = [];
   const m = report.meta;
-  lines.push(`${report.startedAt} · ${m.renderer}${m.reduceMotion ? ' · reduce motion' : ''} · ${m.cardCount} card${m.cardCount === 1 ? '' : 's'} · ${m.peakRarity}${m.slug ? ` · ${m.slug}` : ''}`);
+  lines.push(`${report.startedAt} · ${m.renderer}${m.reduceMotion ? ' · reduce motion' : ''} · ${m.cardCount} card${m.cardCount === 1 ? '' : 's'}${m.skippedAll ? ' (skipped)' : ''} · ${m.peakRarity}${m.slug ? ` · ${m.slug}` : ''}`);
   lines.push(`Total ${report.durationMs} ms${report.framesFromMs != null ? ` · frames sampled from +${report.framesFromMs} ms` : ''}`);
   if (report.js) {
     const j = report.js;

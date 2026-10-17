@@ -16,11 +16,18 @@ let walletFixture = { availablePulls: 12, reservePulls: 0 };
 // and draw status load in parallel.
 let walletLoader: (() => Promise<any>) | null = null;
 let manifestFixture: any[] = [{ slug: 'csharp', availability: 'live', title: 'C# Interview' }];
-let resolveDeckFixture: any = {
+// 2026-10-17 batch open: 12 cards, so 12 draws open a five-card batch here.
+const CSHARP_DECK = {
   Slug: 'csharp',
   Title: 'C# Interview',
-  Cards: [{ StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1' }],
+  Cards: Array.from({ length: 12 }, (_, index) => ({
+    StableUid: String(index + 1),
+    OrderInDeck: index + 1,
+    Difficulty: 1,
+    Question: `Q${index + 1}`,
+  })),
 };
+let resolveDeckFixture: any = CSHARP_DECK;
 let updatesFixture: Record<string, any> = {};
 
 const consumeDeckPullsMock = vi.fn(async (_slug: string, count: number) => {
@@ -33,7 +40,7 @@ const consumeDeckPullsMock = vi.fn(async (_slug: string, count: number) => {
   return { wallet: nextWallet, spent, promotedFromReserve: 0 };
 });
 
-const commitDrawMock = vi.fn(async (_slug: string, drawCount: 1 | 10, _options?: any) => ({
+const commitDrawMock = vi.fn(async (_slug: string, drawCount: number, _options?: any) => ({
   cards: Array.from({ length: drawCount }, (_, index) => ({
     stableUid: `card-${index + 1}`,
     question: `Q${index + 1}`,
@@ -122,7 +129,7 @@ vi.mock('../../src/features/gacha/rewards/deckWallet', () => ({
 }));
 
 vi.mock('../../src/features/gacha/draw/drawCommit', () => ({
-  commitDraw: vi.fn(async (slug: string, drawCount: 1 | 10, options?: any) => commitDrawMock(slug, drawCount, options)),
+  commitDraw: vi.fn(async (slug: string, drawCount: number, options?: any) => commitDrawMock(slug, drawCount, options)),
 }));
 
 // The screen reads draw state through loadDrawStatus -> loadDrawState. Mocked
@@ -175,11 +182,7 @@ describe('DrawScreen deck switch (G38)', () => {
     walletFixture = { availablePulls: 12, reservePulls: 0 };
     walletLoader = null;
     manifestFixture = [{ slug: 'csharp', availability: 'live', title: 'C# Interview' }];
-    resolveDeckFixture = {
-      Slug: 'csharp',
-      Title: 'C# Interview',
-      Cards: [{ StableUid: '1', OrderInDeck: 1, Difficulty: 1, Question: 'Q1' }],
-    };
+    resolveDeckFixture = CSHARP_DECK;
     updatesFixture = {};
     consumeDeckPullsMock.mockClear();
     commitDrawMock.mockClear();
@@ -269,7 +272,8 @@ describe('DrawScreen deck switch (G38)', () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(collectText(tree)).toContain('Open 10');
+    expect(collectText(tree)).toContain('Open 5');
+    expect(collectText(tree)).not.toContain('Open 10');
   });
 
   it('passes the already-loaded deck to commitDraw', async () => {
