@@ -120,6 +120,9 @@ vi.mock('../../src/review/storage', () => ({
 }));
 
 import { commitDraw, type DrawnCardVm } from '../../src/features/gacha/draw/drawCommit';
+// 2026-10-17 batch open: the largest open the screen offers (the deck here has 4 cards, so it
+// draws them all, as the old ten-card commit did).
+import { MAX_BATCH_OPEN } from '../../src/features/gacha/draw/drawBatch';
 import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStateCache';
 import { applyRemoteFeatures } from '../../src/config/featureFlags';
 
@@ -141,7 +144,7 @@ describe('drawCommit MCQ faces', () => {
   afterEach(() => applyRemoteFeatures(null));
 
   it('tags drawn cards with topic and kind', async () => {
-    const result = await commitDraw(SLUG, 10);
+    const result = await commitDraw(SLUG, MAX_BATCH_OPEN);
     expect(result).not.toBeNull();
     const cards = result!.cards;
     const { c1, c2, c3, c4 } = byUid(cards);
@@ -187,7 +190,7 @@ describe('drawCommit MCQ faces', () => {
 
   it('drops the kind under the kill switch and keeps the tag', async () => {
     applyRemoteFeatures({ features: { mcq: { enabled: false } } });
-    const result = await commitDraw(SLUG, 10);
+    const result = await commitDraw(SLUG, MAX_BATCH_OPEN);
     expect(result).not.toBeNull();
     const { c2, c3 } = byUid(result!.cards);
 

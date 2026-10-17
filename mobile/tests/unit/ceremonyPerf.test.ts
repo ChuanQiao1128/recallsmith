@@ -319,5 +319,21 @@ describe('ceremonyPerf storage + presentation', () => {
     expect(bare).toContain('Audio hits: none');
     expect(bare[bare.length - 1]).toBe('Device: ios · hermes');
     expect(bare.some((l) => l.startsWith('Phases:'))).toBe(false);
+    // No skippedAll (or false): the card count reads as before.
+    expect(lines[0]).not.toContain('skipped');
+  });
+
+  // 2026-10-17 batch open: local-only, next to the card count, so a batch that was skipped shows.
+  it('keeps skippedAll in the meta and marks the card count when the reveal was skipped', () => {
+    const now = vi.fn(() => 0);
+    const session = createCeremonyPerfSession(
+      { ...META, skippedAll: false },
+      { now, raf: null, caf: null, persist: async () => {}, device: () => DEVICE, wallClock: () => new Date(0) },
+    );
+    session.updateMeta({ skippedAll: true });
+    const report = session.stop();
+    expect(report.meta.cardCount).toBe(META.cardCount);
+    expect(report.meta.skippedAll).toBe(true);
+    expect(formatCeremonyPerfReport(report)[0]).toContain(`${META.cardCount} cards (skipped)`);
   });
 });

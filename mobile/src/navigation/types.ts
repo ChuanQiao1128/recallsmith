@@ -71,6 +71,8 @@ export type RootStackParamList = {
     /** Slot whose card the guarantee paid out on, null when it did not fire this pull. */
     pityCardIndex?: number | null;
     poolExhausted?: boolean;
+    /** 2026-10-17 batch open: this open took the pack's last missing cards (nothing left to draw). */
+    packComplete?: boolean;
   };
   DrawResult: {
     slug: string;
@@ -104,6 +106,8 @@ export type RootStackParamList = {
     } | null;
     ownedAfter?: number;
     totalCards?: number;
+    /** 2026-10-17 batch open: forwarded from DrawCeremony; true when the pack has nothing left to draw. */
+    packComplete?: boolean;
   };
 
   // No `Review` entry. ReviewScreen was a second, unreachable copy of

@@ -221,19 +221,26 @@ export function DrawResultScreen({ navigation, route }: Props) {
   }, []);
 
   const isWalletLoading = remainingPulls === null;
+  // 2026-10-17 batch open: after the open that took the pack's last missing cards there is nothing
+  // left to draw, whatever the wallet holds, so the primary goes to the Library instead of back to a
+  // Draw screen that can only say "Collection complete".
+  const packComplete = params.packComplete === true;
+  const canContinueDrawing = !isWalletLoading && remainingPulls > 0 && !packComplete;
   // Labels start with "Continue drawing" / "Go to Library" (test contract);
   // we just append context so the user knows what'll happen.
   const primaryLabel = isWalletLoading
     ? 'Checking draws...'
-    : remainingPulls > 0
+    : canContinueDrawing
       ? `Continue drawing  ·  ${remainingPulls} draw${remainingPulls === 1 ? '' : 's'} left`
-      : 'Go to Library  ·  earn draws in study';
+      : packComplete
+        ? 'Go to Library  ·  collection complete'
+        : 'Go to Library  ·  earn draws in study';
 
   const handlePrimary = () => {
     if (isWalletLoading) {
       return;
     }
-    if (remainingPulls > 0) {
+    if (canContinueDrawing) {
       navigation.navigate('Draw', { slug: params.slug });
       return;
     }
@@ -593,7 +600,7 @@ export function DrawResultScreen({ navigation, route }: Props) {
               accessibilityLabel={
                 isWalletLoading
                   ? 'Checking remaining draws'
-                  : remainingPulls > 0
+                  : canContinueDrawing
                   ? `Continue drawing from ${deckLabel(params)}`
                   : 'Go to library, scroll to new cards'
               }

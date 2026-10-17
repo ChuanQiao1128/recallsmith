@@ -17,8 +17,9 @@ import { ensureStarterDeckInstalled } from '../content/starterOffline';
 import { listVisibleManifestDecks } from '../content/visibleManifest';
 import { deckShortTitle } from '../content/deckShortTitle';
 import { commitDraw } from '../features/gacha/draw/drawCommit';
+import { clampOpenCount, drawButtonPlan, MAX_BATCH_OPEN } from '../features/gacha/draw/drawBatch';
 import { loadDrawStatus } from '../features/gacha/draw/drawPool';
-import { DRAW_COMMITTED_SYNC_DELAY_MS } from '../features/gacha/draw/ceremonyTimings';
+import { drawCommittedSyncDelayMs } from '../features/gacha/draw/ceremonyTimings';
 import {
   consumeDeckPulls,
   ensureDeckBootstrap,
@@ -60,8 +61,10 @@ type DrawReady = {
   slug: string;
   deckTitle: string;
   walletPulls: number;
-  canPullSingle: boolean;
-  canPullMulti: boolean;
+  // 2026-10-17 batch open: this pack's cards not yet owned (loadDrawStatus). With walletPulls it
+  // decides the open buttons (drawButtonPlan); the canPullSingle / canPullMulti pair it replaces
+  // only knew 1 and 10.
+  undrawnCount: number;
   deckOptions: DeckOption[];
   pityLabel: string;
   collectionComplete: boolean;
@@ -367,7 +370,7 @@ export function DrawScreen({ navigation, route }: Props) {
 
   // Auto-arm the pack on real devices — the swipe-to-arm gesture is still
   // wired up (preserved for test contract + accessibility) but the user
-  // doesn't need to perform it. Open 1 / Open 10 are enabled from the start
+  // doesn't need to perform it. The open buttons are enabled from the start
   // of a normal session, matching Pokemon's frictionless tap-to-open flow.
   useEffect(() => {
     if (!hasAnimated) return; // tests retain manual arming via armPackSwipe()
@@ -534,8 +537,7 @@ export function DrawScreen({ navigation, route }: Props) {
               slug,
               deckTitle,
               walletPulls: pulls,
-              canPullSingle: pulls >= 1,
-              canPullMulti: pulls >= 10,
+              undrawnCount: status.undrawnCount,
               deckOptions: mergedOptions,
               pityLabel: status.pityLabel,
               collectionComplete: status.collectionComplete,
@@ -577,24 +579,38 @@ export function DrawScreen({ navigation, route }: Props) {
   );
 
   const open = useCallback(
-    async (drawCount: 1 | 10) => {
+    async (requested: number) => {
       if (!ready || opening || !swipePrimed) return;
       // Belt to the disabled button's braces. The screen's owned set is a
       // snapshot from focus time; another device can empty the pool between
       // that read and this press, and the press must not cost anything then
       // either.
       if (ready.collectionComplete) return;
-      if ((drawCount === 1 && !ready.canPullSingle) || (drawCount === 10 && !ready.canPullMulti)) return;
+      // Only a count a button on screen offers: Open 1, or the batch size.
+      const plan = drawButtonPlan({ held: ready.walletPulls, undrawn: ready.undrawnCount });
+      if (!((requested === 1 && plan.single) || (plan.batch !== null && requested === plan.batch))) return;
 
       clearSwipeResetTimer();
-      setSwipePrimed(false);
-      setSwipeDelta(0);
       setOpening(true);
       // How much was actually taken, not how much we asked for. A refund
       // driven by the request would invent pulls when the charge itself was
       // the thing that failed.
       let chargedPulls = 0;
       try {
+        // 2026-10-17 batch open: re-read the pack's wallet right before the
+        // commit. The buttons were sized from the focus-time snapshot, and a
+        // batch asks for up to five cards: a sync or another screen can have
+        // spent draws since. Never open more than the pack holds now or than
+        // it is missing; with nothing left, open nothing.
+        const heldNow = spendablePullsNow(await loadDeckWallet(ready.slug));
+        const drawCount = clampOpenCount({ requested, held: heldNow, undrawn: ready.undrawnCount });
+        if (drawCount < 1) {
+          setReady((prev) => (prev && prev.slug === ready.slug ? { ...prev, walletPulls: heldNow } : prev));
+          return;
+        }
+        setSwipePrimed(false);
+        setSwipeDelta(0);
+
         // Draw first, charge second. AsyncStorage gives us no transaction, so
         // the only thing we choose is which side a kill lands on: charging
         // first loses the user a pull (charged, no cards), charging second
@@ -621,11 +637,11 @@ export function DrawScreen({ navigation, route }: Props) {
 
         // Charge for what arrived, not for what was asked. The guard above
         // reads `length === 0` because that is where the previous fix stopped,
-        // and a pool with 4 cards left answers an Open 10 with four of them --
+        // and a pool with 2 cards left answers an Open 5 with two of them --
         // a normal return (poolSelection stops at `remaining.length > 0` and
         // reports it as `poolExhausted`, not as an error). Passing drawCount
-        // here spent all ten. The near-complete collector, who is exactly who
-        // this pack is for by then, paid six pulls for nothing and was told
+        // here spent all five. The near-complete collector, who is exactly who
+        // this pack is for by then, paid three draws for nothing and was told
         // nothing about it.
         const spent = await consumeDeckPulls(ready.slug, Math.min(drawCount, result.cards.length));
         chargedPulls = spent.spent;
@@ -635,15 +651,26 @@ export function DrawScreen({ navigation, route }: Props) {
         // an app closed meant a collection that existed on exactly one
         // device. 'draw_committed' is on the pull whitelist for the same
         // reason -- right after a draw is when a second device is most
-        // worth reconciling.
-        scheduleProgressSync({ delayMs: DRAW_COMMITTED_SYNC_DELAY_MS, reason: 'draw_committed' });
+        // worth reconciling. The delay covers the ceremony and, for a batch,
+        // the whole card-by-card reveal, so the sync never lands mid-reveal.
+        scheduleProgressSync({ delayMs: drawCommittedSyncDelayMs(result.cards.length), reason: 'draw_committed' });
         // R24 M01: anonymous funnel step; only the first committed pack of the install is recorded.
         recordFunnelEvent('first_pack_opened', ready.slug);
 
         const latestPulls = spendablePullsNow(spent.wallet);
+        const received = result.cards.length;
+        // 2026-10-17 batch open: a batch that takes the pack's last missing cards completes the
+        // collection here and now, so the screen under the ceremony (seen again on the way back from
+        // DrawResult, before the focus reload) reads "Collection complete", not "Earn draws".
+        const undrawnAfter = Math.max(0, ready.undrawnCount - received);
         setReady((prev) =>
           prev
-            ? { ...prev, walletPulls: latestPulls, canPullSingle: latestPulls >= 1, canPullMulti: latestPulls >= 10 }
+            ? {
+                ...prev,
+                walletPulls: latestPulls,
+                undrawnCount: Math.max(0, prev.undrawnCount - received),
+                collectionComplete: prev.collectionComplete || Math.max(0, prev.undrawnCount - received) === 0,
+              }
             : prev,
         );
 
@@ -660,6 +687,7 @@ export function DrawScreen({ navigation, route }: Props) {
           deckTitle: ready.deckTitle,
           ownedAfter: result.ownedAfter,
           totalCards: result.totalCards,
+          packComplete: undrawnAfter === 0,
           poolExhausted: result.poolExhausted,
           pityThreshold: ready.pityThreshold,
           pityCardIndex: pityCardIndexFor(result.cards, result.pityBefore, ready.pityThreshold, result.pityFiredFor),
@@ -768,15 +796,12 @@ export function DrawScreen({ navigation, route }: Props) {
   // spinner; the header, badge, rail and footer stay put.
   const switchingDeck = selectedSlug !== null && selectedSlug !== ready.slug;
   const openDisabled = opening || !swipePrimed || switchingDeck;
-  // With 1–9 pulls the affordable action is Open 1, so it takes the loud
-  // primary style and the disabled Open 10 is demoted to the ghost and says
-  // why. With 10+ (or 0) pulls the buttons keep their default emphasis.
-  const emphasizeSingle = ready.canPullSingle && !ready.canPullMulti;
-  const open10BaseStyle = emphasizeSingle ? styles.secondaryCta : styles.primaryCta;
-  const open10TextStyle = emphasizeSingle ? styles.secondaryCtaText : styles.primaryCtaText;
-  const open10Label = emphasizeSingle ? 'Open 10 · need 10 draws' : 'Open 10';
-  const open1BaseStyle = emphasizeSingle ? styles.primaryCta : styles.secondaryCta;
-  const open1TextStyle = emphasizeSingle ? styles.primaryCtaText : styles.secondaryCtaText;
+  // 2026-10-17 batch open: the buttons come from n = min(draws held, cards
+  // not yet owned). n >= 2 offers "Open {min(n, 5)}" as the primary and
+  // "Open 1" beside it; n = 1 offers "Open 1" alone, in the primary style;
+  // n = 0 shows the empty states below. Nothing greyed out says how many
+  // draws a bigger batch needs: that would read as a reason to save up.
+  const plan = drawButtonPlan({ held: ready.walletPulls, undrawn: ready.undrawnCount });
   // One always-present status line under the footer. minHeight keeps the
   // footer from jumping as the copy appears and clears.
   const statusText = opening
@@ -896,14 +921,14 @@ export function DrawScreen({ navigation, route }: Props) {
                 string the test asserts) so collectText still finds it. */}
             <View style={styles.swipeBlockHidden} accessibilityElementsHidden>
               <Text style={styles.swipeHintHidden} numberOfLines={1}>
-                {swipePrimed ? 'Pack armed — choose Open 10 or Open 1' : 'Swipe right to arm this pack'}
+                {swipePrimed ? 'Pack armed — choose how many cards to open' : 'Swipe right to arm this pack'}
               </Text>
             </View>
             {/* The "No pulls left" hint is now redundant when the empty
                 CTA is shown — it says the same thing more actionably.
                 Keep the text node in the tree (collectText test contract)
                 via a hidden probe when the empty-pulls CTA takes over. */}
-            {!ready.canPullSingle ? (
+            {ready.walletPulls < 1 ? (
               <Text style={styles.swipeHintHidden} numberOfLines={1}>
                 No draws for this pack yet. Learn its cards to earn more.
               </Text>
@@ -911,10 +936,14 @@ export function DrawScreen({ navigation, route }: Props) {
           </View>
 
           {/* ─── Footer actions ─────────────────────────────────────────
-              Two paths:
-              (a) Wallet has pulls → show Open 10 + Open 1 buttons as
-                  primary + ghost (current behavior).
-              (b) Wallet empty → hide the disabled pair as 0×0 probes
+              2026-10-17 batch open, from n = min(draws held, cards not yet
+              owned) (drawBatch.ts):
+              (a) n >= 2 → primary "Open {min(n, 5)}" + ghost "Open 1".
+              (b) n = 1 → a single "Open 1" in the primary style. It keeps
+                  the secondary testID (Open 1 is always the secondary);
+                  the primary testID stays in the tree as a 0×0 disabled
+                  probe, the same test contract the empty wallet keeps.
+              (c) Wallet empty → hide the disabled pair as 0×0 probes
                   (test contract preserves the testIDs + disabled props)
                   and show a prominent pokeBlue "Earn draws by studying"
                   CTA that navigates straight to SessionCard. Restores
@@ -932,7 +961,7 @@ export function DrawScreen({ navigation, route }: Props) {
                 disabled={true}
                 style={[styles.primaryCta, styles.ctaDisabled]}
                 onPress={() => {
-                  void open(10);
+                  void open(MAX_BATCH_OPEN);
                 }}
               >
                 <Text style={styles.primaryCtaText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
@@ -954,7 +983,7 @@ export function DrawScreen({ navigation, route }: Props) {
                 </Text>
               </Pressable>
             </View>
-          ) : !ready.canPullSingle ? (
+          ) : plan.openable < 1 ? (
             <View style={styles.footerActions}>
               <Pressable
                 testID="draw-earn-pulls-cta"
@@ -970,7 +999,8 @@ export function DrawScreen({ navigation, route }: Props) {
                 </Text>
               </Pressable>
               {/* Hidden test probes — preserve testID + disabled state
-                  for screen-draw-primary-cta / screen-draw-secondary-cta */}
+                  for screen-draw-primary-cta / screen-draw-secondary-cta.
+                  No label: there is no button for them to name. */}
               <Pressable
                 testID="screen-draw-primary-cta"
                 accessibilityElementsHidden
@@ -978,11 +1008,9 @@ export function DrawScreen({ navigation, route }: Props) {
                 disabled={true}
                 style={styles.swipeHintHidden}
                 onPress={() => {
-                  void open(10);
+                  void open(MAX_BATCH_OPEN);
                 }}
-              >
-                <Text style={styles.swipeHintHidden}>Open 10</Text>
-              </Pressable>
+              />
               <Pressable
                 testID="screen-draw-secondary-cta"
                 accessibilityElementsHidden
@@ -992,37 +1020,64 @@ export function DrawScreen({ navigation, route }: Props) {
                 onPress={() => {
                   void open(1);
                 }}
+              />
+            </View>
+          ) : plan.batch === null ? (
+            <View style={styles.footerActions}>
+              <Pressable
+                testID="screen-draw-secondary-cta"
+                accessibilityRole="button"
+                accessibilityLabel={`Open 1 card from ${ready.deckTitle}`}
+                disabled={openDisabled}
+                style={({ pressed }) => [styles.primaryCta, openDisabled && styles.ctaDisabled, pressed && styles.pressed]}
+                onPress={() => {
+                  void open(1);
+                }}
               >
-                <Text style={styles.swipeHintHidden}>Open 1</Text>
+                <Text style={styles.primaryCtaText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
+                  Open 1
+                </Text>
               </Pressable>
+              {/* Hidden test probe — preserves testID + disabled state for
+                  screen-draw-primary-cta while no batch can be opened. */}
+              <Pressable
+                testID="screen-draw-primary-cta"
+                accessibilityElementsHidden
+                importantForAccessibility="no-hide-descendants"
+                disabled={true}
+                style={styles.swipeHintHidden}
+                onPress={() => {
+                  void open(MAX_BATCH_OPEN);
+                }}
+              />
             </View>
           ) : (
             <View style={styles.footerActions}>
               <Pressable
                 testID="screen-draw-primary-cta"
                 accessibilityRole="button"
-                accessibilityLabel={`Open ten cards from ${ready.deckTitle}`}
-                disabled={openDisabled || !ready.canPullMulti}
-                style={({ pressed }) => [open10BaseStyle, (openDisabled || !ready.canPullMulti) && styles.ctaDisabled, pressed && styles.pressed]}
+                accessibilityLabel={`Open ${plan.batch} cards from ${ready.deckTitle}`}
+                disabled={openDisabled}
+                style={({ pressed }) => [styles.primaryCta, openDisabled && styles.ctaDisabled, pressed && styles.pressed]}
                 onPress={() => {
-                  void open(10);
+                  if (plan.batch !== null) void open(plan.batch);
                 }}
               >
-                <Text style={open10TextStyle} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
-                  {open10Label}
+                <Text style={styles.primaryCtaText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
+                  {`Open ${plan.batch}`}
                 </Text>
               </Pressable>
               <Pressable
                 testID="screen-draw-secondary-cta"
                 accessibilityRole="button"
-                accessibilityLabel={`Open one card from ${ready.deckTitle}`}
-                disabled={openDisabled || !ready.canPullSingle}
-                style={({ pressed }) => [open1BaseStyle, (openDisabled || !ready.canPullSingle) && styles.ctaDisabled, pressed && styles.pressed]}
+                accessibilityLabel={`Open 1 card from ${ready.deckTitle}`}
+                disabled={openDisabled}
+                style={({ pressed }) => [styles.secondaryCta, openDisabled && styles.ctaDisabled, pressed && styles.pressed]}
                 onPress={() => {
                   void open(1);
                 }}
               >
-                <Text style={open1TextStyle} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
+                <Text style={styles.secondaryCtaText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   Open 1
                 </Text>
               </Pressable>
@@ -1228,7 +1283,7 @@ const styles = StyleSheet.create({
   },
   primaryCtaText: { color: colors.softCream, fontSize: typography.button, fontWeight: '900', letterSpacing: 0.4 },
   // Ghost button — no fill, hairline border. Reads as "alternative", makes
-  // the solid pokeBlue Open 10 button the obvious primary action.
+  // the solid pokeBlue batch button the obvious primary action.
   secondaryCta: {
     minHeight: 48, borderRadius: 999, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.md,
     backgroundColor: 'transparent', borderWidth: 1, borderColor: colors.hairline,

@@ -38,7 +38,7 @@ import {
   resolveStarterSlug,
 } from '../../src/features/gacha/starter/starterGate';
 import { completeStarterLesson, skipStarterLesson } from '../../src/features/gacha/starter/starterLesson';
-import { ensureDeckBootstrap } from '../../src/features/gacha/rewards/deckWallet';
+import { DECK_BOOTSTRAP_GRANT, ensureDeckBootstrap } from '../../src/features/gacha/rewards/deckWallet';
 import { isPermissionPromptPending } from '../../src/features/gacha/starter/permissionPromptGate';
 
 const STAGE_KEY = 'recallsmith:onboarding:stage:v1';
@@ -109,7 +109,7 @@ describe('starter lesson', () => {
     expect(isStarterLessonComplete({ slug: 'aws', uids: [] }, [untouched('a1')])).toBe(true);
   });
 
-  it('completing closes the stage, grants the 3-pull bootstrap and arms the reminder prompt', async () => {
+  it('completing closes the stage, grants the bootstrap draws (5) and arms the reminder prompt', async () => {
     await startStarterLesson();
     await ensureStarterLesson({ Slug: 'aws', Cards: [qa('a1', 1)] });
     expect(await isPermissionPromptPending()).toBe(false);
@@ -117,7 +117,13 @@ describe('starter lesson', () => {
 
     const result = await completeStarterLesson('aws');
 
-    expect(result).toEqual({ completed: true, granted: 3, wallet: { availablePulls: 3, reservePulls: 0 } });
+    // 2026-10-17 batch open: the lesson ends with one five-card batch.
+    expect(DECK_BOOTSTRAP_GRANT).toBe(5);
+    expect(result).toEqual({
+      completed: true,
+      granted: DECK_BOOTSTRAP_GRANT,
+      wallet: { availablePulls: DECK_BOOTSTRAP_GRANT, reservePulls: 0 },
+    });
     expect(await getOnboardingStage()).toBe('done');
     expect(store.has(STARTER_LESSON_KEY)).toBe(false);
     expect(await isPermissionPromptPending()).toBe(true);
@@ -152,7 +158,7 @@ describe('starter lesson', () => {
     expect(await isPermissionPromptPending()).toBe(true);
     // The skip itself grants nothing; the ordinary first-visit bootstrap now pays on any pack.
     expect(await loadDeckWallet('csharp-basics')).toEqual({ availablePulls: 0, reservePulls: 0 });
-    expect((await ensureDeckBootstrap('aws')).granted).toBe(3);
+    expect((await ensureDeckBootstrap('aws')).granted).toBe(DECK_BOOTSTRAP_GRANT);
     // A second skip (or an existing user) changes nothing.
     expect(await skipStarterLesson()).toBe(false);
   });

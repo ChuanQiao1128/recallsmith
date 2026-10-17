@@ -274,6 +274,8 @@ describe('draw pool uses the effective owned set', () => {
       const status = await loadDrawStatus(SLUG, cards);
 
       expect(status.collectionComplete).toBe(true);
+      // 2026-10-17 batch open: nothing left to open.
+      expect(status.undrawnCount).toBe(0);
       // The only LEG is learned: nothing is left to guarantee, so no countdown.
       expect(status.pityLabel).toBe('');
     });
@@ -297,7 +299,9 @@ describe('draw pool uses the effective owned set', () => {
       const status = await loadDrawStatus(SLUG, cards);
 
       expect(status.collectionComplete).toBe(false);
-      expect(status.pityLabel).toBe('A rare card is guaranteed within 6 cards');
+      // 2026-10-17 batch open: c2 is the one card the pool can still hand out.
+      expect(status.undrawnCount).toBe(1);
+      expect(status.pityLabel).toBe('A rare card is guaranteed within 7 cards');
       expect(status.pityThreshold).toBe(10);
     });
 
@@ -313,7 +317,9 @@ describe('draw pool uses the effective owned set', () => {
       expect(status.collectionComplete).toBe(false);
       // Not the outer failure branch (which drops the label): only the
       // progress term was lost.
-      expect(status.pityLabel).toBe('A rare card is guaranteed within 6 cards');
+      expect(status.pityLabel).toBe('A rare card is guaranteed within 7 cards');
+      // The learned cards are not seen, so both count as missing, as the pool would treat them.
+      expect(status.undrawnCount).toBe(2);
     });
 
     it('is not complete when every read fails', async () => {
@@ -326,10 +332,20 @@ describe('draw pool uses the effective owned set', () => {
 
       expect(status.collectionComplete).toBe(false);
       expect(status.pityThreshold).toBe(10);
+      // Unknown ownership offers the whole deck; the selection still draws only missing cards.
+      expect(status.undrawnCount).toBe(2);
     });
 
     it('an empty deck is never complete', async () => {
       expect((await loadDrawStatus(SLUG, [])).collectionComplete).toBe(false);
+      expect((await loadDrawStatus(SLUG, [])).undrawnCount).toBe(0);
+    });
+
+    it('counts undrawn cards once per StableUid, as the pool does', async () => {
+      const cards = [card('c1', 1), card('c2', 2), card('c2', 3), card('c3', 4)];
+      await saveDrawState(SLUG, { owned: ['c1'], pity: null });
+
+      expect((await loadDrawStatus(SLUG, cards)).undrawnCount).toBe(2);
     });
   });
 });

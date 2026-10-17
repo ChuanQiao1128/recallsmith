@@ -77,11 +77,21 @@ export function flushDrawHistory(): Promise<void> {
   return historyQueue;
 }
 
+// 2026-10-17 batch open: the screen asks for any count from 1 to its batch maximum (5), not
+// just 1 or 10. Ten stays the hard ceiling here so a caller bug can never commit more than the
+// old largest pull did.
+export const MAX_COMMIT_DRAW_COUNT = 10;
+
 export async function commitDraw(
   slug: string,
-  drawCount: 1 | 10,
+  drawCount: number,
   options?: CommitDrawOptions,
 ): Promise<DrawCommitResult | null> {
+  // Checked before anything is read or written: a count outside 1..10 (or not a whole number) is
+  // a caller bug, and it must not reach the selection, the draw state or the history.
+  if (!Number.isInteger(drawCount) || drawCount < 1 || drawCount > MAX_COMMIT_DRAW_COUNT) {
+    throw new RangeError(`commitDraw: drawCount must be an integer from 1 to ${MAX_COMMIT_DRAW_COUNT}, got ${drawCount}`);
+  }
   // A draw never calls loadDeckProgress. It used to load the deck's
   // review progress and hand it to selectDrawCards, which stopped reading
   // it when the review-history weighting was deleted; the load stayed, a

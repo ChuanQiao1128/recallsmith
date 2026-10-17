@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { CEREMONY_COPY, CEREMONY_COPY_V10, CEREMONY_COPY_V9 } from '../../src/features/gacha/draw/ceremonyCopy';
+import {
+  CEREMONY_COPY,
+  CEREMONY_COPY_V10,
+  CEREMONY_COPY_V9,
+  getCeremonyPhaseCopy,
+} from '../../src/features/gacha/draw/ceremonyCopy';
 
 function collectStrings(value: unknown): string[] {
   if (typeof value === 'string') return [value];
@@ -38,5 +43,13 @@ describe('ceremonyCopy', () => {
       typeof v === 'string' ? [v] : typeof v === 'function' ? [String((v as (...a: any[]) => string)(3, 10, 'Rare'))] : [],
     );
     expect(v10Strings.join('\n')).not.toMatch(/Not flipped|unflipped|unrevealed/i);
+  });
+
+  // 2026-10-17 batch open: a multi-card open is 2 to 5 cards, so no copy counts ten.
+  it('never counts ten cards: the multi tear copy speaks of your cards', () => {
+    expect(getCeremonyPhaseCopy('tear-flip', true).body).toBe('Your cards are spinning into place.');
+    expect(getCeremonyPhaseCopy('tear-flip', false).body).toBe('Your card is spinning into place.');
+    const all = [...collectStrings(CEREMONY_COPY), ...collectStrings(CEREMONY_COPY_V9)].join('\n');
+    expect(all).not.toMatch(/\bten\b|ten-card|10 cards/i);
   });
 });

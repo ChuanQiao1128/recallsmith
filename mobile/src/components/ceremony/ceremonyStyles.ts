@@ -6,6 +6,7 @@ import { a11y } from '../../theme/a11y';
 import { colors } from '../../theme/colors';
 import { spacing } from '../../theme/spacing';
 import { typography } from '../../theme/typography';
+import { CEREMONY_STAGE_WIDTH } from './tableOverlayFrame';
 
 export const ceremonyStyles = StyleSheet.create({
   // ─── Tap-to-flip table layout ─────────────────────────────────────────
@@ -150,7 +151,7 @@ export const ceremonyStyles = StyleSheet.create({
   // Full-screen LEG dim (opacity driven by timeline.dim; 0 for COM/RAR).
   dimOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: '#08041A' },
   // The 280×360 stage that hosts the renderer.
-  stage: { marginTop: spacing.md, width: 280, height: 360, alignItems: 'center', justifyContent: 'center' },
+  stage: { marginTop: spacing.md, width: CEREMONY_STAGE_WIDTH, height: 360, alignItems: 'center', justifyContent: 'center' },
   swipePack: { width: 260, minHeight: 360, alignItems: 'center', justifyContent: 'center' },
   swipePackInner: {
     width: 240, minHeight: 336, borderRadius: 22, borderWidth: 2, alignItems: 'center', justifyContent: 'center',

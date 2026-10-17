@@ -907,7 +907,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
       const starterLesson = starterLessonRef.current;
       if (starterLesson && isStarterLessonComplete(starterLesson, nextState.updatedProgress)) {
         // The lesson's last card: the first pack is the reward. The stage closes, the pack's bootstrap
-        // (3 pulls) lands and the reminder prompt is armed, then Draw opens instead of the summary.
+        // (DECK_BOOTSTRAP_GRANT pulls) lands and the reminder prompt is armed, then Draw opens instead of the summary.
         starterLessonRef.current = null;
         await completeStarterLesson(starterLesson.slug);
         navigation.replace('Draw', { slug: starterLesson.slug, rewardPending: true });

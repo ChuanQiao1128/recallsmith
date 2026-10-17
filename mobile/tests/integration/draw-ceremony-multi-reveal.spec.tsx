@@ -72,6 +72,9 @@ vi.mock('../../src/components/ceremonyHaptics', async (importOriginal) => {
 import * as ReactNative from 'react-native';
 import { DrawCeremonyScreen } from '../../src/screens/DrawCeremonyScreen';
 import { resolveCeremonyTimings, type PeakRarity } from '../../src/features/gacha/draw/ceremonyTimings';
+import { tableSlotLayout } from '../../src/components/ceremony/useCeremonyTimeline';
+import { summaryGridLayout } from '../../src/features/gacha/draw/spotlightQueue';
+import { clearActiveCeremonyPerf, getActiveCeremonyPerf } from '../../src/features/gacha/draw/ceremonyPerf';
 
 type Rarity = 'COM' | 'RAR' | 'LEG';
 
@@ -239,6 +242,128 @@ describe('DrawCeremony multi-pull reveal', () => {
     expect(advanceUntil(tree, () => gridPresent(tree))).toBe(true);
     expect(cardPresent(tree)).toBe(false);
     expect(tree.root.findAllByProps({ testID: 'draw-ceremony-summary-cell-0' }).length).toBeGreaterThan(0);
+  });
+
+  // 2026-10-17 batch open: the Draw screen's largest open is five cards. They sit in one row on the
+  // table, the reveal builds from Common to Legendary, the Legendary waits for its tap, and the walk
+  // ends on a one-row summary grid of five.
+  it('reveals a five-card open in one row, Common to Legendary, and ends on a 1 x 5 grid', () => {
+    const rarities: Rarity[] = ['COM', 'COM', 'RAR', 'RAR', 'LEG'];
+    const { tree } = renderScreen(rarities);
+    reachTable(tree, rarities);
+
+    // One row: the table lays five cards out as a single row of five, all in one row container.
+    expect(tableSlotLayout(5)).toMatchObject({ rows: 1, rowLength: 5 });
+    const table = tree.root.find((n) => typeof n.type === 'string' && n.props.testID === 'draw-ceremony-cards-on-table');
+    // A single row container (six or more cards would nest two), holding the five cards directly.
+    expect(table.children).toHaveLength(1);
+    const row = (table.children[0] as renderer.ReactTestInstance).find((n) => typeof n.type === 'string');
+    expect(row.children).toHaveLength(5);
+    for (let i = 0; i < 5; i += 1) {
+      expect(row.findAll((n) => typeof n.type === 'string' && n.props.testID === `tap-card-${i}`).length).toBeGreaterThan(0);
+    }
+
+    act(() => {
+      tree.root.findByProps({ testID: 'draw-ceremony-reveal-all' }).props.onPress();
+    });
+
+    // Record the rarity shown for each step of the walk, in order.
+    const banners: string[] = [];
+    const seen = new Set<string>();
+    const record = () => {
+      const progress = progressText(tree);
+      const banner = bannerText(tree);
+      if (progress && banner && !seen.has(progress)) {
+        seen.add(progress);
+        banners.push(`${progress} ${banner}`);
+      }
+      return banner === 'Legendary';
+    };
+    expect(advanceUntil(tree, record)).toBe(true);
+    expect(banners).toEqual(['1 / 5 Common', '2 / 5 Common', '3 / 5 Rare', '4 / 5 Rare', '5 / 5 Legendary']);
+
+    // The Legendary holds face up until it is tapped: a long wait leaves it there, no grid yet.
+    expect(advanceUntil(tree, () => faceUp(tree))).toBe(true);
+    advance(6000);
+    expect(bannerText(tree)).toBe('Legendary');
+    expect(cardPresent(tree)).toBe(true);
+    expect(gridPresent(tree)).toBe(false);
+
+    act(() => {
+      tree.root.findByProps({ testID: 'reveal-spotlight-card' }).props.onPress();
+    });
+    expect(advanceUntil(tree, () => gridPresent(tree))).toBe(true);
+    expect(cardPresent(tree)).toBe(false);
+
+    // The summary grid is one row of five, Legendary first.
+    expect(summaryGridLayout(5, 358)).toMatchObject({ columns: 5, rows: 1 });
+    const grid = tree.root.find((n) => typeof n.type === 'string' && n.props.testID === 'draw-ceremony-summary-grid');
+    expect(grid.children).toHaveLength(1);
+    for (let i = 0; i < 5; i += 1) {
+      expect(tree.root.findAllByProps({ testID: `draw-ceremony-summary-cell-${i}` }).length).toBeGreaterThan(0);
+    }
+    expect(tree.root.findAllByProps({ testID: 'draw-ceremony-summary-cell-5' })).toHaveLength(0);
+    const firstCell = tree.root.find(
+      (n) => typeof n.type === 'string' && n.props.testID === 'draw-ceremony-summary-cell-0',
+    );
+    expect(String(firstCell.props.accessibilityLabel)).toMatch(/^Legendary: /);
+  });
+
+  it('records a skipped reveal in the local perf report (2026-10-17 batch open)', () => {
+    clearActiveCeremonyPerf();
+    const rarities: Rarity[] = ['COM', 'COM', 'RAR', 'RAR', 'LEG'];
+    const { tree } = renderScreen(rarities);
+    const session = getActiveCeremonyPerf();
+    expect(session).not.toBeNull();
+    reachTable(tree, rarities);
+
+    act(() => {
+      tree.root.findByProps({ testID: 'draw-ceremony-reveal-all' }).props.onPress();
+    });
+    expect(advanceUntil(tree, () => cardPresent(tree))).toBe(true);
+    act(() => {
+      tree.root.findByProps({ testID: 'reveal-spotlight-skip-all' }).props.onPress();
+    });
+    expect(gridPresent(tree)).toBe(true);
+
+    act(() => {
+      tree.unmount();
+    });
+    expect(session!.report!.meta).toMatchObject({ cardCount: 5, isMulti: true, skippedAll: true });
+  });
+
+  it('records leaving the table through Skip before every card is face up as skipped', () => {
+    clearActiveCeremonyPerf();
+    const rarities: Rarity[] = ['COM', 'RAR', 'LEG'];
+    const { tree, replace } = renderScreen(rarities);
+    const session = getActiveCeremonyPerf();
+    reachTable(tree, rarities);
+
+    const cta = tree.root.findByProps({ testID: 'screen-draw-ceremony-primary-cta' });
+    expect(cta.findByType('Text' as any).props.children).toBe('Skip · 0/3');
+    act(() => {
+      cta.props.onPress();
+    });
+    expect(replace).toHaveBeenCalledWith('DrawResult', expect.anything());
+
+    act(() => {
+      tree.unmount();
+    });
+    expect(session!.report!.meta).toMatchObject({ cardCount: 3, skippedAll: true });
+  });
+
+  it('records a reveal walked to the end as not skipped', () => {
+    clearActiveCeremonyPerf();
+    const rarities: Rarity[] = ['COM', 'RAR'];
+    const { tree } = renderScreen(rarities, { autoReveal: true });
+    const session = getActiveCeremonyPerf();
+    reachTable(tree, rarities);
+    expect(advanceUntil(tree, () => gridPresent(tree))).toBe(true);
+
+    act(() => {
+      tree.unmount();
+    });
+    expect(session!.report!.meta).toMatchObject({ cardCount: 2, skippedAll: false });
   });
 
   it('holds a Legendary in the spotlight until it is tapped', () => {

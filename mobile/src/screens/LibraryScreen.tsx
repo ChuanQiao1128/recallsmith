@@ -76,7 +76,7 @@ export function LibraryScreen({ navigation, route }: Props) {
   const [filter, setFilter] = useState<LibraryFilter>('all');
   const [filterOpen, setFilterOpen] = useState(false);
   const [topicFilter, setTopicFilter] = useState<string | null>(null);
-  // A pull grants ten cards; highlighting one of them was never the ask.
+  // A pull can grant several cards; highlighting one of them was never the ask.
   const [highlightedUids, setHighlightedUids] = useState<readonly string[]>([]);
   // Wallet state — drives the empty-collection banner's CTA target.
   // wallet=0 → banner sends user to SessionCard (earn pulls first);
