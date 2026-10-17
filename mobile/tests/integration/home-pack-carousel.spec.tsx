@@ -495,6 +495,27 @@ describe('HomeScreen cover carousel', () => {
     expect(announceMock).toHaveBeenCalledWith('Claude CCDV-F selected');
   });
 
+  // 2026-10-18 review: a scroll that skipped the snap (VoiceOver's three-finger scroll pages by the
+  // view's width) stops between pages; the carousel moves one page that way and settles on it.
+  it('settles an off-grid stop one page in the scroll direction, never skipping a pack', async () => {
+    const tree = await renderHome();
+    setActiveDeckSlugMock.mockClear();
+    scrollToMock.mockClear();
+
+    // From AWS Basics, a 375-pt page scroll would round to Claude and skip SAA-C03.
+    await swipeEnd(tree, 375);
+    expect(setActiveDeckSlugMock.mock.calls).toEqual([['aws-saa-c03']]);
+    expect(scrollToMock).toHaveBeenLastCalledWith({ x: HOME_PACK_PAGE_WIDTH, y: 0, animated: false });
+
+    // Back the other way, stopping 41 pt off the first page: settles on AWS Basics, centred.
+    await act(async () => {
+      tree.root.findByProps({ testID: 'home-pack-carousel' }).props.onScrollBeginDrag();
+    });
+    await swipeEnd(tree, 41);
+    expect(setActiveDeckSlugMock.mock.calls).toEqual([['aws-saa-c03'], ['aws-saa-fundamentals']]);
+    expect(scrollToMock).toHaveBeenLastCalledWith({ x: 0, y: 0, animated: false });
+  });
+
   it('treats the momentum end of its own animated scroll as no selection', async () => {
     const tree = await renderHome();
     await press(dot(tree, 'Claude CCDV-F'));

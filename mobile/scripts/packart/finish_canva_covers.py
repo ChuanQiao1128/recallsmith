@@ -91,7 +91,7 @@ def run_aws_basics():
     # at y 244-350 and the bottom one at y 1150-1298, where the corner
     # filigree curls in to x 160 / 862 at y 1192. Lettering plus outline lands
     # at x 241-780, y 260-333 ('DeveloperCards') and x 196-819, y 1189-1272
-    # ('AWS Basics'), at least 54 px clear of the filigree, so keep 112 px.
+    # ('AWS Basics'), about 30 px clear of the filigree, so keep 112 px.
     im = Image.open('aws-basics-foil-full.png').convert('RGBA')
     im = gold(im, 'DeveloperCards', 72, 511, 296)
     im = gold(im, 'AWS Basics', 112, 511, 1230)

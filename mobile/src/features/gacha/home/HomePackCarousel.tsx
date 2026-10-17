@@ -271,11 +271,23 @@ export default function HomePackCarousel({
           pendingScrollIndexRef.current = null;
         }}
         onMomentumScrollEnd={(event: any) => {
-          const landed = packIndexForOffset(event?.nativeEvent?.contentOffset?.x ?? 0, count);
+          const x = event?.nativeEvent?.contentOffset?.x ?? 0;
+          let landed = packIndexForOffset(x, count);
           const pending = pendingScrollIndexRef.current;
           if (pending !== null) {
             pendingScrollIndexRef.current = null;
             if (landed !== pending) return;
+          }
+          // A scroll that skipped the snap can stop between pages: VoiceOver's three-finger scroll
+          // pages by the view's width (375-430pt), not by snapToInterval, so rounding the offset
+          // could skip a pack. Inside the track, a stop well off a page moves at most one page from
+          // the current one, and the carousel settles on it. Overscroll past either end and a
+          // few points of float are left to the plain rounding above.
+          const offGrid = Math.abs(x - landed * HOME_PACK_PAGE_WIDTH) > 8;
+          if (offGrid && x > 0 && x < (count - 1) * HOME_PACK_PAGE_WIDTH) {
+            if (Math.abs(landed - index) > 1) landed = index + Math.sign(landed - index);
+            pendingScrollIndexRef.current = landed;
+            scrollRef.current?.scrollTo?.({ x: landed * HOME_PACK_PAGE_WIDTH, y: 0, animated: false });
           }
           select(landed, 'swipe');
         }}
@@ -471,9 +483,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 2,
   },
-  // 32 x 24 plus 10pt hit slop above and below: a 44pt-tall target around an 8pt dot.
+  // 44 x 24 plus 10pt hit slop above and below: a 44 x 44pt target around an 8pt dot (Apple HIG).
   dotHit: {
-    width: 32,
+    width: 44,
     height: 24,
     alignItems: 'center',
     justifyContent: 'center',
