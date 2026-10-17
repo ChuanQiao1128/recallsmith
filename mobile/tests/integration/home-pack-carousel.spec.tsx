@@ -678,4 +678,37 @@ describe('HomeScreen cover carousel', () => {
     }
     expect([...seen].sort()).toEqual(['spacer', 'status']);
   });
+
+  it('keeps one fixed line under the Today card: the update notice, else the goal line, else nothing', async () => {
+    // Basics: a goal line. SAA-C03: a newer build waits (the notice wins over its goal line).
+    // Claude: nothing due or new, so neither. The slot and its hidden spacer stay on every page.
+    updatesFixture = {
+      'aws-saa-c03': {
+        slug: 'aws-saa-c03',
+        installedVersion: '1',
+        remoteVersion: '2',
+        hasUpdate: true,
+        remoteUrl: 'https://example.test/aws-saa-c03.json',
+        remoteSha256: null,
+      },
+    };
+    deckSummariesFixture = [BASICS(), { ...SAA(), totalCards: 12 }, CLAUDE()];
+    const tree = await renderHome();
+    const shown: string[] = [];
+    for (const page of [0, 1, 2]) {
+      if (page > 0) await swipeEnd(tree, page * HOME_PACK_PAGE_WIDTH);
+      const slot = hostNodes(tree, (node) => node.props?.testID === 'home-below-today-slot');
+      expect(slot).toHaveLength(1);
+      const spacer = slot[0].findAll(
+        (node) => (node.type as any) === 'Text' && node.props?.accessibilityElementsHidden === true,
+      );
+      expect(spacer).toHaveLength(1);
+      expect(spacer[0].props.importantForAccessibility).toBe('no-hide-descendants');
+      const notice = hostNodes(tree, (node) => node.props?.testID === 'home-update-notice');
+      const goal = hostNodes(tree, (node) => node.props?.testID === 'home-goal-line');
+      expect(notice.length + goal.length).toBeLessThanOrEqual(1);
+      shown.push(notice.length ? 'notice' : goal.length ? 'goal' : 'none');
+    }
+    expect(shown).toEqual(['goal', 'notice', 'none']);
+  });
 });

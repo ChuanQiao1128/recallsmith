@@ -968,27 +968,48 @@ export function HomeScreen({ navigation, route }: Props) {
                       counts={homeState.vm.counts}
                       selectedDeckTitle={homeState.vm.selectedDeckTitle}
                     />
-                    {/* One line for the selected deck while a newer build exists:
-                        "Updating …" while the free-deck auto-installer runs, and the
-                        manual fallback ("tap the pack to install") when it has not
-                        or could not. */}
-                    {homeState.vm.updateNotice ? (
+                    {/* One fixed line under the Today card, about the selected pack:
+                        the update notice while a newer build exists ("Updating …"
+                        while the free-deck auto-installer runs, or the manual
+                        fallback, "tap the pack to install"), otherwise the goal
+                        line. Both come and go with the pack, so the slot keeps the
+                        height of the taller one (an invisible notice pill in the
+                        same style, so it follows Dynamic Type) and a swipe never
+                        moves anything below it. The notice wins while it lasts;
+                        the goal line is back once the update settles. */}
+                    <View testID="home-below-today-slot" style={styles.belowTodaySlot}>
                       <Text
-                        testID="home-update-notice"
-                        style={[
-                          styles.updateNotice,
-                          homeState.vm.updateNotice.state === 'updating' && styles.updateNoticeUpdating,
-                        ]}
+                        style={[styles.updateNotice, styles.belowTodaySpacer]}
                         numberOfLines={1}
+                        accessibilityElementsHidden
+                        importantForAccessibility="no-hide-descendants"
                       >
-                        {homeState.vm.updateNotice.text}
+                        {'\u00A0'}
                       </Text>
-                    ) : null}
-                    {homeState.vm.goal ? (
-                      <Text testID="home-goal-line" style={styles.goalLine} numberOfLines={1}>
-                        {homeState.vm.goal.text}
-                      </Text>
-                    ) : null}
+                      <View style={styles.belowTodayLine}>
+                        {homeState.vm.updateNotice ? (
+                          <Text
+                            testID="home-update-notice"
+                            style={[
+                              styles.updateNotice,
+                              styles.belowTodayContent,
+                              homeState.vm.updateNotice.state === 'updating' && styles.updateNoticeUpdating,
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {homeState.vm.updateNotice.text}
+                          </Text>
+                        ) : homeState.vm.goal ? (
+                          <Text
+                            testID="home-goal-line"
+                            style={[styles.goalLine, styles.belowTodayContent]}
+                            numberOfLines={1}
+                          >
+                            {homeState.vm.goal.text}
+                          </Text>
+                        ) : null}
+                      </View>
+                    </View>
                     {homeState.error ? (
                       <View style={styles.errorBlock}>
                         <Text style={styles.errorText} numberOfLines={3}>
@@ -1205,6 +1226,18 @@ const styles = StyleSheet.create({
   actionGroup: {
     marginTop: spacing.md,
   },
+  belowTodaySlot: { alignSelf: 'stretch' },
+  belowTodaySpacer: { opacity: 0 },
+  // Over the spacer, less its bottom margin, so the line sits centred on the pill's box.
+  belowTodayLine: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: spacing.xs,
+    left: 0,
+    justifyContent: 'center',
+  },
+  belowTodayContent: { marginBottom: 0 },
   goalLine: {
     marginBottom: spacing.xs,
     color: colors.inkSecondary,

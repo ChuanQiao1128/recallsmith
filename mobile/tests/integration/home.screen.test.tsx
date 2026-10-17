@@ -1097,7 +1097,12 @@ describe('HomeScreen v9', () => {
 
   it('labels the fourth Today tile Collected, not Owned', async () => {
     const tree = await renderHome();
-    expect(textBlob(tree)).toContain('Collected');
+    // Read the label off the real tile: the empty Today card also holds an invisible copy of the
+    // tiles (it keeps the card's height), so a text search alone would pass without the grid.
+    const tile = tree.root.findByProps({ testID: 'home-today-count-total' });
+    expect(tile.findAll((node) => (node.type as any) === 'Text').map((node) => String(node.props.children))).toContain(
+      'Collected',
+    );
     expect(textBlob(tree)).not.toContain('Owned');
     expect(textBlob(tree)).not.toContain('Keep streak');
   });
