@@ -624,14 +624,14 @@ export async function resolveDeckBySlug(slug: string): Promise<DeckContent | nul
     }
   }
 
-  const info = await FileSystem.getInfoAsync(meta.fileUri);
-  if (!info.exists) {
+  const fileUri = await locateInstalledDeckFile(safeSlug, userKey, meta);
+  if (!fileUri) {
     await removeDeckMeta(safeSlug, userKey);
     return null;
   }
 
   try {
-    const rawText = await FileSystem.readAsStringAsync(meta.fileUri, { encoding: UTF8_ENCODING });
+    const rawText = await FileSystem.readAsStringAsync(fileUri, { encoding: UTF8_ENCODING });
     const parsed = JSON.parse(rawText);
 
     if (isRawDeckV1(parsed)) {
@@ -1419,6 +1419,44 @@ async function removeDeckMeta(slug: string, userKey?: string) {
   try {
     await AsyncStorage.removeItem(deckMetaKey(slug, u));
   } catch {}
+}
+
+/**
+ * The installed deck file for `meta`, or null when it is gone.
+ *
+ * meta.fileUri is absolute, and iOS moves the app's data container to a new path whenever a new
+ * binary is installed (App Store, TestFlight, simulator), files included. A file missing at the
+ * stored URI is looked for at the same name in this launch's deck directory; when it is there the
+ * meta is repointed, so a deck the learner already has is not read as uninstalled and re-downloaded.
+ */
+async function locateInstalledDeckFile(
+  slug: string,
+  userKey: string,
+  meta: DeckInstallMeta,
+): Promise<string | null> {
+  const info = await FileSystem.getInfoAsync(meta.fileUri);
+  if (info.exists) return meta.fileUri;
+
+  const fileName = `${slugToFileName(slug)}.json`;
+  // Every install writes this exact name; a meta pointing anywhere else is not one of ours to move.
+  if (!meta.fileUri.endsWith(`/${fileName}`)) return null;
+  let current: string;
+  try {
+    current = `${getDeckDirForUser(userKey)}${fileName}`;
+  } catch {
+    return null;
+  }
+  if (current === meta.fileUri) return null;
+  const moved = await FileSystem.getInfoAsync(current);
+  if (!moved.exists) return null;
+
+  try {
+    const repointed: DeckInstallMeta = { ...meta, fileUri: current };
+    await AsyncStorage.setItem(deckMetaKey(slug, userKey), JSON.stringify(repointed));
+  } catch {
+    // The file is still readable this launch; the next read repoints again.
+  }
+  return current;
 }
 
 async function loadManifestPreferRemote(): Promise<RawManifest | null> {
