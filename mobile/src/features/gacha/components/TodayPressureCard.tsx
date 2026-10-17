@@ -21,8 +21,8 @@ export function TodayPressureCard(props: { counts: TodayCounts; selectedDeckTitl
   const metricSizeStyle = useCompactMetrics ? styles.metricCompact : styles.metricWide;
   // Every tile describes the selected deck, so the collapse does too. Collected
   // is the superset (a due, new or learned card is a collected card), and the
-  // cross-deck due total that used to sit here belongs to reminders and the
-  // header line, not to whether this deck has cards in it.
+  // cross-deck due total that used to sit here belongs to reminders, not to
+  // whether this deck has cards in it.
   const nothingYet =
     counts.selectedOwned === 0 &&
     counts.selectedDue === 0 &&

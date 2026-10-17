@@ -13,6 +13,7 @@ import type {
 } from '../contracts';
 import type { UpdateInfo } from '../../../content/deckRepository';
 import { deckShortTitle } from '../../../content/deckShortTitle';
+import { sortByDeckOrder } from '../../../content/hiddenDecks';
 import { buildChallengeRoute } from '../planner/sessionBuilder';
 import type { RewardWalletState } from '../rewards/rewardWallet';
 
@@ -57,7 +58,7 @@ export type HomeDeckUpdateVM = {
 
 export type HomeDeckVM = {
   deck: DeckSummary;
-  /** Short display name for the 72pt tile (content/deckShortTitle); `deck.title` stays canonical. */
+  /** Short display name for the cover carousel's caption and dots (content/deckShortTitle); `deck.title` stays canonical. */
   shortTitle: string;
   statusLabel: string;
   progressLabel: string;
@@ -755,6 +756,34 @@ function buildDeckRows(params: {
       isSelected: deck.slug === selectedSlug,
     };
   });
+}
+
+/**
+ * 2026-10-18 home carousel: the packs Home's cover carousel pages through, one page each, in
+ * DECK_ORDER (content/hiddenDecks.ts). The summaries already arrive in that order; sorting again
+ * keeps the carousel in it whatever reaches Home. A 'coming' deck has nothing to open and gets no
+ * page.
+ *
+ * While the starter lesson is open (`lockedSlug`) the carousel holds one page, the lesson's pack,
+ * so the cover and the one instruction under it name the same pack. When the lesson's pack is not
+ * on the shelf the page falls back to the selected pack, then the first.
+ */
+export function homeCarouselRows(params: {
+  rows: readonly HomeDeckVM[];
+  selectedSlug: string | null;
+  lockedSlug: string | null;
+}): HomeDeckVM[] {
+  const { rows, selectedSlug, lockedSlug } = params;
+  const pages = sortByDeckOrder(rows.map((row) => ({ slug: row.deck.slug, row })))
+    .map(({ row }) => row)
+    .filter((row) => row.actionHint !== 'none');
+  if (!lockedSlug) return pages;
+  const lessonRow =
+    rows.find((row) => row.deck.slug === lockedSlug) ??
+    pages.find((row) => row.deck.slug === selectedSlug) ??
+    pages[0] ??
+    null;
+  return lessonRow ? [lessonRow] : [];
 }
 
 function buildCalendarCompact(allUpcoming30: CalendarDay[]): HomeCalendarCompact {

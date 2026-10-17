@@ -385,11 +385,26 @@ describe('HomeScreen — free-deck auto-update', () => {
     expect((await loadDrawState('csharp')).owned).toEqual(['c1', 'c2']);
   });
 
-  it('runs the manual install from the chip and stays on Home', async () => {
+  // 2026-10-18 home carousel: the pack's dot only selects it; the manual install
+  // is a tap on the cover, as the notice says ("tap the pack to install").
+  it('runs the manual install from the cover and stays on Home', async () => {
     installImpl = async () => false;
     const navigate = vi.fn();
     const tree = await renderHome(navigate);
     await waitFor(() => expect(chipText(tree)).toBe('Update · +2 cards'));
+    expect(tree.root.findByProps({ testID: 'home-featured-pack' }).props.accessibilityLabel).toBe(
+      'Update C# Interview',
+    );
+
+    // The dot selects the pack and installs nothing.
+    await act(async () => {
+      packTile(tree).props.onPress();
+      await Promise.resolve();
+    });
+    await flush();
+    expect(installDeckFromUrlMock).toHaveBeenCalledTimes(1);
+    expect(chipText(tree)).toBe('Update · +2 cards');
+    setActiveDeckSlugMock.mockClear();
 
     // The retry succeeds.
     installImpl = async () => {
@@ -398,7 +413,7 @@ describe('HomeScreen — free-deck auto-update', () => {
       return true;
     };
     await act(async () => {
-      packTile(tree).props.onPress();
+      tree.root.findByProps({ testID: 'home-featured-pack' }).props.onPress();
       await Promise.resolve();
     });
     await flush();

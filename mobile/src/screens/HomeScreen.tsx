@@ -8,7 +8,6 @@ import {
   Text,
   View,
 } from 'react-native';
-import * as RN from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
@@ -17,6 +16,7 @@ import type { RootStackParamList } from '../navigation/types';
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
 import {
   buildHomeScreenVM,
+  homeCarouselRows,
   type HomeDeckVM,
   type HomeViewModel,
 } from '../features/gacha/selectors/homeSelectors';
@@ -28,6 +28,7 @@ import {
   resolveDeckAction,
 } from '../features/gacha/home/deckActionResolver';
 import HomeDeckRow from '../features/gacha/home/HomeDeckRow';
+import HomePackCarousel, { type HomePackPage } from '../features/gacha/home/HomePackCarousel';
 import {
   buildReadyHomeVm,
   createCoalescedRunner,
@@ -55,25 +56,6 @@ import { spacing } from '../theme/spacing';
 import { typography } from '../theme/typography';
 import { packImageForSlug, packPaletteFromSlug } from '../theme/packArt';
 import { recordFunnelEvent } from '../telemetry/funnel';
-
-// Vitest supplies react-native without Image — guarded lookup so tests don't crash.
-function readRN<T = any>(key: string, fallback: T): T {
-  try {
-    const value = (RN as any)[key];
-    return (value ?? fallback) as T;
-  } catch {
-    return fallback;
-  }
-}
-const RNImage: any = readRN('Image', null);
-const AI: any = readRN('AccessibilityInfo', null);
-const RNEasing: any = readRN('Easing', null);
-// Safe Animated lookup — vitest's RN facade throws on missing exports.
-// Mirrors the pattern used in DrawScreen.tsx: `A` is a tolerant facade and
-// `hasAnimated` flips animations off during tests so JSX still renders.
-const A: any = readRN('Animated', {});
-const AnimatedView: any = A.View ?? View;
-const hasAnimated = typeof A.Value === 'function';
 
 // R24 §2.2: swap an installed starter pack for the full deck when the manifest is reachable. Lazy and
 // guarded: the starter module reaches deckRepository (expo-file-system, amplify), which Home itself
@@ -110,19 +92,53 @@ type HomeState = {
   error: string | null;
   vm: HomeViewModel;
 };
-type HomeVisualDeck = {
-  slug: string;
-  title: string;
-  /** Tile label (content/deckShortTitle); `title` stays the full manifest name for the hero. */
-  shortTitle: string;
-  realRow: HomeDeckVM | null;
-  cover: ReturnType<typeof packImageForSlug>;
-  palette: ReturnType<typeof packPaletteFromSlug>;
-  status: string;
-  isFullyMastered: boolean;
-  disabled: boolean;
-  selected: boolean;
-};
+// 2026-10-18 home carousel: one cover page per pack row. `status` is what the pack's dot reads
+// (VoiceOver: "AWS Basics pack — Ready"), the same words the old YOUR PACKS tiles used.
+function toPackPage(row: HomeDeckVM): HomePackPage {
+  const slug = row.deck.slug;
+  const dueCount = (row.deck as any)?.dueCount ?? (row.deck as any)?.dueToday ?? 0;
+  const totalCards = (row.deck as any)?.totalCards ?? 0;
+  const masteredCount = (row.deck as any)?.masteredCount ?? 0;
+  // Fully mastered: every card in the deck has reached the mastery stage
+  // (stage >= 4, read from masteredCount — F11). The learned-count proxy
+  // ("reviewed once") must not decide this. We also require dueCount=0 (no
+  // review is currently due) to avoid celebrating prematurely when a card just
+  // dropped back into review.
+  const isFullyMastered = totalCards > 0 && masteredCount >= totalCards && dueCount === 0;
+  let status = 'Ready';
+  if (row.actionHint === 'none') status = 'Soon';
+  else if (row.actionHint === 'paywall') status = 'Locked';
+  else if (row.actionHint === 'install' || row.actionHint === 'trial-start') status = 'Install';
+  else if (row.update?.state === 'updating') status = 'Updating';
+  else if (row.actionHint === 'update') status = 'Update';
+  else if (isFullyMastered) status = 'Mastered ✓';
+  else if (dueCount > 0) status = `${dueCount} due`;
+  return {
+    slug,
+    title: row.deck.title ?? slug,
+    shortTitle: row.shortTitle,
+    realRow: row,
+    cover: packImageForSlug(slug),
+    palette: packPaletteFromSlug(slug),
+    status,
+    isFullyMastered,
+  };
+}
+
+// The one page shown while no pack has loaded (offline first run, a failed load).
+function emptyPackPage(): HomePackPage {
+  return {
+    slug: 'default',
+    title: 'Your first pack',
+    shortTitle: 'Your first pack',
+    realRow: null,
+    cover: packImageForSlug('default'),
+    palette: packPaletteFromSlug('default'),
+    status: 'Soon',
+    isFullyMastered: false,
+  };
+}
+
 const EMPTY_VM = buildHomeScreenVM({ state: 'empty' });
 const HOME_TOKENS = {
   border: colors.hairline,
@@ -247,39 +263,6 @@ export function HomeScreen({ navigation, route }: Props) {
     const t = setTimeout(() => setNotice(undefined), 3500) as unknown as number;
     return () => clearTimeout(t);
   }, [incomingNotice]);
-  // ─── Idle hero animations ──────────────────────────────────────────
-  // The pack bobs gently up/down (3px), unless reduced motion is enabled.
-  // The guarded Animated facade keeps the static hero available in tests.
-  const packBobRef = useRef<any>(hasAnimated ? new A.Value(0) : null);
-  useEffect(() => {
-    if (!hasAnimated) return;
-    const easing = RNEasing?.inOut ? RNEasing.inOut(RNEasing.ease) : undefined;
-    const bob = A.loop(
-      A.sequence([
-        A.timing(packBobRef.current, { toValue: 1, duration: 2400, easing, useNativeDriver: true }),
-        A.timing(packBobRef.current, { toValue: 0, duration: 2400, easing, useNativeDriver: true }),
-      ]),
-    );
-    let stopped = false;
-    const apply = (enabled: boolean) => {
-      if (enabled) {
-        try { bob.stop(); } catch { /* noop */ }
-        packBobRef.current?.setValue?.(0.5);
-      } else if (!stopped) {
-        bob.start();
-      }
-    };
-    AI?.isReduceMotionEnabled?.().then(apply).catch(() => bob.start()) ?? bob.start();
-    const sub = AI?.addEventListener?.('reduceMotionChanged', apply);
-    return () => {
-      stopped = true;
-      try { bob.stop(); } catch { /* noop */ }
-      sub?.remove?.();
-    };
-  }, []);
-  const packTranslateY = hasAnimated && packBobRef.current
-    ? packBobRef.current.interpolate({ inputRange: [0, 1], outputRange: [-3, 3] })
-    : 0;
   useEffect(() => {
     void authInit();
   }, [authInit]);
@@ -461,14 +444,18 @@ export function HomeScreen({ navigation, route }: Props) {
     refreshHomeRef.current = refreshHome;
   }, [refreshHome]);
   // Rebuilds the VM for a newly selected pack from the inputs already in hand --
-  // no loadHomeDeckSummaries, no storage read, no network -- so a tile tap
-  // highlights instantly. Falls back to a full refresh only before the first
+  // no loadHomeDeckSummaries, no storage read, no network -- so a swipe or a dot
+  // tap switches instantly. Falls back to a full refresh only before the first
   // successful load has produced any inputs.
+  // 2026-10-18 home carousel: `persist` makes the pack the app-wide active deck
+  // (Library, Draw, SessionCard follow it), as a pack-tile tap did. Only an
+  // installed pack gets that: an uninstalled one is selected on Home alone, so
+  // Draw never resolves-or-installs a pack the learner only swiped past.
   const selectPackLocally = useCallback(
-    (slug: string) => {
+    (slug: string, persist: boolean) => {
       selectedSlugRef.current = slug;
       setSelectedSlug(slug);
-      void setActiveDeckSlug(slug);
+      if (persist) void setActiveDeckSlug(slug);
       if (homeInputsRef.current) {
         publishReadyVm(homeInputsRef.current);
       } else {
@@ -476,6 +463,16 @@ export function HomeScreen({ navigation, route }: Props) {
       }
     },
     [publishReadyVm, refreshHome],
+  );
+  // A swipe, a dot, a tap on a peeking pack or a VoiceOver pack action. Selection
+  // only: never an install, a navigation or the paywall -- the cover and the
+  // primary button keep those.
+  const handleSelectPage = useCallback(
+    (page: HomePackPage) => {
+      if (!page.realRow) return;
+      selectPackLocally(page.slug, page.realRow.deck.canStudy);
+    },
+    [selectPackLocally],
   );
   useFocusEffect(
     useCallback(() => {
@@ -672,6 +669,11 @@ export function HomeScreen({ navigation, route }: Props) {
     : homeState.vm.cta.label;
   const primaryCtaTestID = starterSlug ? 'home-starter-cta' : homeState.vm.cta.testID;
   const totalDueAcrossDecks = homeState.vm.counts.totalDueAllDecks;
+  // 2026-10-18 home carousel: the hero headline counts the selected pack's due
+  // cards only, so swiping to a pack with nothing due never leaves "N cards
+  // waiting" over its "Open library". The header repeats the same number.
+  const selectedDueToday = selectedDeckRow?.deck.canStudy ? Math.max(0, selectedDeckRow.deck.dueToday ?? 0) : 0;
+  const cardsWaiting = `${selectedDueToday} card${selectedDueToday === 1 ? '' : 's'} waiting`;
   const examCountdownLabel = buildExamCountdownLabel(examDate, Date.now());
   // The header line is context, never a second instruction: the hero below carries the one
   // instruction (R22 §1.6). It shows the exam countdown when a date is set (with the goal deck's
@@ -684,8 +686,8 @@ export function HomeScreen({ navigation, route }: Props) {
     homeState.vm.statusKind === 'nothing_to_learn' || homeState.vm.statusKind === 'today_full_clear';
   const headerStatus = starterSlug
     ? null
-    : totalDueAcrossDecks > 0
-      ? `${totalDueAcrossDecks} cards waiting today`
+    : selectedDueToday > 0
+      ? `${cardsWaiting} today`
       : homeState.vm.draw.state === 'available' || homeState.vm.draw.state === 'reserve'
         ? 'A reward pack is ready'
         : !heroSaysClear
@@ -777,98 +779,45 @@ export function HomeScreen({ navigation, route }: Props) {
                 <Text style={styles.settingsText}>⚙︎</Text>
               </Pressable>
             </View>
-            {/* ─── HERO BAND v4 ──────────────────────────────────────
-                Pack now FLOATS on the page background — no frame, no
-                border, no parchmentBg backing. Just shadow + a soft gold
-                halo positioned behind it for ambient light. The pack
-                also bobs gently (3px translateY) when motion is enabled.
-                Hero copy is action-driven, not a duplicate of the pack name. */}
+            {/* ─── HERO BAND — the cover carousel ─────────────────────
+                2026-10-18 home carousel: the hero pack is a horizontal
+                swipe carousel, one page per pack in DECK_ORDER, with the
+                short name and page dots under it (HomePackCarousel). The
+                current cover floats on the page background and bobs gently
+                when motion is enabled. Hero copy is action-driven, not a
+                duplicate of the pack name. */}
             {(() => {
-              // Build the shelf from real manifest rows only. Rows with
-              // availability: 'coming' render as disabled "Soon" tiles.
-              const realRows = homeState.vm.decks.rows;
-
-              const realVisualDecks: HomeVisualDeck[] = realRows.map((realRow) => {
-                const slug = realRow.deck.slug;
-                const cover = packImageForSlug(slug);
-                const palette = packPaletteFromSlug(slug);
-                const dueCount = (realRow.deck as any)?.dueCount ?? (realRow.deck as any)?.dueToday ?? 0;
-                const totalCards = (realRow.deck as any)?.totalCards ?? 0;
-                const masteredCount = (realRow.deck as any)?.masteredCount ?? 0;
-                // Fully mastered: every card in the deck has reached the
-                // mastery stage (stage >= 4, read from masteredCount — F11).
-                // The learned-count proxy ("reviewed once") must not decide
-                // this. We also require dueCount=0 (no review is currently
-                // due) to avoid celebrating prematurely when a card just
-                // dropped back into review.
-                const isFullyMastered =
-                  totalCards > 0 && masteredCount >= totalCards && dueCount === 0;
-                let status = 'Ready';
-                if (realRow.actionHint === 'none') status = 'Soon';
-                else if (realRow.actionHint === 'paywall') status = 'Locked';
-                else if (realRow.actionHint === 'install' || realRow.actionHint === 'trial-start') status = 'Install';
-                else if (realRow.update?.state === 'updating') status = 'Updating';
-                else if (realRow.actionHint === 'update') status = 'Update';
-                else if (isFullyMastered) status = 'Mastered ✓';
-                else if (dueCount > 0) status = `${dueCount} due`;
-                return {
-                  slug,
-                  title: realRow.deck.title ?? slug,
-                  shortTitle: realRow.shortTitle,
-                  realRow,
-                  cover,
-                  palette,
-                  status,
-                  isFullyMastered,
-                  disabled: realRow.actionHint === 'none',
-                  selected: slug === homeState.vm.selectedDeckSlug,
-                };
+              // One page per pack row ('coming' decks get none); while the
+              // starter lesson is open, the lesson's pack alone.
+              const carouselRows = homeCarouselRows({
+                rows: homeState.vm.decks.rows,
+                selectedSlug: homeState.vm.selectedDeckSlug,
+                lockedSlug: starterSlug,
               });
-
-              const visualDecks = realVisualDecks;
-              const EMPTY_FEATURED: HomeVisualDeck = {
-                slug: 'default',
-                title: 'Your first pack',
-                shortTitle: 'Your first pack',
-                realRow: null,
-                cover: packImageForSlug('default'),
-                palette: packPaletteFromSlug('default'),
-                status: 'Soon',
-                isFullyMastered: false,
-                disabled: true,
-                selected: false,
-              };
-              const featuredDeck: HomeVisualDeck =
-                visualDecks.find((d) => d.selected)
-                ?? visualDecks.find((d) => !d.disabled)
-                ?? visualDecks[0]
-                ?? EMPTY_FEATURED;
+              const pages: HomePackPage[] =
+                carouselRows.length > 0 ? carouselRows.map(toPackPage) : [emptyPackPage()];
+              const currentIndex = Math.max(
+                0,
+                pages.findIndex((page) => page.slug === homeState.vm.selectedDeckSlug),
+              );
+              const featuredDeck: HomePackPage = pages[currentIndex] ?? pages[0];
 
               // Action-driven hero title — NEVER duplicate the pack name.
-              // Priority: deck-mastered celebration → due count →
-              // reward pack ready → vm fallback.
+              // Priority: deck-mastered celebration → the selected pack's
+              // due count → reward pack ready → vm fallback.
               const isFeaturedMastered = featuredDeck.isFullyMastered;
               const heroTitle =
                 starterSlug
                   ? STARTER_COPY.headline
                   : isFeaturedMastered
                   ? 'Deck mastered 🎉'
-                  : totalDueAcrossDecks > 0
-                    ? `${totalDueAcrossDecks} cards waiting`
+                  : selectedDueToday > 0
+                    ? cardsWaiting
                     : (homeState.vm.draw.state === 'available' || homeState.vm.draw.state === 'reserve')
                       ? 'A reward pack is ready'
                       : homeState.vm.hero.headline;
 
-              // Status dot color for selector tiles (replaces text badge)
-              const statusDotColor = (deck: HomeVisualDeck) => {
-                if (!deck.realRow || deck.status === 'Soon') return colors.inkMuted;
-                if (deck.status === 'Locked') return colors.inkMuted;
-                if (deck.status === 'Install' || deck.status === 'Update' || deck.status === 'Updating') return colors.pokeBlue;
-                if (deck.status.endsWith(' due')) return colors.gold;
-                return colors.mint; // ready / default
-              };
-
-              // Featured-pack press handler — pack is now tappable.
+              // Featured-pack press handler — the current cover is tappable.
               // Its destination follows the same primary decision shown below,
               // except setup actions still use the existing deck resolver.
               const drawState = homeState.vm.draw.state;
@@ -929,51 +878,22 @@ export function HomeScreen({ navigation, route }: Props) {
 
               return (
                 <>
-                  {/* ─── HERO BAND — pack floats on page background ──── */}
                   <View style={styles.heroBand}>
-                    {/* Gold radial halo behind the pack (faint ambient
-                        light, no border, low opacity). Sits in the bg layer. */}
-                    <View pointerEvents="none" style={styles.heroHalo} />
-
-                    {/* Pack is now tappable — direct affordance to "open
-                        this pack". Wrap AnimatedView (idle bob) in a
-                        Pressable. Press routes intelligently per state. */}
-                    <Pressable
-                      testID="home-featured-pack"
-                      accessibilityRole="button"
-                      accessibilityLabel={featuredPackAccessibilityLabel}
-                      onPress={handleFeaturedPackPress}
-                      hitSlop={8}
-                    >
-                      <AnimatedView
-                        style={[
-                          styles.heroPackFloat,
-                          hasAnimated ? { transform: [{ translateY: packTranslateY }] } : null,
-                        ]}
-                      >
-                        {featuredDeck.cover && RNImage ? (
-                          <RNImage
-                            source={featuredDeck.cover}
-                            resizeMode="contain"
-                            style={styles.heroPackImage}
-                          />
-                        ) : (
-                          <LinearGradient
-                            colors={featuredDeck.palette.cover}
-                            start={{ x: 0.1, y: 0 }}
-                            end={{ x: 0.9, y: 1 }}
-                            style={styles.heroPackFallback}
-                          >
-                            <Text style={styles.heroPackFallbackTitle} numberOfLines={2}>
-                              {featuredDeck.title}
-                            </Text>
-                          </LinearGradient>
-                        )}
-                      </AnimatedView>
-                    </Pressable>
+                    {/* Short name and page dots sit under the carousel and
+                        above the hero title, so nothing comes between the
+                        title and the primary button. */}
+                    <HomePackCarousel
+                      pages={pages}
+                      currentIndex={currentIndex}
+                      locked={!!starterSlug}
+                      featuredLabel={featuredPackAccessibilityLabel}
+                      onFeaturedPress={handleFeaturedPackPress}
+                      onSelectPage={handleSelectPage}
+                    />
 
                     {/* Action-driven title — never duplicates the pack
-                        name. "12 cards waiting" beats "C#" every time.
+                        name. "12 cards waiting" beats "C#" every time; the
+                        count is the selected pack's.
                         R22 §5: two lines, shrinking rather than cutting off. */}
                     <Text
                       testID="home-hero-title"
@@ -1061,101 +981,6 @@ export function HomeScreen({ navigation, route }: Props) {
                     ) : null}
                   </View>
 
-                  {/* ─── SELECTOR v4 — small thumbnails + status dots ──── */}
-                  <View style={styles.selectorBlock}>
-                    <Text style={styles.sectionLabel} numberOfLines={1}>
-                      Your packs
-                    </Text>
-                    <ScrollView
-                      horizontal
-                      showsHorizontalScrollIndicator={false}
-                      contentContainerStyle={styles.selectorContent}
-                      testID="home-pack-visual"
-                    >
-                      {visualDecks.map((d) => (
-                        <Pressable
-                          key={d.slug}
-                          accessibilityRole="button"
-                          accessibilityLabel={`${d.shortTitle} pack — ${d.status}`}
-                          disabled={d.disabled}
-                          style={({ pressed }) => [
-                            styles.selectorTile,
-                            d.selected && styles.selectorTileSelected,
-                            pressed && styles.pressed,
-                          ]}
-                          onPress={() => {
-                            if (!d.realRow) return;
-                            const hint = d.realRow.actionHint;
-                            const updating = d.realRow.update?.state === 'updating';
-                            if (hint === 'open' || hint === 'none' || (hint === 'update' && updating)) {
-                              selectPackLocally(d.slug);
-                              return;
-                            }
-                            void handleDeckPress(d.realRow);
-                          }}
-                        >
-                          {/* Two-layer thumbnail: outer = shadow, inner = clip */}
-                          <View style={styles.selectorThumbShadow}>
-                            <View style={styles.selectorThumbFrame}>
-                              {d.cover && RNImage ? (
-                                <RNImage
-                                  source={d.cover}
-                                  resizeMode="contain"
-                                  style={styles.selectorThumbImage}
-                                />
-                              ) : (
-                                <LinearGradient
-                                  colors={d.palette.cover}
-                                  start={{ x: 0.1, y: 0 }}
-                                  end={{ x: 0.9, y: 1 }}
-                                  style={styles.selectorThumbFallback}
-                                >
-                                  <Text style={styles.selectorThumbFallbackText} numberOfLines={1}>
-                                    {d.shortTitle}
-                                  </Text>
-                                </LinearGradient>
-                              )}
-                            </View>
-                            {/* Update chip over the pack art. The blue dot alone
-                                said nothing; a stale deck (81 of 115 cards) now
-                                says what it is missing, or that it is on its way. */}
-                            {d.realRow?.update ? (
-                              <View
-                                testID={`home-pack-update-chip-${d.slug}`}
-                                pointerEvents="none"
-                                style={[
-                                  styles.selectorUpdateChip,
-                                  d.realRow.update.state === 'updating' && styles.selectorUpdateChipUpdating,
-                                ]}
-                              >
-                                <Text style={styles.selectorUpdateChipText} numberOfLines={2}>
-                                  {d.realRow.update.chipLabel}
-                                </Text>
-                              </View>
-                            ) : null}
-                          </View>
-                          {/* Tile meta: status color dot + short title (two lines allowed) */}
-                          <View style={styles.selectorMetaRow}>
-                            <View
-                              style={[
-                                styles.selectorStatusDot,
-                                { backgroundColor: statusDotColor(d) },
-                              ]}
-                            />
-                            <Text
-                              style={[
-                                styles.selectorTitle,
-                                d.selected && styles.selectorTitleSelected,
-                              ]}
-                              numberOfLines={2}
-                            >
-                              {d.shortTitle}
-                            </Text>
-                          </View>
-                        </Pressable>
-                      ))}
-                    </ScrollView>
-                  </View>
                 </>
               );
             })()}
@@ -1316,54 +1141,15 @@ const styles = StyleSheet.create({
   primaryCard: { borderRadius: spacing.lg, borderWidth: 1, borderColor: HOME_TOKENS.borderStrong, backgroundColor: HOME_TOKENS.card, padding: spacing.md },
 
   // ─── HOME v4 — pack-floats-on-page hero ──────────────────────────────
-  // No card chrome around the pack. The pack lives on the page background
-  // with only a shadow + a soft gold halo behind it. Hero copy sits below
-  // the pack (centered), action-driven, never duplicating the pack name.
+  // No card chrome around the pack. The cover carousel (HomePackCarousel)
+  // keeps the covers on the page background with only a shadow + a soft
+  // gold halo behind the current one. Hero copy sits below (centered),
+  // action-driven, never duplicating the pack name. The carousel pages carry
+  // their own top padding, so the band starts tighter than the single pack did.
   heroBand: {
     alignItems: 'center',
-    paddingTop: spacing.md,
+    paddingTop: 4,
     paddingBottom: spacing.md,
-  },
-  // Soft gold halo positioned BEHIND the pack — gives an ambient-light
-  // feel without adding any structural framing. Sits 220×220 centered.
-  heroHalo: {
-    position: 'absolute',
-    top: 0,
-    width: 240,
-    height: 240,
-    borderRadius: 240,
-    backgroundColor: 'rgba(232,184,90,0.18)', // colors.glowGold @ 18%
-  },
-  // Floating pack — shadow only, no border, no backing color. The image
-  // is drawn directly on the parchment page.
-  heroPackFloat: {
-    width: 168,
-    height: 240,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: 'rgba(58,35,5,0.30)',
-    shadowOpacity: 1,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 12 },
-    elevation: 10,
-  },
-  heroPackImage: {
-    width: '100%',
-    height: '100%',
-  },
-  heroPackFallback: {
-    width: 168,
-    height: 240,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: spacing.sm,
-  },
-  heroPackFallbackTitle: {
-    color: '#FFFFFF',
-    fontSize: typography.title2,
-    fontWeight: '900',
-    textAlign: 'center',
   },
   heroTitle: {
     marginTop: 6,
@@ -1443,118 +1229,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
 
-  // ─── HOME v4 — pack selector with thumbnails ────────────────────────
-  // Bigger top margin (lg) than the rest of the gaps — that's how the
-  // page tells the user "selector is below the hero, not part of it".
-  selectorBlock: {
-    marginTop: spacing.lg,
-  },
-  sectionLabel: {
-    marginBottom: spacing.xs,
-    fontSize: typography.caption,
-    fontWeight: '900',
-    color: colors.inkMuted,
-    letterSpacing: 0.6,
-    textTransform: 'uppercase',
-  },
-  selectorContent: {
-    columnGap: 12,
-    paddingRight: spacing.screenPadding,
-    paddingVertical: 4,
-  },
-  selectorTile: {
-    width: 72,
-    alignItems: 'center',
-  },
-  selectorTileSelected: {
-    transform: [{ translateY: -3 }],
-  },
-  // Two-layer thumbnail: outer = shadow only, inner = clip
-  selectorThumbShadow: {
-    width: 64,
-    height: 88,
-    borderRadius: 10,
-    shadowColor: 'rgba(58,35,5,0.20)',
-    shadowOpacity: 1,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 4,
-  },
-  // "Update · +34 cards" pill pinned to the bottom of the thumbnail. Wider
-  // than the 64pt thumb on purpose (it may wrap to two short lines) and
-  // centred on it, so the count survives the tile width.
-  selectorUpdateChip: {
-    position: 'absolute',
-    bottom: 4,
-    left: -4,
-    right: -4,
-    paddingHorizontal: 4,
-    paddingVertical: 2,
-    borderRadius: 8,
-    backgroundColor: colors.pokeBlue,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  selectorUpdateChipUpdating: {
-    backgroundColor: colors.inkSecondary,
-  },
-  selectorUpdateChipText: {
-    color: '#FFFFFF',
-    fontSize: 9,
-    lineHeight: 11,
-    fontWeight: '900',
-    letterSpacing: 0.2,
-    textAlign: 'center',
-  },
-  selectorThumbFrame: {
-    width: 64,
-    height: 88,
-    borderRadius: 10,
-    overflow: 'hidden',
-    backgroundColor: 'transparent',
-  },
-  selectorThumbImage: {
-    width: '100%',
-    height: '100%',
-  },
-  selectorThumbFallback: {
-    width: 64,
-    height: 88,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 4,
-  },
-  selectorThumbFallbackText: {
-    color: '#FFFFFF',
-    fontSize: typography.caption,
-    fontWeight: '900',
-    textAlign: 'center',
-  },
-  selectorMetaRow: {
-    marginTop: 8,
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 4,
-    maxWidth: 72,
-  },
-  selectorStatusDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 999,
-    marginTop: 4,
-  },
-  selectorTitle: {
-    fontSize: typography.caption,
-    lineHeight: 14,
-    fontWeight: '900',
-    color: colors.inkSoft,
-    letterSpacing: 0.3,
-    flexShrink: 1,
-  },
-  selectorTitleSelected: {
-    color: colors.pokeBlueDeep,
-  },
   errorText: { marginTop: spacing.xs, color: colors.danger, fontSize: typography.caption, lineHeight: 16 },
   // Error block — keeps Home hero intact even on network failure;
   // surfaces a calm message + actionable retry pill instead of a bare
