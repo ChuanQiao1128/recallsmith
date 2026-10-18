@@ -11,7 +11,9 @@ namespace RecallSmith.Lambda.IntegrationTests;
 /// canonical strings are a synthetic MCQ card and a synthetic Q/A card; the hand-typed inputs sit in the contract's
 /// written order (v, question, explanation, realWorldUsage, mcq with qualifier before options, text before why, the
 /// correct option without a why) to prove the canonicaliser reorders keys into jsonb order and fills the why default.
-/// Every contract code has a rejection row; the console's validator emits the same codes.
+/// Every contract code has a rejection row; the console's validator emits the same codes. The shared parity fixture
+/// (content/decks/translation-fixtures.json) is the same set of cases the console's validator reads, so both sides agree
+/// on the first error code of every case.
 /// </summary>
 public class TranslationValidationTests
 {
@@ -186,17 +188,18 @@ public class TranslationValidationTests
     Assert.Equal(code, ex.Code);
   }
 
+  private static readonly string[] ContractCodes =
+  [
+    "TRANSLATION_BAD_SHAPE", "TRANSLATION_BAD_LOCALE", "TRANSLATION_QUESTION_EMPTY", "TRANSLATION_ANSWER_EMPTY",
+    "TRANSLATION_FIELD_MISSING", "TRANSLATION_FIELD_EXTRA", "TRANSLATION_OPTION_KEYS_MISMATCH", "TRANSLATION_CORRECT_MARK",
+    "TRANSLATION_OPTION_EMPTY", "TRANSLATION_OPTION_TOO_LONG", "TRANSLATION_OPTION_TEXT_DUPLICATE", "TRANSLATION_WHY_MISMATCH",
+    "TRANSLATION_QUALIFIER_MISMATCH", "TRANSLATION_QUALIFIER_NOT_IN_STEM", "TRANSLATION_CHOOSE_N_MISMATCH", "TRANSLATION_NOT_TRANSLATED",
+  ];
+
   [Fact]
   public void Rejections_CoverEveryContractCode()
   {
-    string[] contractCodes =
-    [
-      "TRANSLATION_BAD_SHAPE", "TRANSLATION_BAD_LOCALE", "TRANSLATION_QUESTION_EMPTY", "TRANSLATION_ANSWER_EMPTY",
-      "TRANSLATION_FIELD_MISSING", "TRANSLATION_FIELD_EXTRA", "TRANSLATION_OPTION_KEYS_MISMATCH", "TRANSLATION_CORRECT_MARK",
-      "TRANSLATION_OPTION_EMPTY", "TRANSLATION_OPTION_TOO_LONG", "TRANSLATION_OPTION_TEXT_DUPLICATE", "TRANSLATION_WHY_MISMATCH",
-      "TRANSLATION_QUALIFIER_MISMATCH", "TRANSLATION_QUALIFIER_NOT_IN_STEM", "TRANSLATION_CHOOSE_N_MISMATCH", "TRANSLATION_NOT_TRANSLATED",
-    ];
-    Assert.Equal(contractCodes.Order().ToArray(), Rejections().Select(r => (string)r[0]!).Distinct().Order().ToArray());
+    Assert.Equal(ContractCodes.Order().ToArray(), Rejections().Select(r => (string)r[0]!).Distinct().Order().ToArray());
   }
 
   [Fact]
@@ -207,6 +210,79 @@ public class TranslationValidationTests
     Assert.False(ex is McqValidationError);
     Assert.Equal("TRANSLATION_BAD_SHAPE", ((TranslationValidationError)ex).Code);
     Assert.Equal("m", ex.Message);
+  }
+
+  // ---------------------------------------------------------------- shared parity fixture
+
+  // An array of { name, english: { question, explanation, realWorldUsage, mcq }, translations, expectFirstCode | null }.
+  // english.mcq is the authoring MCQ blob (v, qualifier, shuffle, options[] with key/text/why/correct) or null. No case
+  // depends on the deck's locale; both sides check it against an English deck.
+  private const string FixturePath = "content/decks/translation-fixtures.json";
+  private const string FixtureDeckLocale = "en-US";
+
+  private static readonly Lazy<JsonElement> Fixture = new(() => El(File.ReadAllText(Path.Combine(RepoRoot(), FixturePath))));
+
+  private static string RepoRoot()
+  {
+    var dir = new DirectoryInfo(AppContext.BaseDirectory);
+    while (dir is not null && !File.Exists(Path.Combine(dir.FullName, FixturePath))) dir = dir.Parent;
+    return dir?.FullName ?? throw new FileNotFoundException($"no {FixturePath} above {AppContext.BaseDirectory}");
+  }
+
+  public static IEnumerable<object[]> FixtureCaseNames() =>
+    Fixture.Value.EnumerateArray().Select(c => new object[] { c.GetProperty("name").GetString()! });
+
+  private static TranslationValidation.EnglishCard FixtureEnglish(JsonElement english)
+  {
+    static string? Text(JsonElement el, string name) => el.GetProperty(name) is { ValueKind: JsonValueKind.String } s ? s.GetString() : null;
+
+    var question = english.GetProperty("question").GetString()!;
+    var mcq = english.GetProperty("mcq") is { ValueKind: JsonValueKind.Object } blob ? McqValidation.Canonicalize(blob, question) : null;
+    return new(question, Text(english, "explanation"), Text(english, "realWorldUsage"), mcq);
+  }
+
+  [Theory]
+  [MemberData(nameof(FixtureCaseNames))]
+  public void SharedFixture_FirstErrorCode_OrSuccess(string name)
+  {
+    var c = Fixture.Value.EnumerateArray().Single(x => x.GetProperty("name").GetString() == name);
+    var english = FixtureEnglish(c.GetProperty("english"));
+    var translations = c.GetProperty("translations");
+    var expected = c.GetProperty("expectFirstCode") is { ValueKind: JsonValueKind.String } code ? code.GetString() : null;
+
+    if (expected is null)
+    {
+      var canonical = TranslationValidation.Canonicalize(translations, english, FixtureDeckLocale);
+      if (canonical is not null) Assert.Equal(canonical, TranslationValidation.Canonicalize(El(canonical), english, FixtureDeckLocale));
+    }
+    else
+    {
+      var ex = Assert.Throws<TranslationValidationError>(() => TranslationValidation.Canonicalize(translations, english, FixtureDeckLocale));
+      Assert.Equal(expected, ex.Code);
+    }
+  }
+
+  [Fact]
+  public void SharedFixture_KeepsTheSharedShape_AndCoversEveryContractCode()
+  {
+    var cases = Fixture.Value.EnumerateArray().ToList();
+    Assert.True(cases.Count >= 15, $"the shared fixture has {cases.Count} cases; it needs at least 15");
+
+    foreach (var c in cases)
+    {
+      Assert.Equal(new[] { "name", "english", "translations", "expectFirstCode" }, c.EnumerateObject().Select(p => p.Name).ToArray());
+      Assert.Equal(new[] { "question", "explanation", "realWorldUsage", "mcq" }, c.GetProperty("english").EnumerateObject().Select(p => p.Name).ToArray());
+      Assert.False(string.IsNullOrWhiteSpace(c.GetProperty("name").GetString()));
+      var code = c.GetProperty("expectFirstCode");
+      Assert.True(code.ValueKind == JsonValueKind.Null || ContractCodes.Contains(code.GetString()), $"unknown expectFirstCode {code}");
+    }
+
+    var names = cases.Select(c => c.GetProperty("name").GetString()).ToList();
+    Assert.Equal(names.Count, names.Distinct(StringComparer.Ordinal).Count());
+
+    var codes = cases.Select(c => c.GetProperty("expectFirstCode")).Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!);
+    Assert.Equal(ContractCodes.Order().ToArray(), codes.Distinct().Order().ToArray());
+    Assert.Contains(cases, c => c.GetProperty("expectFirstCode").ValueKind == JsonValueKind.Null);
   }
 
   // ---------------------------------------------------------------- basis and status

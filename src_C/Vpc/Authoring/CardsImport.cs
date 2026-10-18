@@ -20,6 +20,10 @@ namespace RecallSmith.Lambda.Vpc.Authoring;
 ///
 /// On a database that has not run 022 the deferral fails with SQLSTATE 42809, which this handler
 /// maps to 503 MIGRATION_REQUIRED on this route alone. Deploy order is migrate, then code.
+///
+/// Every card field is whole-file (an absent field takes its default and replaces the stored value)
+/// except <c>translations</c>: a card object without that key keeps the stored translations and their
+/// basis, and only an explicit <c>"translations": null</c> clears them.
 /// </summary>
 public static class CardsImport
 {
@@ -40,7 +44,8 @@ public static class CardsImport
     string? Mcq,
     string? Source,
     string? Translations,
-    string? TranslationBasis);
+    string? TranslationBasis,
+    bool TranslationsSent);
 
   /// <summary>What the core learned about the import, for the after-response side effects.</summary>
   private sealed class ImportOutcome
@@ -136,6 +141,7 @@ public static class CardsImport
     if (conn is null) return Helpers.ConfigError(res, "Missing PG env vars (PGHOST/PGDATABASE/PGUSER/PGPASSWORD)");
 
     long deckId;
+    string? deckLocale;
     List<ImportCard> cards;
 
     try
@@ -166,7 +172,7 @@ public static class CardsImport
       outcome.CardCount = count;
 
       // A translation into the deck's own locale is refused; an unknown deck answers DECK_NOT_FOUND below.
-      var deckLocale = await Helpers.DeckLocaleAsync(conn, deckId);
+      deckLocale = await Helpers.DeckLocaleAsync(conn, deckId);
 
       cards = new List<ImportCard>(count);
       var i = 0;
@@ -224,11 +230,13 @@ public static class CardsImport
           // Whole-file import: an absent source is null and clears a stored one.
           var source = Helpers.ParseOptionalSource(cardEl);
 
-          // Whole-file import too: absent translations are null and clear stored ones (with their basis). Present ones
-          // mirror this card's English and are restamped, so the file is the translation's new basis.
+          // Translations are not whole-file: a card object without the key keeps the stored translations and their basis
+          // (a client that predates translations must not wipe them), and only an explicit null clears them. A present
+          // block mirrors this card's English and is restamped, so the file is the translation's new basis.
           string? translations = null;
           string? translationBasis = null;
-          if (cardEl.TryGetProperty("translations", out var trEl))
+          var translationsSent = cardEl.TryGetProperty("translations", out var trEl);
+          if (translationsSent)
           {
             var english = new TranslationValidation.EnglishCard(question, explanation, realWorldUsage, mcq);
             translations = TranslationValidation.Canonicalize(trEl, english, deckLocale);
@@ -236,7 +244,7 @@ public static class CardsImport
           }
 
           cards.Add(new ImportCard(i, uid, question, explanation, codeSnippet, codeLanguage, realWorldUsage, difficulty, orderInDeck, topic, mcq, source,
-            translations, translationBasis));
+            translations, translationBasis, translationsSent));
         }
         catch (McqValidationError ex)
         {
@@ -339,6 +347,41 @@ public static class CardsImport
           $"{pairs}, which is not in this import; nothing was written. Retry after resolving the conflict.");
       }
 
+      // A card sent without translations keeps the stored ones, so, as on PUT, they must still mirror the English this
+      // file writes (a text-only English change keeps the old basis, so the translation reads as stale until it is
+      // restamped). The rows stay locked, so the upsert keeps exactly the translations checked here.
+      var keptUids = cards.Where(c => !c.TranslationsSent).Select(c => c.StableUid).ToArray();
+      if (translationsReady && keptUids.Length > 0)
+      {
+        var storedRows = await DbUtil.QueryAsync(conn, tx,
+          """
+          select stable_uid as "stableUid", translations from cards
+          where deck_id = $1 and is_deleted = 0 and stable_uid = any($2) and translations is not null
+          for update
+          """,
+          [deckId, keptUids]);
+        var stored = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        foreach (var r in storedRows)
+        {
+          if (Helpers.JsonbElement(r, "translations") is { } kept) stored[(string)r["stableUid"]!] = kept;
+        }
+
+        foreach (var c in cards)
+        {
+          if (c.TranslationsSent || !stored.TryGetValue(c.StableUid, out var kept)) continue;
+          try
+          {
+            TranslationValidation.Canonicalize(kept, new TranslationValidation.EnglishCard(c.Question, c.Explanation, c.RealWorldUsage, c.Mcq), deckLocale);
+          }
+          catch (TranslationValidationError ex)
+          {
+            return res.BadRequest(ex.Code,
+              $"cards[{c.Index}] ({c.StableUid}): the stored translations no longer match this card's English ({ex.Message}); " +
+              "send translations with the card, or translations: null to clear them");
+          }
+        }
+      }
+
       const string upsertSql = """
         insert into cards (
           deck_id, stable_uid, question, explanation, code_snippet, code_language,
@@ -356,16 +399,17 @@ public static class CardsImport
           topic = excluded.topic,
           mcq = excluded.mcq,
           source = excluded.source,
-          translations = excluded.translations,
-          translation_basis = excluded.translation_basis,
+          translations = case when $15::boolean then excluded.translations else cards.translations end,
+          translation_basis = case when $15::boolean then excluded.translation_basis else cards.translation_basis end,
           version = cards.version + 1,
           updated_at = now()
         where (cards.question, cards.explanation, cards.code_snippet, cards.code_language, cards.real_world_usage,
                cards.difficulty, cards.order_in_deck, cards.topic, cards.mcq, cards.source, cards.translations, cards.translation_basis)
           is distinct from
               (excluded.question, excluded.explanation, excluded.code_snippet, excluded.code_language, excluded.real_world_usage,
-               excluded.difficulty, excluded.order_in_deck, excluded.topic, excluded.mcq, excluded.source, excluded.translations,
-               excluded.translation_basis)
+               excluded.difficulty, excluded.order_in_deck, excluded.topic, excluded.mcq, excluded.source,
+               case when $15::boolean then excluded.translations else cards.translations end,
+               case when $15::boolean then excluded.translation_basis else cards.translation_basis end)
         returning id, (xmax = 0) as inserted
         """;
       const string upsertSqlPre047 = """
@@ -401,7 +445,7 @@ public static class CardsImport
           ? await DbUtil.QueryAsync(conn, tx, upsertSql, new object?[]
           {
             deckId, c.StableUid, c.Question, c.Explanation, c.CodeSnippet, c.CodeLanguage,
-            c.RealWorldUsage, c.Difficulty, c.OrderInDeck, c.Topic, c.Mcq, c.Source, c.Translations, c.TranslationBasis,
+            c.RealWorldUsage, c.Difficulty, c.OrderInDeck, c.Topic, c.Mcq, c.Source, c.Translations, c.TranslationBasis, c.TranslationsSent,
           })
           : await DbUtil.QueryAsync(conn, tx, upsertSqlPre047, new object?[]
           {

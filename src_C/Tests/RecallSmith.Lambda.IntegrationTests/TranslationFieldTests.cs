@@ -309,16 +309,24 @@ public class TranslationFieldTests
 
   // ---------------------------------------------------------------- import
 
-  private static object ImportCard(string uid, int order, JsonNode? translations, string explanation = Explanation) => new
+  private static Dictionary<string, object?> ImportCard(string uid, int order, JsonNode? translations, string explanation = Explanation,
+    bool includeTranslations = true, object? mcq = null)
   {
-    stableUid = uid,
-    question = Question,
-    explanation,
-    difficulty = 2,
-    orderInDeck = order,
-    mcq = Mcq,
-    translations,
-  };
+    var card = new Dictionary<string, object?>(StringComparer.Ordinal)
+    {
+      ["stableUid"] = uid,
+      ["question"] = Question,
+      ["explanation"] = explanation,
+      ["difficulty"] = 2,
+      ["orderInDeck"] = order,
+      ["mcq"] = mcq ?? Mcq,
+    };
+    if (includeTranslations) card["translations"] = translations;
+    return card;
+  }
+
+  private async Task<long> CardIdAsync(long deckId, string uid) =>
+    Convert.ToInt64(await _db.ScalarAsync("select id from cards where deck_id = $1 and stable_uid = $2", deckId, uid), CultureInfo.InvariantCulture);
 
   [Fact]
   public async Task Import_Translations_AreCreatedSkippedRestampedAndClearedLikeTheFile()
@@ -341,9 +349,122 @@ public class TranslationFieldTests
     Assert.Equal($$"""{"zh-CN":"{{TranslationValidation.Basis(English(newExplanation))}}"}""", Compact(basisAfter!));
     Assert.Equal(revision, revisionAfter);
 
-    // Whole-file semantics: a file without translations clears them.
+    // A file that says "translations": null clears them, basis included.
     Assert.Equal(1, Data(await ImportAsync(deckId, ImportCard("tr-imp", 1, null, newExplanation))).GetProperty("updated").GetInt32());
     Assert.Equal((null, null, revision), await StoredAsync(id));
+  }
+
+  [Fact]
+  public async Task Import_CardWithoutTheTranslationsKey_KeepsTheStoredTranslationsAndBasis()
+  {
+    var deckId = await NewDeckAsync("import-absent");
+    Data(await ImportAsync(deckId, ImportCard("tr-abs", 1, Zh())));
+    var id = await CardIdAsync(deckId, "tr-abs");
+    var before = await StoredAsync(id);
+    Assert.NotNull(before.Translations);
+
+    // The same English without the key: nothing to write, so nothing bumps.
+    var version = await _db.ScalarAsync("select version from cards where id = $1", id);
+    Assert.Equal(1, Data(await ImportAsync(deckId, ImportCard("tr-abs", 1, null, includeTranslations: false))).GetProperty("unchanged").GetInt32());
+    Assert.Equal(before, await StoredAsync(id));
+    Assert.Equal(version, await _db.ScalarAsync("select version from cards where id = $1", id));
+
+    // New English without the key: the English is written, the translations and their old basis are kept, so the
+    // translation reads as stale until it is restamped.
+    const string newExplanation = "A queue absorbs the burst; consumers read at their own pace.";
+    var data = Data(await ImportAsync(deckId, ImportCard("tr-abs", 1, null, newExplanation, includeTranslations: false)));
+    Assert.Equal(1, data.GetProperty("updated").GetInt32());
+    Assert.Equal(before, await StoredAsync(id));
+    Assert.Equal(newExplanation, await _db.ScalarAsync("select explanation from cards where id = $1", id));
+    var row = Data(await CardsAsync("GET", null, new Dictionary<string, string> { ["id"] = id.ToString(CultureInfo.InvariantCulture) }))[0];
+    Assert.Equal("stale", row.GetProperty("translationStatus").GetProperty("zh-CN").GetString());
+
+    // A new card without the key has no translations.
+    Assert.Equal(1, Data(await ImportAsync(deckId,
+      ImportCard("tr-abs", 1, null, newExplanation, includeTranslations: false),
+      ImportCard("tr-abs-new", 2, null, includeTranslations: false))).GetProperty("created").GetInt32());
+    var (newTranslations, newBasis, _) = await StoredAsync(await CardIdAsync(deckId, "tr-abs-new"));
+    Assert.Null(newTranslations);
+    Assert.Null(newBasis);
+  }
+
+  [Fact]
+  public async Task Import_ExplicitNullTranslations_ClearTheStoredTranslationsAndBasis()
+  {
+    var deckId = await NewDeckAsync("import-null");
+    Data(await ImportAsync(deckId, ImportCard("tr-null", 1, Zh())));
+    var id = await CardIdAsync(deckId, "tr-null");
+    var (_, _, revision) = await StoredAsync(id);
+
+    // English unchanged: the explicit null alone is a change.
+    Assert.Equal(1, Data(await ImportAsync(deckId, ImportCard("tr-null", 1, null))).GetProperty("updated").GetInt32());
+    Assert.Equal((null, null, revision), await StoredAsync(id));
+
+    // Cleared stays cleared: an absent key keeps the null, an explicit null again changes nothing.
+    Assert.Equal(1, Data(await ImportAsync(deckId, ImportCard("tr-null", 1, null, includeTranslations: false))).GetProperty("unchanged").GetInt32());
+    Assert.Equal(1, Data(await ImportAsync(deckId, ImportCard("tr-null", 1, null))).GetProperty("unchanged").GetInt32());
+    Assert.Equal((null, null, revision), await StoredAsync(id));
+  }
+
+  [Fact]
+  public async Task Import_PresentTranslations_RestampTheBasisAgainstTheFilesEnglish()
+  {
+    var deckId = await NewDeckAsync("import-restamp");
+    Data(await ImportAsync(deckId, ImportCard("tr-rst", 1, Zh())));
+    var id = await CardIdAsync(deckId, "tr-rst");
+    var (storedBefore, basisBefore, revision) = await StoredAsync(id);
+
+    // An English edit without the key leaves the old basis (stale) ...
+    const string newExplanation = "A queue absorbs the burst; consumers read at their own pace.";
+    Data(await ImportAsync(deckId, ImportCard("tr-rst", 1, null, newExplanation, includeTranslations: false)));
+    Assert.Equal((storedBefore, basisBefore, revision), await StoredAsync(id));
+
+    // ... and the same translations sent with that English restamp it: only the basis moves, never the revision.
+    Assert.Equal(1, Data(await ImportAsync(deckId, ImportCard("tr-rst", 1, Zh(), newExplanation))).GetProperty("updated").GetInt32());
+    var (storedAfter, basisAfter, revisionAfter) = await StoredAsync(id);
+    Assert.Equal(storedBefore, storedAfter);
+    Assert.Equal($$"""{"zh-CN":"{{TranslationValidation.Basis(English(newExplanation))}}"}""", Compact(basisAfter!));
+    Assert.NotEqual(basisBefore, basisAfter);
+    Assert.Equal(revision, revisionAfter);
+    var row = Data(await CardsAsync("GET", null, new Dictionary<string, string> { ["id"] = id.ToString(CultureInfo.InvariantCulture) }))[0];
+    Assert.Equal("ok", row.GetProperty("translationStatus").GetProperty("zh-CN").GetString());
+  }
+
+  [Fact]
+  public async Task Import_CardWithoutTheKey_WhoseNewEnglishBreaksTheStoredTranslations_IsRefused_AndWritesNothing()
+  {
+    var deckId = await NewDeckAsync("import-break");
+    Data(await ImportAsync(deckId, ImportCard("tr-brk", 1, Zh())));
+    var id = await CardIdAsync(deckId, "tr-brk");
+    var before = await StoredAsync(id);
+    var mcqBefore = await _db.ScalarAsync("select mcq::text from cards where id = $1", id);
+
+    // The English MCQ gains option d, which the kept zh-CN translation does not cover.
+    var fourOptions = new
+    {
+      v = 1,
+      options = new object[]
+      {
+        new { key = "a", text = "Amazon SQS", correct = true },
+        new { key = "b", text = "A larger EC2 instance", why = "Resizing does not buffer anything.", correct = false },
+        new { key = "c", text = "A single-shard stream", why = "One shard caps the ingest rate.", correct = false },
+        new { key = "d", text = "A cron job", why = "A schedule does not absorb a burst.", correct = false },
+      },
+    };
+    var (code, message) = Error(await ImportAsync(deckId,
+      ImportCard("tr-ok", 2, null, includeTranslations: false),
+      ImportCard("tr-brk", 1, null, includeTranslations: false, mcq: fourOptions)), 400);
+    Assert.Equal("TRANSLATION_OPTION_KEYS_MISMATCH", code);
+    Assert.StartsWith("cards[1] (tr-brk): the stored translations no longer match", message, StringComparison.Ordinal);
+
+    // The whole file is refused.
+    Assert.Equal(before, await StoredAsync(id));
+    Assert.Equal(mcqBefore, await _db.ScalarAsync("select mcq::text from cards where id = $1", id));
+    Assert.Equal(1L, Convert.ToInt64(await _db.ScalarAsync("select count(*) from cards where deck_id = $1", deckId), CultureInfo.InvariantCulture));
+
+    // Sending translations: null with the new English is the way to drop them.
+    Data(await ImportAsync(deckId, ImportCard("tr-brk", 1, null, mcq: fourOptions)));
+    Assert.Equal((null, null, before.Revision), await StoredAsync(id));
   }
 
   [Fact]
@@ -567,6 +688,7 @@ public class TranslationFieldTests
       Data(await CardsAsync("PUT", new { id = posted.GetProperty("id").GetInt64(), expectedVersion = posted.GetProperty("version").GetInt64(), explanation = "Edited." }));
       Data(await CardsAsync("GET", null, new Dictionary<string, string> { ["deckId"] = deckId.ToString(CultureInfo.InvariantCulture) }));
       Data(await ImportAsync(deckId, ImportCard("pre-2", 2, null)));
+      Data(await ImportAsync(deckId, ImportCard("pre-2", 2, null, includeTranslations: false)));
 
       // A translation write needs the columns.
       Assert.Equal("MIGRATION_REQUIRED", Error(await CardsAsync("POST", CardBody(deckId, "pre-3", 3, Zh())), 503).Code);
