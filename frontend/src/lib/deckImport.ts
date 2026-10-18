@@ -25,6 +25,12 @@
 //   SOURCE: <https url>    (optional; the lines below it are the quote)
 //   <quote lines>
 //
+// A card may also carry its built-in Simplified Chinese (zh-CN) translation:
+// each translatable section gets a `_ZH` twin right after it (QUALIFIER_ZH:,
+// Q_ZH:, OPT_ZH:, WHY_ZH:, A_ZH:, USAGE_ZH:). OPT_ZH:/WHY_ZH: bind to the
+// nearest OPT: above them; correct marks, code, topic and the source quote
+// stay English only. A card with one _ZH section needs all that apply.
+//
 // Two deliberate lexing rules make hand written files predictable:
 //
 // 1. A marker is only a marker at column 0. Indented text is always content,
@@ -37,6 +43,7 @@
 
 import type { Card, CardSource } from '../types/card';
 import type { McqBlob } from '../types/mcq';
+import type { CardTranslation, CardTranslations, TranslatedMcq } from '../types/translation';
 import { hasContent, isValidDifficulty, isValidStableUid } from './cardRules';
 import { validateMcq, normalizeMcqForCompare, mcqOf, OPT_PAYLOAD, type McqIssueCode } from './mcqRules';
 import { warnMcq, sortWarnings, type ImportWarning } from './mcqWarnings';
@@ -46,6 +53,14 @@ import {
   SOURCE_QUOTE_MAX_LENGTH,
   SOURCE_URL_MAX_LENGTH,
 } from './sourceRules';
+import {
+  hasCjk,
+  normalizeTranslationsForCompare,
+  translationsOf,
+  validateTranslation,
+  warnTranslation,
+  type TranslationIssueCode,
+} from './translationRules';
 
 // ---------------------- types ----------------------
 
@@ -64,6 +79,8 @@ export interface DeckCardContent {
   mcq?: McqBlob;
   /** Citation (server column cards.source). ABSENT, never null, when the card has no SOURCE: line. */
   source?: CardSource;
+  /** Built-in translations (server column cards.translations). ABSENT, never null, when the card has no _ZH section. */
+  translations?: CardTranslations;
 }
 
 export interface ParsedCard extends DeckCardContent {
@@ -92,7 +109,13 @@ export type ImportIssueCode =
   | McqIssueCode
   | 'MCQ_DUPLICATE_QUALIFIER'
   | 'BAD_SOURCE_URL'
-  | 'SOURCE_QUOTE_TOO_LONG';
+  | 'SOURCE_QUOTE_TOO_LONG'
+  | 'ZH_UNSUPPORTED_FIELD'
+  | 'ZH_MISSING_FIELD'
+  | 'ZH_BAD_OPT_LINE'
+  | 'ZH_WITHOUT_OPTION'
+  | 'EN_FIELD_HAS_CJK'
+  | TranslationIssueCode;
 
 export interface ImportIssue {
   code: ImportIssueCode;
@@ -116,7 +139,8 @@ export type ConflictReason =
   | 'INVALID_CARD'
   | 'DUPLICATE_UID_IN_FILE'
   | 'AMBIGUOUS_EXISTING_UID'
-  | 'EXISTING_SOFT_DELETED';
+  | 'EXISTING_SOFT_DELETED'
+  | 'TRANSLATIONS_WOULD_BE_CLEARED';
 
 /** Fields compared when deciding update vs unchanged. */
 export type ComparableField =
@@ -129,7 +153,8 @@ export type ComparableField =
   | 'realWorldUsage'
   | 'topic'
   | 'mcq'
-  | 'source';
+  | 'source'
+  | 'translations';
 
 export interface ImportCreate {
   kind: 'create';
@@ -143,6 +168,12 @@ export interface ImportUpdate {
   /** Server version at plan time, passed straight to updateCard for CAS. */
   expectedVersion: number;
   changedFields: ComparableField[];
+  /**
+   * Set only when the operator opted in (PlanImportOptions.allowClearTranslations)
+   * and this update deletes the card's stored translation. The runner refuses an
+   * update that would delete one without it.
+   */
+  clearsTranslations?: true;
 }
 
 export interface ImportUnchanged {
@@ -189,6 +220,18 @@ const QUALIFIER_MARKER = /^QUALIFIER:(.*)$/;
 // Loose on purpose, like TOPIC_MARKER: a column-0 SOURCE: line is always this
 // marker; the payload is the URL, the lines below it are the quote.
 const SOURCE_MARKER = /^SOURCE:(.*)$/;
+// The zh-CN twins of the translatable sections. Q_ZH:/A_ZH:/USAGE_ZH:/WHY_ZH:
+// take text like their English markers; QUALIFIER_ZH: is single line; OPT_ZH:
+// takes no payload (it translates the OPT: above it, text on the lines below).
+const QUALIFIER_ZH_MARKER = /^QUALIFIER_ZH:(.*)$/;
+const QUESTION_ZH_MARKER = /^Q_ZH:[ \t]?(.*)$/;
+const OPT_ZH_MARKER = /^OPT_ZH:(.*)$/;
+const WHY_ZH_MARKER = /^WHY_ZH:(.*)$/;
+const ANSWER_ZH_MARKER = /^A_ZH:[ \t]?(.*)$/;
+const USAGE_ZH_MARKER = /^USAGE_ZH:[ \t]?(.*)$/;
+// Every other column-0 "<NAME>_ZH:" (SOURCE_ZH:, CODE_ZH:, TOPIC_ZH: ...) is
+// reserved and refused, so it can never be glued into the open section.
+const RESERVED_ZH_MARKER = /^([A-Z]+)_ZH:/;
 
 /**
  * The card uid rule moved to cardRules.ts (UID_PATTERN + MAX_UID_LENGTH,
@@ -204,7 +247,19 @@ const SOURCE_MARKER = /^SOURCE:(.*)$/;
  */
 const SLUG_PATTERN = /^[a-z0-9]+(?:[-_][a-z0-9]+)*$/;
 
-type SectionKind = 'question' | 'answer' | 'code' | 'usage' | 'source' | `option:${string}` | `why:${string}`;
+type SectionKind =
+  | 'question' | 'answer' | 'code' | 'usage' | 'source' | `option:${string}` | `why:${string}`
+  | 'question_zh' | 'answer_zh' | 'usage_zh' | `option_zh:${string}` | `why_zh:${string}`;
+
+/** The marker a zh section kind is written with, for messages; English kinds keep their old wording. */
+function sectionName(kind: SectionKind): string {
+  if (kind === 'question_zh') return 'Q_ZH:';
+  if (kind === 'answer_zh') return 'A_ZH:';
+  if (kind === 'usage_zh') return 'USAGE_ZH:';
+  if (kind.startsWith('option_zh:')) return `OPT_ZH: of option "${kind.slice('option_zh:'.length)}"`;
+  if (kind.startsWith('why_zh:')) return `WHY_ZH: of option "${kind.slice('why_zh:'.length)}"`;
+  return kind;
+}
 
 interface Section {
   line: number;
@@ -236,6 +291,10 @@ interface CardDraft {
   mcq: McqDraft | null;
   /** Set by MCQ_BAD_OPT_LINE: finishCard drops the card and reports nothing further for it. */
   dropped: boolean;
+  /** Line of the first _ZH marker; null on an English-only card, which gets no `translations` key. */
+  zhLine: number | null;
+  /** The QUALIFIER_ZH: payload ('' when empty), null until one is seen. */
+  zhQualifier: string | null;
 }
 
 function isBlank(line: string): boolean {
@@ -326,6 +385,32 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
     const codeSnippet = sectionText(d.sections.code) || null;
     const realWorldUsage = sectionText(d.sections.usage) || null;
 
+    // A translated card must translate every section its English card has
+    // (contract §3): a half-translated card would show mixed languages, so it
+    // is dropped like a card without Q:, one issue per missing section.
+    if (d.zhLine !== null) {
+      const missing: string[] = [];
+      if (d.mcq?.qualifierSeen && d.zhQualifier === null) missing.push('QUALIFIER_ZH:');
+      if (!d.sections.question_zh) missing.push('Q_ZH:');
+      for (const option of d.mcq?.options ?? []) {
+        if (!d.sections[`option_zh:${option.key}`]) missing.push(`OPT_ZH: for option "${option.key}"`);
+        if (sectionText(d.sections[`why:${option.key}`]) && !d.sections[`why_zh:${option.key}`]) {
+          missing.push(`WHY_ZH: for option "${option.key}"`);
+        }
+      }
+      if (!d.sections.answer_zh) missing.push('A_ZH:');
+      if (realWorldUsage && !d.sections.usage_zh) missing.push('USAGE_ZH:');
+      for (const name of missing) {
+        pushIssue(
+          'ZH_MISSING_FIELD',
+          d.headerLine,
+          `Card "${d.stableUid}" has a Chinese translation but no ${name}; a translated card needs the _ZH twin of every section it has.`,
+          d.stableUid,
+        );
+      }
+      if (missing.length > 0) return;
+    }
+
     // A card with at least one MCQ marker becomes an MCQ card. shuffle is always
     // true (the format has no marker for it) and v is always 1.
     const mcq: McqBlob | null = d.mcq
@@ -341,6 +426,36 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
           })),
         }
       : null;
+
+    // Built from whatever _ZH sections the author wrote, extras included, so
+    // validateTranslation (via validateCards) can name what does not match.
+    let translations: CardTranslations | undefined;
+    if (d.zhLine !== null) {
+      const zhMcq: TranslatedMcq | null =
+        d.mcq || d.zhQualifier !== null
+          ? {
+              qualifier: d.zhQualifier,
+              options: Object.fromEntries(
+                (d.mcq?.options ?? []).map((o) => [
+                  o.key,
+                  {
+                    text: sectionText(d.sections[`option_zh:${o.key}`]),
+                    why: sectionText(d.sections[`why_zh:${o.key}`]) || null,
+                  },
+                ]),
+              ),
+            }
+          : null;
+      const usageZh = sectionText(d.sections.usage_zh);
+      const entry: CardTranslation = {
+        v: 1,
+        question: sectionText(d.sections.question_zh),
+        explanation: sectionText(d.sections.answer_zh),
+        ...(usageZh ? { realWorldUsage: usageZh } : {}),
+        ...(zhMcq ? { mcq: zhMcq } : {}),
+      };
+      translations = { 'zh-CN': entry };
+    }
 
     cards.push({
       stableUid: d.stableUid,
@@ -364,6 +479,7 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
       ...(d.sourceUrl !== null
         ? { source: { url: d.sourceUrl, quote: sectionText(d.sections.source).trim() || null } }
         : {}),
+      ...(translations ? { translations } : {}),
     });
   };
 
@@ -388,7 +504,7 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
       pushIssue(
         'DUPLICATE_SECTION',
         line,
-        `Card "${draft.stableUid}" repeats the ${kind} section; the first one wins.`,
+        `Card "${draft.stableUid}" repeats the ${sectionName(kind)} section; the first one wins.`,
         draft.stableUid,
       );
       // Keep the first section intact and swallow the repeat, so the result
@@ -463,6 +579,8 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
         sourceInvalid: false,
         mcq: null,
         dropped: false,
+        zhLine: null,
+        zhQualifier: null,
       };
       currentSection = null;
       continue;
@@ -650,6 +768,121 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
       continue;
     }
 
+    // ---- zh-CN translation markers (contract §3) ----
+    const qualifierZhMatch = QUALIFIER_ZH_MARKER.exec(raw);
+    if (qualifierZhMatch) {
+      draft.zhLine ??= lineNo;
+      // Single line, like QUALIFIER:; it never touches currentSection.
+      if (draft.zhQualifier !== null) {
+        pushIssue(
+          'DUPLICATE_SECTION',
+          lineNo,
+          `Card "${draft.stableUid}" repeats the QUALIFIER_ZH: line; the first one wins.`,
+          draft.stableUid,
+        );
+        continue;
+      }
+      draft.zhQualifier = qualifierZhMatch[1].trim();
+      continue;
+    }
+
+    const questionZhMatch = QUESTION_ZH_MARKER.exec(raw);
+    if (questionZhMatch) {
+      draft.zhLine ??= lineNo;
+      currentSection = openSection('question_zh', lineNo, questionZhMatch[1]);
+      continue;
+    }
+
+    const optZhMatch = OPT_ZH_MARKER.exec(raw);
+    if (optZhMatch) {
+      draft.zhLine ??= lineNo;
+      const payload = optZhMatch[1].trim();
+      if (payload !== '') {
+        // A star here would be a second, contradicting answer key; anything
+        // else is a mistyped marker. Either way the card is dropped, like an
+        // MCQ_BAD_OPT_LINE, and its body swallowed.
+        if (payload.includes('*')) {
+          pushIssue(
+            'TRANSLATION_CORRECT_MARK',
+            lineNo,
+            `Card "${draft.stableUid}": OPT_ZH: never carries "*"; correct answers are marked only on the English OPT: line.`,
+            draft.stableUid,
+          );
+        } else {
+          pushIssue(
+            'ZH_BAD_OPT_LINE',
+            lineNo,
+            `Card "${draft.stableUid}": OPT_ZH: takes no payload (it translates the OPT: above it; the text goes on the lines below), got "${raw.trimEnd()}".`,
+            draft.stableUid,
+          );
+        }
+        draft.dropped = true;
+        currentSection = null;
+        swallowing = true;
+        continue;
+      }
+      const key = draft.mcq?.lastOptionKey ?? null;
+      if (key === null) {
+        pushIssue(
+          'ZH_WITHOUT_OPTION',
+          lineNo,
+          `Card "${draft.stableUid}" has an OPT_ZH: line before any OPT: line.`,
+          draft.stableUid,
+        );
+        currentSection = null;
+        swallowing = true;
+        continue;
+      }
+      currentSection = openSection(`option_zh:${key}`, lineNo, '');
+      continue;
+    }
+
+    const whyZhMatch = WHY_ZH_MARKER.exec(raw);
+    if (whyZhMatch) {
+      draft.zhLine ??= lineNo;
+      const key = draft.mcq?.lastOptionKey ?? null;
+      if (key === null) {
+        pushIssue(
+          'ZH_WITHOUT_OPTION',
+          lineNo,
+          `Card "${draft.stableUid}" has a WHY_ZH: line before any OPT: line.`,
+          draft.stableUid,
+        );
+        currentSection = null;
+        swallowing = true;
+        continue;
+      }
+      currentSection = openSection(`why_zh:${key}`, lineNo, whyZhMatch[1].replace(/^[ \t]/, ''));
+      continue;
+    }
+
+    const answerZhMatch = ANSWER_ZH_MARKER.exec(raw);
+    if (answerZhMatch) {
+      draft.zhLine ??= lineNo;
+      currentSection = openSection('answer_zh', lineNo, answerZhMatch[1]);
+      continue;
+    }
+    const usageZhMatch = USAGE_ZH_MARKER.exec(raw);
+    if (usageZhMatch) {
+      draft.zhLine ??= lineNo;
+      currentSection = openSection('usage_zh', lineNo, usageZhMatch[1]);
+      continue;
+    }
+
+    const reservedZhMatch = RESERVED_ZH_MARKER.exec(raw);
+    if (reservedZhMatch) {
+      pushIssue(
+        'ZH_UNSUPPORTED_FIELD',
+        lineNo,
+        `Card "${draft.stableUid}": ${reservedZhMatch[1]}_ZH: is not a translatable section; only QUALIFIER_ZH:, Q_ZH:, OPT_ZH:, WHY_ZH:, A_ZH: and USAGE_ZH: exist (code, topic and the source quote stay English).`,
+        draft.stableUid,
+      );
+      // The body is dropped silently rather than glued to the section above.
+      currentSection = null;
+      swallowing = true;
+      continue;
+    }
+
     if (currentSection === null) {
       if (!swallowing && !strayInCardReported) {
         strayInCardReported = true;
@@ -684,6 +917,10 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
     for (const w of warnMcq({ question: card.question, realWorldUsage: card.realWorldUsage, mcq: card.mcq })) {
       warnings.push({ code: w.code, severity: 'warning', line: card.sourceLine, message: w.message, stableUid: card.stableUid });
     }
+    if (!card.translations) continue;
+    for (const w of warnTranslation({ translations: card.translations, mcq: card.mcq })) {
+      warnings.push({ code: w.code, severity: 'warning', line: card.sourceLine, message: w.message, stableUid: card.stableUid });
+    }
   }
 
   return { deckSlug, cards, errors: sortIssues(errors), warnings: sortWarnings(warnings) };
@@ -711,7 +948,10 @@ function sortIssues(issues: ImportIssue[]): ImportIssue[] {
  * the first place a duplicate can be refused, and refusing it here is cheaper
  * than every downstream consumer defending itself.
  */
-export function validateCards(cards: readonly ParsedCard[]): ImportIssue[] {
+export function validateCards(
+  cards: readonly ParsedCard[],
+  options: { deckLocale?: string | null } = {},
+): ImportIssue[] {
   const issues: ImportIssue[] = [];
   const firstSeen = new Map<string, number>();
 
@@ -798,9 +1038,51 @@ export function validateCards(cards: readonly ParsedCard[]): ImportIssue[] {
         });
       }
     }
+
+    // A translated card is checked against its own English (contract §2), and
+    // its English must not contain Chinese: on a bilingual card that is almost
+    // always zh text pasted into the wrong section. English-only cards are not
+    // checked, so a deck written in Chinese (aws-saa-fundamentals) is unaffected.
+    if (card.translations) {
+      const cjkFields = englishCjkFields(card);
+      if (cjkFields.length > 0) {
+        issues.push({
+          code: 'EN_FIELD_HAS_CJK',
+          line: card.sourceLine,
+          message: `Card "${card.stableUid}" has a Chinese translation, but its English ${cjkFields.join(', ')} contain Chinese characters; Chinese text belongs in the _ZH sections.`,
+          stableUid: card.stableUid,
+        });
+      }
+      for (const issue of validateTranslation({
+        translations: card.translations,
+        english: {
+          question: card.question,
+          explanation: card.explanation,
+          realWorldUsage: card.realWorldUsage,
+          mcq: card.mcq ?? null,
+        },
+        deckLocale: options.deckLocale,
+      })) {
+        issues.push({ code: issue.code, line: card.sourceLine, message: `Card "${card.stableUid}": ${issue.message}`, stableUid: card.stableUid });
+      }
+    }
   }
 
   return sortIssues(issues);
+}
+
+/** The English sections of a card that contain a Han character, named by their markers. */
+function englishCjkFields(card: ParsedCard): string[] {
+  const fields: string[] = [];
+  if (hasCjk(card.question)) fields.push('Q:');
+  if (card.mcq?.qualifier && hasCjk(card.mcq.qualifier)) fields.push('QUALIFIER:');
+  for (const option of card.mcq?.options ?? []) {
+    if (hasCjk(option.text)) fields.push(`OPT: ${option.key}`);
+    if (option.why !== null && hasCjk(option.why)) fields.push(`WHY: of option "${option.key}"`);
+  }
+  if (hasCjk(card.explanation)) fields.push('A:');
+  if (card.realWorldUsage !== null && hasCjk(card.realWorldUsage)) fields.push('USAGE:');
+  return fields;
 }
 
 // ---------------------- plan ----------------------
@@ -816,6 +1098,7 @@ const COMPARABLE_FIELDS: readonly ComparableField[] = [
   'topic',
   'mcq',
   'source',
+  'translations',
 ];
 
 /**
@@ -846,9 +1129,28 @@ function fieldsThatDiffer(card: ParsedCard, existing: Card): ComparableField[] {
       if (normalizeSourceForCompare(card.source) !== normalizeSourceForCompare(existing.source)) changed.push(field);
       continue;
     }
+    if (field === 'translations') {
+      // Like mcq: server null, a missing key on an old server and a card with
+      // no _ZH section all normalize to ''.
+      if (normalizeTranslationsForCompare(card.translations) !== normalizeTranslationsForCompare(translationsOf(existing))) {
+        changed.push(field);
+      }
+      continue;
+    }
     if (normalizeText(card[field]) !== normalizeText(existing[field])) changed.push(field);
   }
   return changed;
+}
+
+export interface PlanImportOptions {
+  /**
+   * The operator ticked "clear translations": an update that deletes a stored
+   * translation goes ahead (marked clearsTranslations) instead of becoming a
+   * TRANSLATIONS_WOULD_BE_CLEARED conflict.
+   */
+  allowClearTranslations?: boolean;
+  /** The target deck's locale, so a translation into the deck's own language is refused. */
+  deckLocale?: string | null;
 }
 
 /**
@@ -863,13 +1165,14 @@ function fieldsThatDiffer(card: ParsedCard, existing: Card): ComparableField[] {
 export function planImport(
   parsed: Pick<ParsedDeck, 'cards'>,
   existingCards: readonly Card[],
+  options: PlanImportOptions = {},
 ): ImportPlan {
   const plan: ImportPlan = { creates: [], updates: [], unchanged: [], conflicts: [] };
 
   // Cards that failed validation never reach the API. planImport re-runs the
   // check rather than trusting the caller to have looked at parsed.errors.
   const invalidUids = new Map<string, ImportIssue>();
-  for (const issue of validateCards(parsed.cards)) {
+  for (const issue of validateCards(parsed.cards, { deckLocale: options.deckLocale })) {
     if (issue.stableUid === undefined) continue;
     if (!invalidUids.has(issue.stableUid)) invalidUids.set(issue.stableUid, issue);
   }
@@ -937,6 +1240,22 @@ export function planImport(
       plan.unchanged.push({ kind: 'unchanged', card, existingId: target.id });
       continue;
     }
+
+    // The runner writes the whole card, so a card the file leaves without _ZH
+    // sections would have its stored translation deleted. Typically that is an
+    // English-only export of a translated deck, so it is refused unless the
+    // operator opted in.
+    const clearsTranslations = card.translations === undefined && changedFields.includes('translations');
+    if (clearsTranslations && !options.allowClearTranslations) {
+      plan.conflicts.push({
+        kind: 'conflict',
+        card,
+        reason: 'TRANSLATIONS_WOULD_BE_CLEARED',
+        message: `Card "${card.stableUid}" has a Chinese translation on the server, but this document has no _ZH sections for it, so importing would delete the translation. Add its _ZH sections, or choose to clear translations.`,
+      });
+      continue;
+    }
+
     plan.updates.push({
       kind: 'update',
       card,
@@ -945,10 +1264,36 @@ export function planImport(
       // edit made in another tab between preview and execute.
       expectedVersion: target.version,
       changedFields,
+      ...(clearsTranslations ? { clearsTranslations: true as const } : {}),
     });
   }
 
   return plan;
+}
+
+const ENGLISH_TRANSLATED_FIELDS: readonly ComparableField[] = ['question', 'explanation', 'realWorldUsage', 'mcq'];
+
+/**
+ * ZH_WARN_MAYBE_STALE, non-blocking: an update that changes the English text of
+ * a translated card while leaving its _ZH sections exactly as the server has
+ * them. The server re-stamps a translation as current on every write that
+ * carries one, so this is the last point where the drift is visible.
+ */
+export function translationPlanWarnings(plan: Pick<ImportPlan, 'updates'>): ImportWarning[] {
+  const warnings: ImportWarning[] = [];
+  for (const update of plan.updates) {
+    if (!update.card.translations || update.changedFields.includes('translations')) continue;
+    const english = update.changedFields.filter((field) => ENGLISH_TRANSLATED_FIELDS.includes(field));
+    if (english.length === 0) continue;
+    warnings.push({
+      code: 'ZH_WARN_MAYBE_STALE',
+      severity: 'warning',
+      line: update.card.sourceLine,
+      message: `Card "${update.card.stableUid}": the English ${english.join(', ')} changed but its _ZH sections did not; importing marks the translation current, so check the Chinese still says the same.`,
+      stableUid: update.card.stableUid,
+    });
+  }
+  return sortWarnings(warnings);
 }
 
 // ---------------------- serialize ----------------------
@@ -964,23 +1309,43 @@ export function serializeDeckMarkdown(
   const out: string[] = [`# deck: ${deckSlug}`, ''];
 
   for (const card of cards) {
+    // Canonical order (FORMAT.md §1.4): each _ZH twin right after its English section.
+    const zh = card.translations?.['zh-CN'];
     out.push(`## ${card.stableUid} | d${card.difficulty}`);
     if (card.topic) out.push(`TOPIC: ${card.topic}`);
     if (card.mcq && card.mcq.qualifier !== null) out.push(`QUALIFIER: ${card.mcq.qualifier}`);
+    if (zh?.mcq && zh.mcq.qualifier !== null) out.push(`QUALIFIER_ZH: ${zh.mcq.qualifier}`);
     out.push('Q:');
     out.push(card.question);
+    if (zh) {
+      out.push('Q_ZH:');
+      out.push(zh.question);
+    }
     if (card.mcq) {
       for (const option of card.mcq.options) {
+        const zhOption = zh?.mcq?.options[option.key];
         out.push(option.correct ? `OPT: ${option.key} *` : `OPT: ${option.key}`);
         out.push(option.text);
+        if (zhOption) {
+          out.push('OPT_ZH:');
+          out.push(zhOption.text);
+        }
         if (option.why !== null) {
           out.push('WHY:');
           out.push(option.why);
+        }
+        if (zhOption && zhOption.why !== null) {
+          out.push('WHY_ZH:');
+          out.push(zhOption.why);
         }
       }
     }
     out.push('A:');
     out.push(card.explanation);
+    if (zh && zh.explanation !== undefined) {
+      out.push('A_ZH:');
+      out.push(zh.explanation);
+    }
     if (card.codeSnippet) {
       out.push(card.codeLanguage ? `CODE: ${card.codeLanguage}` : 'CODE:');
       out.push(card.codeSnippet);
@@ -988,6 +1353,10 @@ export function serializeDeckMarkdown(
     if (card.realWorldUsage) {
       out.push('USAGE:');
       out.push(card.realWorldUsage);
+    }
+    if (zh?.realWorldUsage) {
+      out.push('USAGE_ZH:');
+      out.push(zh.realWorldUsage);
     }
     if (card.source) {
       out.push(`SOURCE: ${card.source.url}`);

@@ -10,6 +10,7 @@ import { useUnsavedChangesGuard } from '../hooks/useUnsavedChangesGuard';
 import { parseDeckId } from '../lib/parseDeckId';
 import type { Card } from '../types/card';
 import { CardForm, type CardFormValues } from '../components/CardForm';
+import { CardTranslationPanel } from '../components/CardTranslationPanel';
 import { buildCardBody, buildCardSource } from '../lib/authoringBodies';
 import { CONSOLE_NAME } from '../lib/brand';
 import { ConsoleShell } from '../components/console/ConsoleShell';
@@ -205,7 +206,8 @@ export function EditCardPage() {
     // it): '' is sent on purpose, because the server stores null for a blank
     // topic, which is how a topic is cleared. source is always sent too: null
     // when the Source URL box is blank, which clears the column. mcq stays
-    // absent, so a stored MCQ blob is left alone.
+    // absent, so a stored MCQ blob is left alone, and so do translations: the
+    // server keeps the stored one and marks it stale if the English moved.
     const { result } = await updateCardMutation.mutateAsync({
       ...buildCardBody(values),
       topic: values.topic.trim(),
@@ -284,6 +286,7 @@ export function EditCardPage() {
           recoveryLabel={conflictRecoverable ? RETRY_WITH_LATEST : null}
           mcq={card.mcq ?? null}
         />
+        <CardTranslationPanel card={card} deck={deck} />
       </div>
     </ConsoleShell>
   );

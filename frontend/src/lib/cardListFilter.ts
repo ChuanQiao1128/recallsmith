@@ -1,4 +1,5 @@
 import type { Card } from '../types/card';
+import { translationState } from './translationView';
 
 // Pure filtering and sorting for the card list. No React here: the page owns the
 // state and the memoisation, this module owns the rules, and the tests can drive
@@ -6,11 +7,14 @@ import type { Card } from '../types/card';
 
 export type CardKindFilter = 'all' | 'mcq' | 'qa';
 export type CardSortKey = 'order' | 'updated' | 'difficulty';
+/** The zh-CN translation verdict a card must have to stay visible (translationView.translationState). */
+export type CardTranslationFilter = 'all' | 'zh-missing' | 'zh-stale';
 
 export interface CardListCriteria {
   query: string;
   kind: CardKindFilter;
   difficulty: 'all' | number;
+  translation: CardTranslationFilter;
   sort: CardSortKey;
 }
 
@@ -18,6 +22,7 @@ export const DEFAULT_CARD_LIST_CRITERIA: CardListCriteria = {
   query: '',
   kind: 'all',
   difficulty: 'all',
+  translation: 'all',
   sort: 'order',
 };
 
@@ -34,7 +39,7 @@ const CARD_DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
  * only appear once the set of visible cards can actually differ from the deck.
  */
 export function isCriteriaActive(c: CardListCriteria): boolean {
-  return c.query.trim() !== '' || c.kind !== 'all' || c.difficulty !== 'all';
+  return c.query.trim() !== '' || c.kind !== 'all' || c.difficulty !== 'all' || c.translation !== 'all';
 }
 
 /**
@@ -63,6 +68,9 @@ export function filterAndSortCards(
     if (criteria.difficulty !== 'all' && Number(card.difficulty) !== criteria.difficulty) {
       return false;
     }
+
+    if (criteria.translation === 'zh-missing' && translationState(card) !== 'missing') return false;
+    if (criteria.translation === 'zh-stale' && translationState(card) !== 'stale') return false;
 
     return true;
   });

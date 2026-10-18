@@ -1,4 +1,5 @@
 import type { McqBlob } from './mcq';
+import type { CardTranslations, TranslationStatus } from './translation';
 
 /** Per-card citation (server column cards.source): the https page and the passage copied from it. */
 export interface CardSource {
@@ -23,6 +24,10 @@ export interface Card {
   mcq?: McqBlob | null;
   /** null = no source on the server; absent = an older server without the column. */
   source?: CardSource | null;
+  /** Built-in translations (cards.translations). null = none on the server; absent = an older server without the column. */
+  translations?: CardTranslations | null;
+  /** Server verdict per translated locale ('stale' once the English changed after the translation); absent when there is none. */
+  translationStatus?: TranslationStatus | null;
   revision?: number | null;
 
   version: number;

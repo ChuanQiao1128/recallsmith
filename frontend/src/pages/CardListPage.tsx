@@ -20,6 +20,7 @@ import {
   isCriteriaActive,
 } from '../lib/cardListFilter';
 import type { CardListCriteria } from '../lib/cardListFilter';
+import { deckUsesTranslations, translationState, type TranslationState } from '../lib/translationView';
 import {
   emptyErrorFeed,
   clearNotice,
@@ -96,6 +97,24 @@ function LoadFailureScreen({
   );
 }
 
+const TRANSLATION_BADGE: Record<TranslationState, { label: string; className: string }> = {
+  ok: { label: 'zh-CN', className: 'bg-emerald-50 text-emerald-800 border-emerald-200' },
+  stale: { label: 'zh-CN stale', className: 'bg-amber-50 text-amber-900 border-amber-200' },
+  missing: { label: 'zh-CN missing', className: 'bg-red-50 text-red-800 border-red-200' },
+};
+
+function TranslationBadge({ state }: { state: TranslationState }) {
+  const badge = TRANSLATION_BADGE[state];
+  return (
+    <span
+      data-testid={`card-translation-badge-${state}`}
+      className={`ml-1 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${badge.className}`}
+    >
+      {badge.label}
+    </span>
+  );
+}
+
 export function CardListPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -138,9 +157,10 @@ export function CardListPage() {
         query: deferredQuery,
         kind: criteria.kind,
         difficulty: criteria.difficulty,
+        translation: criteria.translation,
         sort: criteria.sort,
       }),
-    [cardsQuery.data, deferredQuery, criteria.kind, criteria.difficulty, criteria.sort],
+    [cardsQuery.data, deferredQuery, criteria.kind, criteria.difficulty, criteria.translation, criteria.sort],
   );
 
   async function handleDelete(cardId: number) {
@@ -249,6 +269,9 @@ export function CardListPage() {
     (a, b) => a - b,
   );
   const filtersActive = isCriteriaActive(criteria);
+  // The translation filter and badges only appear on a deck that declares
+  // zh-CN or already holds a translated card; every other deck looks as before.
+  const showTranslations = deckUsesTranslations(deck, cards);
 
   return (
     <ConsoleShell
@@ -369,6 +392,24 @@ export function CardListPage() {
               ))}
             </select>
 
+            {showTranslations ? (
+              <select
+                aria-label="Chinese translation"
+                value={criteria.translation}
+                onChange={e =>
+                  setCriteria(prev => ({
+                    ...prev,
+                    translation: e.target.value as CardListCriteria['translation'],
+                  }))
+                }
+                className="text-sm px-2 py-1.5 rounded-md border border-slate-300 text-slate-700"
+              >
+                <option value="all">Any translation status</option>
+                <option value="zh-missing">Chinese missing</option>
+                <option value="zh-stale">Chinese stale</option>
+              </select>
+            ) : null}
+
             <select
               aria-label="Sort cards"
               value={criteria.sort}
@@ -433,6 +474,7 @@ export function CardListPage() {
                       <td className="px-3 py-2">
                         <RarityBadge difficulty={card.difficulty} />
                         {card.mcq ? <span data-testid="card-mcq-badge" className="ml-1 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border bg-slate-100 text-slate-700 border-slate-200">MCQ</span> : null}
+                        {showTranslations ? <TranslationBadge state={translationState(card)} /> : null}
                       </td>
                       <td className="px-3 py-2 text-slate-500 text-xs">{formatCardDate(card.createdAt)}</td>
                       <td className="px-3 py-2 text-slate-500 text-xs">{formatCardDate(card.updatedAt)}</td>

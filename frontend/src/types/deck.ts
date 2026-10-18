@@ -31,6 +31,9 @@ export interface Deck {
   // The build the manifest serves, from decks.live_build_id. Lets editors, who
   // never fetch the admin manifest, still tell a published deck from a draft.
   liveBuildId?: string | null;
+  // decks.translation_locales: the locales every live card must carry before
+  // the deck can publish (card translations contract §4). [] = none declared.
+  translationLocales?: string[] | null;
 
   // legacy/optional (keep if you already use)
   contentVersion?: string | null;

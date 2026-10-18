@@ -21,10 +21,17 @@
 //    operator gets every failure at once.
 // 4. Cleared optional fields are sent as "" instead of being omitted, and mcq is
 //    always sent as an explicit value (null on a Q/A card), and so is source
-//    (null on a card without SOURCE:, so a removed SOURCE: clears the column).
+//    (null on a card without SOURCE:, so a removed SOURCE: clears the column),
+//    and so are translations (null on a card without _ZH sections).
 //    F01 upserts every column from the payload, and the planner compares the
 //    same normalized strings, so a re-import of the same file is a no-op — idempotence has to
 //    survive deletions too.
+// 5. Because a null translations clears the column, an update that would
+//    delete a stored translation is only sent when the plan marked it
+//    clearsTranslations (the operator opted in). planImport already turns the
+//    rest into TRANSLATIONS_WOULD_BE_CLEARED conflicts; the runner re-checks
+//    rather than trusting its caller, and records any such action as a failure
+//    without sending it.
 
 import { VERSION_CONFLICT } from '../api/errors';
 import type { ImportCardInput, ImportCardsBatchResult } from '../api/authoring';
@@ -50,6 +57,11 @@ export const IMPORT_RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
 // api layer's CANCELLED so the page can tell "you stopped this" from any other
 // refusal and point the operator at a re-preview.
 export const IMPORT_CANCELLED = 'IMPORT_CANCELLED';
+
+// code stamped on an update the runner refused to send because it would delete
+// a stored translation without the operator's opt-in. Same code as the plan
+// conflict it backs up.
+export const TRANSLATIONS_WOULD_BE_CLEARED = 'TRANSLATIONS_WOULD_BE_CLEARED';
 
 const CANCELLED_MESSAGE =
   'Cancelled while this batch was being written. Re-run the preview to see whether it landed.';
@@ -134,9 +146,24 @@ function cardInputFor(action: ImportAction): ImportCardInput {
     topic: optionalText(card.topic ?? null),
     mcq: card.mcq ?? null,
     source: card.source ?? null,
+    translations: card.translations ?? null,
     difficulty: card.difficulty,
     orderInDeck: card.orderInDeck,
   };
+}
+
+/**
+ * True for an update that would delete the card's stored translation without
+ * the plan's explicit opt-in: the server holds one (the compare found a
+ * difference), the file has none, and nobody ticked "clear translations".
+ */
+export function wouldClearTranslations(action: ImportAction): boolean {
+  return (
+    action.kind === 'update' &&
+    action.card.translations === undefined &&
+    action.changedFields.includes('translations') &&
+    action.clearsTranslations !== true
+  );
 }
 
 /** Human sentence for a failure, with the one hint that is not obvious. */
@@ -261,8 +288,21 @@ export async function runImport(
     notRun: 0,
   };
   const total = actions.length;
-  const chunks = chunkImportActions(deckId, actions);
-  let done = 0;
+  const refused = actions.filter(wouldClearTranslations);
+  for (const action of refused) {
+    result.failures.push({
+      action,
+      stableUid: action.card.stableUid,
+      code: TRANSLATIONS_WOULD_BE_CLEARED,
+      message: `Not sent: importing "${action.card.stableUid}" would delete its Chinese translation. Re-run the preview and choose to clear translations if that is intended.`,
+    });
+  }
+  const chunks = chunkImportActions(
+    deckId,
+    refused.length === 0 ? actions : actions.filter((action) => !wouldClearTranslations(action)),
+  );
+  let done = refused.length;
+  if (refused.length > 0) onProgress?.({ done, total, current: refused[refused.length - 1] });
 
   for (const chunk of chunks) {
     // Cancelled before this batch even started: none of it, or anything after

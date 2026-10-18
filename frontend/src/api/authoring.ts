@@ -3,6 +3,7 @@ import type { ApiResult } from '../types/api';
 import type { Deck, DeckAvailability, DeckTier } from '../types/deck';
 import type { Card, CardSource } from '../types/card';
 import type { McqBlob } from '../types/mcq';
+import type { CardTranslations, TranslationStatus } from '../types/translation';
 import axios from 'axios';
 import { http } from './http';
 import { apiResultFromError, failResult } from './httpFailure';
@@ -32,6 +33,34 @@ function toOptionalInt(v: unknown): number | null | undefined {
   return undefined;
 }
 
+/**
+ * translationLocales as the deck carries it: an array of non-empty strings, or
+ * undefined when an older server sends no such key (never guessed as []).
+ */
+function toLocaleList(v: unknown): string[] | null | undefined {
+  if (v === undefined) return undefined;
+  if (!Array.isArray(v)) return null;
+  return v.filter((x): x is string => typeof x === 'string' && x.trim() !== '');
+}
+
+/**
+ * The jsonb `translations` object passes through as received (the server has
+ * already canonicalised it); anything that is not an object is no translation.
+ */
+function toTranslations(v: unknown): CardTranslations | null {
+  return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as CardTranslations) : null;
+}
+
+/** Keeps only the 'ok' / 'stale' verdicts; an unknown value is dropped rather than guessed. */
+function toTranslationStatus(v: unknown): TranslationStatus | null {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return null;
+  const out: Record<string, 'ok' | 'stale'> = {};
+  for (const [locale, verdict] of Object.entries(v as UnknownRecord)) {
+    if (verdict === 'ok' || verdict === 'stale') out[locale] = verdict;
+  }
+  return out as TranslationStatus;
+}
+
 function normalizeDeck(d: Deck | null | undefined): Deck | null {
   if (!d) return null;
   const o = d as unknown as UnknownRecord;
@@ -59,6 +88,9 @@ function normalizeDeck(d: Deck | null | undefined): Deck | null {
     tier: (o.tier === undefined ? d.tier : (o.tier as DeckTier | null)) ?? null,
     availability: (o.availability === undefined ? d.availability : (o.availability as DeckAvailability | null)) ?? null,
     eta: (o.eta === undefined ? d.eta : (o.eta as string | null)) ?? null,
+    // Spread only when the server sent the key, so a deck from an older server
+    // keeps exactly the shape it had before translations existed.
+    ...(o.translationLocales === undefined ? {} : { translationLocales: toLocaleList(o.translationLocales) ?? [] }),
   };
 }
 
@@ -74,6 +106,9 @@ function normalizeCard(c: Card): Card {
     revision: o.revision === undefined ? c.revision : (toOptionalInt(o.revision) ?? null),
     version: toInt(o.version, c.version),
     isDeleted: o.isDeleted === undefined ? c.isDeleted : toInt(o.isDeleted, c.isDeleted ?? 0),
+    // Like isDeleted: an absent key (an older server) stays absent.
+    ...(o.translations === undefined ? {} : { translations: toTranslations(o.translations) }),
+    ...(o.translationStatus === undefined ? {} : { translationStatus: toTranslationStatus(o.translationStatus) }),
   };
 }
 
@@ -210,6 +245,9 @@ export async function updateDeck(
     retiredAtMs?: number | null;
     totalCards?: number | null;
     previewCards?: number | null;
+    // super_admin only on the server (Decks.cs update spec). DeckEditPage sends
+    // it only when it changed, so an editor's save never carries it.
+    translationLocales?: string[];
   }
 ): Promise<ApiResult<Deck>> {
   try {
@@ -229,6 +267,7 @@ export async function updateDeck(
     if (params.retiredAtMs !== undefined) body.retiredAtMs = params.retiredAtMs;
     if (params.totalCards !== undefined) body.totalCards = params.totalCards;
     if (params.previewCards !== undefined) body.previewCards = params.previewCards;
+    if (params.translationLocales !== undefined) body.translationLocales = params.translationLocales;
 
     // Backend returns single deck object, not array
     const resp = await http.put<ApiResult<Deck>>('/api/v1/authoring/decks', body);
@@ -607,6 +646,8 @@ export interface ImportCardInput {
   mcq: McqBlob | null;
   /** Optional on the type; the import runner always sets it (null clears the column). */
   source?: CardSource | null;
+  /** Optional on the type; the import runner always sets it (null clears the column, see TRANSLATIONS_WOULD_BE_CLEARED). */
+  translations?: CardTranslations | null;
   difficulty: number;
   orderInDeck: number;
 }
