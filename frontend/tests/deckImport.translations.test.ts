@@ -230,6 +230,34 @@ describe('_ZH lexing rules', () => {
     }
   });
 
+  it('ZH_BAD_MARKER: a _ZH marker with a space before its colon or a fullwidth colon is refused, never glued above', () => {
+    const plain = (marker: string) =>
+      `# deck: d\n\n## c-1 | d1\nQ:\nWhat is a VPC?\n${marker}\n什么是 VPC？\nA:\nAn isolated virtual network.\n`;
+    for (const marker of ['Q_ZH :', 'Q_ZH：', 'Q_ZH\t:', 'A_ZH ：', 'USAGE_ZH :', 'OPT_ZH：', 'WHY_ZH :', 'QUALIFIER_ZH : 最安全', 'SOURCE_ZH：']) {
+      const parsed = parseDeckMarkdown(plain(marker));
+      expect(parsed.errors.map((issue) => [issue.code, issue.line]), marker).toEqual([['ZH_BAD_MARKER', 6]]);
+      expect(parsed.errors[0].stableUid).toBe('c-1');
+      expect(parsed.errors[0].message, marker).toContain('Q_ZH:');
+      // The Chinese line went nowhere: not into Q:, and no translation was made from it.
+      expect(parsed.cards[0].question, marker).toBe('What is a VPC?');
+      expect(parsed.cards[0].translations, marker).toBeUndefined();
+    }
+  });
+
+  it('ZH_BAD_MARKER on a translated card also leaves the twin missing, so the card is dropped', () => {
+    const parsed = parseDeckMarkdown(DOC.replace('\nQ_ZH:\n', '\nQ_ZH：\n'));
+    expect(parsed.errors.map((issue) => issue.code)).toEqual(['ZH_MISSING_FIELD', 'ZH_BAD_MARKER']);
+    expect(parsed.errors[0].message).toContain('Q_ZH:');
+    expect(parsed.cards).toEqual([]);
+  });
+
+  it('the exact SOURCE_ZH: spelling stays ZH_UNSUPPORTED_FIELD, and lines that only look similar stay content', () => {
+    expect(codesOf(insertBefore('A:', ['SOURCE_ZH:', '引文。']))).toEqual(['ZH_UNSUPPORTED_FIELD']);
+    const parsed = parseDeckMarkdown('# deck: d\n\n## c-1 | d1\nQ:\nWhat does Q_ZHX: mean?\nQ_ZHX: is not a marker\nA:\nNothing.\n');
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.cards[0].question).toBe('What does Q_ZHX: mean?\nQ_ZHX: is not a marker');
+  });
+
   it('OPT_ZH: never carries a star (TRANSLATION_CORRECT_MARK) or any other payload (ZH_BAD_OPT_LINE)', () => {
     const star = parseDeckMarkdown(DOC.replace('OPT: b\nEnable SSE-S3 default encryption on the bucket.\nOPT_ZH:', 'OPT: b\nEnable SSE-S3 default encryption on the bucket.\nOPT_ZH: *'));
     expect(star.errors.map((issue) => issue.code)).toEqual(['TRANSLATION_CORRECT_MARK']);
@@ -261,6 +289,18 @@ describe('_ZH lexing rules', () => {
     expect(parsed.errors.map((issue) => issue.code)).toEqual(['EN_FIELD_HAS_CJK']);
     expect(parsed.errors[0].message).toContain('A:');
     expect(planImport(parsed, []).conflicts.map((c) => c.reason)).toEqual(['INVALID_CARD']);
+  });
+
+  it('EN_FIELD_HAS_CJK: once a file carries a translation, every card in it is checked, the untranslated ones too', () => {
+    const untranslated = '## plain-cjk-01 | d1\nQ:\nWhich service stores objects?\nQ_ZH\n哪种服务存储对象？\nA:\nAmazon S3.\n';
+    const parsed = parseDeckMarkdown(`${DOC}\n${untranslated}`);
+    expect(parsed.errors.map((issue) => [issue.code, issue.stableUid])).toEqual([['EN_FIELD_HAS_CJK', 'plain-cjk-01']]);
+    expect(parsed.errors[0].message).toContain('has no _ZH sections');
+    expect(parsed.errors[0].message).toContain('Q:');
+    expect(planImport(parsed, []).conflicts.map((c) => [c.reason, c.card.stableUid])).toEqual([['INVALID_CARD', 'plain-cjk-01']]);
+
+    // The same card in a file with no translated card is a Chinese deck's card, not an error.
+    expect(parseDeckMarkdown(`# deck: d\n\n${untranslated}`).errors).toEqual([]);
   });
 
   it('an English-only card written in Chinese (the aws-saa-fundamentals deck) is not an EN_FIELD_HAS_CJK', () => {
@@ -351,6 +391,64 @@ describe('planImport with translations', () => {
       DOC.replace('Enable MFA Delete on the bucket.', 'Turn on MFA Delete for the bucket.').replace('在存储桶上启用 MFA Delete。', '为存储桶启用 MFA Delete。'),
     );
     expect(translationPlanWarnings(planImport(both, [serverCard(card)]))).toEqual([]);
+  });
+});
+
+describe('planImport and a translation the server marks stale', () => {
+  const parsed = parseDeckMarkdown(DOC);
+  const card = parsed.cards[0];
+  const stale = (over: Partial<Card> = {}) => serverCard(card, { translationStatus: { 'zh-CN': 'stale' }, ...over });
+
+  it('re-imports the identical file as an update of translations, so the basis is restamped, with a warning', () => {
+    const plan = planImport(parsed, [stale()]);
+    expect(plan.unchanged).toEqual([]);
+    expect(plan.updates.map((u) => u.changedFields)).toEqual([['translations']]);
+    expect(plan.updates[0].restampsStaleTranslation).toBe(true);
+    expect(plan.updates[0].clearsTranslations).toBeUndefined();
+    const warnings = translationPlanWarnings(plan);
+    expect(warnings.map((w) => [w.code, w.stableUid, w.severity])).toEqual([['ZH_WARN_STALE_MARKED_CURRENT', UID, 'warning']]);
+    expect(warnings[0].message).toContain('this import marks the stale Chinese translation as current');
+    // Non-blocking: nothing became a conflict.
+    expect(plan.conflicts).toEqual([]);
+  });
+
+  it('is unchanged once the server reports the translation current again', () => {
+    expect(planImport(parsed, [serverCard(card, { translationStatus: { 'zh-CN': 'ok' } })]).unchanged).toHaveLength(1);
+    expect(planImport(parsed, [serverCard(card, { translationStatus: null })]).unchanged).toHaveLength(1);
+  });
+
+  it('gives the stale warning instead of ZH_WARN_MAYBE_STALE when the English changed too', () => {
+    const englishEdit = parseDeckMarkdown(DOC.replace('Enable MFA Delete on the bucket.', 'Turn on MFA Delete for the bucket.'));
+    const plan = planImport(englishEdit, [stale()]);
+    expect(plan.updates.map((u) => u.changedFields)).toEqual([['mcq', 'translations']]);
+    expect(translationPlanWarnings(plan).map((w) => w.code)).toEqual(['ZH_WARN_STALE_MARKED_CURRENT']);
+  });
+
+  it('a rewritten Chinese text is an ordinary translations update, with no warning', () => {
+    const edited = parseDeckMarkdown(DOC.replace('在存储桶上启用 MFA Delete。', '为存储桶启用 MFA Delete。'));
+    const plan = planImport(edited, [stale()]);
+    expect(plan.updates.map((u) => u.changedFields)).toEqual([['translations']]);
+    expect(plan.updates[0].restampsStaleTranslation).toBeUndefined();
+    expect(translationPlanWarnings(plan)).toEqual([]);
+  });
+
+  it('an English-only file over a stale translation is still TRANSLATIONS_WOULD_BE_CLEARED', () => {
+    const englishOnly = parseDeckMarkdown(serializeDeckMarkdown('lint-sample', englishOnlyOf(parsed.cards)));
+    const plan = planImport(englishOnly, [stale()]);
+    expect(plan.conflicts.map((c) => c.reason)).toEqual(['TRANSLATIONS_WOULD_BE_CLEARED']);
+  });
+
+  it('the runner sends the translation, so the server can restamp it', async () => {
+    const batches: ImportCardInput[][] = [];
+    const writer: ImportBatchWriter = {
+      async importCards({ cards }) {
+        batches.push(cards);
+        return ok({ created: 0, updated: cards.length, unchanged: 0 });
+      },
+    };
+    const result = await runImport(7, planImport(parsed, [stale()]).updates, writer, { sleep: async () => {} });
+    expect(result.failures).toEqual([]);
+    expect(batches[0][0].translations).toEqual(card.translations);
   });
 });
 

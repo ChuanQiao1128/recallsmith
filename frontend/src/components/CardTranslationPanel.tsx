@@ -62,8 +62,9 @@ export function CardTranslationPanel({ card, deck }: { card: Card; deck: Deck })
         </span>
       </div>
       <p lang="en" className="mt-1 text-xs text-slate-500">
-        Read-only. The translation changes through the deck Markdown import (the _ZH sections); saving this
-        form never touches it.
+        Read-only. The translation changes only through the deck Markdown import (the _ZH sections). Saving
+        this form never writes it, but the server checks it against the edited English: reworded text marks
+        it stale, and adding or removing Real-world usage or the Explanation has to be done in the Markdown.
       </p>
 
       {zh === null ? (

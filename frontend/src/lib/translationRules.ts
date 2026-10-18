@@ -397,7 +397,7 @@ export function translationsOf(row: object | null | undefined): Record<string, u
 
 // ---------------------- warnings (non-blocking) ----------------------
 
-export type TranslationWarningCode = 'ZH_WARN_CORRECT_LONGEST' | 'ZH_WARN_MAYBE_STALE';
+export type TranslationWarningCode = 'ZH_WARN_CORRECT_LONGEST' | 'ZH_WARN_MAYBE_STALE' | 'ZH_WARN_STALE_MARKED_CURRENT';
 export type TranslationWarning = { code: TranslationWarningCode; message: string };
 
 /** Same ratio as MCQ_WARN_CORRECT_LONGEST, measured on the Chinese option text. */

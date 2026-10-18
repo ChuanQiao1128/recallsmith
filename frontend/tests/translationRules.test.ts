@@ -2,8 +2,12 @@
 // contract §2, the canonical compare, the wire reader and the non-blocking
 // longest-answer hint. The server (TranslationValidation.cs) answers with the
 // same codes, so the last test pins that every code in the list is reachable
-// from a concrete input here.
+// from a concrete input here, and the shared fixture file
+// content/decks/translation-fixtures.json pins that both sides give the same
+// first code for the same input.
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import type { McqBlob } from '../src/types/mcq';
@@ -320,5 +324,49 @@ describe('warnTranslation', () => {
     expect(warnTranslation({ translations: { 'zh-CN': zhQa() }, mcq: null })).toEqual([]);
     expect(warnTranslation({ translations: null, mcq: MCQ })).toEqual([]);
     expect(warnTranslation({ translations: { 'zh-CN': { mcq: { options: 'x' } } }, mcq: MCQ })).toEqual([]);
+  });
+});
+
+// ---------------------- parity with the server ----------------------
+
+/**
+ * One case of content/decks/translation-fixtures.json. The file is a copy of
+ * the one on the backend branch, where TranslationValidationTests.cs reads it
+ * too. The server stops at its first failure; validateTranslation returns
+ * every issue in the server's check order, so its first code must be the one
+ * the server answers with, and a case the server accepts must have none.
+ */
+interface TranslationFixture {
+  name: string;
+  english: TranslationEnglish;
+  translations: unknown;
+  expectFirstCode: TranslationIssueCode | null;
+}
+
+const FIXTURES_PATH = fileURLToPath(new URL('../../content/decks/translation-fixtures.json', import.meta.url));
+const FIXTURES = JSON.parse(readFileSync(FIXTURES_PATH, 'utf8')) as TranslationFixture[];
+
+describe('parity with the server (content/decks/translation-fixtures.json)', () => {
+  it('holds at least 15 well formed cases with unique names, valid ones included', () => {
+    expect(Array.isArray(FIXTURES)).toBe(true);
+    expect(FIXTURES.length).toBeGreaterThanOrEqual(15);
+    expect(new Set(FIXTURES.map((f) => f.name)).size).toBe(FIXTURES.length);
+    for (const fixture of FIXTURES) {
+      expect(Object.keys(fixture).sort(), fixture.name).toEqual(['english', 'expectFirstCode', 'name', 'translations']);
+      expect(Object.keys(fixture.english).sort(), fixture.name).toEqual(['explanation', 'mcq', 'question', 'realWorldUsage']);
+      if (fixture.expectFirstCode !== null) {
+        expect(TRANSLATION_ISSUE_CODES as readonly string[], fixture.name).toContain(fixture.expectFirstCode);
+      }
+    }
+    expect(FIXTURES.some((f) => f.expectFirstCode === null)).toBe(true);
+  });
+
+  it.each(FIXTURES.map((fixture) => [fixture.name, fixture] as const))('%s', (_name, fixture) => {
+    const issues = validateTranslation({ translations: fixture.translations, english: fixture.english });
+    if (fixture.expectFirstCode === null) {
+      expect(issues).toEqual([]);
+    } else {
+      expect(issues[0]?.code).toBe(fixture.expectFirstCode);
+    }
   });
 });

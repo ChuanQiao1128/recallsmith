@@ -13,6 +13,7 @@ import { CardForm, type CardFormValues } from '../components/CardForm';
 import { CardTranslationPanel } from '../components/CardTranslationPanel';
 import { buildCardBody, buildCardSource } from '../lib/authoringBodies';
 import { CONSOLE_NAME } from '../lib/brand';
+import { FORM_TRANSLATION_MIRROR_CODES, formTranslationConflict, USAGE_NEEDS_MARKDOWN } from '../lib/translationView';
 import { ConsoleShell } from '../components/console/ConsoleShell';
 import { consoleNav } from '../components/console/consoleNav';
 
@@ -207,7 +208,18 @@ export function EditCardPage() {
     // topic, which is how a topic is cleared. source is always sent too: null
     // when the Source URL box is blank, which clears the column. mcq stays
     // absent, so a stored MCQ blob is left alone, and so do translations: the
-    // server keeps the stored one and marks it stale if the English moved.
+    // form never writes them. It does not leave them unchecked, though: the
+    // server re-validates the stored translation against the edited English on
+    // every PUT. A wording change only marks it stale, but adding or removing
+    // Real-world usage (or the explanation) on a translated card is a 400, so
+    // that edit is refused here before it is sent, and the same codes coming
+    // back from the server get the same message.
+    const translationConflict = formTranslationConflict(card, values);
+    if (translationConflict !== null) {
+      setConflictRecoverable(false);
+      return { ok: false, error: translationConflict };
+    }
+
     const { result } = await updateCardMutation.mutateAsync({
       ...buildCardBody(values),
       topic: values.topic.trim(),
@@ -241,6 +253,15 @@ export function EditCardPage() {
 
         setConflictRecoverable(true);
         return { ok: false, error: `${message} ${CONFLICT_HINT}` };
+      }
+
+      const code = result.error?.code;
+      if (code && FORM_TRANSLATION_MIRROR_CODES.includes(code)) {
+        // Reached when the page's copy of the card is behind the server (an
+        // import in another tab added the translation); the Markdown is still
+        // the only way through.
+        setConflictRecoverable(false);
+        return { ok: false, error: formTranslationConflict(card, values) ?? USAGE_NEEDS_MARKDOWN };
       }
 
       setConflictRecoverable(false);

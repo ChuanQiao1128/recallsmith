@@ -26,7 +26,8 @@ import type { CardTranslations } from '../src/types/translation';
 import type { CardReport } from '../src/api/cardReports';
 import { ConfirmDialogProvider } from '../src/components/ui/ConfirmDialog';
 import { queryClient } from '../src/api/queryClient';
-import { ok } from './support/apiResult';
+import { ok, refused } from './support/apiResult';
+import { EXPLANATION_NEEDS_MARKDOWN, USAGE_NEEDS_MARKDOWN } from '../src/lib/translationView';
 import { signInAsEditor, signInAsSuperAdmin, signOut } from './support/consoleSession';
 import { renderAt } from './support/routerProbe';
 import { renderWithQuery } from './support/queryTestClient';
@@ -209,6 +210,91 @@ describe('EditCardPage: the read-only Chinese panel', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
     await waitFor(() => expect(api.updateCard).toHaveBeenCalledTimes(1));
     expect(Object.hasOwn(api.updateCard.mock.calls[0][0] as object, 'translations')).toBe(false);
+  });
+});
+
+describe('EditCardPage: edits the stored translation cannot follow', () => {
+  function mountEdit() {
+    return renderAt(<EditCardPage />, [`/decks/cards/edit?deckId=${DECK_ID}&cardId=101`]);
+  }
+
+  const zhWithUsage: CardTranslations = {
+    'zh-CN': { ...ZH['zh-CN']!, realWorldUsage: '把密钥交给团队自己管理。' },
+  };
+
+  async function alertText(): Promise<string> {
+    return (await screen.findByRole('alert')).textContent ?? '';
+  }
+
+  it('refuses, without sending, adding Real-world usage to a translated card', async () => {
+    mountEdit();
+    await screen.findByTestId('card-translation-panel');
+    await userEvent.type(screen.getByLabelText('RealWorldUsage'), 'Keep the key with the team.');
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    expect(await alertText()).toContain(USAGE_NEEDS_MARKDOWN);
+    expect(USAGE_NEEDS_MARKDOWN).toContain('USAGE_ZH:');
+    expect(api.updateCard).not.toHaveBeenCalled();
+  });
+
+  it('refuses, without sending, removing Real-world usage from a translated card', async () => {
+    api.fetchCardById.mockResolvedValue(
+      ok(card({ realWorldUsage: 'Keep the key with the team.', translations: zhWithUsage, translationStatus: { 'zh-CN': 'ok' } })),
+    );
+    mountEdit();
+    await screen.findByTestId('card-translation-panel');
+    await userEvent.clear(screen.getByLabelText('RealWorldUsage'));
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    expect(await alertText()).toContain(USAGE_NEEDS_MARKDOWN);
+    expect(api.updateCard).not.toHaveBeenCalled();
+  });
+
+  it('still saves a reworded Real-world usage (the server marks the translation stale)', async () => {
+    api.fetchCardById.mockResolvedValue(
+      ok(card({ realWorldUsage: 'Keep the key with the team.', translations: zhWithUsage, translationStatus: { 'zh-CN': 'ok' } })),
+    );
+    api.updateCard.mockResolvedValue(ok(card({ translations: zhWithUsage, translationStatus: { 'zh-CN': 'stale' } })));
+    mountEdit();
+    await screen.findByTestId('card-translation-panel');
+    await userEvent.type(screen.getByLabelText('RealWorldUsage'), ' Rotate it yearly.');
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    await waitFor(() => expect(api.updateCard).toHaveBeenCalledTimes(1));
+    expect(Object.hasOwn(api.updateCard.mock.calls[0][0] as object, 'translations')).toBe(false);
+  });
+
+  it('refuses clearing the explanation of a translated Q/A card', async () => {
+    const qaZh: CardTranslations = { 'zh-CN': { v: 1, question: '哪种做法最安全？', explanation: '使用客户托管的 AWS KMS 密钥。' } };
+    api.fetchCardById.mockResolvedValue(ok(card({ mcq: null, translations: qaZh, translationStatus: { 'zh-CN': 'ok' } })));
+    mountEdit();
+    await screen.findByTestId('card-translation-panel');
+    await userEvent.clear(screen.getByLabelText('Explanation'));
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    expect(await alertText()).toContain(EXPLANATION_NEEDS_MARKDOWN);
+    expect(api.updateCard).not.toHaveBeenCalled();
+  });
+
+  it.each(['TRANSLATION_FIELD_MISSING', 'TRANSLATION_FIELD_EXTRA', 'TRANSLATION_ANSWER_EMPTY'])(
+    'shows the same message when the server answers %s (the page read the card before it was translated)',
+    async (code) => {
+      api.fetchCardById.mockResolvedValue(ok(card({ translations: null })));
+      api.updateCard.mockResolvedValue(refused<Card>(code, 'The English card has a realWorldUsage, but the zh-CN translation has none.'));
+      mountEdit();
+      await screen.findByTestId('card-translation-panel');
+      await userEvent.type(screen.getByLabelText('RealWorldUsage'), 'Keep the key with the team.');
+      await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+      await waitFor(() => expect(api.updateCard).toHaveBeenCalledTimes(1));
+      const text = await alertText();
+      expect(text).toContain(USAGE_NEEDS_MARKDOWN);
+      expect(text).not.toContain('the zh-CN translation has none');
+    },
+  );
+
+  it('passes any other server refusal through unchanged', async () => {
+    api.fetchCardById.mockResolvedValue(ok(card({ translations: null })));
+    api.updateCard.mockResolvedValue(refused<Card>('VALIDATION_ERROR', 'Something else went wrong.'));
+    mountEdit();
+    await screen.findByTestId('card-translation-panel');
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    expect(await alertText()).toContain('Something else went wrong.');
   });
 });
 

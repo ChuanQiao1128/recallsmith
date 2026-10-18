@@ -266,7 +266,8 @@ export function DeckImportPage() {
     return [...preview.plan.creates, ...preview.plan.updates];
   }, [preview]);
 
-  // Parse-time suggestions plus the plan-time ZH_WARN_MAYBE_STALE, in one list.
+  // Parse-time suggestions plus the plan-time ZH_WARN_MAYBE_STALE and
+  // ZH_WARN_STALE_MARKED_CURRENT, in one list.
   const warnings = useMemo<ImportWarning[]>(() => {
     if (!preview) return [];
     const planWarnings = translationPlanWarnings(preview.plan);

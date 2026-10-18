@@ -29,7 +29,9 @@
 // each translatable section gets a `_ZH` twin right after it (QUALIFIER_ZH:,
 // Q_ZH:, OPT_ZH:, WHY_ZH:, A_ZH:, USAGE_ZH:). OPT_ZH:/WHY_ZH: bind to the
 // nearest OPT: above them; correct marks, code, topic and the source quote
-// stay English only. A card with one _ZH section needs all that apply.
+// stay English only. A card with one _ZH section needs all that apply. A
+// misspelled _ZH marker ("Q_ZH :", a fullwidth colon) is refused, never glued
+// into the English section above it.
 //
 // Two deliberate lexing rules make hand written files predictable:
 //
@@ -111,6 +113,7 @@ export type ImportIssueCode =
   | 'BAD_SOURCE_URL'
   | 'SOURCE_QUOTE_TOO_LONG'
   | 'ZH_UNSUPPORTED_FIELD'
+  | 'ZH_BAD_MARKER'
   | 'ZH_MISSING_FIELD'
   | 'ZH_BAD_OPT_LINE'
   | 'ZH_WITHOUT_OPTION'
@@ -174,6 +177,12 @@ export interface ImportUpdate {
    * update that would delete one without it.
    */
   clearsTranslations?: true;
+  /**
+   * Set when the file's translation equals the stored one but the server marks
+   * it stale (its English changed after it was written): the update re-sends
+   * it, which restamps it as current. translationPlanWarnings says so.
+   */
+  restampsStaleTranslation?: true;
 }
 
 export interface ImportUnchanged {
@@ -230,8 +239,13 @@ const WHY_ZH_MARKER = /^WHY_ZH:(.*)$/;
 const ANSWER_ZH_MARKER = /^A_ZH:[ \t]?(.*)$/;
 const USAGE_ZH_MARKER = /^USAGE_ZH:[ \t]?(.*)$/;
 // Every other column-0 "<NAME>_ZH:" (SOURCE_ZH:, CODE_ZH:, TOPIC_ZH: ...) is
-// reserved and refused, so it can never be glued into the open section.
-const RESERVED_ZH_MARKER = /^([A-Z]+)_ZH:/;
+// reserved and refused, so it can never be glued into the open section. The
+// net is wider than the contract's form: a space before the colon or a
+// fullwidth colon (U+FF1A, what a Chinese keyboard types), as in "Q_ZH :" or
+// "Q_ZH\uFF1A", is caught too and refused as ZH_BAD_MARKER instead of being
+// glued, silently, into the English section above it.
+const RESERVED_ZH_MARKER = /^([A-Z]+)_ZH\s*[:\uFF1A]/;
+const RESERVED_ZH_EXACT = /^[A-Z]+_ZH:/;
 
 /**
  * The card uid rule moved to cardRules.ts (UID_PATTERN + MAX_UID_LENGTH,
@@ -871,12 +885,24 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
 
     const reservedZhMatch = RESERVED_ZH_MARKER.exec(raw);
     if (reservedZhMatch) {
-      pushIssue(
-        'ZH_UNSUPPORTED_FIELD',
-        lineNo,
-        `Card "${draft.stableUid}": ${reservedZhMatch[1]}_ZH: is not a translatable section; only QUALIFIER_ZH:, Q_ZH:, OPT_ZH:, WHY_ZH:, A_ZH: and USAGE_ZH: exist (code, topic and the source quote stay English).`,
-        draft.stableUid,
-      );
+      // Every exact spelling of the six markers was taken above, so an exact
+      // "<NAME>_ZH:" here names a section that has no translation, and
+      // anything else is one of the six (or a reserved name) misspelled.
+      if (RESERVED_ZH_EXACT.test(raw)) {
+        pushIssue(
+          'ZH_UNSUPPORTED_FIELD',
+          lineNo,
+          `Card "${draft.stableUid}": ${reservedZhMatch[1]}_ZH: is not a translatable section; only QUALIFIER_ZH:, Q_ZH:, OPT_ZH:, WHY_ZH:, A_ZH: and USAGE_ZH: exist (code, topic and the source quote stay English).`,
+          draft.stableUid,
+        );
+      } else {
+        pushIssue(
+          'ZH_BAD_MARKER',
+          lineNo,
+          `Card "${draft.stableUid}": "${reservedZhMatch[0]}" is not a marker as written; a translation marker is exactly QUALIFIER_ZH:, Q_ZH:, OPT_ZH:, WHY_ZH:, A_ZH: or USAGE_ZH:, with an ASCII colon and no space before it.`,
+          draft.stableUid,
+        );
+      }
       // The body is dropped silently rather than glued to the section above.
       currentSection = null;
       swallowing = true;
@@ -954,6 +980,9 @@ export function validateCards(
 ): ImportIssue[] {
   const issues: ImportIssue[] = [];
   const firstSeen = new Map<string, number>();
+  // A file with one translated card is a bilingual file, so Chinese in any
+  // card's English sections is a mistake there, not a Chinese deck.
+  const fileHasTranslations = cards.some((card) => card.translations !== undefined);
 
   for (const card of cards) {
     if (!isValidStableUid(card.stableUid)) {
@@ -1041,18 +1070,25 @@ export function validateCards(
 
     // A translated card is checked against its own English (contract §2), and
     // its English must not contain Chinese: on a bilingual card that is almost
-    // always zh text pasted into the wrong section. English-only cards are not
-    // checked, so a deck written in Chinese (aws-saa-fundamentals) is unaffected.
-    if (card.translations) {
+    // always zh text pasted into the wrong section, or a _ZH marker mistyped
+    // so that its text joined the section above. Once a file carries one
+    // translation the check covers every card in it, the untranslated ones
+    // too. A file with no translated card is not checked at all, so a deck
+    // written in Chinese (aws-saa-fundamentals) is unaffected.
+    if (card.translations || fileHasTranslations) {
       const cjkFields = englishCjkFields(card);
       if (cjkFields.length > 0) {
         issues.push({
           code: 'EN_FIELD_HAS_CJK',
           line: card.sourceLine,
-          message: `Card "${card.stableUid}" has a Chinese translation, but its English ${cjkFields.join(', ')} contain Chinese characters; Chinese text belongs in the _ZH sections.`,
+          message: card.translations
+            ? `Card "${card.stableUid}" has a Chinese translation, but its English ${cjkFields.join(', ')} contain Chinese characters; Chinese text belongs in the _ZH sections.`
+            : `Card "${card.stableUid}" has no _ZH sections, but its English ${cjkFields.join(', ')} contain Chinese characters, in a file that carries Chinese translations; Chinese text belongs in the _ZH sections.`,
           stableUid: card.stableUid,
         });
       }
+    }
+    if (card.translations) {
       for (const issue of validateTranslation({
         translations: card.translations,
         english: {
@@ -1131,8 +1167,14 @@ function fieldsThatDiffer(card: ParsedCard, existing: Card): ComparableField[] {
     }
     if (field === 'translations') {
       // Like mcq: server null, a missing key on an old server and a card with
-      // no _ZH section all normalize to ''.
-      if (normalizeTranslationsForCompare(card.translations) !== normalizeTranslationsForCompare(translationsOf(existing))) {
+      // no _ZH section all normalize to ''. A translation the server marks
+      // stale is a change even when its text is identical: only a write that
+      // carries it restamps its basis, so planning it unchanged would leave
+      // the deck behind the publish gate's TRANSLATION_STALE for good.
+      if (
+        normalizeTranslationsForCompare(card.translations) !== normalizeTranslationsForCompare(translationsOf(existing)) ||
+        restampsStaleTranslation(card, existing)
+      ) {
         changed.push(field);
       }
       continue;
@@ -1140,6 +1182,23 @@ function fieldsThatDiffer(card: ParsedCard, existing: Card): ComparableField[] {
     if (normalizeText(card[field]) !== normalizeText(existing[field])) changed.push(field);
   }
   return changed;
+}
+
+/**
+ * True when the file carries the very translation the server holds, for a
+ * locale the server marks 'stale' (translationStatus): writing it restamps
+ * the stored basis, so the import turns a stale translation current without
+ * changing a word of it.
+ */
+function restampsStaleTranslation(card: ParsedCard, existing: Card): boolean {
+  if (card.translations === undefined) return false;
+  const stale = Object.keys(card.translations).some(
+    (locale) => existing.translationStatus?.[locale as keyof CardTranslations] === 'stale',
+  );
+  return (
+    stale &&
+    normalizeTranslationsForCompare(card.translations) === normalizeTranslationsForCompare(translationsOf(existing))
+  );
 }
 
 export interface PlanImportOptions {
@@ -1265,6 +1324,7 @@ export function planImport(
       expectedVersion: target.version,
       changedFields,
       ...(clearsTranslations ? { clearsTranslations: true as const } : {}),
+      ...(restampsStaleTranslation(card, target) ? { restampsStaleTranslation: true as const } : {}),
     });
   }
 
@@ -1278,10 +1338,25 @@ const ENGLISH_TRANSLATED_FIELDS: readonly ComparableField[] = ['question', 'expl
  * a translated card while leaving its _ZH sections exactly as the server has
  * them. The server re-stamps a translation as current on every write that
  * carries one, so this is the last point where the drift is visible.
+ *
+ * ZH_WARN_STALE_MARKED_CURRENT, non-blocking: an update that re-sends, word
+ * for word, a translation the server already marks stale (the English moved on
+ * after it was written, typically through the Edit Card form). It takes the
+ * place of ZH_WARN_MAYBE_STALE on that card, so a card gets one of the two.
  */
 export function translationPlanWarnings(plan: Pick<ImportPlan, 'updates'>): ImportWarning[] {
   const warnings: ImportWarning[] = [];
   for (const update of plan.updates) {
+    if (update.restampsStaleTranslation) {
+      warnings.push({
+        code: 'ZH_WARN_STALE_MARKED_CURRENT',
+        severity: 'warning',
+        line: update.card.sourceLine,
+        message: `Card "${update.card.stableUid}": the server marks its Chinese translation stale (the English changed after it was written) and this import marks the stale Chinese translation as current without changing it, so check the _ZH sections still say the same as the English.`,
+        stableUid: update.card.stableUid,
+      });
+      continue;
+    }
     if (!update.card.translations || update.changedFields.includes('translations')) continue;
     const english = update.changedFields.filter((field) => ENGLISH_TRANSLATED_FIELDS.includes(field));
     if (english.length === 0) continue;

@@ -39,9 +39,10 @@ Node 22.18+ or 24 runs the `.mts` directly (this machine: v24.9.0); nothing to i
   `## ` (card header; needs a space or tab after `##`, so `###` and `##x` are content) ·
   `# deck:` (case-insensitive, `#deck:` also matches) · `TOPIC:` · `QUALIFIER:` · `SOURCE:` · `OPT:` ·
   `WHY:` · `Q:` · `A:` · `USAGE:` · `CODE:` · then the Chinese twins (§1.7) `QUALIFIER_ZH:` · `Q_ZH:` ·
-  `OPT_ZH:` · `WHY_ZH:` · `A_ZH:` · `USAGE_ZH:` · and last the reserved `^[A-Z]+_ZH:` (any other
-  `<NAME>_ZH:` line, e.g. `SOURCE_ZH:`, is refused with `ZH_UNSUPPORTED_FIELD` instead of being
-  glued to the section above).
+  `OPT_ZH:` · `WHY_ZH:` · `A_ZH:` · `USAGE_ZH:` · and last the reserved `^[A-Z]+_ZH\s*[:：]` (any other
+  `<NAME>_ZH:` line, e.g. `SOURCE_ZH:`, is refused with `ZH_UNSUPPORTED_FIELD`, and a misspelled one,
+  with a space before the colon or a fullwidth colon such as `Q_ZH :` or `Q_ZH：`, with
+  `ZH_BAD_MARKER`, instead of being glued to the section above).
 - A `# deck:` line **anywhere** in the file (even inside a card body or code block) is taken as
   the deck header, never as content. Do not write one in a snippet.
 
@@ -177,10 +178,11 @@ parses).
 | `MCQ_CHOOSE_N_MISMATCH` | starred count ≠ what the stem's `(Choose two/three.)` implies | blocks |
 | `MCQ_OPTION_TOO_LONG` | option text >600 chars (server + lint only) | server rejects the write |
 | `ZH_UNSUPPORTED_FIELD` | a column-0 `<NAME>_ZH:` that is not one of the six `_ZH` markers (`SOURCE_ZH:`, `CODE_ZH:`, `TOPIC_ZH:` …) | body swallowed, blocks |
+| `ZH_BAD_MARKER` | a column-0 `<NAME>_ZH` followed by spaces and a colon, or by a fullwidth colon `：` (`Q_ZH :`, `Q_ZH：`, `SOURCE_ZH：`): not one of the six exact markers | body swallowed, blocks |
 | `ZH_MISSING_FIELD` | a card with any `_ZH` section lacks one its English sections call for (one issue per missing section, named) | **card dropped**, blocks |
 | `ZH_BAD_OPT_LINE` | `OPT_ZH:` with a payload other than `*` | **card dropped**, blocks |
 | `ZH_WITHOUT_OPTION` | `OPT_ZH:` / `WHY_ZH:` before the card's first `OPT:` | body swallowed, blocks |
-| `EN_FIELD_HAS_CJK` | a translated card's English `Q:`/`QUALIFIER:`/`OPT:`/`WHY:`/`A:`/`USAGE:` contains a Chinese character | blocks |
+| `EN_FIELD_HAS_CJK` | an English `Q:`/`QUALIFIER:`/`OPT:`/`WHY:`/`A:`/`USAGE:` contains a Chinese character, on a translated card or on any card of a file that has at least one translated card | blocks |
 | `TRANSLATION_*` | the translation does not mirror its English card (§1.7; same codes as the server) | blocks |
 | `TRANSLATION_MISSING` | lint `--locales zh-CN` only: a card without a zh-CN translation (the publish gate's rule) | publish refused |
 
@@ -212,7 +214,10 @@ changes nothing about scheduling, grading or the shuffle order.
   never coin a Chinese product name.
 - `Q_ZH:` must contain at least one Chinese character (`TRANSLATION_NOT_TRANSLATED`). The English
   sections of a translated card must contain none (`EN_FIELD_HAS_CJK`): Chinese pasted into an
-  English section is the usual cause.
+  English section, or a mistyped `_ZH` marker whose text joined the section above, is the usual
+  cause. Once a file has one translated card the check covers every card in it; a file with no
+  translated card is not checked, so a deck written in Chinese (`aws-saa-fundamentals`) parses as
+  before.
 - `QUALIFIER_ZH:` is the Chinese of the exam qualifier (e.g. `最安全` for `MOST secure`) and must
   appear verbatim (case-insensitive) in `Q_ZH:` (`TRANSLATION_QUALIFIER_NOT_IN_STEM`); present iff
   `QUALIFIER:` is (`TRANSLATION_QUALIFIER_MISMATCH`).
@@ -228,9 +233,12 @@ changes nothing about scheduling, grading or the shuffle order.
   (a `Q_ZH:` or `A_ZH:` marker with no text under it). The console reports every issue of a card; the
   server refuses a write with the first one, in the same check order.
 - Non-blocking: `ZH_WARN_CORRECT_LONGEST` (the 1.4× longest-answer check on the Chinese option
-  text) and `ZH_WARN_MAYBE_STALE` (the import changes a translated card's English but not its
+  text), `ZH_WARN_MAYBE_STALE` (the import changes a translated card's English but not its
   `_ZH` sections; the server re-stamps a translation as current on every write that carries it,
-  so check the Chinese still says the same).
+  so check the Chinese still says the same) and `ZH_WARN_STALE_MARKED_CURRENT` (the server marks
+  the card's translation stale, typically after an English edit in the Edit Card form, and the
+  file carries the same `_ZH` text: this import marks the stale Chinese translation as current,
+  §2.3).
 - A deck whose `translation_locales` holds `zh-CN` (console › Edit Deck › Translation locales,
   super_admin) refuses to publish while any live card lacks a current zh-CN translation
   (`TRANSLATION_PUBLISH_GATE`). Lint with `--locales zh-CN` to see those cards first (§7).
@@ -278,7 +286,12 @@ realWorldUsage, topic, mcq, source, translations`. Text fields are compared afte
 each text/why trimmed, empty why → null, `v` dropped, server `null` == file absence); `source` is
 compared as `[url.trim(), quote.trim() || null]` (`normalizeSourceForCompare`; server `null` ==
 file absence); `translations` as canonical JSON too (locales and option keys sorted, text trimmed,
-empty why/usage → null, `v` dropped; server `null` == a card with no `_ZH` section).
+empty why/usage → null, `v` dropped; server `null` == a card with no `_ZH` section). A translation
+the server marks stale (`translationStatus`, the English changed after it was written) counts as
+changed even when the file's `_ZH` text is identical: only a write that carries it restamps it, so
+re-importing the same file is how a checked translation becomes current again (with the
+`ZH_WARN_STALE_MARKED_CURRENT` hint); an "unchanged" plan would leave the deck refused by the
+publish gate.
 
 **Removing every `_ZH` section is a delete.** The run writes whole cards, so importing a file without
 `_ZH` sections over cards that have a translation on the server would clear it. Those cards become

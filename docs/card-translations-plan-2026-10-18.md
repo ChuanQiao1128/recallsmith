@@ -62,7 +62,8 @@
 - 规范顺序：header、TOPIC、QUALIFIER、QUALIFIER_ZH、Q、Q_ZH、（OPT、OPT_ZH、WHY、WHY_ZH）…、A、A_ZH、CODE、USAGE、USAGE_ZH、SOURCE。
 - 一张卡只要出现一个 `_ZH` 段落，就必须把英文有的每一段都翻译齐（`ZH_MISSING_FIELD`，逐段点名，整张卡丢弃）。不允许半翻译，否则 App 会中英混排。
 - 其它 `<名字>_ZH:`（`SOURCE_ZH:`、`CODE_ZH:`、`TOPIC_ZH:` 等）一律报 `ZH_UNSUPPORTED_FIELD`，正文丢弃，不会粘到上一段里。
-- 已翻译卡的英文段落里出现汉字报 `EN_FIELD_HAS_CJK`（通常是把中文贴错了段落）。没有翻译的卡不查，所以本身就是中文的 `aws-saa-fundamentals` 卡包不受影响。
+- 标记写错（冒号前有空格，或用了中文全角冒号，比如 `Q_ZH :`、`Q_ZH：`）报 `ZH_BAD_MARKER`，正文同样丢弃。识别范围是 `^[A-Z]+_ZH\s*[:：]`；以前这种行会被悄悄粘进上一段英文里。
+- 英文段落里出现汉字报 `EN_FIELD_HAS_CJK`（通常是把中文贴错了段落，或者 `_ZH` 标记写错、中文粘进了英文段落）。已翻译的卡一律检查；只要文件里有一张已翻译的卡，文件里每张卡都检查，没翻译的卡也查。整个文件一张已翻译的卡都没有时不查，所以本身就是中文的 `aws-saa-fundamentals` 卡包解析结果和 main 完全一样。
 - 中文多选标记：英文题干有 `(Choose two.)` / `(Choose three.)` 时，中文题干必须有 `（选择两项。）` / `（选择三项。）`，反过来也一样（`TRANSLATION_CHOOSE_N_MISMATCH`，正则 `[（(]\s*选择?\s*(两|二|三|2|3)\s*项\s*[。.]?\s*[）)]`）。
 - 中文里保留 AWS 服务名和功能名的英文写法（Amazon S3、AWS KMS、S3 Versioning、MFA Delete、s3:PutObject），和 AWS 官方简体中文考试指南的做法一致，不自造中文译名。
 
@@ -138,8 +139,10 @@ lint 结果：`1 cards, 1 mcq, 0 issues, 2 warnings, 1 zh-CN`，退出码 0。�
 | `TRANSLATION_NOT_TRANSLATED` | 中文题干里没有一个汉字 |
 
 服务端遇到第一个错误就拒绝写入；控制台一次列出所有错误，而且按服务端的检查顺序排列，所以控制台列出的第一个错误码就是服务端会返回的那个。
-只在 Markdown 里出现的错误码：`ZH_UNSUPPORTED_FIELD`、`ZH_MISSING_FIELD`、`ZH_BAD_OPT_LINE`、`ZH_WITHOUT_OPTION`、`EN_FIELD_HAS_CJK`。
-不阻断的提示：`ZH_WARN_CORRECT_LONGEST`（中文正确选项比错误选项中位数长 1.4 倍以上）、`ZH_WARN_MAYBE_STALE`（这次导入改了英文，但中文没改）。
+只在 Markdown 里出现的错误码：`ZH_UNSUPPORTED_FIELD`、`ZH_BAD_MARKER`、`ZH_MISSING_FIELD`、`ZH_BAD_OPT_LINE`、`ZH_WITHOUT_OPTION`、`EN_FIELD_HAS_CJK`。
+不阻断的提示：`ZH_WARN_CORRECT_LONGEST`（中文正确选项比错误选项中位数长 1.4 倍以上）、`ZH_WARN_MAYBE_STALE`（这次导入改了英文，但中文没改）、`ZH_WARN_STALE_MARKED_CURRENT`（服务端已把这张卡的翻译标成 stale，文件里的中文和服务器上一字不差：这次导入会把过期的中文翻译重新标成最新）。
+
+两端一致性：后端分支提供共享夹具 `content/decks/translation-fixtures.json`（每条是 name、english、translations、expectFirstCode），本分支提交了同一份拷贝，`frontend/tests/translationRules.test.ts` 逐条断言 `validateTranslation` 的第一个错误码（或没有错误）和服务端一致。
 
 ## 五、控制台分支做了什么（证据）
 
@@ -148,21 +151,22 @@ lint 结果：`1 cards, 1 mcq, 0 issues, 2 warnings, 1 zh-CN`，退出码 0。�
 | 校验器 `validateTranslation`，错误码和服务端相同，检查顺序和服务端相同 | `frontend/src/lib/translationRules.ts:130` |
 | 汉字判断和中文多选正则（源码里写成 \u 转义，因为控制台 src/ 不允许出现中文字符） | `frontend/src/lib/translationRules.ts:28`、`frontend/src/lib/translationRules.ts:39` |
 | 比较用的规范化（locale 和 key 排序、去空白、空 why 等于 null、去掉 v；服务端 null 等于文件里没有） | `frontend/src/lib/translationRules.ts:347` |
-| `_ZH` 标记的词法规则、保留的 `<名字>_ZH:` | `frontend/src/lib/deckImport.ts:226`、`frontend/src/lib/deckImport.ts:234` |
-| 完整性检查 `ZH_MISSING_FIELD` | `frontend/src/lib/deckImport.ts:405` |
-| `EN_FIELD_HAS_CJK` 和翻译校验接入 `validateCards`（所以 planImport 会把它们变成 INVALID_CARD 冲突） | `frontend/src/lib/deckImport.ts:1050` |
-| `translations` 进入 COMPARABLE_FIELDS 的规范化比较 | `frontend/src/lib/deckImport.ts:1132` |
-| `TRANSLATIONS_WOULD_BE_CLEARED` 冲突，需要勾选才会清除 | `frontend/src/lib/deckImport.ts:1253` |
-| `ZH_WARN_MAYBE_STALE` | `frontend/src/lib/deckImport.ts:1282` |
-| 序列化按规范顺序输出 `_ZH` 段落 | `frontend/src/lib/deckImport.ts:1313` |
+| `_ZH` 标记的词法规则、保留的 `<名字>_ZH:` 和写错的标记（`ZH_UNSUPPORTED_FIELD` / `ZH_BAD_MARKER`） | `frontend/src/lib/deckImport.ts:235`、`frontend/src/lib/deckImport.ts:247`、`frontend/src/lib/deckImport.ts:900` |
+| 完整性检查 `ZH_MISSING_FIELD` | `frontend/src/lib/deckImport.ts:419` |
+| `EN_FIELD_HAS_CJK`（文件里有已翻译的卡时检查每张卡）和翻译校验接入 `validateCards`（所以 planImport 会把它们变成 INVALID_CARD 冲突） | `frontend/src/lib/deckImport.ts:985`、`frontend/src/lib/deckImport.ts:1082` |
+| `translations` 进入 COMPARABLE_FIELDS 的规范化比较；服务端标成 stale 的翻译即使一字不差也算改动 | `frontend/src/lib/deckImport.ts:1168`、`frontend/src/lib/deckImport.ts:1193` |
+| `TRANSLATIONS_WOULD_BE_CLEARED` 冲突，需要勾选才会清除 | `frontend/src/lib/deckImport.ts:1312` |
+| `ZH_WARN_MAYBE_STALE`、`ZH_WARN_STALE_MARKED_CURRENT` | `frontend/src/lib/deckImport.ts:1347` |
+| 序列化按规范顺序输出 `_ZH` 段落 | `frontend/src/lib/deckImport.ts:1387` |
 | 导入请求总是带 `translations`（没有就是 null）；没勾选就要清除翻译的更新不会发出去 | `frontend/src/lib/deckImportRunner.ts:149`、`frontend/src/lib/deckImportRunner.ts:160`、`frontend/src/lib/deckImportRunner.ts:291` |
 | API 类型与规范化：Card.translations、translationStatus、Deck.translationLocales | `frontend/src/api/authoring.ts:40`、`frontend/src/api/authoring.ts:50` |
-| 编辑卡片页的只读中文面板（按 key 对齐，显示英文 ✓，Missing / Stale / OK 标签） | `frontend/src/components/CardTranslationPanel.tsx`、`frontend/src/pages/EditCardPage.tsx:289` |
+| 编辑卡片页的只读中文面板（按 key 对齐，显示英文 ✓，Missing / Stale / OK 标签） | `frontend/src/components/CardTranslationPanel.tsx`、`frontend/src/pages/EditCardPage.tsx:310` |
+| 编辑卡片页拦下翻译跟不上的修改（已翻译的卡新增或删除 Real-world usage、新增或清空 Explanation），服务端同类错误码显示同一句提示 | `frontend/src/lib/translationView.ts:87`、`frontend/src/pages/EditCardPage.tsx:217`、`frontend/src/pages/EditCardPage.tsx:264` |
 | 预览页 English / Chinese 切换；翻译不完整的卡整张显示英文并标注 | `frontend/src/pages/DeckPreviewPage.tsx:176`、`frontend/src/lib/translationView.ts` |
 | 卡片列表的“中文缺失 / 中文过期”筛选和行内标签 | `frontend/src/pages/CardListPage.tsx:274`、`frontend/src/lib/cardListFilter.ts` |
 | 卡包设置 Translation locales（只有 super_admin 能改，只在改动时才发送） | `frontend/src/pages/DeckEditPage.tsx:240`、`frontend/src/pages/DeckEditPage.tsx:562` |
 | 举报列表显示学习者当时看的语言 | `frontend/src/api/cardReports.ts:130`、`frontend/src/pages/ReportsPage.tsx:362` |
-| 导入页的“删除中文翻译”确认框 | `frontend/src/pages/DeckImportPage.tsx:291`、`frontend/src/pages/DeckImportPage.tsx:524` |
+| 导入页的“删除中文翻译”确认框 | `frontend/src/pages/DeckImportPage.tsx:292`、`frontend/src/pages/DeckImportPage.tsx:525` |
 | lint 的 `--locales zh-CN` 参数（缺翻译报 `TRANSLATION_MISSING`，和发布门禁一致） | `frontend/scripts/lint-deck.mts:99`、`frontend/scripts/lint-deck.mts:150` |
 
 界面文案全部是英文（控制台的 `frontend/tests/uiLanguage.test.ts` 不允许 src/ 里出现中文），所以切换按钮写成 English / Chinese，标签写成 zh-CN，没有用“中文”两个字。
@@ -185,7 +189,7 @@ lint 结果：`1 cards, 1 mcq, 0 issues, 2 warnings, 1 zh-CN`，退出码 0。�
 
 | 命令（在 `frontend/` 下） | 结果 |
 |---|---|
-| `npx vitest run` | 167 个测试文件、1619 个测试全部通过（新增 5 个文件：translationRules、deckImport.translations、translationsApi、cardTranslationsConsole、lintDeckLocales） |
+| `npx vitest run` | 167 个测试文件、1669 个测试全部通过（新增 5 个文件：translationRules、deckImport.translations、translationsApi、cardTranslationsConsole、lintDeckLocales；含 31 条和后端共享的夹具用例） |
 | `npx tsc -b`（真正的类型检查入口；`npx tsc --noEmit` 在这个仓库里什么都不查） | 通过 |
 | `npx eslint .` | 0 个错误（1 个 DeckListPage 的旧 warning，与本次无关） |
 | `npm run build` | 通过 |
@@ -194,7 +198,9 @@ lint 结果：`1 cards, 1 mcq, 0 issues, 2 warnings, 1 zh-CN`，退出码 0。�
 ## 八、风险与注意
 
 - **整文件导入会清除翻译**：导入一份没有 `_ZH` 段落的英文文件，会把服务器上这些卡的翻译清掉。现在这种情况会变成 `TRANSLATIONS_WOULD_BE_CLEARED` 冲突并阻断，必须在预览里勾选“Delete the Chinese translation”才能继续；导入执行器也会再检查一次。
-- **翻译过期**：只改英文、不改中文时，导入会把翻译重新标成“最新”（服务端每次带翻译的写入都会重新盖章），所以控制台用 `ZH_WARN_MAYBE_STALE` 提醒。在控制台表单里改英文则不会碰翻译，服务端会标成 stale，卡片列表可以筛出来。
+- **翻译过期**：只改英文、不改中文时，导入会把翻译重新标成“最新”（服务端每次带翻译的写入都会重新盖章），所以控制台用 `ZH_WARN_MAYBE_STALE` 提醒。
+- **编辑卡片表单和翻译**：表单保存从不写入翻译，但服务端每次保存都会拿库里的翻译去对照改过的英文重新校验。只改措辞时保存成功，翻译被标成 stale，卡片列表可以筛出来；在已翻译的卡上新增或删除 Real-world usage（或者新增、清空 Explanation）时，服务端会返回 400（`TRANSLATION_FIELD_MISSING` / `TRANSLATION_FIELD_EXTRA` / `TRANSLATION_ANSWER_EMPTY`）。控制台现在在发请求之前就拦下，提示去 Markdown 里改 USAGE: 和 USAGE_ZH:（或 A: 和 A_ZH:）再重新导入；服务端返回这几个错误码时也显示同一句提示。
+- **过期翻译的恢复**：翻译被标成 stale 以后，把中文核对好（不用改字）再导入同一份文件，导入计划会把这张卡算作 `translations` 更新而不是“未改动”，服务端借这次写入重新盖章，同时给出 `ZH_WARN_STALE_MARKED_CURRENT` 提示。以前这种情况会被算成“未改动”，卡包会一直卡在发布门禁的 `TRANSLATION_STALE` 上。
 - **revision**：只改翻译不要手动提高 revision。
 - **翻译质量**：中文需要人工复核；服务名保留英文，避免生造译名。
 - **体积**：371 张全选择题卡加中文后，deck.json 大约从 1.05 MB 涨到 1.9–2.6 MB，传输压缩后约 0.6–0.7 MB。

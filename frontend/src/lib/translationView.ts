@@ -48,6 +48,55 @@ export function translationState(card: TranslatableCard, locale: TranslationLoca
   return translationIssues(card, locale).length > 0 ? 'stale' : 'ok';
 }
 
+/**
+ * What the Edit Card form says when an edit would leave a stored translation
+ * out of step with the English. The form never sends translations, but the
+ * server re-validates the stored one against the edited English on every PUT
+ * (Cards.cs), so adding or removing a section the translation must mirror is
+ * refused with a 400 (TRANSLATION_FIELD_MISSING / TRANSLATION_FIELD_EXTRA, or
+ * TRANSLATION_ANSWER_EMPTY). The Chinese can only change through the Markdown
+ * import, so that is where the author is sent.
+ */
+export const USAGE_NEEDS_MARKDOWN =
+  'This card has a Chinese translation, so Real-world usage cannot be added or removed here: the server refuses ' +
+  'a save that leaves its USAGE_ZH: out of step. Edit USAGE: and USAGE_ZH: in the deck Markdown and re-import it.';
+
+export const EXPLANATION_NEEDS_MARKDOWN =
+  'This card has a Chinese translation, so the Explanation cannot be added or cleared here: the server refuses ' +
+  'a save that leaves its A_ZH: out of step. Edit A: and A_ZH: in the deck Markdown and re-import it.';
+
+/** The server codes a form save answers with when the stored translation no longer mirrors the edit. */
+export const FORM_TRANSLATION_MIRROR_CODES: readonly string[] = [
+  'TRANSLATION_FIELD_MISSING',
+  'TRANSLATION_FIELD_EXTRA',
+  'TRANSLATION_ANSWER_EMPTY',
+];
+
+function hasText(value: unknown): boolean {
+  return typeof value === 'string' && value.trim() !== '';
+}
+
+/**
+ * Null when the form's English can be saved over the card's stored zh-CN
+ * translation, else the message to show instead of sending the PUT. Mirrors
+ * the server's presence rules: Real-world usage and the explanation must each
+ * be present in the English exactly when the stored translation has them.
+ * Changing their wording is allowed (the server then marks the translation
+ * stale); only adding or removing one is refused.
+ */
+export function formTranslationConflict(
+  card: Pick<Card, 'translations'>,
+  values: { explanation: string; realWorldUsage: string },
+  locale: TranslationLocale = 'zh-CN',
+): string | null {
+  const entry = translationsOf(card)?.[locale];
+  if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return null;
+  const zh = entry as { explanation?: unknown; realWorldUsage?: unknown };
+  if (hasText(values.realWorldUsage) !== hasText(zh.realWorldUsage)) return USAGE_NEEDS_MARKDOWN;
+  if (hasText(values.explanation) !== hasText(zh.explanation)) return EXPLANATION_NEEDS_MARKDOWN;
+  return null;
+}
+
 /** True when the deck declares `locale` (decks.translation_locales), so every live card needs it to publish. */
 export function deckDeclaresLocale(deck: Pick<Deck, 'translationLocales'>, locale: TranslationLocale = 'zh-CN'): boolean {
   return Array.isArray(deck.translationLocales) && deck.translationLocales.includes(locale);
