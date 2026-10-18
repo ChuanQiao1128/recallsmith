@@ -1,10 +1,11 @@
 // The key line of a card answer (2026-10-14 learning flow, B3).
 //
-// The Chinese aws-saa-fundamentals deck writes every answer as three lines:
+// The aws-saa-fundamentals deck writes every answer as three lines, in English
+// with a built-in Chinese translation (2026-10-18 rewrite):
 //
-//   答：<the one-line conclusion>
-//   因为：<why>
-//   考法：<how the exam asks it>
+//   Answer: <the one-line conclusion>      答：<the one-line conclusion>
+//   Because: <why>                         因为：<why>
+//   Exam: <how the exam asks it>           考法：<how the exam asks it>
 //
 // The first line is what the learner judges themselves against; the other two
 // explain it. splitKeyLine separates that line so the answer sections can
@@ -12,16 +13,16 @@
 //
 // Rules (pure, no React):
 //   • A split is returned only when the trimmed explanation's first line starts
-//     with 答： (full-width colon) or 答: (ASCII colon). Anything else — every
-//     English deck's single-paragraph answer included — returns null, so those
-//     cards render exactly as before.
-//   • keyLine is that first line, trimmed, prefix kept (the learner sees 答：).
+//     with 答： / 答: or with Answer: / Answer： (case-sensitive, colon right after
+//     the word). Anything else — every other deck's single-paragraph answer
+//     included — returns null, so those cards render exactly as before.
+//   • keyLine is that first line, trimmed, prefix kept (the learner sees 答： or Answer:).
 //   • rest is every later line, joined with \n and trimmed; '' for a one-line
 //     answer.
 
 export type AnswerKeyLine = { keyLine: string; rest: string };
 
-const KEY_LINE_PREFIX = /^答[：:]/;
+const KEY_LINE_PREFIX = /^(?:答|Answer)[：:]/;
 
 export function splitKeyLine(explanation: string | null | undefined): AnswerKeyLine | null {
   if (typeof explanation !== 'string') return null;
