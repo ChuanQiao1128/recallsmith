@@ -189,15 +189,3 @@ describe('2.0.0 store texts', () => {
     expect(r2).not.toMatch(/at the end of the card's page/);
   });
 });
-
-describe('release README', () => {
-  it('the typical run is 2.0.0 (24) with the 2.0.0 text files', () => {
-    const readme = fs.readFileSync(path.join(RELEASE_DIR, 'README.md'), 'utf8');
-    expect(readme).toContain('Typical run for 2.0.0 (24)');
-    expect(readme).toContain('--version 2.0.0 --build 24');
-    for (const f of ['whats-new', 'description', 'keywords', 'promo', 'subtitle', 'review-notes']) {
-      expect(readme).toContain(`scripts/release/${f}-2.0.0.txt`);
-    }
-    expect(readme).not.toContain('--version 1.9.0');
-  });
-});

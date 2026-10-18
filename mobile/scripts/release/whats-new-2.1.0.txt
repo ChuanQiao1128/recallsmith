@@ -1,0 +1,7 @@
+DeveloperCards 2.1
+• Swipe left or right on the Home cover to switch packs. The buttons below stay in place while you swipe.
+• AWS Architect Basics: the Chinese foundation deck for the SAA-C03 has its own name and a new cover.
+• Open up to 5 cards from a pack at once, or Open 1. Every pack now starts with 5 draws.
+• After an app update, decks you already downloaded are ready right away.
+• The .NET & C# Interview deck is no longer in the app.
+• Stability improvements.

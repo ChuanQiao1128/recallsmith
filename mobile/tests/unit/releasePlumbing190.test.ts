@@ -12,7 +12,7 @@ import { PROBE, waitUntilExecutable } from '../setup/execProbe';
 // The budget is explicit per spawn-heavy suite; every assertion is unchanged.
 const SPAWN_TIMEOUT_MS = 30_000;
 
-// 1.9.0 release plumbing (M04): eas.json Sentry env per profile, the version pins (2.0.0 (24) since R24B), the CI
+// 1.9.0 release plumbing (M04): eas.json Sentry env per profile, the version pins (2.1.0 (25) since 2026-10-18), the CI
 // expo export step and the ios-build.sh placeholder guard. ios-build.sh only ever runs from a temp
 // copy with fixture files, a fake eas first on PATH and DRY_RUN=1.
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -103,21 +103,22 @@ describe('eas.json Sentry env (1.9.0)', () => {
   });
 });
 
-// R24B R01: 2.0.0 (24) replaces the 1.9.0 (23) pins; the photo-library text drops "pull" (contract §1).
-describe('version 2.0.0 (24)', () => {
-  it('app.json is 2.0.0 build 24 with the Sentry plugin and the appVersion runtime policy', () => {
+// R24B R01: 2.0.0 (24) replaced the 1.9.0 (23) pins; 2.1.0 (25) replaces those (2026-10-18). The photo-library
+// text drops "pull" (contract §1).
+describe('version 2.1.0 (25)', () => {
+  it('app.json is 2.1.0 build 25 with the Sentry plugin and the appVersion runtime policy', () => {
     const app = readJson('app.json').expo;
-    expect(app.version).toBe('2.0.0');
-    expect(app.ios.buildNumber).toBe('24');
+    expect(app.version).toBe('2.1.0');
+    expect(app.ios.buildNumber).toBe('25');
     expect(app.runtimeVersion.policy).toBe('appVersion');
     expect(JSON.stringify(app.plugins)).toContain('@sentry/react-native/expo');
   });
 
-  it('package.json and the lockfile root say 2.0.0', () => {
-    expect(readJson('package.json').version).toBe('2.0.0');
+  it('package.json and the lockfile root say 2.1.0', () => {
+    expect(readJson('package.json').version).toBe('2.1.0');
     const lock = readJson('package-lock.json');
-    expect(lock.version).toBe('2.0.0');
-    expect(lock.packages[''].version).toBe('2.0.0');
+    expect(lock.version).toBe('2.1.0');
+    expect(lock.packages[''].version).toBe('2.1.0');
   });
 
   it('the photo-library permission text says "a card image", not "a pull card image"', () => {
