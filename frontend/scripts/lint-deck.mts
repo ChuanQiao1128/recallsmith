@@ -6,13 +6,20 @@
 //
 // Run (Node 22.18+ / 24 strips the types itself; nothing to install):
 //
-//   node frontend/scripts/lint-deck.mts <deck.md> [more.md ...]
+//   node frontend/scripts/lint-deck.mts [--strict] [--locales zh-CN] <deck.md> [more.md ...]
 //
 // Output: one line per issue as `<line>: <CODE> <message>`, then one line per
 // non-blocking suggestion as `<line>: WARN <CODE> <message>`, then a summary
 // line `N cards, M mcq, K issues, W warnings`. Exit 1 when any file has an
 // issue, 0 when every file is clean — warnings never fail the run unless
 // `--strict` is passed, which fails on any warning too.
+//
+// `--locales zh-CN` (or `--locales=zh-CN`) lints the file the way the publish
+// gate treats a deck whose translation_locales holds zh-CN: every card without
+// a zh-CN translation is a TRANSLATION_MISSING issue. When the flag is given,
+// or any card carries a translation, the summary line gains `, T zh-CN` (T =
+// cards with a zh-CN translation); an English-only file prints exactly what it
+// printed before translations existed.
 //
 // How src/lib is loaded: the console sources import each other without file
 // extensions (`./cardRules`), which Node's ESM loader refuses, and this repo
@@ -38,6 +45,9 @@ import type { ImportWarning } from '../src/lib/mcqWarnings.ts';
 
 /** Mirrors McqValidation.cs step 9 (`options[i].Text.Length > 600`). */
 const MCQ_OPTION_MAX_LENGTH = 600;
+
+/** Mirrors TRANSLATION_LOCALES in src/lib/translationRules.ts (v1: zh-CN only). */
+const SUPPORTED_LOCALES = ['zh-CN'];
 
 interface DeckLib {
   parseDeckMarkdown(text: string): ParsedDeck;
@@ -85,29 +95,88 @@ function optionLengthIssues(deck: ParsedDeck): ImportIssue[] {
   return issues;
 }
 
+/** The publish gate's TRANSLATION_MISSING, raised early for every declared locale a card lacks. */
+function missingTranslationIssues(deck: ParsedDeck, locales: readonly string[]): ImportIssue[] {
+  const issues: ImportIssue[] = [];
+  for (const card of deck.cards) {
+    for (const locale of locales) {
+      if (card.translations?.[locale as 'zh-CN'] !== undefined) continue;
+      issues.push({
+        // Not a console ImportIssueCode: this is the server's publish-gate code, surfaced early.
+        code: 'TRANSLATION_MISSING' as ImportIssue['code'],
+        line: card.sourceLine,
+        message: `Card "${card.stableUid}" has no ${locale} translation; a deck that declares ${locale} cannot publish until every card has one.`,
+        stableUid: card.stableUid,
+      });
+    }
+  }
+  return issues;
+}
+
 interface LintResult {
   cards: number;
   mcq: number;
   issues: ImportIssue[];
   warnings: ImportWarning[];
+  /** Cards carrying a translation, per supported locale. */
+  translated: Map<string, number>;
 }
 
-function lintText(lib: DeckLib, text: string): LintResult {
+function lintText(lib: DeckLib, text: string, locales: readonly string[] = []): LintResult {
   const deck = lib.parseDeckMarkdown(text);
-  const issues = [...deck.errors, ...optionLengthIssues(deck)].sort((a, b) => a.line - b.line);
+  const issues = [...deck.errors, ...optionLengthIssues(deck), ...missingTranslationIssues(deck, locales)].sort(
+    (a, b) => a.line - b.line,
+  );
+  const translated = new Map<string, number>();
+  for (const locale of SUPPORTED_LOCALES) {
+    translated.set(locale, deck.cards.filter((card) => card.translations?.[locale as 'zh-CN'] !== undefined).length);
+  }
   return {
     cards: deck.cards.length,
     mcq: deck.cards.filter((card) => card.mcq !== undefined).length,
     issues,
     warnings: deck.warnings,
+    translated,
   };
 }
 
+interface LintArgs {
+  paths: string[];
+  strict: boolean;
+  locales: string[];
+}
+
+/** Splits argv into paths and flags; a string is a usage error. `--locales` takes the next argument or `=value`, comma separated. */
+function parseArgs(argv: readonly string[]): LintArgs | string {
+  const args: LintArgs = { paths: [], strict: false, locales: [] };
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--strict') {
+      args.strict = true;
+    } else if (arg === '--locales' || arg.startsWith('--locales=')) {
+      const value = arg === '--locales' ? argv[++i] : arg.slice('--locales='.length);
+      if (value === undefined || value.trim() === '') return '--locales needs a value, e.g. --locales zh-CN';
+      for (const locale of value.split(',').map((l) => l.trim()).filter(Boolean)) {
+        if (!SUPPORTED_LOCALES.includes(locale)) return `unsupported locale "${locale}"; supported: ${SUPPORTED_LOCALES.join(', ')}`;
+        if (!args.locales.includes(locale)) args.locales.push(locale);
+      }
+    } else if (!arg.startsWith('--')) {
+      args.paths.push(arg);
+    }
+  }
+  return args;
+}
+
 export async function main(argv: readonly string[]): Promise<number> {
-  const paths = argv.filter((arg) => !arg.startsWith('--'));
-  const strict = argv.includes('--strict');
+  const args = parseArgs(argv);
+  const usage = 'usage: node frontend/scripts/lint-deck.mts [--strict] [--locales zh-CN] <deck.md> [more.md ...]\n';
+  if (typeof args === 'string') {
+    process.stderr.write(`lint-deck: ${args}\n${usage}`);
+    return 2;
+  }
+  const { paths, strict, locales } = args;
   if (paths.length === 0) {
-    process.stderr.write('usage: node frontend/scripts/lint-deck.mts <deck.md> [more.md ...]\n');
+    process.stderr.write(usage);
     return 2;
   }
 
@@ -124,7 +193,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       continue;
     }
 
-    const result = lintText(lib, text);
+    const result = lintText(lib, text, locales);
     if (paths.length > 1) process.stdout.write(`== ${path}\n`);
     for (const issue of result.issues) {
       process.stdout.write(`${issue.line}: ${issue.code} ${issue.message}\n`);
@@ -132,7 +201,14 @@ export async function main(argv: readonly string[]): Promise<number> {
     for (const warning of result.warnings) {
       process.stdout.write(`${warning.line}: WARN ${warning.code} ${warning.message}\n`);
     }
-    process.stdout.write(`${result.cards} cards, ${result.mcq} mcq, ${result.issues.length} issues, ${result.warnings.length} warnings\n`);
+    // A locale joins the summary when it was declared or the file uses it, so
+    // an English-only file keeps its old summary line byte for byte.
+    const localeCounts = SUPPORTED_LOCALES.filter((locale) => locales.includes(locale) || (result.translated.get(locale) ?? 0) > 0)
+      .map((locale) => `, ${result.translated.get(locale) ?? 0} ${locale}`)
+      .join('');
+    process.stdout.write(
+      `${result.cards} cards, ${result.mcq} mcq, ${result.issues.length} issues, ${result.warnings.length} warnings${localeCounts}\n`,
+    );
     if (result.issues.length > 0 || (strict && result.warnings.length > 0)) failed = true;
   }
 

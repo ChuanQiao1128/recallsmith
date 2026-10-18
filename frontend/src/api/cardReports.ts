@@ -5,6 +5,8 @@
 // learner-written text: it is kept as a string, capped, and only ever rendered
 // as text. R28 ANONREPORT: `anonymous` marks a report sent by a learner who was
 // not signed in (no note, no account behind it); it never says who sent anything.
+// `displayLocale` (card translations contract §4) is the language the learner
+// was reading the card in, so a translation error can be told from an English one.
 import type { ApiResult } from '../types/api';
 import { http } from './http';
 import { apiResultFromError, failResult } from './httpFailure';
@@ -41,6 +43,8 @@ export type CardReport = {
   resolvedAt: string | null;
   /** Sent from the public route by a learner who was not signed in (R28). */
   anonymous: boolean;
+  /** The card language the learner saw ('en', 'zh-CN'); absent when the report names none or the server predates it. */
+  displayLocale?: string;
 };
 
 export type CardReportsPage = { items: CardReport[]; nextCursor: string | null };
@@ -82,6 +86,9 @@ function cappedNote(value: unknown): string | null {
   return text !== null && text.length > CARD_REPORT_NOTE_MAX ? text.slice(0, CARD_REPORT_NOTE_MAX) : text;
 }
 
+/** Same shape as the server's CHECK on card_reports.display_locale. */
+const DISPLAY_LOCALE = /^[a-z]{2}(-[A-Z]{2})?$/;
+
 function isReason(value: unknown): value is CardReportReason {
   return typeof value === 'string' && (CARD_REPORT_REASONS as readonly string[]).includes(value);
 }
@@ -110,7 +117,20 @@ function normalizeReport(value: unknown): CardReport | null {
     createdAt: textOf(value.createdAt),
     resolvedAt: nullableText(value.resolvedAt),
     anonymous: value.anonymous === true,
+    ...(typeof value.displayLocale === 'string' && DISPLAY_LOCALE.test(value.displayLocale)
+      ? { displayLocale: value.displayLocale }
+      : {}),
   };
+}
+
+/**
+ * The badge text for a report read in a language other than English, or null.
+ * English is the default display, so it gets no badge.
+ */
+export function cardReportLocaleBadge(report: Pick<CardReport, 'displayLocale'>): string | null {
+  const locale = report.displayLocale;
+  if (locale === undefined || locale === 'en' || locale.startsWith('en-')) return null;
+  return locale === 'zh-CN' ? 'Seen in Chinese (zh-CN)' : `Seen in ${locale}`;
 }
 
 /** GET /api/v1/admin/card-reports?status=&deckId=&limit=&cursor=, newest first. */

@@ -4,7 +4,10 @@
 // renders them in an amber "suggestions — not blocking" panel and lint-deck.mts
 // prints them; nothing in the pipeline keys a decision off them. The codes here
 // deliberately stay out of McqIssueCode / ImportIssueCode (the blocking tiers).
+// The translation tier (translationRules.ts ZH_WARN_*) shares ImportWarning but
+// not McqWarningCode, which stays the MCQ list.
 import type { McqBlob } from '../types/mcq';
+import type { TranslationWarningCode } from './translationRules';
 
 export type McqWarningCode =
   | 'MCQ_WARN_CORRECT_LONGEST'
@@ -14,7 +17,7 @@ export type McqWarningCode =
   | 'MCQ_WARN_SHAPE'
   | 'MCQ_WARN_NO_USAGE';
 
-export interface ImportWarning { code: McqWarningCode; severity: 'warning'; line: number; message: string; stableUid: string }
+export interface ImportWarning { code: McqWarningCode | TranslationWarningCode; severity: 'warning'; line: number; message: string; stableUid: string }
 export interface McqWarningInput { question: string; realWorldUsage: string | null; mcq: McqBlob }
 export type McqWarning = { code: McqWarningCode; message: string };
 

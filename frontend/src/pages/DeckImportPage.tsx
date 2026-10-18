@@ -19,6 +19,7 @@ import {
   formatIssue,
   parseDeckMarkdown,
   planImport,
+  translationPlanWarnings,
   type ImportPlan,
   type ParsedCard,
   type ParsedDeck,
@@ -29,11 +30,12 @@ import {
   type ImportAction,
   type ImportRunResult,
 } from '../lib/deckImportRunner';
-import { formatWarning, type ImportWarning, type McqWarningCode } from '../lib/mcqWarnings';
+import { formatWarning, sortWarnings, type ImportWarning } from '../lib/mcqWarnings';
 import { markEnd, markStart } from '../perf/journey';
 import { CONSOLE_NAME } from '../lib/brand';
 import { ConsoleShell } from '../components/console/ConsoleShell';
 import { consoleNav } from '../components/console/consoleNav';
+import type { Card } from '../types/card';
 import type { Deck } from '../types/deck';
 
 type Step = 'input' | 'preview' | 'result';
@@ -49,6 +51,10 @@ interface PreviewState {
   plan: ImportPlan;
   /** Set when the document header names a different deck than the target. */
   slugMismatch: string | null;
+  /** The server rows the plan was built from, kept so the clear-translations opt-in can re-plan without a refetch. */
+  existing: Card[];
+  /** The operator's explicit opt-in to delete stored translations the file leaves out. Reset by every preview. */
+  clearTranslations: boolean;
 }
 
 const ACCEPTED_EXTENSIONS = ['.md', '.txt'];
@@ -58,8 +64,8 @@ function truncate(text: string, max = 90): string {
   return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max - 1)}…`;
 }
 
-function groupWarnings(warnings: readonly ImportWarning[]): Array<[McqWarningCode, ImportWarning[]]> {
-  const groups = new Map<McqWarningCode, ImportWarning[]>();
+function groupWarnings(warnings: readonly ImportWarning[]): Array<[ImportWarning['code'], ImportWarning[]]> {
+  const groups = new Map<ImportWarning['code'], ImportWarning[]>();
   for (const warning of warnings) {
     const bucket = groups.get(warning.code);
     if (bucket) bucket.push(warning);
@@ -241,11 +247,11 @@ export function DeckImportPage() {
       }
 
       const existing = cardsResult.data ?? [];
-      const plan = planImport(parsed, existing);
+      const plan = planImport(parsed, existing, { deckLocale: deck.locale });
       const slugMismatch =
         parsed.deckSlug && deck.slug && parsed.deckSlug !== deck.slug ? parsed.deckSlug : null;
 
-      setPreview({ parsed, plan, slugMismatch });
+      setPreview({ parsed, plan, slugMismatch, existing, clearTranslations: false });
       setStep('preview');
       markEnd('import:preview');
     } catch (err: unknown) {
@@ -259,6 +265,34 @@ export function DeckImportPage() {
     if (!preview) return [];
     return [...preview.plan.creates, ...preview.plan.updates];
   }, [preview]);
+
+  // Parse-time suggestions plus the plan-time ZH_WARN_MAYBE_STALE and
+  // ZH_WARN_STALE_MARKED_CURRENT, in one list.
+  const warnings = useMemo<ImportWarning[]>(() => {
+    if (!preview) return [];
+    const planWarnings = translationPlanWarnings(preview.plan);
+    return planWarnings.length === 0 ? preview.parsed.warnings : sortWarnings([...preview.parsed.warnings, ...planWarnings]);
+  }, [preview]);
+
+  // Cards whose stored translation this import would delete: still conflicts
+  // before the opt-in, marked updates after it.
+  const translationClears = preview
+    ? preview.clearTranslations
+      ? preview.plan.updates.filter((u) => u.clearsTranslations === true).length
+      : preview.plan.conflicts.filter((c) => c.reason === 'TRANSLATIONS_WOULD_BE_CLEARED').length
+    : 0;
+
+  function setClearTranslations(clearTranslations: boolean) {
+    if (!preview || !deck) return;
+    setPreview({
+      ...preview,
+      clearTranslations,
+      plan: planImport(preview.parsed, preview.existing, {
+        deckLocale: deck.locale,
+        allowClearTranslations: clearTranslations,
+      }),
+    });
+  }
 
   const blocked = useMemo(() => {
     if (!preview) return true;
@@ -486,13 +520,37 @@ export function DeckImportPage() {
                   </div>
                 ) : null}
 
-                {preview.parsed.warnings.length > 0 ? (
+                {translationClears > 0 ? (
+                  <div
+                    data-testid="import-translation-clears"
+                    className="bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded text-sm"
+                  >
+                    <div className="font-semibold">
+                      {translationClears} card{translationClears === 1 ? ' has' : 's have'} a Chinese translation on the
+                      server that this document leaves out.
+                    </div>
+                    <p className="mt-1 text-xs">
+                      The import writes whole cards, so importing them deletes those translations. Add their{' '}
+                      <span className="font-mono">_ZH</span> sections to the document, or confirm below.
+                    </p>
+                    <label className="mt-2 flex items-center gap-2 text-xs">
+                      <input
+                        type="checkbox"
+                        checked={preview.clearTranslations}
+                        onChange={(e) => setClearTranslations(e.target.checked)}
+                      />
+                      Delete the Chinese translation of {translationClears === 1 ? 'this card' : `these ${translationClears} cards`}
+                    </label>
+                  </div>
+                ) : null}
+
+                {warnings.length > 0 ? (
                   <div data-testid="import-warnings" className="bg-amber-50 border border-amber-200 text-amber-900 px-3 py-2 rounded">
                     <div className="font-semibold text-sm mb-1">
-                      {preview.parsed.warnings.length} suggestion
-                      {preview.parsed.warnings.length === 1 ? '' : 's'} — not blocking
+                      {warnings.length} suggestion
+                      {warnings.length === 1 ? '' : 's'} — not blocking
                     </div>
-                    {groupWarnings(preview.parsed.warnings).map(([code, items]) => (
+                    {groupWarnings(warnings).map(([code, items]) => (
                       <div key={code} className="mt-1">
                         <div className="text-xs font-semibold">{code} ({items.length})</div>
                         <ul className="text-xs font-mono space-y-1 max-h-64 overflow-y-auto">

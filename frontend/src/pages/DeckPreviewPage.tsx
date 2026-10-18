@@ -8,7 +8,9 @@ import {
   buildDeckExportPreview,
   validateDeckExportLikeMobile,
   type DeckExportPreview,
+  type DeckExportPreviewCard,
 } from '../lib/deckExportPreview';
+import { cardFace, deckUsesTranslations, type DisplayLang } from '../lib/translationView';
 import { CONSOLE_NAME } from '../lib/brand';
 import { ConsoleShell } from '../components/console/ConsoleShell';
 import { consoleNav } from '../components/console/consoleNav';
@@ -42,6 +44,53 @@ function downloadText(filename: string, text: string) {
   URL.revokeObjectURL(url);
 }
 
+/**
+ * One card as the app would show it in the chosen language. A card without a
+ * complete translation shows in English with a note, the app's own rule.
+ */
+function PreviewCardFace({ card, lang }: { card: DeckExportPreviewCard; lang: DisplayLang }) {
+  const face = cardFace(
+    {
+      question: card.Question,
+      explanation: card.Explanation,
+      realWorldUsage: card.RealWorldUsage ?? null,
+      mcq: card.Mcq ?? null,
+    },
+    card.Translations,
+    lang,
+  );
+  return (
+    <li data-testid={`preview-card-${card.StableUid}`} lang={face.lang} className="py-3 border-b border-slate-100 last:border-b-0">
+      <div lang="en" className="flex items-center gap-2 text-xs text-slate-500">
+        <span className="font-mono">{card.StableUid}</span>
+        {face.fellBack ? (
+          <span
+            data-testid="preview-card-fallback"
+            className="inline-flex items-center px-1.5 py-0.5 rounded border bg-amber-50 text-amber-900 border-amber-200"
+          >
+            No complete Chinese translation: shown in English
+          </span>
+        ) : null}
+      </div>
+      <div className="mt-1 whitespace-pre-wrap text-sm text-slate-900">{face.question}</div>
+      {face.options.length > 0 ? (
+        <ol className="mt-1 space-y-1 text-sm">
+          {face.options.map(option => (
+            <li key={option.key} className="text-slate-800">
+              <span className="font-mono text-xs text-slate-500">{option.key}</span>{' '}
+              {option.correct ? <span className="mr-1 text-emerald-700">✓</span> : null}
+              {option.text}
+              {option.why ? <div className="text-xs text-slate-500">{option.why}</div> : null}
+            </li>
+          ))}
+        </ol>
+      ) : null}
+      {face.explanation ? <div className="mt-1 whitespace-pre-wrap text-xs text-slate-700">{face.explanation}</div> : null}
+      {face.realWorldUsage ? <div className="mt-1 whitespace-pre-wrap text-xs text-slate-500">{face.realWorldUsage}</div> : null}
+    </li>
+  );
+}
+
 export function DeckPreviewPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -58,6 +107,7 @@ export function DeckPreviewPage() {
   const cardsQuery = useCards(queryDeckId);
 
   const [copied, setCopied] = useState<string | null>(null);
+  const [lang, setLang] = useState<DisplayLang>('en');
 
   const deck = deckQuery.data ?? null;
   // Memoised so the empty-list fallback is a stable reference: exportModel's
@@ -121,6 +171,10 @@ export function DeckPreviewPage() {
 
   const liveCount = exportModel?.Cards.length ?? 0;
   const deletedCount = Math.max(0, cards.length - liveCount);
+  // The English | Chinese toggle only exists on a deck where Chinese is in play; the
+  // card list renders in English everywhere else.
+  const showLangToggle = deckUsesTranslations(deck, cards);
+  const shownLang: DisplayLang = showLangToggle ? lang : 'en';
 
   return (
     <ConsoleShell
@@ -253,6 +307,37 @@ export function DeckPreviewPage() {
               </ul>
             </div>
           ) : null}
+        </div>
+
+        <div className="bg-white border border-slate-200 rounded-lg shadow-sm p-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-slate-800">Cards as the app shows them</h2>
+            {showLangToggle ? (
+              <div role="group" aria-label="Card language" className="inline-flex rounded-md border border-slate-300 overflow-hidden text-xs">
+                {(['en', 'zh-CN'] as const).map(option => (
+                  <button
+                    key={option}
+                    type="button"
+                    aria-pressed={shownLang === option}
+                    data-testid={`preview-lang-${option}`}
+                    className={`px-3 py-1 ${shownLang === option ? 'bg-indigo-600 text-white' : 'bg-white text-slate-700 hover:bg-slate-50'}`}
+                    onClick={() => setLang(option)}
+                  >
+                    {option === 'en' ? 'English' : 'Chinese'}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          {exportModel && exportModel.Cards.length > 0 ? (
+            <ul className="mt-2 max-h-[32rem] overflow-y-auto">
+              {exportModel.Cards.map(card => (
+                <PreviewCardFace key={card.StableUid} card={card} lang={shownLang} />
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-2 text-sm text-slate-500">No live cards.</p>
+          )}
         </div>
 
         <div className="bg-white border border-slate-200 rounded-lg shadow-sm p-4">

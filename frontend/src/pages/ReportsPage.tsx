@@ -22,6 +22,7 @@ import {
   CARD_REPORT_NOTE_MAX,
   CARD_REPORT_RESOLUTIONS,
   cardReportEditorHref,
+  cardReportLocaleBadge,
   listCardReports,
   resolveCardReport,
   type CardReport,
@@ -341,6 +342,7 @@ export function ReportsPage() {
                   const reason = REASON_LABELS[r.reason];
                   const editorHref = cardReportEditorHref(r);
                   const cardName = r.question || r.stableUid;
+                  const localeBadge = cardReportLocaleBadge(r);
                   return (
                     <Fragment key={r.reportId}>
                       <tr className="border-b border-slate-100 align-top">
@@ -354,6 +356,11 @@ export function ReportsPage() {
                           {r.anonymous ? (
                             <div className="text-xs text-slate-500 mt-1" data-testid="report-anonymous">
                               Not signed in
+                            </div>
+                          ) : null}
+                          {localeBadge ? (
+                            <div className="mt-1" data-testid="report-display-locale">
+                              <Badge tone="info">{localeBadge}</Badge>
                             </div>
                           ) : null}
                         </td>

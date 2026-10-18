@@ -3,7 +3,8 @@
 The parser is the law: `frontend/src/lib/deckImport.ts` (lexer + `validateCards` + `planImport`),
 `frontend/src/lib/mcqRules.ts` (`validateMcq`), `frontend/src/lib/cardRules.ts` (uid, difficulty),
 `frontend/src/lib/deckImportRunner.ts` (the write loop), `frontend/src/lib/sourceRules.ts` (source
-limits). Everything below is derived from those
+limits), `frontend/src/lib/translationRules.ts` (`validateTranslation`, the `_ZH` rules of §1.7).
+Everything below is derived from those
 files as of `main@8a99cc2`; when this document and the code disagree, the code wins and this
 document is wrong.
 
@@ -37,7 +38,11 @@ Node 22.18+ or 24 runs the `.mts` directly (this machine: v24.9.0); nothing to i
 - Marker regexes, all anchored at column 0, tested in this order:
   `## ` (card header; needs a space or tab after `##`, so `###` and `##x` are content) ·
   `# deck:` (case-insensitive, `#deck:` also matches) · `TOPIC:` · `QUALIFIER:` · `SOURCE:` · `OPT:` ·
-  `WHY:` · `Q:` · `A:` · `USAGE:` · `CODE:`.
+  `WHY:` · `Q:` · `A:` · `USAGE:` · `CODE:` · then the Chinese twins (§1.7) `QUALIFIER_ZH:` · `Q_ZH:` ·
+  `OPT_ZH:` · `WHY_ZH:` · `A_ZH:` · `USAGE_ZH:` · and last the reserved `^[A-Z]+_ZH\s*[:：]` (any other
+  `<NAME>_ZH:` line, e.g. `SOURCE_ZH:`, is refused with `ZH_UNSUPPORTED_FIELD`, and a misspelled one,
+  with a space before the colon or a fullwidth colon such as `Q_ZH :` or `Q_ZH：`, with
+  `ZH_BAD_MARKER`, instead of being glued to the section above).
 - A `# deck:` line **anywhere** in the file (even inside a card body or code block) is taken as
   the deck header, never as content. Do not write one in a snippet.
 
@@ -88,13 +93,21 @@ Any non-blank line before the first card header that is not the deck header →
 | `CODE: <language>` | `codeSnippet` + `codeLanguage` | no | language is the rest of the marker line (`CODE: python`, `CODE: json`, `CODE: bash`; bare `CODE:` = no language). Body is the snippet. A `CODE:` with no body is dropped entirely (no snippet, no language). |
 | `USAGE:` | `realWorldUsage` | no | multi-line. |
 | `SOURCE: <https url>` | `source.url` + `source.quote` | no | once per card. URL = the rest of the marker line, trimmed; must match `^https://\S+$` and be ≤ 2048 chars, else `BAD_SOURCE_URL` (card dropped). Quote = the following lines, trimmed; empty → `null`; internal newlines kept; ≤ 1000 chars, else `SOURCE_QUOTE_TOO_LONG`. Copy the quote word for word from the page. |
+| `QUALIFIER_ZH: <phrase>` | `translations["zh-CN"].mcq.qualifier` | iff `QUALIFIER:` | single line, once (second → `DUPLICATE_SECTION`). Must appear verbatim (case-insensitive) in `Q_ZH:`. §1.7. |
+| `Q_ZH:` | `translations["zh-CN"].question` | translated cards | the Chinese stem; must contain a Chinese character. §1.7. |
+| `OPT_ZH:` | `translations["zh-CN"].mcq.options[key].text` | every `OPT:` of a translated card | no payload: translates the nearest `OPT:` above it, text on the lines below. `OPT_ZH: *` → `TRANSLATION_CORRECT_MARK`, any other payload → `ZH_BAD_OPT_LINE` (card dropped either way). |
+| `WHY_ZH:` | `translations["zh-CN"].mcq.options[key].why` | iff that option has `WHY:` | translates the `WHY:` of the nearest `OPT:` above it. |
+| `A_ZH:` | `translations["zh-CN"].explanation` | translated cards | the Chinese answer sentence. |
+| `USAGE_ZH:` | `translations["zh-CN"].realWorldUsage` | iff `USAGE:` | the Chinese usage line. |
 
 - A *section* is a marker line plus every following non-blank line up to the next column-0
   marker or card header. A card may contain each of `Q:`, `A:`, `CODE:`, `USAGE:`, `SOURCE:` once; a repeat
   → `DUPLICATE_SECTION`, the first copy is kept and the repeat's body is swallowed.
 - Lines after the header but before the first section marker → `TEXT_BEFORE_SECTION`.
 - Sections may appear in any order; the round-trip (canonical) order is
-  `header, TOPIC:, QUALIFIER:, Q:, OPT:/WHY: …, A:, CODE:, USAGE:, SOURCE:`. Write them in that order.
+  `header, TOPIC:, QUALIFIER:, QUALIFIER_ZH:, Q:, Q_ZH:, (OPT:, OPT_ZH:, WHY:, WHY_ZH:) …, A:, A_ZH:,
+  CODE:, USAGE:, USAGE_ZH:, SOURCE:` (the `_ZH` lines only on a translated card). Write them in that
+  order.
 - A card is MCQ as soon as it has one `OPT:`, `WHY:` or `QUALIFIER:` line; `shuffle` is always
   true and `v` is always 1 (the format has no marker for either).
 
@@ -164,10 +177,71 @@ parses).
 | `MCQ_QUALIFIER_EMPTY` / `MCQ_QUALIFIER_IS_CHOOSE_N` / `MCQ_QUALIFIER_NOT_IN_STEM` | see §1.5 | blocks |
 | `MCQ_CHOOSE_N_MISMATCH` | starred count ≠ what the stem's `(Choose two/three.)` implies | blocks |
 | `MCQ_OPTION_TOO_LONG` | option text >600 chars (server + lint only) | server rejects the write |
+| `ZH_UNSUPPORTED_FIELD` | a column-0 `<NAME>_ZH:` that is not one of the six `_ZH` markers (`SOURCE_ZH:`, `CODE_ZH:`, `TOPIC_ZH:` …) | body swallowed, blocks |
+| `ZH_BAD_MARKER` | a column-0 `<NAME>_ZH` followed by spaces and a colon, or by a fullwidth colon `：` (`Q_ZH :`, `Q_ZH：`, `SOURCE_ZH：`): not one of the six exact markers | body swallowed, blocks |
+| `ZH_MISSING_FIELD` | a card with any `_ZH` section lacks one its English sections call for (one issue per missing section, named) | **card dropped**, blocks |
+| `ZH_BAD_OPT_LINE` | `OPT_ZH:` with a payload other than `*` | **card dropped**, blocks |
+| `ZH_WITHOUT_OPTION` | `OPT_ZH:` / `WHY_ZH:` before the card's first `OPT:` | body swallowed, blocks |
+| `EN_FIELD_HAS_CJK` | an English `Q:`/`QUALIFIER:`/`OPT:`/`WHY:`/`A:`/`USAGE:` contains a Chinese character, on a translated card or on any card of a file that has at least one translated card | blocks |
+| `TRANSLATION_*` | the translation does not mirror its English card (§1.7; same codes as the server) | blocks |
+| `TRANSLATION_MISSING` | lint `--locales zh-CN` only: a card without a zh-CN translation (the publish gate's rule) | publish refused |
 
 Validator issues are reported at the card's header line; lexer issues at the offending line.
 Every card-attributed issue also becomes an `INVALID_CARD` conflict in the plan, so nothing
 half-valid can slip through even if the page's error list were ignored.
+
+### 1.7 Chinese translation (`_ZH` sections)
+
+One deck per exam; English is the source of truth and the default display. A card may carry a
+built-in Simplified Chinese (`zh-CN`) translation that the app shows when the learner switches the
+card to 中文. Progress belongs to the card (`stableUid`), never to the language, so a translation
+changes nothing about scheduling, grading or the shuffle order.
+
+- Each translatable section gets a `_ZH` twin written right after it: `QUALIFIER_ZH:`, `Q_ZH:`,
+  `OPT_ZH:`, `WHY_ZH:`, `A_ZH:`, `USAGE_ZH:`. `OPT_ZH:` and `WHY_ZH:` bind to the nearest `OPT:`
+  above them, so each option's Chinese sits under its English text (§3.4).
+- **All or nothing per card.** A card with any `_ZH` section needs every twin its English has:
+  `Q_ZH:` and `A_ZH:` always; `QUALIFIER_ZH:` iff `QUALIFIER:`; `OPT_ZH:` for every `OPT:`;
+  `WHY_ZH:` iff that option has a `WHY:`; `USAGE_ZH:` iff `USAGE:`. Each missing twin is a
+  `ZH_MISSING_FIELD` and the card is dropped; an extra one (a `USAGE_ZH:` without `USAGE:`, a
+  `WHY_ZH:` on an option with no `WHY:`) is a `TRANSLATION_FIELD_EXTRA` / `TRANSLATION_WHY_MISMATCH`.
+  A half-translated card never ships: the app would show it in two languages.
+- **Never translated:** the correct marks (`*` lives only on the English `OPT:` line; `OPT_ZH: *` is
+  `TRANSLATION_CORRECT_MARK`), option keys and order, `CODE:`, `TOPIC:`, difficulty and the
+  `SOURCE:` quote (it stays the verbatim English passage). There is no marker for them.
+- Keep AWS service and feature names in English inside the Chinese text (`Amazon S3`, `AWS KMS`,
+  `S3 Versioning`, `MFA Delete`, `s3:PutObject`), as the AWS Simplified Chinese exam guide does;
+  never coin a Chinese product name.
+- `Q_ZH:` must contain at least one Chinese character (`TRANSLATION_NOT_TRANSLATED`). The English
+  sections of a translated card must contain none (`EN_FIELD_HAS_CJK`): Chinese pasted into an
+  English section, or a mistyped `_ZH` marker whose text joined the section above, is the usual
+  cause. Once a file has one translated card the check covers every card in it; a file with no
+  translated card is not checked, so a deck written in Chinese (`aws-saa-fundamentals`) parses as
+  before.
+- `QUALIFIER_ZH:` is the Chinese of the exam qualifier (e.g. `最安全` for `MOST secure`) and must
+  appear verbatim (case-insensitive) in `Q_ZH:` (`TRANSLATION_QUALIFIER_NOT_IN_STEM`); present iff
+  `QUALIFIER:` is (`TRANSLATION_QUALIFIER_MISMATCH`).
+- Choose-N: the Chinese stem ends with `（选择两项。）` / `（选择三项。）` exactly when the English
+  stem says `(Choose two.)` / `(Choose three.)` (`TRANSLATION_CHOOSE_N_MISMATCH`, both directions;
+  regex `[（(]\s*选择?\s*(两|二|三|2|3)\s*项\s*[。.]?\s*[）)]`).
+- Option text: non-empty (`TRANSLATION_OPTION_EMPTY`), ≤ 600 characters
+  (`TRANSLATION_OPTION_TOO_LONG`), unique within the card (`TRANSLATION_OPTION_TEXT_DUPLICATE`).
+- The remaining codes mostly guard the JSON shape the API takes: `TRANSLATION_BAD_SHAPE` (unknown
+  keys, `v` ≠ 1), `TRANSLATION_BAD_LOCALE` (v1 is `zh-CN` only, and never the deck's own locale: the
+  `aws-saa-fundamentals` deck is already Chinese, so its import refuses `_ZH` sections),
+  `TRANSLATION_OPTION_KEYS_MISMATCH`, and `TRANSLATION_QUESTION_EMPTY` / `TRANSLATION_ANSWER_EMPTY`
+  (a `Q_ZH:` or `A_ZH:` marker with no text under it). The console reports every issue of a card; the
+  server refuses a write with the first one, in the same check order.
+- Non-blocking: `ZH_WARN_CORRECT_LONGEST` (the 1.4× longest-answer check on the Chinese option
+  text), `ZH_WARN_MAYBE_STALE` (the import changes a translated card's English but not its
+  `_ZH` sections; the server re-stamps a translation as current on every write that carries it,
+  so check the Chinese still says the same) and `ZH_WARN_STALE_MARKED_CURRENT` (the server marks
+  the card's translation stale, typically after an English edit in the Edit Card form, and the
+  file carries the same `_ZH` text: this import marks the stale Chinese translation as current,
+  §2.3).
+- A deck whose `translation_locales` holds `zh-CN` (console › Edit Deck › Translation locales,
+  super_admin) refuses to publish while any live card lacks a current zh-CN translation
+  (`TRANSLATION_PUBLISH_GATE`). Lint with `--locales zh-CN` to see those cards first (§7).
 
 ---
 
@@ -207,13 +281,24 @@ does not resolve collisions. Consequences:
 ### 2.3 "Unchanged" means: no comparable field differs after normalisation
 
 `COMPARABLE_FIELDS = question, difficulty, orderInDeck, explanation, codeSnippet, codeLanguage,
-realWorldUsage, topic, mcq, source`. Text fields are compared after `.trim()` of the **whole value**
+realWorldUsage, topic, mcq, source, translations`. Text fields are compared after `.trim()` of the **whole value**
 (server `null` == `""` == absent); `mcq` is compared as canonical JSON (options sorted by key,
 each text/why trimmed, empty why → null, `v` dropped, server `null` == file absence); `source` is
 compared as `[url.trim(), quote.trim() || null]` (`normalizeSourceForCompare`; server `null` ==
-file absence).
+file absence); `translations` as canonical JSON too (locales and option keys sorted, text trimmed,
+empty why/usage → null, `v` dropped; server `null` == a card with no `_ZH` section). A translation
+the server marks stale (`translationStatus`, the English changed after it was written) counts as
+changed even when the file's `_ZH` text is identical: only a write that carries it restamps it, so
+re-importing the same file is how a checked translation becomes current again (with the
+`ZH_WARN_STALE_MARKED_CURRENT` hint); an "unchanged" plan would leave the deck refused by the
+publish gate.
 
-So an edit registers only if it changes one of those ten fields: changing wording, difficulty,
+**Removing every `_ZH` section is a delete.** The run writes whole cards, so importing a file without
+`_ZH` sections over cards that have a translation on the server would clear it. Those cards become
+`TRANSLATIONS_WOULD_BE_CLEARED` conflicts and block the run until you tick "Delete the Chinese
+translation" in the preview (the runner refuses such a write without that opt-in too).
+
+So an edit registers only if it changes one of those eleven fields: changing wording, difficulty,
 topic, an option, a why, the qualifier, the code, the usage, the source all count. Adding or removing blank
 lines and trailing spaces does **not** count (the lexer drops them); re-flowing a line break
 inside a paragraph **does** count (internal newlines are content); leading/trailing whitespace of
@@ -230,13 +315,15 @@ card.
   importing an edit to an existing card, raise Revision by hand in the console's Edit Card form
   if learners who already learned the card should see it again. Publishing still ships the new
   text either way (the worker's diff compares the content fields as well as revision).
+- A translation-only change never needs a Revision bump and must not get one: the Chinese ships in
+  the next publish, and a bump would push the card back to every learner as "updated".
 
 ### 2.5 The run
 
 Serial writes in plan order; a failed card is recorded and the run continues; the failure list
 can be re-run as is. Optional fields you removed are sent as `""` (and `mcq: null` for a Q/A
-card, `source: null` for a card without `SOURCE:`) so a cleared section actually clears on the
-server. The first MCQ write is probed: if the
+card, `source: null` for a card without `SOURCE:`, `translations: null` for a card without `_ZH`
+sections, see §2.3) so a cleared section actually clears on the server. The first MCQ write is probed: if the
 API echoes the card without its `mcq` blob the run stops with `SERVER_NOT_READY_MCQ` and the
 rest of the file is listed as not written.
 
@@ -309,6 +396,69 @@ Default encryption sets what happens when a client says nothing; only a deny pol
 ```
 
 Single-answer MCQ: same shape, 4 options, one `*`, no `(Choose …)` in the stem.
+
+### 3.4 MCQ with its Chinese translation (`_ZH` sections, §1.7)
+
+The §3.3 card with every `_ZH` twin, in canonical order. AWS service and feature names stay in
+English inside the Chinese text. With a `# deck: lint-sample` header it lints as
+`1 cards, 1 mcq, 0 issues, 2 warnings, 1 zh-CN` (the two warnings are the longest-answer hints,
+one for the English options and one for the Chinese).
+
+```markdown
+## sample-mcq-zh-04 | d2
+TOPIC: 1.3 Data security controls
+QUALIFIER: MOST secure
+QUALIFIER_ZH: 最安全
+Q:
+A team stores customer exports in an S3 bucket. Security requires that objects are encrypted with a key the team controls and rotates, and that no object can be uploaded unencrypted. Which combination of actions is the MOST secure way to meet both requirements? (Choose two.)
+Q_ZH:
+一个团队把客户导出文件存放在 Amazon S3 存储桶中。安全要求是：对象必须用团队自己控制并轮换的密钥加密，并且任何对象都不能以未加密的方式上传。哪种操作组合是同时满足这两项要求的最安全方式？（选择两项。）
+OPT: a *
+Create a customer managed KMS key with automatic rotation enabled and set it as the bucket's default encryption key.
+OPT_ZH:
+创建一个启用了自动轮换的客户托管 AWS KMS 密钥，并将其设为存储桶的默认加密密钥。
+OPT: b
+Enable SSE-S3 default encryption on the bucket.
+OPT_ZH:
+在存储桶上启用 SSE-S3 默认加密。
+WHY:
+SSE-S3 keys are owned and rotated by S3, not by the team, so the "key the team controls" requirement is not met even though objects are encrypted at rest.
+WHY_ZH:
+SSE-S3 的密钥由 Amazon S3 拥有并轮换，不由团队控制；即使对象已静态加密，也不满足“团队控制的密钥”这一要求。
+OPT: c *
+Add a bucket policy that denies s3:PutObject unless the request specifies aws:kms server-side encryption.
+OPT_ZH:
+添加一条存储桶策略：除非请求指定 aws:kms 服务器端加密，否则拒绝 s3:PutObject。
+OPT: d
+Enable S3 Versioning so an unencrypted upload can be rolled back.
+OPT_ZH:
+启用 S3 Versioning，以便回滚未加密的上传。
+WHY:
+Versioning keeps prior copies of an object; it neither prevents an unencrypted upload nor encrypts anything, so it addresses recovery rather than the stated control.
+WHY_ZH:
+Versioning 只保留对象的旧版本，既不能阻止未加密的上传，也不会加密任何内容；它解决的是恢复问题，而不是题目要求的控制。
+OPT: e
+Enable MFA Delete on the bucket.
+OPT_ZH:
+在存储桶上启用 MFA Delete。
+WHY:
+MFA Delete protects object versions from deletion; it has no effect on whether uploads are encrypted or which key is used.
+WHY_ZH:
+MFA Delete 保护对象版本不被删除，对上传是否加密、使用哪个密钥都没有影响。
+A:
+Use a customer managed KMS key with rotation as the bucket default and a bucket policy that denies any PutObject lacking KMS encryption. The key gives the team ownership and rotation; the deny statement makes unencrypted uploads impossible rather than merely unlikely. SSE-S3, Versioning and MFA Delete each solve a different problem and leave one of the two requirements open.
+A_ZH:
+把启用轮换的客户托管 AWS KMS 密钥设为存储桶的默认加密密钥，再用存储桶策略拒绝任何未使用 KMS 加密的 PutObject。密钥让团队拥有控制权并能轮换；拒绝语句让未加密的上传变得不可能，而不只是不太可能。SSE-S3、Versioning 和 MFA Delete 各自解决的是别的问题，都会让两项要求之一落空。
+USAGE:
+Default encryption sets what happens when a client says nothing; only a deny policy turns "should be encrypted" into "cannot be stored otherwise".
+USAGE_ZH:
+默认加密只决定客户端什么都不指定时的行为；只有拒绝策略才能把“应该加密”变成“不加密就无法存储”。
+```
+
+The import sends it as one card whose `translations` is
+`{"zh-CN": {"v": 1, "question": …, "explanation": …, "realWorldUsage": …, "mcq": {"qualifier": "最安全",
+"options": {"a": {"text": …, "why": null}, "b": {"text": …, "why": …}, …}}}}`; the correct marks stay
+on the English `mcq`.
 
 ---
 
@@ -434,8 +584,12 @@ task statement the family serves.
 ### 7.1 Command
 
 ```
-node frontend/scripts/lint-deck.mts <file.md> [more.md ...]
+node frontend/scripts/lint-deck.mts [--strict] [--locales zh-CN] <file.md> [more.md ...]
 ```
+
+`--locales zh-CN` (also `--locales=zh-CN`) lints the file as the publish gate treats a deck that
+declares zh-CN: every card without a zh-CN translation is a `TRANSLATION_MISSING` issue. Any other
+locale is a usage error (exit 2). `--strict` fails on warnings too.
 
 Run from anywhere; paths may be relative to the current directory or absolute. Requires
 Node ≥ 22.18 (native type stripping) and `frontend/node_modules` installed (`esbuild` comes with
@@ -446,9 +600,11 @@ parser, never a copy).
 
 - One line per issue: `<line>: <CODE> <message>` (line = 1-based line in the file; validator
   issues point at the card header).
-- Summary line: `N cards, M mcq, K issues`. `N` counts cards that parsed structurally (a card
+- Summary line: `N cards, M mcq, K issues, W warnings`. `N` counts cards that parsed structurally (a card
   dropped by `MISSING_QUESTION`, `BAD_TOPIC`, `MCQ_BAD_OPT_LINE` … is not in `N`), `M` of those
-  carry options, `K` is what must be 0.
+  carry options, `K` is what must be 0. When `--locales zh-CN` is given or any card is translated,
+  the line ends with `, T zh-CN` (`T` = cards carrying a zh-CN translation); an English-only file
+  prints the same line as before translations existed.
 - Exit 0 when every file has 0 issues; exit 1 when any file has an issue or cannot be read;
   exit 2 on usage/loader errors.
 - With several files, each block is prefixed by `== <path>`.

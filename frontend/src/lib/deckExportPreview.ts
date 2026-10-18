@@ -4,12 +4,15 @@
 // deck.json in the browser as an *approximate* preview: the published file is
 // produced by the publish worker, whose Version is the build id. The card shape
 // mirrors the worker's CardExportData (src_C/Worker/S3/IS3DeckUploader.cs), so
-// JSON.stringify key order matches, and Topic/Mcq are appended after Revision
-// only when present — the worker writes them with WhenWritingNull.
+// JSON.stringify key order matches, and Topic/Mcq/Translations are appended
+// after Revision only when present — the worker writes them with
+// WhenWritingNull, Translations last.
 
 import type { Card } from '../types/card';
 import type { Deck } from '../types/deck';
 import type { McqBlob } from '../types/mcq';
+import type { CardTranslations } from '../types/translation';
+import { translationsOf } from './translationRules';
 
 export type DeckExportPreviewCard = {
   StableUid: string;
@@ -23,6 +26,7 @@ export type DeckExportPreviewCard = {
   Revision?: number;
   Topic?: string;
   Mcq?: McqBlob;
+  Translations?: CardTranslations;
 };
 
 export type DeckExportPreview = {
@@ -108,6 +112,12 @@ export function buildDeckExportPreview(deck: Deck, cards: Card[]): DeckExportPre
       // Pass the server's object through as received: the worker also writes
       // the stored jsonb as is, so we do not rebuild, reorder or normalise it.
       card.Mcq = c.mcq;
+    }
+    // Same rule for the translations jsonb (CardExportData.Translations, the
+    // last property): as stored, and no key at all on a card without one.
+    const translations = translationsOf(c);
+    if (translations !== null) {
+      card.Translations = translations as CardTranslations;
     }
 
     return card;

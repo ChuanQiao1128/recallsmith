@@ -36,6 +36,9 @@ type FormState = {
   totalCards: string;
   previewCards: string;
   retiredAtMs: string;
+
+  // decks.translation_locales (super_admin). Only zh-CN exists in v1.
+  translationZh: boolean;
 };
 
 function toStr(v: unknown): string {
@@ -111,6 +114,8 @@ export function DeckEditPage() {
     totalCards: '',
     previewCards: '',
     retiredAtMs: '',
+
+    translationZh: false,
   });
 
   // The form as last saved (or as first loaded), for the unsaved-changes guard.
@@ -163,6 +168,8 @@ export function DeckEditPage() {
       totalCards: found.totalCards != null ? String(found.totalCards) : '',
       previewCards: found.previewCards != null ? String(found.previewCards) : '',
       retiredAtMs: found.retiredAtMs != null ? String(found.retiredAtMs) : '',
+
+      translationZh: Array.isArray(found.translationLocales) && found.translationLocales.includes('zh-CN'),
     };
     setForm(loaded);
     // Same snapshot as the form starts on, so the page is clean until edited.
@@ -227,6 +234,11 @@ export function DeckEditPage() {
         retiredAtMs: form.availability === 'retired' ? parseNullableInt(form.retiredAtMs) : null,
         totalCards: parseNullableInt(form.totalCards),
         previewCards: effectiveTier(deckType, form.tier) === 'premium' ? parseNullableInt(form.previewCards) : null,
+        // Sent only by a super_admin and only when it changed, so an editor's
+        // save, and a save against a server without the column, never carry it.
+        ...(superAdmin && savedForm !== null && form.translationZh !== savedForm.translationZh
+          ? { translationLocales: form.translationZh ? ['zh-CN'] : [] }
+          : {}),
       };
 
       const { result: res } = await updateDeckMutation.mutateAsync({
@@ -546,6 +558,26 @@ export function DeckEditPage() {
                 />
               </label>
             ) : null}
+
+            <div className="block lg:col-span-2" data-testid="deck-translation-locales">
+              <div className="text-xs text-slate-600 mb-1">Translation locales</div>
+              <label className="flex items-center gap-2 text-sm text-slate-800">
+                <input
+                  type="checkbox"
+                  checked={form.translationZh}
+                  onChange={e => setForm(prev => ({ ...prev, translationZh: e.target.checked }))}
+                  disabled={!superAdmin || form.locale.trim().toLowerCase() === 'zh-cn'}
+                />
+                <span>
+                  Simplified Chinese (<span className="font-mono">zh-CN</span>)
+                </span>
+              </label>
+              <div className="text-[11px] text-slate-500 mt-1">
+                {form.locale.trim().toLowerCase() === 'zh-cn'
+                  ? 'This deck is already written in zh-CN, so it cannot also carry a zh-CN translation.'
+                  : 'When set, publishing is refused until every live card has a current zh-CN translation. Turn it on only after the Chinese import is complete.'}
+              </div>
+            </div>
 
             {form.availability === 'retired' ? (
               <label className="block">
