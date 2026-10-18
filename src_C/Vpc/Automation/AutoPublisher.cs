@@ -33,8 +33,8 @@ public static class AutoPublisher
     Human = "human";
 
   /// <summary>Publish refusal codes that route to a human with the same reason (A00 §6.2 check 9).</summary>
-  private static readonly string[] HumanRefusalCodes = ["MCQ_PUBLISH_GATE", "AI_QA_REQUIRED", "AI_QA_BLOCKED", "CONFIG_ERROR", "SERVER_NOT_READY_AI_QA",
-    "DECK_DELETED"];
+  private static readonly string[] HumanRefusalCodes = ["MCQ_PUBLISH_GATE", "TRANSLATION_PUBLISH_GATE", "AI_QA_REQUIRED", "AI_QA_BLOCKED",
+    "CONFIG_ERROR", "SERVER_NOT_READY_AI_QA", "DECK_DELETED"];
 
   /// <summary>What checks 1–8 decided; <see cref="StartPublish"/> means every check passed and check 9 runs.</summary>
   private sealed record Verdict(string State, string? Reason, string? Detail, string? DeckSlug, string? BuildId, string? Snapshot, bool StartPublish,
@@ -365,13 +365,17 @@ public static class AutoPublisher
 
   /// <summary>
   /// The refusals <see cref="Publish.StartPublishAsync"/> would answer for the deck's current cards, without its side
-  /// effects (no gate defect row, no refusal gauge, no chained QA run): the MCQ publish gate, then the AI QA gate when
-  /// it is enforced. Null when both pass.
+  /// effects (no gate defect row, no refusal gauge, no chained QA run): the MCQ publish gate, the translation publish
+  /// gate, then the AI QA gate when it is enforced. Null when all pass.
   /// </summary>
   private static async Task<(string Code, string Message)?> DryRunGateRefusalAsync(NpgsqlConnection conn, long deckId,
     IReadOnlyList<Dictionary<string, object?>> export, CancellationToken ct)
   {
     if (Publish.FirstMcqGateFailure(export) is { } mcq) return ("MCQ_PUBLISH_GATE", $"{mcq.StableUid}: {mcq.Code}");
+    if (await Publish.TranslationGateFailureAsync(conn, deckId, export) is { } tr)
+    {
+      return ("TRANSLATION_PUBLISH_GATE", $"{tr.StableUid}: {tr.Code}");
+    }
     if (!QaGate.IsEnforced()) return null;
     var state = await QaGate.ComputeAsync(conn, deckId, ct);
     var missing = state.Changed.Where(c => !c.ReviewedAtCurrentHash).Select(c => c.StableUid).ToList();

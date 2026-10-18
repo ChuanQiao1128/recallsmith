@@ -5,9 +5,13 @@ using System.Text.Json;
 
 namespace RecallSmith.Lambda.Db;
 
-/// <summary>One exported card as the publish snapshot digests it; jsonb columns as the PG text they are read as.</summary>
+/// <summary>
+/// One exported card as the publish snapshot digests it; jsonb columns as the PG text they are read as.
+/// <see cref="TranslationsJson"/> (migration 047) is null for a card without translations.
+/// </summary>
 public sealed record PublishSnapshotCard(string? StableUid, int OrderInDeck, int? Difficulty, string? Question, string? Explanation,
-  string? CodeLanguage, string? CodeSnippet, string? RealWorldUsage, int? Revision, string? Topic, string? McqJson, string? SourceJson);
+  string? CodeLanguage, string? CodeSnippet, string? RealWorldUsage, int? Revision, string? Topic, string? McqJson, string? SourceJson,
+  string? TranslationsJson = null);
 
 /// <summary>
 /// The digest that binds a publish build to the cards the AI QA publish gate passed (R18 Y02, backend-design-16).
@@ -15,7 +19,9 @@ public sealed record PublishSnapshotCard(string? StableUid, int OrderInDeck, int
 /// computes it over the cards it is about to build and refuses the job (<see cref="StaleErrorCode"/>) when they
 /// differ, so a card edited between the gate and the build is never published at an unreviewed hash. Both sides
 /// read the same export columns in the same order; a missing text value and an empty one digest alike (the Worker
-/// maps some nulls to ""), as do a missing difficulty and 2 and a missing revision and 1.
+/// maps some nulls to ""), as do a missing difficulty and 2 and a missing revision and 1. A card's translations are
+/// digested only when it has some, so the digest of an untranslated card is the formula's from before migration 047
+/// (no AI_QA_STALE while core-vpc and the Worker deploy apart).
 /// </summary>
 public static class PublishSnapshot
 {
@@ -30,20 +36,25 @@ public static class PublishSnapshot
   /// <summary>Lowercase hex SHA-256 over the canonical JSON of <paramref name="cards"/>, in the order given (export order).</summary>
   public static string Digest(IEnumerable<PublishSnapshotCard> cards)
   {
-    var payload = cards.Select(c => new object[]
+    var payload = cards.Select(c =>
     {
-      c.StableUid ?? string.Empty,
-      c.OrderInDeck,
-      c.Difficulty ?? 2,
-      c.Question ?? string.Empty,
-      c.Explanation ?? string.Empty,
-      c.CodeLanguage ?? string.Empty,
-      c.CodeSnippet ?? string.Empty,
-      c.RealWorldUsage ?? string.Empty,
-      c.Revision ?? 1,
-      c.Topic ?? string.Empty,
-      c.McqJson ?? string.Empty,
-      c.SourceJson ?? string.Empty,
+      var fields = new List<object>
+      {
+        c.StableUid ?? string.Empty,
+        c.OrderInDeck,
+        c.Difficulty ?? 2,
+        c.Question ?? string.Empty,
+        c.Explanation ?? string.Empty,
+        c.CodeLanguage ?? string.Empty,
+        c.CodeSnippet ?? string.Empty,
+        c.RealWorldUsage ?? string.Empty,
+        c.Revision ?? 1,
+        c.Topic ?? string.Empty,
+        c.McqJson ?? string.Empty,
+        c.SourceJson ?? string.Empty,
+      };
+      if (c.TranslationsJson is not null) fields.Add(c.TranslationsJson);
+      return fields.ToArray();
     }).ToList();
     var hash = SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(payload)));
     return Convert.ToHexString(hash).ToLowerInvariant();
@@ -52,7 +63,8 @@ public static class PublishSnapshot
   /// <summary>
   /// A card from a row with the export aliases (<c>stableUid</c>, <c>orderInDeck</c>, <c>difficulty</c>,
   /// <c>question</c>, <c>explanation</c>, <c>codeLanguage</c>, <c>codeSnippet</c>, <c>realWorldUsage</c>,
-  /// <c>revision</c>, <c>topic</c>, <c>mcq</c>, <c>source</c>) as <see cref="DbUtil"/> returns it.
+  /// <c>revision</c>, <c>topic</c>, <c>mcq</c>, <c>source</c>, and <c>translations</c> when selected) as <see cref="DbUtil"/>
+  /// returns it.
   /// </summary>
   public static PublishSnapshotCard FromRow(IReadOnlyDictionary<string, object?> row) => new(
     Text(row, "stableUid"),
@@ -66,7 +78,9 @@ public static class PublishSnapshot
     Cell(row, "revision") is { } r ? Convert.ToInt32(r, CultureInfo.InvariantCulture) : null,
     Text(row, "topic"),
     Text(row, "mcq"),
-    Text(row, "source"));
+    Text(row, "source"),
+    // Null-preserving, unlike Text: a card without translations must digest as before migration 047.
+    Cell(row, "translations") is { } translations ? Convert.ToString(translations, CultureInfo.InvariantCulture) : null);
 
   private static object? Cell(IReadOnlyDictionary<string, object?> row, string key) => row.TryGetValue(key, out var v) ? v : null;
 

@@ -18,7 +18,7 @@ namespace RecallSmith.Lambda.Vpc.Reports;
 /// caller is never linked), an exact gateway route with its own throttle, a small body cap, a per-container request
 /// budget and a global daily cap.
 /// <para>
-/// Structured data only: <c>{ deckSlug, stableUid, reason, appVersion }</c>, nothing else (an unknown key, a note
+/// Structured data only: <c>{ deckSlug, stableUid, reason, appVersion, displayLocale? }</c>, nothing else (an unknown key, a note
 /// included, is a 400). The row is an ordinary <c>card_reports</c> row with <c>user_sub</c> null and <c>note</c> null
 /// (migration 046), so the console list, <c>automation/status</c> and the weekly digest count it with no other change.
 /// No account, device or install id and no IP is read or stored; the body is never logged. Only a card of a live free
@@ -45,7 +45,7 @@ public static class AnonymousCardReports
   internal const long DailyCapLineMs = 3_600_000;
 
   /// <summary>The body keys this route accepts; any other key is refused so free text cannot arrive by mistake.</summary>
-  public static readonly IReadOnlyList<string> Fields = ["deckSlug", "stableUid", "reason", "appVersion"];
+  public static readonly IReadOnlyList<string> Fields = ["deckSlug", "stableUid", "reason", "appVersion", "displayLocale"];
 
   // ASCII digits and \z, not \d and $: in .NET \d matches any Unicode digit (e.g. Arabic-Indic) and $ also matches
   // before a final "\n", so "2.0.0\n" or 2.0.0 in Arabic-Indic digits would reach client_version (R28 ANONREPORT-R3).
@@ -79,7 +79,7 @@ public static class AnonymousCardReports
     }
   }
 
-  private sealed record Input(string DeckSlug, string StableUid, string Reason, string AppVersion);
+  private sealed record Input(string DeckSlug, string StableUid, string Reason, string AppVersion, string? DisplayLocale);
 
   /// <summary>
   /// The ingest. Takes no <see cref="AuthContext"/> on purpose: a bearer sent with the call is never read. Answers
@@ -162,12 +162,15 @@ public static class AnonymousCardReports
           return Helpers.ErrorEnvelope(res, 429, "REPORT_DAILY_CAP", "Too many reports today. Try again tomorrow.");
         }
 
+        // display_locale (migration 047) only when sent, as on the signed-in route.
+        var withLocale = input.DisplayLocale is not null;
+        object?[] values = [deckId, input.DeckSlug, cardId, input.StableUid, input.Reason, input.AppVersion, question];
         var inserted = (await DbUtil.QueryAsync(conn, tx,
-          """
-          insert into card_reports (user_sub, deck_id, deck_slug, card_id, stable_uid, reason, note, client_version, question)
-          values (null, $1, $2, $3, $4, $5, null, $6::text, $7::text)
+          $"""
+          insert into card_reports (user_sub, deck_id, deck_slug, card_id, stable_uid, reason, note, client_version, question{(withLocale ? ", display_locale" : "")})
+          values (null, $1, $2, $3, $4, $5, null, $6::text, $7::text{(withLocale ? ", $8::text" : "")})
           returning id, created_at
-          """, [deckId, input.DeckSlug, cardId, input.StableUid, input.Reason, input.AppVersion, question]))[0];
+          """, withLocale ? [.. values, input.DisplayLocale] : values))[0];
         reportId = RunnerRoutes.Long(inserted["id"]);
         createdAt = inserted["created_at"];
         await tx.CommitAsync();
@@ -234,7 +237,7 @@ public static class AnonymousCardReports
     {
       throw new ValidationError($"appVersion must look like 2.0.0 (at most {MaxAppVersionChars} characters)", "appVersion");
     }
-    return new Input(deckSlug!, stableUid, reason, appVersion);
+    return new Input(deckSlug!, stableUid, reason, appVersion, CardReports.DisplayLocale(body));
   }
 
   private static string? StringProp(JsonElement obj, string name) =>

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Amazon.Lambda.APIGatewayEvents;
 using Npgsql;
 using RecallSmith.Lambda.Common;
@@ -34,6 +35,7 @@ public static class CardReports
   public const int MaxNoteLength = 500;
   public const int MaxClientVersionLength = 64;
   public const int MaxQuestionLength = 200;
+  public const int MaxDisplayLocaleLength = 16;
   public const int DefaultListLimit = 50;
   public const int MaxListLimit = 100;
 
@@ -43,6 +45,9 @@ public static class CardReports
   public static readonly IReadOnlyList<string> Reasons = ["wrong_answer", "outdated", "unclear", "typo", "other"];
   public static readonly IReadOnlyList<string> Resolutions = ["fixed", "wont_fix", "duplicate", "invalid"];
   private static readonly string[] StatusFilters = ["open", "resolved", "all"];
+
+  // ck_card_reports_display_locale (migration 047). ASCII classes and \z, not $: $ also matches before a final "\n".
+  private static readonly Regex DisplayLocaleRegex = new(@"^[a-z]{2}(-[A-Z]{2})?\z", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(50));
 
   /// <summary><c>CARD_REPORTS_ENABLED</c>, read per call; unset means the contract default <c>"1"</c>.</summary>
   public static bool Enabled() => Env.IsTruthy(Environment.GetEnvironmentVariable(EnabledEnv) ?? "1");
@@ -66,7 +71,7 @@ public static class CardReports
     return res.MethodNotAllowed("Method not allowed");
   }
 
-  private sealed record NewReport(string DeckSlug, string StableUid, string Reason, string? Note, string? ClientVersion);
+  private sealed record NewReport(string DeckSlug, string StableUid, string Reason, string? Note, string? ClientVersion, string? DisplayLocale);
 
   private static NewReport ParseNewReport(JsonElement root)
   {
@@ -76,7 +81,23 @@ public static class CardReports
     var reason = AutomationBody.RequiredEnum(body, "reason", Reasons);
     var note = TrimmedText(body, "note", MaxNoteLength);
     var clientVersion = TrimmedText(body, "clientVersion", MaxClientVersionLength);
-    return new NewReport(deckSlug, stableUid, reason, note, clientVersion);
+    return new NewReport(deckSlug, stableUid, reason, note, clientVersion, DisplayLocale(body));
+  }
+
+  /// <summary>
+  /// The optional <c>displayLocale</c> of a report (card translations): the language the learner saw the card in, such as
+  /// <c>en</c> or <c>zh-CN</c>. Absent / null → null; otherwise a string of at most 16 characters matching
+  /// <c>^[a-z]{2}(-[A-Z]{2})?$</c>.
+  /// </summary>
+  internal static string? DisplayLocale(JsonElement body)
+  {
+    if (!body.TryGetProperty("displayLocale", out var el) || el.ValueKind == JsonValueKind.Null) return null;
+    var s = el.ValueKind == JsonValueKind.String ? el.GetString()! : null;
+    if (s is null || s.Length > MaxDisplayLocaleLength || !DisplayLocaleRegex.IsMatch(s))
+    {
+      throw new ValidationError("displayLocale must be a locale such as en or zh-CN, or null", "displayLocale");
+    }
+    return s;
   }
 
   internal static string RequiredKey(JsonElement body, string name)
@@ -160,12 +181,16 @@ public static class CardReports
           return Helpers.ErrorEnvelope(res, 429, "REPORT_DAILY_LIMIT", "Daily report limit reached. Try again tomorrow.");
         }
 
+        // display_locale (migration 047) is written only when the app sent one, so a report without it inserts exactly
+        // as before that migration.
+        var withLocale = input.DisplayLocale is not null;
+        object?[] values = [userSub, deckId, input.DeckSlug, cardId, input.StableUid, input.Reason, input.Note, input.ClientVersion, question];
         var inserted = (await DbUtil.QueryAsync(conn, tx,
-          """
-          insert into card_reports (user_sub, deck_id, deck_slug, card_id, stable_uid, reason, note, client_version, question)
-          values ($1, $2, $3, $4, $5, $6, $7::text, $8::text, $9::text)
+          $"""
+          insert into card_reports (user_sub, deck_id, deck_slug, card_id, stable_uid, reason, note, client_version, question{(withLocale ? ", display_locale" : "")})
+          values ($1, $2, $3, $4, $5, $6, $7::text, $8::text, $9::text{(withLocale ? ", $10::text" : "")})
           returning id, created_at
-          """, [userSub, deckId, input.DeckSlug, cardId, input.StableUid, input.Reason, input.Note, input.ClientVersion, question]))[0];
+          """, withLocale ? [.. values, input.DisplayLocale] : values))[0];
         reportId = RunnerRoutes.Long(inserted["id"]);
         createdAt = inserted["created_at"];
         await tx.CommitAsync();
@@ -322,7 +347,8 @@ public static class CardReports
       var rows = await DbUtil.QueryAsync(conn, null,
         $"""
         select r.id, r.deck_id, r.deck_slug, r.card_id, r.stable_uid, left(c.question, $1) as question, r.reason, r.note, r.status,
-          r.resolution, r.resolution_note, r.client_version, r.created_at, r.resolved_at, (r.user_sub is null) as anonymous
+          r.resolution, r.resolution_note, r.client_version, r.created_at, r.resolved_at, (r.user_sub is null) as anonymous,
+          to_jsonb(r) ->> 'display_locale' as display_locale
         from card_reports r left join cards c on c.id = r.card_id
         where {string.Join(" and ", where)}
         order by r.id desc
@@ -347,6 +373,8 @@ public static class CardReports
         resolvedAt = RunnerRoutes.Timestamp(r["resolved_at"]),
         // R28 ANONREPORT: sent from the public route by a learner who was not signed in (never who sent it).
         anonymous = r["anonymous"] is true,
+        // The language the learner saw the card in (migration 047); null when the app did not say.
+        displayLocale = r["display_locale"],
       }).ToList();
       var nextCursor = rows.Count > limit ? Drafts.EncodeCursor(RunnerRoutes.Long(page[^1]["id"])) : null;
       return res.Ok(new { items, nextCursor });

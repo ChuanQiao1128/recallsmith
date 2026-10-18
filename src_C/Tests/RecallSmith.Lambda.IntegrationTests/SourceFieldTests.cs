@@ -302,8 +302,8 @@ public class SourceFieldTests
     var data = Data(response);
     AssertSource(data, "https://docs.aws.amazon.com/AmazonS3/latest/userguide/restoring-objects-retrieval-options.html", "line one\nline two");
 
-    // source is the last key of the card.
-    Assert.Equal("source", data.EnumerateObject().Last().Name);
+    // source is the last content key of the card; only the translation keys (migration 047) are appended after it.
+    Assert.Equal(["source", "translations", "translationStatus"], data.EnumerateObject().Select(p => p.Name).TakeLast(3).ToArray());
 
     var stored = await DbSourceAsync(data.GetProperty("id").GetInt64());
     Assert.NotNull(stored);

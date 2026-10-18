@@ -319,6 +319,24 @@ public static class Helpers
     return null;
   }
 
+  /// <summary>
+  /// Whether <paramref name="table"/> has <paramref name="column"/>, probed through pg_attribute so it never raises (safe
+  /// inside an open transaction). NOT cached: a scratch database or the console's Migrate can add the column at any time.
+  /// Guards the writes of a column that a just-deployed handler may meet before its migration ran.
+  /// </summary>
+  public static async Task<bool> ColumnExistsAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, string table, string column) =>
+    await DbUtil.ExecuteScalarAsync(conn, tx,
+      "select exists (select 1 from pg_attribute where attrelid = to_regclass($1) and attname = $2 and attnum > 0 and not attisdropped)",
+      [$"public.{table}", column]) is true;
+
+  /// <summary>503 MIGRATION_REQUIRED for a card translations write that reached a database without migration 047.</summary>
+  public static APIGatewayProxyResponse TranslationsNotMigrated(Res res) =>
+    ErrorEnvelope(res, 503, "MIGRATION_REQUIRED", "cards.translations does not exist yet; run migration 047 first");
+
+  /// <summary>The deck's own locale (a card translation into it is refused), or null when the deck does not exist.</summary>
+  public static async Task<string?> DeckLocaleAsync(NpgsqlConnection conn, long deckId) =>
+    await DbUtil.ExecuteScalarAsync(conn, null, "select locale from decks where id = $1", [deckId]) as string;
+
   public static async Task<long?> GetDeckIdByCardId(NpgsqlConnection conn, long cardId)
   {
     var rows = await DbUtil.QueryAsync(conn, null, "select deck_id as \"deckId\" from cards where id = $1", [cardId]);

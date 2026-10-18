@@ -170,6 +170,7 @@ public static class EmailTemplates
     ["PUBLISH_WAIT_TIMEOUT"] = "another publish did not finish in time",
     ["DECK_HAS_HUMAN_CHANGES"] = "the deck has changes a human made",
     ["MCQ_PUBLISH_GATE"] = "MCQ publish gate refused a card",
+    ["TRANSLATION_PUBLISH_GATE"] = "a card's translation is missing, invalid or stale",
     ["AI_QA_REQUIRED"] = "AI QA publish gate needs a review",
     ["AI_QA_BLOCKED"] = "AI QA publish gate found an open blocker",
     ["AI_QA_STALE"] = "cards changed while the publish was checked",

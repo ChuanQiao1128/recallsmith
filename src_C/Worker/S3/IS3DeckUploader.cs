@@ -70,4 +70,11 @@ public class CardExportData
 
   [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
   public JsonElement? Source { get; set; }
+
+  /// <summary>
+  /// Built-in translations (cards.translations, migration 047), keyed by locale. Omitted when null, so a card without
+  /// translations serializes byte-identically to the builds before this field existed. Never carries translation_basis.
+  /// </summary>
+  [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+  public JsonElement? Translations { get; set; }
 }

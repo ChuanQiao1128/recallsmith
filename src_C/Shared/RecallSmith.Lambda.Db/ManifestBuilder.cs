@@ -1,5 +1,7 @@
 using System.Globalization;
 using System.Net;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Amazon;
 using Amazon.S3;
 using Amazon.S3.Model;
@@ -89,6 +91,11 @@ public static class ManifestBuilder
     return deckType == 1 ? "free" : "premium";
   }
 
+  /// <summary><c>decks.translation_locales</c> (text[] → string[]) without blanks or repeats; absent or null → empty.</summary>
+  private static IReadOnlyList<string> TranslationLocales(object? v) => v is IEnumerable<string> locales
+    ? locales.Where(l => !string.IsNullOrWhiteSpace(l)).Distinct(StringComparer.Ordinal).ToList()
+    : [];
+
   private static string NormalizeAvailability(object? v)
   {
     var a = (Convert.ToString(v, CultureInfo.InvariantCulture) ?? "live").Trim().ToLowerInvariant();
@@ -121,26 +128,33 @@ public static class ManifestBuilder
 
   private static async Task<ManifestBody> BuildImplAsync(NpgsqlConnection conn, string contentPrefix, long generatedAtMs)
   {
-    const string decksSql = """
-      select
-        slug,
-        title,
-        locale,
-        deck_type as "deckType",
-        manifest_order as "order",
-        tier,
-        availability,
-        eta,
-        retired_at_ms as "retiredAtMs",
-        total_cards as "totalCards",
-        preview_cards as "previewCards",
-        version
-      from decks
-      where is_deleted = 0
-      order by manifest_order asc, slug asc;
+    const string decksColumns = """
+      slug,
+      title,
+      locale,
+      deck_type as "deckType",
+      manifest_order as "order",
+      tier,
+      availability,
+      eta,
+      retired_at_ms as "retiredAtMs",
+      total_cards as "totalCards",
+      preview_cards as "previewCards",
+      version
       """;
+    const string decksFilter = "from decks where is_deleted = 0 order by manifest_order asc, slug asc;";
 
-    var decks = await DbUtil.QueryAsync(conn, null, decksSql, []);
+    // translation_locales (migration 047) is 42703-tolerant: before it the decks simply declare no translations.
+    List<Dictionary<string, object?>> decks;
+    try
+    {
+      decks = await DbUtil.QueryAsync(conn, null,
+        $"select {decksColumns}, translation_locales as \"translationLocales\" {decksFilter}", []);
+    }
+    catch (PostgresException pg) when (pg.SqlState == "42703")
+    {
+      decks = await DbUtil.QueryAsync(conn, null, $"select {decksColumns} {decksFilter}", []);
+    }
 
     // Live pointer: the build a deck currently points at (42703-tolerant before migration 021,
     // 42P01-tolerant like the newest-SUCCESS query below).
@@ -294,7 +308,7 @@ public static class ManifestBuilder
     }
 
     var emittedPatchEdges = 0;
-    var outDecks = decks.Select(d =>
+    var outDecks = decks.Select<Dictionary<string, object?>, object?>(d =>
     {
       var slug = Convert.ToString(d["slug"], CultureInfo.InvariantCulture) ?? string.Empty;
       var deckType = ToInt(d.TryGetValue("deckType", out var dt) ? dt : null, 1);
@@ -348,7 +362,7 @@ public static class ManifestBuilder
         : null;
       if (patchList is not null) emittedPatchEdges += patchList.Count;
 
-      return new
+      var entry = new
       {
         order,
         slug,
@@ -384,6 +398,14 @@ public static class ManifestBuilder
           : null,
         previewPatches = (object?)null,
       };
+
+      // Optional and last (card translations, migration 047): only a deck that declares translation locales carries
+      // the key, so every other entry keeps its bytes. Old clients map manifest fields by name and ignore it.
+      var translationLocales = TranslationLocales(d.TryGetValue("translationLocales", out var tl) ? tl : null);
+      if (translationLocales.Count == 0) return entry;
+      var node = JsonSerializer.SerializeToNode(entry)!.AsObject();
+      node["translationLocales"] = new JsonArray(translationLocales.Select(l => (JsonNode?)JsonValue.Create(l)).ToArray());
+      return node;
     }).Where(x => x is not null).ToList();
 
     var manifest = new
@@ -394,7 +416,7 @@ public static class ManifestBuilder
       decks = outDecks,
     };
 
-    var json = System.Text.Json.JsonSerializer.Serialize(manifest);
+    var json = JsonSerializer.Serialize(manifest);
     return new ManifestBody(json, outDecks.Count, emittedPatchEdges);
   }
 

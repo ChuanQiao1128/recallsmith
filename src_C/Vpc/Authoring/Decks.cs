@@ -28,7 +28,37 @@ public static class Decks
 
   /// <summary>The PUT RETURNING aliases the manifest reads (ManifestBuilder decksSql). A change to any of them rebuilds manifest.json.</summary>
   internal static readonly string[] ManifestColumns =
-    ["slug", "title", "locale", "deckType", "version", "isDeleted", "tier", "availability", "eta", "manifestOrder", "totalCards", "previewCards", "retiredAtMs"];
+    ["slug", "title", "locale", "deckType", "version", "isDeleted", "tier", "availability", "eta", "manifestOrder", "totalCards", "previewCards", "retiredAtMs",
+      "translationLocales"];
+
+  /// <summary>
+  /// PUT translationLocales → decks.translation_locales: an array of supported translation locales (TranslationValidation),
+  /// none of them the deck's own locale (TRANSLATION_BAD_LOCALE), repeats dropped; JSON null → none. Super_admin only:
+  /// once set, the publish gate refuses any live card without a current translation in each locale.
+  /// </summary>
+  internal static string[] NormalizeTranslationLocales(JsonElement el, string? deckLocale)
+  {
+    if (el.ValueKind == JsonValueKind.Null) return [];
+    if (el.ValueKind != JsonValueKind.Array) throw new ValidationError("translationLocales must be an array of locale strings", "translationLocales");
+
+    var locales = new List<string>();
+    foreach (var item in el.EnumerateArray())
+    {
+      if (item.ValueKind != JsonValueKind.String) throw new ValidationError("translationLocales must be an array of locale strings", "translationLocales");
+      var locale = item.GetString()!.Trim();
+      if (!TranslationValidation.SupportedLocales.Contains(locale, StringComparer.Ordinal))
+      {
+        throw new TranslationValidationError("TRANSLATION_BAD_LOCALE",
+          $"unsupported translation locale '{locale}' (supported: {string.Join(", ", TranslationValidation.SupportedLocales)})");
+      }
+      if (deckLocale is not null && string.Equals(locale, deckLocale.Trim(), StringComparison.OrdinalIgnoreCase))
+      {
+        throw new TranslationValidationError("TRANSLATION_BAD_LOCALE", $"translation locale '{locale}' is the deck's own locale");
+      }
+      if (!locales.Contains(locale, StringComparer.Ordinal)) locales.Add(locale);
+    }
+    return locales.ToArray();
+  }
 
   public const string NoteNoManifestChange = "NO_MANIFEST_CHANGE";
   public const string NoteRepublishRequired = "REPUBLISH_REQUIRED";
@@ -127,6 +157,7 @@ public static class Decks
         var includeDeleted = isSuperAdmin && Validation.ParseBoolean(req.Query.TryGetValue("includeDeleted", out var id) ? id : null, false);
         var idInt = Validation.ParseOptionalInteger(req.Query.TryGetValue("id", out var rid) ? rid : null, "id");
 
+        // translation_locales (migration 047) through the row's jsonb image: '[]' before 047 runs.
         var sql = """
           select
             d.id,
@@ -146,6 +177,7 @@ public static class Decks
             d.preview_cards as "previewCards",
             d.retired_at_ms as "retiredAtMs",
             d.live_build_id as "liveBuildId",
+            coalesce(to_jsonb(d) -> 'translation_locales', '[]'::jsonb) as "translationLocales",
 
             d.is_deleted as "isDeleted",
             d.created_at as "createdAt",
@@ -181,6 +213,7 @@ public static class Decks
         sql += " order by d.created_at desc";
 
         var rows = await DbUtil.QueryAsync(conn, null, sql, parameters);
+        foreach (var row in rows) Helpers.JsonbCell(row, "translationLocales");
         return res.Ok(rows);
       }
       catch (Exception ex) when (ex is ValidationError)
@@ -234,6 +267,7 @@ public static class Decks
             total_cards as "totalCards",
             preview_cards as "previewCards",
             retired_at_ms as "retiredAtMs",
+            coalesce(to_jsonb(decks) -> 'translation_locales', '[]'::jsonb) as "translationLocales",
 
             is_deleted as "isDeleted",
             created_at as "createdAt", updated_at as "updatedAt";
@@ -251,6 +285,7 @@ public static class Decks
         };
 
         var rows = await DbUtil.QueryAsync(conn, null, sql, parameters);
+        if (rows.Count > 0) Helpers.JsonbCell(rows[0], "translationLocales");
         return res.Ok(rows.Count > 0 ? rows[0] : null);
       }
       catch (Exception ex) when (ex is ValidationError)
@@ -290,7 +325,8 @@ public static class Decks
             total_cards as "totalCards",
             preview_cards as "previewCards",
             retired_at_ms as "retiredAtMs",
-            live_build_id as "liveBuildId"
+            live_build_id as "liveBuildId",
+            coalesce(to_jsonb(decks) -> 'translation_locales', '[]'::jsonb) as "translationLocales"
           from decks
           where id = $1
           """, [idInt]);
@@ -313,6 +349,20 @@ public static class Decks
           }
         }
 
+        // A deck never declares a translation into its own locale, whichever of the two this edit changes.
+        var effectiveLocale = body.TryGetProperty("locale", out var localeEl) && localeEl.ValueKind != JsonValueKind.Null
+          ? localeEl.ToString().Trim()
+          : before?["locale"] as string;
+        var writesTranslationLocales = isSuperAdmin && body.TryGetProperty("translationLocales", out _);
+        if (writesTranslationLocales && !await Helpers.ColumnExistsAsync(conn, null, "decks", "translation_locales"))
+        {
+          return Helpers.ErrorEnvelope(res, 503, "MIGRATION_REQUIRED", "decks.translation_locales does not exist yet; run migration 047 first");
+        }
+        if (!writesTranslationLocales && before is not null && Helpers.JsonbElement(before, "translationLocales") is { } declared)
+        {
+          NormalizeTranslationLocales(declared, effectiveLocale);
+        }
+
         var spec = new List<Helpers.UpdateField>
         {
           new("slug", "slug", v => v.ValueKind == JsonValueKind.Null ? null : Validation.RequireSlug(v.ToString())),
@@ -331,6 +381,7 @@ public static class Decks
           new("totalCards", "total_cards", v => v.ValueKind == JsonValueKind.Null ? null : Helpers.EnsureInteger(v, "totalCards")),
           new("previewCards", "preview_cards", v => v.ValueKind == JsonValueKind.Null ? null : Helpers.EnsureInteger(v, "previewCards")),
           new("retiredAtMs", "retired_at_ms", v => v.ValueKind == JsonValueKind.Null ? null : Helpers.EnsureInteger(v, "retiredAtMs")),
+          new("translationLocales", "translation_locales", v => NormalizeTranslationLocales(v, effectiveLocale)),
         };
 
         var fullSpec = spec;
@@ -338,7 +389,8 @@ public static class Decks
         {
           // editors: restrict dangerous fields
           spec = spec.Where(f =>
-              f.BodyKey is not ("isDeleted" or "slug" or "tier" or "availability" or "eta" or "manifestOrder" or "totalCards" or "previewCards" or "retiredAtMs"))
+              f.BodyKey is not ("isDeleted" or "slug" or "tier" or "availability" or "eta" or "manifestOrder" or "totalCards" or "previewCards" or "retiredAtMs"
+                or "translationLocales"))
             .ToList();
         }
         var ignoredFields = Helpers.IgnoredFields(body, fullSpec, spec);
@@ -365,6 +417,7 @@ public static class Decks
             total_cards as "totalCards",
             preview_cards as "previewCards",
             retired_at_ms as "retiredAtMs",
+            coalesce(to_jsonb(decks) -> 'translation_locales', '[]'::jsonb) as "translationLocales",
 
             is_deleted as "isDeleted",
             created_at as "createdAt",
@@ -390,10 +443,15 @@ public static class Decks
         {
           (rebuilt, note) = await TryRebuildAsync(conn, idInt, "deck_put", rebuild);
         }
+        Helpers.JsonbCell(after, "translationLocales");
         after["manifestRebuilt"] = rebuilt;
         after["manifestNote"] = note;
         if (ignoredFields.Count > 0) after["ignoredFields"] = ignoredFields;
         return res.Ok(after);
+      }
+      catch (TranslationValidationError ex)
+      {
+        return res.BadRequest(ex.Code, ex.Message);
       }
       catch (Exception ex) when (ex is ValidationError)
       {

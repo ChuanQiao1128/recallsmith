@@ -280,6 +280,7 @@ public class ContentArtifactsGenerator : IContentArtifactsGenerator
         Topic = c.Topic,
         Mcq = c.Mcq,
         Source = c.Source,
+        Translations = c.Translations,
       });
     }
 
@@ -310,5 +311,6 @@ public class ContentArtifactsGenerator : IContentArtifactsGenerator
     public string? Topic { get; set; }
     public JsonElement? Mcq { get; set; }
     public JsonElement? Source { get; set; }
+    public JsonElement? Translations { get; set; }
   }
 }

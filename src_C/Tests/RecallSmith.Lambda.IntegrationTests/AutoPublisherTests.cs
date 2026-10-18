@@ -467,6 +467,24 @@ public class AutoPublisherTests
   }
 
   [Fact]
+  public async Task Evaluate_DryRun_TranslationGateRefusal_RoutesHumanWithCode()
+  {
+    // A deck that declares zh-CN translations ships no card without one; dry run sees the refusal live would meet.
+    await using var scope = new A04Kit.Scope(AutomationMode.DryRun);
+    var deck = await A04Kit.PublishedDeckAsync(_sql, "drytr");
+    var runId = await A04Kit.RunAsync(_sql, AutomationTestKit.Sub("drytr"), deck.Id, "completed");
+    await _sql.QueryAsync("update decks set translation_locales = '{zh-CN}' where id = $1", deck.Id);
+    var defects = await _sql.CountAsync("select count(*) from automation_events");
+
+    var outcome = await EvaluateAsync(deck.Id, runId);
+
+    AssertOutcome(outcome, "human", "TRANSLATION_PUBLISH_GATE");
+    Assert.Equal($"{deck.OldUid}: TRANSLATION_MISSING", outcome!.ReasonDetail);
+    Assert.Empty(scope.PublishSent);
+    Assert.Equal(defects, await _sql.CountAsync("select count(*) from automation_events"));
+  }
+
+  [Fact]
   public async Task Evaluate_DryRun_IsWouldPublish()
   {
     await using var scope = new A04Kit.Scope(AutomationMode.DryRun);
@@ -607,6 +625,26 @@ public class AutoPublisherTests
 
     AssertOutcome(outcome, "human", "MCQ_PUBLISH_GATE");
     Assert.Equal($"{deck.OldUid}: MCQ_DIFFICULTY_RANGE", outcome!.ReasonDetail);
+    Assert.Empty(scope.PublishSent);
+    Assert.Equal(0, await _sql.CountAsync("select count(*) from deck_publishes where deck_id = $1 and status = 'PENDING'", deck.Id));
+  }
+
+  [Fact]
+  public async Task Evaluate_TranslationGateRefusal_RoutesHumanWithCode()
+  {
+    await using var scope = await LiveAsync();
+    var sub = AutomationTestKit.Sub("trgate");
+    var deck = await A04Kit.PublishedDeckAsync(_sql, "trgate");
+    var runId = await A04Kit.RunAsync(_sql, sub, deck.Id);
+    await A04Kit.AutoAcceptedCardAsync(_db, sub, deck.Id, runId, "Which synthetic gate refuses untranslated widgets?");
+    await _sql.QueryAsync("update automation_runs set status = 'completed', completed_at = now() where run_id = $1", runId);
+    // The deck declares zh-CN; the old live card has no translation, so the publish refuses it.
+    await _sql.QueryAsync("update decks set translation_locales = '{zh-CN}' where id = $1", deck.Id);
+
+    var outcome = await EvaluateAsync(deck.Id, runId);
+
+    AssertOutcome(outcome, "human", "TRANSLATION_PUBLISH_GATE");
+    Assert.Equal($"{deck.OldUid}: TRANSLATION_MISSING", outcome!.ReasonDetail);
     Assert.Empty(scope.PublishSent);
     Assert.Equal(0, await _sql.CountAsync("select count(*) from deck_publishes where deck_id = $1 and status = 'PENDING'", deck.Id));
   }

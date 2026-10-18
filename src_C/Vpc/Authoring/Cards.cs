@@ -33,6 +33,8 @@ public static class Cards
           if (denyDeck is not null) return denyDeck;
         }
 
+        // The migration-047 columns are read through the row's jsonb image: SQL null both for a null cell and for a
+        // schema that has not run 047 yet, so the route never fails with 42703 between a code deploy and Migrate.
         var sql = """
           select
             c.id,
@@ -52,7 +54,9 @@ public static class Cards
             c.updated_at    as "updatedAt",
             c.topic,
             c.mcq,
-            c.source
+            c.source,
+            nullif(to_jsonb(c) -> 'translations', 'null'::jsonb) as translations,
+            nullif(to_jsonb(c) -> 'translation_basis', 'null'::jsonb) as "translationBasis"
           from cards c
           """;
 
@@ -85,6 +89,7 @@ public static class Cards
         var rows = await DbUtil.QueryAsync(conn, null, sql, parameters);
         foreach (var row in rows)
         {
+          TranslationValidation.ShapeRow(row);
           Helpers.JsonbCell(row, "mcq");
           Helpers.JsonbCell(row, "source");
         }
@@ -151,10 +156,25 @@ public static class Cards
           if (!McqValidation.IsMcqDifficulty(difficultyInt ?? 2)) return res.BadRequest("MCQ_DIFFICULTY_RANGE", "difficulty must be 1..3 for an MCQ card");
         }
 
-        const string sql = """
+        // Translations mirror the English just validated above; the basis records which English that was.
+        string? translations = null;
+        string? translationBasis = null;
+        if (body.TryGetProperty("translations", out var trEl))
+        {
+          var english = new TranslationValidation.EnglishCard(question, explanation, realWorldUsage, mcq);
+          translations = TranslationValidation.Canonicalize(trEl, english, await Helpers.DeckLocaleAsync(conn, deckIdInt));
+          translationBasis = TranslationValidation.BasisJson(translations, english);
+        }
+
+        // An untranslated card inserts exactly as before migration 047, so this route works on either side of it; a
+        // translated one needs the columns.
+        var withTranslations = translations is not null;
+        if (withTranslations && !await Helpers.ColumnExistsAsync(conn, null, "cards", "translations")) return Helpers.TranslationsNotMigrated(res);
+
+        var sql = $"""
           insert into cards (
             deck_id, stable_uid, question, explanation, code_snippet, code_language,
-            real_world_usage, difficulty, order_in_deck, revision, version, topic, mcq, source
+            real_world_usage, difficulty, order_in_deck, revision, version, topic, mcq, source{(withTranslations ? ", translations, translation_basis" : "")}
           )
           values (
             $1,$2,$3,$4,$5,$6,$7,
@@ -164,7 +184,7 @@ public static class Cards
             coalesce($11,1),
             $12,
             $13::jsonb,
-            $14::jsonb
+            $14::jsonb{(withTranslations ? ", $15::jsonb, $16::jsonb" : "")}
           )
           returning
             id,
@@ -184,10 +204,12 @@ public static class Cards
             updated_at    as "updatedAt",
             topic,
             mcq,
-            source;
+            source,
+            nullif(to_jsonb(cards) -> 'translations', 'null'::jsonb) as translations,
+            nullif(to_jsonb(cards) -> 'translation_basis', 'null'::jsonb) as "translationBasis";
           """;
 
-        var parameters = new object?[]
+        var parameters = new List<object?>
         {
           deckIdInt,
           stableUid,
@@ -202,16 +224,26 @@ public static class Cards
           versionInt,
           topic, mcq, source,
         };
+        if (withTranslations)
+        {
+          parameters.Add(translations);
+          parameters.Add(translationBasis);
+        }
 
         var rows = await DbUtil.QueryAsync(conn, null, sql, parameters);
         if (rows.Count > 0)
         {
+          TranslationValidation.ShapeRow(rows[0]);
           Helpers.JsonbCell(rows[0], "mcq");
           Helpers.JsonbCell(rows[0], "source");
         }
         return res.Ok(rows.Count > 0 ? rows[0] : null);
       }
       catch (McqValidationError ex)
+      {
+        return res.BadRequest(ex.Code, ex.Message);
+      }
+      catch (TranslationValidationError ex)
       {
         return res.BadRequest(ex.Code, ex.Message);
       }
@@ -268,7 +300,12 @@ public static class Cards
           return res.Forbidden("Moving cards between decks requires super_admin");
         }
 
-        var stored = await DbUtil.QueryAsync(conn, null, "select question, explanation, difficulty, mcq from cards where id = $1", [idInt]);
+        var stored = await DbUtil.QueryAsync(conn, null,
+          """
+          select question, explanation, real_world_usage as "realWorldUsage", difficulty, mcq,
+            nullif(to_jsonb(cards) -> 'translations', 'null'::jsonb) as translations
+          from cards where id = $1
+          """, [idInt]);
         if (stored.Count == 0) return res.NotFound("Card not found");
         var storedRow = stored[0];
         var effectiveQuestion = body.TryGetProperty("question", out var qEl) && qEl.ValueKind != JsonValueKind.Null
@@ -296,6 +333,30 @@ public static class Cards
           if (effectiveDifficulty is not long d || !McqValidation.IsMcqDifficulty(d)) return res.BadRequest("MCQ_DIFFICULTY_RANGE", "difficulty must be 1..3 for an MCQ card");
         }
 
+        // Translations against the effective English, like the mcq above: a body translations block is canonicalised and
+        // restamped; without one the stored translations must still mirror the English after this edit (a text-only
+        // English change keeps the old basis, so the translation reads as stale until it is restamped).
+        var effectiveRealWorldUsage = body.TryGetProperty("realWorldUsage", out var rwEl)
+          ? (rwEl.ValueKind == JsonValueKind.Null ? null : rwEl.ToString().Trim())
+          : storedRow["realWorldUsage"] as string;
+        var english = new TranslationValidation.EnglishCard(effectiveQuestion, effectiveExplanation, effectiveRealWorldUsage, effectiveMcq);
+        var effectiveDeckLocale = await Helpers.DeckLocaleAsync(conn, nextDeckId ?? deckIdFromDb.Value);
+        string? translations = null;
+        string? translationBasis = null;
+        var writeTranslations = false;
+        if (body.TryGetProperty("translations", out var trEl))
+        {
+          translations = TranslationValidation.Canonicalize(trEl, english, effectiveDeckLocale);
+          translationBasis = TranslationValidation.BasisJson(translations, english);
+          // Before migration 047 there is nothing to clear; a translation to store needs the columns.
+          writeTranslations = await Helpers.ColumnExistsAsync(conn, null, "cards", "translations");
+          if (!writeTranslations && translations is not null) return Helpers.TranslationsNotMigrated(res);
+        }
+        else if (Helpers.JsonbElement(storedRow, "translations") is { } storedTranslations)
+        {
+          TranslationValidation.Canonicalize(storedTranslations, english, effectiveDeckLocale);
+        }
+
         var spec = new List<Helpers.UpdateField>
         {
           new("deckId", "deck_id", v => v.ValueKind == JsonValueKind.Null ? null : Helpers.EnsureInteger(v, "deckId")),
@@ -313,6 +374,12 @@ public static class Cards
           new("source", "source", v => v.ValueKind == JsonValueKind.Null ? null : Helpers.NormalizeSource(v), "::jsonb"),
           new("isDeleted", "is_deleted", v => Helpers.ParseBoolean(v, false) ? 1 : 0),
         };
+        if (writeTranslations)
+        {
+          // One body key, two columns: a translations block always writes its basis alongside.
+          spec.Add(new("translations", "translations", _ => translations, "::jsonb"));
+          spec.Add(new("translations", "translation_basis", _ => translationBasis, "::jsonb"));
+        }
 
         var fullSpec = spec;
         if (!isSuperAdmin)
@@ -356,7 +423,9 @@ public static class Cards
             updated_at    as "updatedAt",
             topic,
             mcq,
-            source;
+            source,
+            nullif(to_jsonb(cards) -> 'translations', 'null'::jsonb) as translations,
+            nullif(to_jsonb(cards) -> 'translation_basis', 'null'::jsonb) as "translationBasis";
           """;
 
         parameters.Add(idInt);
@@ -370,12 +439,17 @@ public static class Cards
           return Helpers.ErrorEnvelope(res, 409, "VERSION_CONFLICT", "Card has been modified by another user. Please reload and try again.");
         }
 
+        TranslationValidation.ShapeRow(rows[0]);
         Helpers.JsonbCell(rows[0], "mcq");
         Helpers.JsonbCell(rows[0], "source");
         if (ignoredFields.Count > 0) rows[0]["ignoredFields"] = ignoredFields;
         return res.Ok(rows[0]);
       }
       catch (McqValidationError ex)
+      {
+        return res.BadRequest(ex.Code, ex.Message);
+      }
+      catch (TranslationValidationError ex)
       {
         return res.BadRequest(ex.Code, ex.Message);
       }
