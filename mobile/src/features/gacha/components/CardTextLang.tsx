@@ -23,6 +23,7 @@ export function cardTextA11yProps(lang: CardTextLang): { accessibilityLanguage?:
 /** The labels inside a card that follow the card's language. English values are today's copy. */
 export const CARD_SECTION_LABELS = Object.freeze({
   en: Object.freeze({
+    question: 'QUESTION',
     explanation: 'EXPLANATION',
     code: 'CODING SAMPLE',
     usage: 'REAL USAGE',
@@ -30,6 +31,7 @@ export const CARD_SECTION_LABELS = Object.freeze({
     source: 'SOURCE',
   }),
   'zh-CN': Object.freeze({
+    question: '题目',
     explanation: '解析',
     code: '代码示例',
     usage: '实际应用',

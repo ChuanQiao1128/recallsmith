@@ -24,7 +24,7 @@ import { CardAnswerSections } from '../features/gacha/components/CardAnswerSecti
 import { CardLangToggle } from '../features/gacha/components/CardLangToggle';
 import { CardTextLangContext, cardSectionLabels, cardTextA11yProps } from '../features/gacha/components/CardTextLang';
 import { setCardLangPref, useCardLangPref } from '../features/gacha/study/cardLangPrefs';
-import { useDeckTranslations } from '../features/gacha/study/useDeckTranslations';
+import { translationsForCard, useDeckTranslations } from '../features/gacha/study/useDeckTranslations';
 import { InlineCodeText } from '../features/gacha/components/InlineCodeText';
 import { QuestionCodeBlock } from '../features/gacha/session/QuestionCodeBlock';
 import { cardDetailStatus } from '../features/gacha/library/cardDetailStatus';
@@ -279,10 +279,13 @@ export function CardDetailScreen({ navigation, route }: Props) {
   // translations. Read for an owned card only, below; a locked card shows nothing to translate.
   const cardLang = useCardLangPref();
   const deckTranslations = useDeckTranslations(deck?.Slug ?? null, deck?.Version ?? null);
+  // A learner who chose 中文 must not see the English card first: the skeleton stays up until the
+  // deck's translations are read. Reading English never waits on them.
+  const translationsPending = cardLang === 'zh-CN' && !isLocked && deckTranslations.status === 'loading';
 
   // While loading we cannot honestly draw the hero (#000 Common New) or claim
   // the card is missing — a neutral skeleton stands in until the lookup lands.
-  if (status === 'loading') {
+  if (status === 'loading' || translationsPending) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <LinearGradient colors={[colors.softCream, colors.softPeach, colors.softLavender]} style={styles.gradient}>
@@ -351,7 +354,7 @@ export function CardDetailScreen({ navigation, route }: Props) {
   const mcq = card && !isLocked ? resolveMcq(card, getFeatureFlags()) : null;
   // The card as it is shown: its Chinese translation when the learner chose 中文 and the
   // translation is complete, else the English card itself (same objects).
-  const translation = card && deck && !isLocked ? cardTranslationFor(deckTranslations?.get(card.StableUid), deck.Locale) : null;
+  const translation = card && deck && !isLocked ? cardTranslationFor(translationsForCard(deckTranslations, card.StableUid), deck.Locale) : null;
   const canSwitchCardLang = !!card && !isLocked && hasCompleteTranslation(card, mcq, translation);
   const display = card && !isLocked
     ? localizeForDisplay({ card, mcq, shownOrder: mcq?.options ?? [], translation, lang: cardLang })

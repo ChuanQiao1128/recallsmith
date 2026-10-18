@@ -86,7 +86,7 @@ import { loadExpoHaptics } from '../components/ceremonyHaptics';
 import { getFeedbackPrefsSync } from '../features/gacha/settings/feedbackPrefs';
 import { getStudyPrefsSync, loadStudyPrefs } from '../features/gacha/study/studyPrefs';
 import { setCardLangPref, useCardLangPref } from '../features/gacha/study/cardLangPrefs';
-import { useDeckTranslations } from '../features/gacha/study/useDeckTranslations';
+import { translationsForCard, useDeckTranslations } from '../features/gacha/study/useDeckTranslations';
 import { CardLangToggle } from '../features/gacha/components/CardLangToggle';
 import { CardTextLangContext } from '../features/gacha/components/CardTextLang';
 import { getStudyGoal } from '../features/goal/studyGoal';
@@ -338,7 +338,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
   const cardLang = useCardLangPref();
   const deckTranslations = useDeckTranslations(deck?.Slug ?? slug, deck?.Version ?? null);
   const currentTranslation =
-    current && deck ? cardTranslationFor(deckTranslations?.get(current.card.StableUid), deck.Locale) : null;
+    current && deck ? cardTranslationFor(translationsForCard(deckTranslations, current.card.StableUid), deck.Locale) : null;
   const display = useMemo(
     () =>
       current
@@ -357,6 +357,9 @@ export function SessionCardScreen({ navigation, route }: Props) {
     [current, mcqState.mcq, currentTranslation],
   );
   const cardTextLang = display?.lang === 'zh-CN' ? 'zh-CN' : undefined;
+  // A learner who chose 中文 must not see the English card first: the loading view stays up until
+  // the deck's translations are read. Reading English never waits on them.
+  const translationsPending = cardLang === 'zh-CN' && deckTranslations.status === 'loading';
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
@@ -1127,7 +1130,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
       </SafeAreaView>
     );
   }
-  if (loading || !dailyStats || !deck) {
+  if (loading || !dailyStats || !deck || translationsPending) {
     return (
       <SafeAreaView style={styles.safeArea} testID="screen-session-card-root">
         <LinearGradient

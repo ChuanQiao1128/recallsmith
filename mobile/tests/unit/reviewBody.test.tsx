@@ -31,6 +31,7 @@ vi.mock('react-native', () => {
 });
 
 import { ReviewBody } from '../../src/features/gacha/components/ReviewBody';
+import { CardTextLangContext } from '../../src/features/gacha/components/CardTextLang';
 import type { CardExport } from '../../src/types/deckExport';
 import { colors } from '../../src/theme/colors';
 
@@ -370,5 +371,55 @@ describe('ReviewBody — the 答 key line', () => {
     const tree = render(fundamentalsCard, false);
     expect(keyBlocks(tree)).toHaveLength(0);
     expect(hasText(tree, KEY)).toBe(false);
+  });
+});
+
+// Card translations contract §5: the in-card "Question" caption follows the language of the card on
+// screen, like the answer section labels; the badges and buttons are app chrome and stay English.
+describe('ReviewBody — card language', () => {
+  const zhCard: CardExport = {
+    ...longCard,
+    Question: '一家电商公司在每次结账时发出下单事件。哪种设计以最低的运维开销满足这些要求？',
+    Explanation: '发布到 EventBridge 自定义总线，并为每个消费者配置自己的规则。',
+    RealWorldUsage: '',
+  };
+
+  function renderIn(lang: 'zh-CN' | undefined, faceUp: boolean) {
+    let tree!: renderer.ReactTestRenderer;
+    act(() => {
+      tree = renderer.create(
+        <CardTextLangContext.Provider value={lang}>
+          <ReviewBody card={lang ? zhCard : longCard} faceUp={faceUp} onFlip={() => {}} />
+        </CardTextLangContext.Provider>,
+      );
+    });
+    return tree;
+  }
+
+  it('captions the recap 题目, spoken as zh-CN, when the card is shown in Chinese', () => {
+    const tree = renderIn('zh-CN', true);
+    const caption = texts(tree).find((node) => node.props.children === '题目');
+    expect(caption).toBeDefined();
+    expect(caption!.props.accessibilityLanguage).toBe('zh-CN');
+    expect(caption!.props.numberOfLines).toBe(1);
+    expect(hasText(tree, 'QUESTION')).toBe(false);
+    expect(hasText(tree, '解析')).toBe(true);
+    expect(textByTestId(tree, 'review-question').props.accessibilityLanguage).toBe('zh-CN');
+    // App chrome stays English.
+    expect(hasText(tree, 'Hide')).toBe(true);
+    expect(hasText(tree, 'Medium')).toBe(true);
+  });
+
+  it('keeps the English caption with no accessibilityLanguage prop outside a Chinese card', () => {
+    const tree = renderIn(undefined, true);
+    const caption = texts(tree).find((node) => node.props.children === 'QUESTION');
+    expect(caption).toBeDefined();
+    expect('accessibilityLanguage' in caption!.props).toBe(false);
+    expect(hasText(tree, '题目')).toBe(false);
+  });
+
+  it('shows no caption on the front face in either language', () => {
+    expect(hasText(renderIn('zh-CN', false), '题目')).toBe(false);
+    expect(hasText(renderIn(undefined, false), 'QUESTION')).toBe(false);
   });
 });

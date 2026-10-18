@@ -107,8 +107,13 @@ vi.mock('../../src/content/deckCache', () => ({
   getCachedDeck: vi.fn(async (slug: string) => DECKS[slug] ?? null),
   invalidateDeckCache: () => {},
 }));
+// While `translationsGate` is set, every translations read waits on it (a slow file read).
+let translationsGate: Promise<void> | null = null;
 vi.mock('../../src/content/installedDeckIndex', () => ({
-  getDeckTranslations: vi.fn(async (slug: string) => translations.get(slug) ?? null),
+  getDeckTranslations: vi.fn(async (slug: string) => {
+    if (translationsGate) await translationsGate;
+    return translations.get(slug) ?? null;
+  }),
   getInstalledDeckIndex: vi.fn(async () => null),
 }));
 vi.mock('../../src/review/storage', () => ({ loadDeckProgress: vi.fn(async () => []) }));
@@ -170,6 +175,7 @@ describe('CardDetailScreen — card translations', () => {
   beforeEach(async () => {
     store.clear();
     ownedFixture = new Set([MCQ_CARD.StableUid, CLAUDE_CARD.StableUid]);
+    translationsGate = null;
     await setCardLangPref('en');
   });
 
@@ -228,5 +234,71 @@ describe('CardDetailScreen — card translations', () => {
     expect(byTestId(tree, 'card-lang-toggle')).toHaveLength(0);
     expect(questionText(tree)).toBe('Not in your collection yet');
     expect(texts(tree).join('\n')).not.toContain('公司');
+  });
+
+  // Review fix (2026-10-18): the translations are read from the deck file after the card is found,
+  // so the first frames used to show the English card to a learner who chose 中文.
+  it('keeps the skeleton until the translations are read when the learner chose 中文', async () => {
+    await setCardLangPref('zh-CN');
+    let open!: () => void;
+    translationsGate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const tree = await renderScreen(MCQ_CARD.StableUid);
+    expect(byTestId(tree, 'card-detail-skeleton')).toHaveLength(1);
+    expect(byTestId(tree, 'card-detail-question')).toHaveLength(0);
+    expect(texts(tree).join('\n')).not.toContain(MCQ_CARD.Question);
+
+    await act(async () => {
+      open();
+    });
+    await flush();
+    expect(byTestId(tree, 'card-detail-skeleton')).toHaveLength(0);
+    expect(questionText(tree)).toBe(MCQ_ZH.question);
+    expect(byTestId(tree, 'card-lang-toggle')).toHaveLength(1);
+  });
+
+  it('shows a Chinese learner an untranslated card in English once the read finds none', async () => {
+    await setCardLangPref('zh-CN');
+    let open!: () => void;
+    translationsGate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const tree = await renderScreen(CLAUDE_CARD.StableUid);
+    expect(byTestId(tree, 'card-detail-skeleton')).toHaveLength(1);
+    await act(async () => {
+      open();
+    });
+    await flush();
+    expect(questionText(tree)).toBe(CLAUDE_CARD.Question);
+    expect(byTestId(tree, 'card-lang-toggle')).toHaveLength(0);
+  });
+
+  it('never makes an English learner wait for the translations', async () => {
+    let open!: () => void;
+    translationsGate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const tree = await renderScreen(MCQ_CARD.StableUid);
+    expect(byTestId(tree, 'card-detail-skeleton')).toHaveLength(0);
+    expect(questionText(tree)).toBe(MCQ_CARD.Question);
+    expect(byTestId(tree, 'card-lang-toggle')).toHaveLength(0);
+
+    await act(async () => {
+      open();
+    });
+    await flush();
+    expect(questionText(tree)).toBe(MCQ_CARD.Question);
+    expect(byTestId(tree, 'card-lang-toggle')).toHaveLength(1);
+  });
+
+  it('does not hold a locked card back for its translations', async () => {
+    await setCardLangPref('zh-CN');
+    ownedFixture = new Set();
+    translationsGate = new Promise<void>(() => {});
+    const tree = await renderScreen(MCQ_CARD.StableUid);
+    expect(byTestId(tree, 'card-detail-skeleton')).toHaveLength(0);
+    expect(questionText(tree)).toBe('Not in your collection yet');
+    act(() => tree.unmount());
   });
 });

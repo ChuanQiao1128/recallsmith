@@ -114,10 +114,15 @@ vi.mock('../../src/content/deckRepository', () => ({
   installDeckFromUrl: vi.fn(async () => true),
 }));
 
-// The installed deck reader: the translations each test installs, by deck slug.
+// The installed deck reader: the translations each test installs, by deck slug. While
+// `translationsGate` is set, every read waits on it (a slow file read).
 const translationsBySlug = new Map<string, Map<string, unknown>>();
+let translationsGate: Promise<void> | null = null;
 vi.mock('../../src/content/installedDeckIndex', () => ({
-  getDeckTranslations: vi.fn(async (slug: string) => translationsBySlug.get(slug) ?? null),
+  getDeckTranslations: vi.fn(async (slug: string) => {
+    if (translationsGate) await translationsGate;
+    return translationsBySlug.get(slug) ?? null;
+  }),
   getInstalledDeckIndex: vi.fn(async () => null),
 }));
 
@@ -375,6 +380,7 @@ describe('SessionCardScreen card translations', () => {
     vi.clearAllMocks();
     store.clear();
     translationsBySlug.clear();
+    translationsGate = null;
     resetSessionStore();
     await setCardLangPref('en');
     featureFlagsMock.mockReturnValue(flags());
@@ -545,6 +551,10 @@ describe('SessionCardScreen card translations', () => {
     });
     await flush();
     const texts = allText(tree);
+    // The recap caption above the question is in-card text too.
+    expect(texts).toContain('题目');
+    expect(texts).not.toContain('QUESTION');
+    expect(tree.root.find((node) => (node.type as any) === 'Text' && node.props.children === '题目').props.accessibilityLanguage).toBe('zh-CN');
     expect(texts).toContain('解析');
     expect(texts).not.toContain('EXPLANATION');
     expect(byTestID(tree, 'answer-key-line')).toHaveLength(1);
@@ -567,5 +577,72 @@ describe('SessionCardScreen card translations', () => {
     expect(recordReviewEvent).toHaveBeenCalledWith(
       expect.objectContaining({ stableUid: QA_EN.StableUid, rating: 'hard', reviewStage: 'learning_study' }),
     );
+  });
+
+  // Review fix (2026-10-18): the translations are read from the deck file after the deck itself, so
+  // the first frames used to show the English card to a learner who chose 中文.
+  it('holds the card back until the translations are read when the learner chose 中文', async () => {
+    await setCardLangPref('zh-CN');
+    let open!: () => void;
+    translationsGate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    serve(deckOf([MCQ_EN]), MCQ_EN, NEW_PROGRESS(MCQ_EN.StableUid), { [MCQ_EN.StableUid]: MCQ_ZH });
+    const { tree } = await mount();
+
+    // The deck and the card are ready; the loading view stays up and no card text is on screen.
+    expect(pickNextCard).toHaveBeenCalled();
+    expect(byTestID(tree, 'session-card-loading-text')).toHaveLength(1);
+    expect(byTestID(tree, 'mcq-stem')).toHaveLength(0);
+    expect(allText(tree).join('\n')).not.toContain('LEAST operational overhead');
+
+    await act(async () => {
+      open();
+    });
+    await flush();
+    expect(byTestID(tree, 'session-card-loading-text')).toHaveLength(0);
+    expect(idText(tree, 'mcq-stem')).toContain('运维开销最低');
+    expect(allText(tree).join('\n')).not.toContain('LEAST operational overhead');
+    expect(byTestID(tree, 'card-lang-toggle')[0].props.accessibilityState).toEqual({ checked: true });
+  });
+
+  it('shows a Chinese learner the English card once the read finds no translation', async () => {
+    await setCardLangPref('zh-CN');
+    let open!: () => void;
+    translationsGate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const claudeCard = { ...MCQ_EN, StableUid: 'claude-tool-use-mcq' };
+    serve(deckOf([claudeCard], { Slug: 'claude-ccdv-f', Title: 'Claude CCDV-F' }), claudeCard, NEW_PROGRESS(claudeCard.StableUid), null);
+    const { tree } = await mount('claude-ccdv-f');
+    expect(byTestID(tree, 'session-card-loading-text')).toHaveLength(1);
+
+    await act(async () => {
+      open();
+    });
+    await flush();
+    expect(byTestID(tree, 'card-lang-toggle')).toHaveLength(0);
+    expect(idText(tree, 'mcq-stem')).toContain('LEAST operational overhead');
+  });
+
+  it('never makes an English learner wait for the translations', async () => {
+    let open!: () => void;
+    translationsGate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    serve(deckOf([MCQ_EN]), MCQ_EN, NEW_PROGRESS(MCQ_EN.StableUid), { [MCQ_EN.StableUid]: MCQ_ZH });
+    const { tree } = await mount();
+
+    // The card is on screen in English before the read lands; the toggle comes with the translation.
+    expect(byTestID(tree, 'session-card-loading-text')).toHaveLength(0);
+    expect(idText(tree, 'mcq-stem')).toContain('LEAST operational overhead');
+    expect(byTestID(tree, 'card-lang-toggle')).toHaveLength(0);
+
+    await act(async () => {
+      open();
+    });
+    await flush();
+    expect(idText(tree, 'mcq-stem')).toContain('LEAST operational overhead');
+    expect(byTestID(tree, 'card-lang-toggle')[0].props.accessibilityState).toEqual({ checked: false });
   });
 });

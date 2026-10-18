@@ -148,10 +148,13 @@ export function pickNextCard(params: {
   const pickNew = () => {
     const isNew = (card: CardExport, p: CardProgress) => owns(card) && isNewProgress(p);
     if (!kindHint) return pickWith(isNew);
-    // The cap: past mcq.maxPerRun the run takes a Q/A new card while one is left. With none left (an
-    // MCQ-only exam deck, or every Q/A card already learned) it takes an MCQ new card rather than
-    // ending the run short of its planned length.
-    if (!kindHint.mcqAllowed) return pickWith((card, p) => isNew(card, p) && !isMcq(card)) ?? pickWith(isNew);
+    // The cap: mcqAllowed false takes a Q/A new card only (hard filter; maxPerRun 0 = never an MCQ new
+    // card). Past a positive mcq.maxPerRun (mcqFallback) a run with no Q/A new card left (an MCQ-only
+    // exam deck, or every Q/A card already learned) takes an MCQ new card rather than ending short.
+    if (!kindHint.mcqAllowed) {
+      const qaNew = pickWith((card, p) => isNew(card, p) && !isMcq(card));
+      return qaNew ?? (kindHint.mcqFallback === true ? pickWith(isNew) : null);
+    }
     const preferred = pickWith((card, p) => isNew(card, p) && (kindHint.preferMcq ? isMcq(card) : !isMcq(card)));
     return preferred ?? pickWith(isNew);                                                              // soft ordering: the rotation
   };

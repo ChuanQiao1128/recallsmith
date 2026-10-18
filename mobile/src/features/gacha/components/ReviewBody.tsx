@@ -6,6 +6,7 @@ import { questionA11yLabel, splitQuestionCode } from '../../../content/questionC
 import type { CardExport } from '../../../types/deckExport';
 import { formatRank } from '../library/libraryMapper';
 import { CardAnswerSections, friendlyCodeLanguage } from './CardAnswerSections';
+import { cardSectionLabels, cardTextA11yProps, useCardTextLang } from './CardTextLang';
 import { InlineCodeText } from './InlineCodeText';
 import { QuestionCodeBlock } from '../session/QuestionCodeBlock';
 import { colors } from '../../../theme/colors';
@@ -33,6 +34,9 @@ import { typography } from '../../../theme/typography';
 //     instead of overflowing the card edge.
 //   • Card chrome unchanged from v3: softCream + 18 radius + hairline +
 //     subtle shadow (matches Home/CardDetail/Settings language).
+//   • Card translations (contract §5): `card` is the display card, and the
+//     in-card "Question" caption follows its language (CardTextLangContext),
+//     like the answer section labels; the badges and buttons are app chrome.
 export type ReviewBodyProps = {
   card: CardExport;
   /**
@@ -48,6 +52,7 @@ export type ReviewBodyProps = {
 
 export const ReviewBody = React.memo(function ReviewBody(props: ReviewBodyProps) {
   const { card, rank = null, faceUp, onFlip } = props;
+  const lang = useCardTextLang();
   const orderBadge = typeof rank === 'number' && rank > 0 ? `#${formatRank(rank)}` : `#${card.OrderInDeck}`;
 
   const difficultyLabel =
@@ -100,8 +105,8 @@ export const ReviewBody = React.memo(function ReviewBody(props: ReviewBodyProps)
         </>
       ) : (
         <View style={styles.questionRecap} testID="review-question-recap">
-          <Text style={styles.questionCaption} numberOfLines={1}>
-            QUESTION
+          <Text style={styles.questionCaption} numberOfLines={1} {...cardTextA11yProps(lang)}>
+            {cardSectionLabels(lang).question}
           </Text>
           <InlineCodeText
             style={styles.questionRecapText}
