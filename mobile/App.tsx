@@ -55,6 +55,7 @@ import { DEFAULT_APP_STORE_URL, getCurrentAppVersion } from './src/config/remote
 import { getFeatureFlags, subscribeFeatureFlags } from './src/config/featureFlags';
 import { resolveApiBase, resolveApiFallback } from './src/config/hosts';
 import { loadFeedbackPrefs } from './src/features/gacha/settings/feedbackPrefs';
+import { loadCardLangPref } from './src/features/gacha/study/cardLangPrefs';
 import { upgradeStarterDecks } from './src/content/starterOffline';
 import { getPrivacyPrefsSync, loadPrivacyPrefs } from './src/features/gacha/settings/privacyPrefs';
 import { getOnboardingStage } from './src/features/gacha/onboarding/onboardingPrefs';
@@ -201,6 +202,8 @@ function App() {
     // Load the device-global sound/haptics choice early so the ceremony audio,
     // ceremony haptics and study haptics see the stored value on first use.
     void loadFeedbackPrefs();
+    // The remembered card language (English / 中文), so the first translated card opens in it.
+    void loadCardLangPref();
     // first_open (once per install), then the day-1/day-7 return check. An install that already
     // had study progress or a finished onboarding when the funnel first ran records nothing. The
     // remote flag lands after the config fetch; a flip to on sends what is already queued.

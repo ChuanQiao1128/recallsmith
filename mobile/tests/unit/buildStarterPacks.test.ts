@@ -6,10 +6,25 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// starterGate imports AsyncStorage at module scope; pickStarterUids itself never touches storage.
+vi.mock('@react-native-async-storage/async-storage', () => ({
+  default: {
+    getItem: vi.fn(async () => null),
+    setItem: vi.fn(async () => undefined),
+    removeItem: vi.fn(async () => undefined),
+  },
+}));
+
+import { pickStarterUids } from '../../src/features/gacha/starter/starterGate';
+
+type FlatCard = { stableUid: string; orderInDeck: number; mcq: unknown };
 
 type BuilderModule = {
   STARTER_SLUGS: string[];
+  MIN_CARDS: number;
+  cutStarterPrefix: (cards: FlatCard[]) => FlatCard[];
   buildStarterPacks: (options: {
     fetchBytes: (url: string) => Promise<Buffer>;
     outDir: string;
@@ -120,5 +135,52 @@ describe('build-starter-packs: all files or none', () => {
       expect(pack.cards).toHaveLength(30);
       expect(after['index.ts']).toContain(`'${slug}': '${BUILD}',`);
     }
+  });
+});
+
+// Card translations round (2026-10-18): exam decks are MCQ only. pickStarterUids then teaches the
+// deck's first five cards, so the pack is the plain MIN_CARDS prefix and settles the same lesson.
+describe('build-starter-packs: an MCQ-only deck', () => {
+  const MCQ_BLOB = {
+    v: 1,
+    qualifier: null,
+    shuffle: true,
+    options: [
+      { key: 'a', text: 'Right', why: null, correct: true },
+      { key: 'b', text: 'Wrong one', why: 'Because b is wrong.', correct: false },
+      { key: 'c', text: 'Wrong two', why: 'Because c is wrong.', correct: false },
+    ],
+  };
+  const mcqCard = (order: number): FlatCard => ({ stableUid: `m${order}`, orderInDeck: order, mcq: MCQ_BLOB });
+  const asLessonCards = (cards: FlatCard[]) => cards.map((c) => ({ StableUid: c.stableUid, OrderInDeck: c.orderInDeck, Mcq: c.mcq }));
+
+  it('cuts the MIN_CARDS prefix, which picks the same lesson as the full deck', async () => {
+    const { cutStarterPrefix, MIN_CARDS } = await loadBuilder();
+    // Out of order on purpose: the cut sorts by orderInDeck first.
+    const deck = Array.from({ length: 60 }, (_, i) => mcqCard(60 - i));
+    const pack = cutStarterPrefix(deck);
+    expect(pack).toHaveLength(MIN_CARDS);
+    expect(pack.map((c) => c.orderInDeck)).toEqual(Array.from({ length: MIN_CARDS }, (_, i) => i + 1));
+    const lesson = pickStarterUids(asLessonCards(deck));
+    expect(lesson).toEqual(['m1', 'm2', 'm3', 'm4', 'm5']);
+    expect(pickStarterUids(asLessonCards(pack))).toEqual(lesson);
+  });
+
+  it('still refuses a deck too small to teach a lesson', async () => {
+    const { cutStarterPrefix } = await loadBuilder();
+    expect(() => cutStarterPrefix([1, 2, 3, 4].map(mcqCard))).toThrow(/fewer than 5 cards/);
+    // Five cards make a lesson, but not a pack (MIN_CARDS).
+    expect(() => cutStarterPrefix([1, 2, 3, 4, 5].map(mcqCard))).toThrow(/need 30/);
+  });
+
+  it('keeps the Q/A cut for a deck with five Q/A cards', async () => {
+    const { cutStarterPrefix } = await loadBuilder();
+    const qa = (order: number): FlatCard => ({ stableUid: `q${order}`, orderInDeck: order, mcq: null });
+    // Five Q/A cards, the fifth at position 40: the pack runs through it.
+    const deck = [...Array.from({ length: 36 }, (_, i) => mcqCard(i + 1)), qa(37), qa(38), qa(39), qa(40), mcqCard(41), qa(42), mcqCard(43)];
+    const pack = cutStarterPrefix(deck);
+    expect(pack).toHaveLength(42);
+    expect(pickStarterUids(asLessonCards(pack))).toEqual(pickStarterUids(asLessonCards(deck)));
+    expect(pickStarterUids(asLessonCards(deck))).toEqual(['q37', 'q38', 'q39', 'q40', 'q42']);
   });
 });

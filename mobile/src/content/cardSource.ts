@@ -1,52 +1,21 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as FileSystem from 'expo-file-system/legacy';
-import { fetchAuthSession } from 'aws-amplify/auth';
+import type { CardSource } from './cardSourceParse';
+import { getInstalledDeckIndex } from './installedDeckIndex';
 
 /**
  * K03 — a card's citation, read from the installed raw deck file.
  *
  * The deck mapper in deckRepository.ts builds CardExport from named keys only,
  * so `cards[].source` (written by the deck build, contract §5.4) never reaches
- * DeckExport. This reader looks it up in the file the repository installed,
- * found through the same per-user meta key. The repository is frozen and its
- * helpers are private, so the key, user-key and deck-file rules are mirrored
- * here; tests/unit/cardSourceContract.test.ts fails if the originals drift.
+ * DeckExport. The installed deck reader (installedDeckIndex.ts) looks it up in
+ * the file the repository installed; the shape rule is cardSourceParse.ts.
  */
 
-export const CARD_SOURCE_URL_MAX_LENGTH = 2048;
-export const CARD_SOURCE_QUOTE_MAX_LENGTH = 1000;
-
-export type CardSource = { url: string; quote: string | null };
-
-// Mirrors deckRepository.ts DECK_META_PREFIX (+ userKey + ":" + slug).
-const DECK_META_PREFIX = 'devcards:content:deckmeta:v2:';
-const HTTPS_URL = /^https:\/\/\S+$/;
-const MAX_CACHED_DECKS = 4;
-const UTF8_ENCODING: any = (FileSystem as any)?.EncodingType?.UTF8 ?? 'utf8';
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/** Contract §5.1. Anything that is not a valid source is null. */
-export function parseCardSource(raw: unknown): CardSource | null {
-  if (!isRecord(raw)) return null;
-  if (typeof raw.url !== 'string') return null;
-  const url = raw.url.trim();
-  if (url.length > CARD_SOURCE_URL_MAX_LENGTH || !HTTPS_URL.test(url)) return null;
-
-  let quote: string | null;
-  if (raw.quote === undefined || raw.quote === null) {
-    quote = null;
-  } else if (typeof raw.quote === 'string') {
-    const trimmed = raw.quote.trim();
-    if (trimmed.length > CARD_SOURCE_QUOTE_MAX_LENGTH) return null;
-    quote = trimmed || null;
-  } else {
-    return null;
-  }
-  return { url, quote };
-}
+export {
+  CARD_SOURCE_QUOTE_MAX_LENGTH,
+  CARD_SOURCE_URL_MAX_LENGTH,
+  parseCardSource,
+  type CardSource,
+} from './cardSourceParse';
 
 /**
  * The host of an https URL, lower-cased, without one leading "www.". A regex
@@ -64,89 +33,11 @@ export function sourceHostLabel(url: string): string {
   return host.toLowerCase().replace(/^www\./, '');
 }
 
-// Mirrors deckRepository.ts sanitizeUserKey.
-function sanitizeUserKey(s: string): string {
-  const x = String(s || 'anon').trim();
-  if (!x) return 'anon';
-  return x.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 80) || 'anon';
-}
-
-// Mirrors deckRepository.ts getCurrentUserKey.
-async function getCurrentUserKey(): Promise<string> {
-  try {
-    const session: any = await fetchAuthSession();
-    const sub =
-      session?.userSub ??
-      session?.tokens?.idToken?.payload?.sub ??
-      session?.tokens?.accessToken?.payload?.sub ??
-      null;
-    return sanitizeUserKey(sub || 'anon');
-  } catch {
-    return 'anon';
-  }
-}
-
-// Mirrors deckRepository.ts currentDeckFileUri (getDeckDirForUser + slugToFileName).
-function currentDeckFileUri(userKey: string, slug: string): string | null {
-  const base = (FileSystem as any).documentDirectory ?? (FileSystem as any).cacheDirectory;
-  if (!base || typeof base !== 'string') return null;
-  return `${base}devcards-decks-v2/${sanitizeUserKey(userKey)}/${slug.replace(/[^a-zA-Z0-9._-]+/g, '_')}.json`;
-}
-
-// A binary update moves the app's data container, so the meta's absolute fileUri can name the
-// previous one until deckRepository's next read repoints it (locateInstalledDeckFile). Same rule:
-// a file missing at the stored URI is read from the same name in this launch's deck directory.
-async function readInstalledDeckText(userKey: string, slug: string, fileUri: string): Promise<string> {
-  try {
-    return await FileSystem.readAsStringAsync(fileUri, { encoding: UTF8_ENCODING });
-  } catch (err) {
-    const current = currentDeckFileUri(userKey, slug);
-    if (!current || current === fileUri || !fileUri.endsWith(current.slice(current.lastIndexOf('/')))) throw err;
-    return await FileSystem.readAsStringAsync(current, { encoding: UTF8_ENCODING });
-  }
-}
-
-type CachedDeck = { key: string; sources: Map<string, CardSource> };
-
-// Oldest first; at most MAX_CACHED_DECKS entries.
-const cache: CachedDeck[] = [];
-
-function buildSourceMap(text: string): Map<string, CardSource> {
-  const sources = new Map<string, CardSource>();
-  const parsed: unknown = JSON.parse(text);
-  // Flat decks and v1 `{ buildId, deck, cards }` both keep cards[] at the top.
-  const cards = isRecord(parsed) && Array.isArray(parsed.cards) ? parsed.cards : [];
-  for (const card of cards) {
-    if (!isRecord(card) || typeof card.stableUid !== 'string') continue;
-    const source = parseCardSource(card.source);
-    if (source) sources.set(card.stableUid, source);
-  }
-  return sources;
-}
-
 /** The source of an installed card, or null. Never throws. */
 export async function getCardSource(deckSlug: string, stableUid: string): Promise<CardSource | null> {
   try {
-    const slug = String(deckSlug ?? '').trim();
-    if (!slug || typeof stableUid !== 'string' || !stableUid) return null;
-
-    const userKey = await getCurrentUserKey();
-    const rawMeta = await AsyncStorage.getItem(`${DECK_META_PREFIX}${userKey}:${slug}`);
-    if (!rawMeta) return null;
-    const meta: unknown = JSON.parse(rawMeta);
-    if (!isRecord(meta)) return null;
-    const { buildId, fileUri } = meta;
-    if (typeof buildId !== 'string' || !buildId || typeof fileUri !== 'string' || !fileUri) return null;
-
-    const key = JSON.stringify([slug, fileUri, buildId]);
-    let entry = cache.find((c) => c.key === key);
-    if (!entry) {
-      const text = await readInstalledDeckText(userKey, slug, fileUri);
-      entry = { key, sources: buildSourceMap(text) };
-      cache.push(entry);
-      while (cache.length > MAX_CACHED_DECKS) cache.shift();
-    }
-    return entry.sources.get(stableUid) ?? null;
+    if (typeof stableUid !== 'string' || !stableUid) return null;
+    return (await getInstalledDeckIndex(deckSlug))?.sources.get(stableUid) ?? null;
   } catch {
     return null;
   }

@@ -12,7 +12,12 @@
 //
 // Why the prefix rule: pickStarterUids (src/features/gacha/starter/starterGate.ts) takes the first five
 // non-MCQ cards in deck order, so any prefix through the 5th non-MCQ card gives the same lesson as the
-// full deck. Why "-starter": a version equal to the live buildId would make the installer report
+// full deck. A deck with fewer than five non-MCQ cards (an MCQ-only exam deck) has pickStarterUids take
+// its first five cards of any kind instead; then neither the deck nor any prefix of it reaches five
+// non-MCQ cards, so a prefix through the 5th card (MIN_CARDS covers it) gives the same lesson too. That
+// branch relies on every published mcq blob being one the app accepts (the server validates them by the
+// same rules as normalizeMcq): an invalid blob reads as Q/A in the app but as MCQ here.
+// Why "-starter": a version equal to the live buildId would make the installer report
 // already_up_to_date and the full deck would never replace the pack.
 //
 // Also writes src/content/starter/index.ts (static requires, so the JSON is inlined into the JS bundle and
@@ -51,7 +56,8 @@ function hasMcq(card) {
 }
 
 /** The published cards sorted by orderInDeck (ties keep array order, as pickStarterUids does), cut to the
- *  shortest prefix that is at least MIN_CARDS long and contains STARTER_LESSON_SIZE non-MCQ cards. */
+ *  shortest prefix that is at least MIN_CARDS long and contains STARTER_LESSON_SIZE non-MCQ cards — or,
+ *  for a deck with fewer non-MCQ cards than that, STARTER_LESSON_SIZE cards of any kind. */
 export function cutStarterPrefix(cards) {
   const sorted = cards
     .map((card, index) => ({ card, index }))
@@ -66,7 +72,11 @@ export function cutStarterPrefix(cards) {
       break;
     }
   }
-  if (throughFifth < 0) throw new Error(`deck has fewer than ${STARTER_LESSON_SIZE} non-MCQ cards`);
+  if (throughFifth < 0) {
+    // pickStarterUids' fallback: the lesson is the deck's first STARTER_LESSON_SIZE cards.
+    if (sorted.length < STARTER_LESSON_SIZE) throw new Error(`deck has fewer than ${STARTER_LESSON_SIZE} cards`);
+    throughFifth = STARTER_LESSON_SIZE;
+  }
   const length = Math.max(MIN_CARDS, throughFifth);
   if (sorted.length < length) throw new Error(`deck has ${sorted.length} cards, need ${length}`);
   return sorted.slice(0, length);

@@ -2,7 +2,9 @@ import type { CardProgress } from '../../../review/model';
 import type { FeatureFlags } from '../../../config/featureFlags';
 import { isNewProgress } from '../selectors/progressSelectors';
 
-/** What the planner may do with the NEW bucket this pick (D00 §2.3). Absent/null hint = the planner as it is today. */
+/** What the planner may do with the NEW bucket this pick (D00 §2.3). Absent/null hint = the planner as it is today.
+ *  mcqAllowed false (the per-run cap) = a Q/A new card while one is left, else an MCQ one, so an MCQ-only deck
+ *  still fills its run. */
 export type McqKindHint = { mcqAllowed: boolean; preferMcq: boolean };
 
 /** Per-run counter the screen keeps in a ref (D05). `served` = MCQ cards set current this run, from ANY bucket

@@ -160,27 +160,49 @@ describe('planner kindHint', () => {
     );
   });
 
-  it('never deals an MCQ new card when mcqAllowed is false', () => {
+  it('deals a Q/A new card while one is left when mcqAllowed is false', () => {
     const call = (rows: CardProgress[], mode: any, kindHint?: McqKindHint) =>
       uidOf(pickNextCard({ deck: baseDeck, progress: rows, now: NOW, mode, index: null, ownedSet: null, kindHint }));
 
     expect(call(baseFresh, 'learn-new', BLOCK)).toBe('q10');
     expect(call(baseFresh, 'mixed', BLOCK)).toBe('q10');
-
-    // Only MCQ new cards remain (every Q/A card learned + not due).
-    const qaLater = baseCards.map((c) => (c.StableUid.startsWith('q') ? later(c.StableUid) : fresh(c.StableUid)));
-    expect(call(qaLater, 'learn-new', BLOCK)).toBeNull();
-    expect(call(qaLater, 'mixed', BLOCK)).toBeNull();
+    // The cap skips every MCQ new card that sorts ahead of the Q/A one.
+    const mcqFirst = deckOf([mcq(1), mcq(2), qa(30)]);
+    const mcqFirstRows = [fresh('m1'), fresh('m2'), fresh('q30')];
+    expect(uidOf(pickNextCard({ deck: mcqFirst, progress: mcqFirstRows, now: NOW, mode: 'learn-new', index: null, ownedSet: null, kindHint: BLOCK }))).toBe('q30');
 
     // A malformed hint (never produced by buildKindHint) still filters — mcqAllowed is checked first.
     expect(call(baseFresh, 'learn-new', MALFORMED)).toBe('q10');
     expect(call(baseFresh, 'mixed', MALFORMED)).toBe('q10');
-    expect(call(qaLater, 'learn-new', MALFORMED)).toBeNull();
-    expect(call(qaLater, 'mixed', MALFORMED)).toBeNull();
+  });
 
-    // Without a hint the same rows deal the MCQ new card — the filter is visibly the hint's doing.
+  // Card translations round (2026-10-18): exam decks are MCQ only, so the cap may not starve a run.
+  it('falls back to an MCQ new card past the cap when no Q/A new card is left', () => {
+    const call = (rows: CardProgress[], mode: any, kindHint?: McqKindHint) =>
+      uidOf(pickNextCard({ deck: baseDeck, progress: rows, now: NOW, mode, index: null, ownedSet: null, kindHint }));
+
+    // Only MCQ new cards remain (every Q/A card learned + not due).
+    const qaLater = baseCards.map((c) => (c.StableUid.startsWith('q') ? later(c.StableUid) : fresh(c.StableUid)));
+    expect(call(qaLater, 'learn-new', BLOCK)).toBe('m1540');
+    expect(call(qaLater, 'mixed', BLOCK)).toBe('m1540');
+    expect(call(qaLater, 'learn-new', MALFORMED)).toBe('m1540');
+    expect(call(qaLater, 'mixed', MALFORMED)).toBe('m1540');
+    // The same card the planner deals without a hint.
     expect(call(qaLater, 'learn-new')).toBe('m1540');
     expect(call(qaLater, 'mixed')).toBe('m1540');
+
+    // An MCQ-only deck keeps dealing its new cards in deck order under the cap, avoidUid honoured.
+    const mcqOnly = deckOf([mcq(10), mcq(20), mcq(30)]);
+    const mcqOnlyRows = [fresh('m10'), fresh('m20'), fresh('m30')];
+    const pick = (avoidUid: string | null, ownedSet: Set<string> | null = null) =>
+      uidOf(pickNextCard({ deck: mcqOnly, progress: mcqOnlyRows, now: NOW, mode: 'mixed', avoidUid, index: null, ownedSet, kindHint: BLOCK }));
+    expect(pick(null)).toBe('m10');
+    expect(pick('m10')).toBe('m20');
+    // The fallback keeps the owns guard.
+    expect(pick(null, new Set(['m30']))).toBe('m30');
+    expect(pick(null, new Set())).toBeNull();
+    // Nothing new at all: still nothing.
+    expect(uidOf(pickNextCard({ deck: mcqOnly, progress: mcqOnlyRows.map((r) => later(r.stableUid)), now: NOW, mode: 'learn-new', index: null, ownedSet: null, kindHint: BLOCK }))).toBeNull();
   });
 
   it('prefers an MCQ new card that sorts after every Q/A card', () => {
@@ -262,8 +284,10 @@ describe('planner kindHint', () => {
       fresh('m1550'),
       fresh('m1560'),
     ];
+    // Past the cap with no Q/A new card left, the next card is an MCQ new card, not the end of the run.
     const blocked = buildRatedSessionState({ ...common, progress: qaLater, kindHint: BLOCK });
-    expect(blocked.nextCurrent).toBeNull();
+    expect(vi.mocked(pickNextCard).mock.calls.at(-1)?.[0]).toMatchObject({ kindHint: BLOCK });
+    expect(blocked.nextCurrent?.card.StableUid).toBe('m1540');
     expect(blocked.updatedOne.stableUid).toBe('q10');
     expect(blocked.nextDone).toBe(1);
     expect(blocked.remainingDueCount).toBe(0);

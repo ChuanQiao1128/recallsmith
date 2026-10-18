@@ -27,8 +27,8 @@ export const STARTER_VERSION_SUFFIX = '-starter';
 /** At most one upgrade attempt per slug in this window. */
 export const STARTER_UPGRADE_BACKOFF_MS = 5 * 60 * 1000;
 
-// Mirrors deckRepository.ts DECK_META_PREFIX (+ userKey + ":" + slug); see cardSource.ts for the
-// same mirror and tests/unit/cardSourceContract.test.ts for the guard on the original.
+// Mirrors deckRepository.ts DECK_META_PREFIX (+ userKey + ":" + slug); see installedDeckIndex.ts for
+// the same mirror and tests/unit/cardSourceContract.test.ts for the guard on the original.
 const DECK_META_PREFIX = 'devcards:content:deckmeta:v2:';
 
 export function hasStarterPack(slug: string | null | undefined): slug is StarterSlug {

@@ -4,6 +4,7 @@ import { Text } from 'react-native';
 import type { StyleProp, TextProps, TextStyle } from 'react-native';
 
 import { splitInlineCode, stripInlineCode } from '../../../content/inlineCode';
+import { useCardTextLang } from './CardTextLang';
 
 export const INLINE_CODE_TEST_ID = 'inline-code';
 
@@ -96,15 +97,19 @@ export type InlineCodeTextProps = Omit<TextProps, 'children'> & {
 // <Text>: prose in the parent style, each span in monospace on a subtle
 // background, no backticks. Text without a span renders exactly as a plain
 // <Text>{text}</Text> would. The spoken label is the text without backticks,
-// unless the caller passes its own.
+// unless the caller passes its own. Inside a card shown in Chinese (CardTextLangContext) the
+// text is spoken as zh-CN unless the caller sets accessibilityLanguage; elsewhere no such prop is
+// added at all.
 export function InlineCodeText(props: InlineCodeTextProps) {
   const { text, codeStyle, ...rest } = props;
+  const lang = useCardTextLang();
   const spanStyle = useInlineCodeStyle(rest.style, codeStyle);
   const nodes = inlineCodeNodes(text, spanStyle);
+  const textProps = lang && rest.accessibilityLanguage === undefined ? { ...rest, accessibilityLanguage: lang } : rest;
 
-  if (nodes === text) return <Text {...rest}>{text}</Text>;
+  if (nodes === text) return <Text {...textProps}>{text}</Text>;
   return (
-    <Text {...rest} accessibilityLabel={rest.accessibilityLabel ?? stripInlineCode(text as string)}>
+    <Text {...textProps} accessibilityLabel={rest.accessibilityLabel ?? stripInlineCode(text as string)}>
       {nodes}
     </Text>
   );

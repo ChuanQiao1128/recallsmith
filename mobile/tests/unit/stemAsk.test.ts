@@ -40,4 +40,47 @@ describe('splitStemForOptions', () => {
     const stem = 'Which AWS service provides a fully managed message queue?';
     expect(splitStemForOptions(stem, null)).toEqual({ leadIn: '', ask: stem });
   });
+
+  // Card translations: a zh-CN stem ends its sentences with 。！？ and no space after them.
+  describe('a Chinese stem', () => {
+    it('splits at Chinese sentence ends that need no space', () => {
+      const stem = '一个团队把应用日志存放在 Amazon S3 中。他们希望不搬数据就能查询。哪项服务可以直接查询这些日志？';
+      expect(splitStemForOptions(stem, null)).toEqual({
+        leadIn: '一个团队把应用日志存放在 Amazon S3 中。他们希望不搬数据就能查询。',
+        ask: '哪项服务可以直接查询这些日志？',
+      });
+    });
+
+    it('keeps a closing quote with its sentence', () => {
+      const stem = '控制台显示“访问被拒绝。”管理员该先检查什么？';
+      expect(splitStemForOptions(stem, null)).toEqual({
+        leadIn: '控制台显示“访问被拒绝。”',
+        ask: '管理员该先检查什么？',
+      });
+    });
+
+    it('pulls the ask back to the sentence that holds the qualifier', () => {
+      const stem = '订单 API 运行在负载均衡器后面的 EC2 实例上。公司希望以运维开销最低的方式继续接单。哪种方案满足这些要求？';
+      expect(splitStemForOptions(stem, '运维开销最低')).toEqual({
+        leadIn: '订单 API 运行在负载均衡器后面的 EC2 实例上。',
+        ask: '公司希望以运维开销最低的方式继续接单。哪种方案满足这些要求？',
+      });
+    });
+
+    it('keeps a trailing （选择两项。） with the question it belongs to', () => {
+      const lead = '公司必须在第二个区域保留每个对象的副本，并证明七年内无人能删除。';
+      for (const directive of ['（选择两项。）', '（选择三项）', '(选择 2 项。)', '（选两项）']) {
+        const stem = `${lead}哪些操作组合能满足这些要求？${directive}`;
+        expect(splitStemForOptions(stem, null)).toEqual({
+          leadIn: lead,
+          ask: `哪些操作组合能满足这些要求？${directive}`,
+        });
+      }
+    });
+
+    it('returns the whole stem as the ask when there is one sentence', () => {
+      const stem = '哪项 AWS 服务提供全托管的消息队列？';
+      expect(splitStemForOptions(stem, null)).toEqual({ leadIn: '', ask: stem });
+    });
+  });
 });

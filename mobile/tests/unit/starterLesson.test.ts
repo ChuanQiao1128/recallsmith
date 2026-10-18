@@ -77,8 +77,20 @@ describe('starter lesson', () => {
     expect(STARTER_LESSON_SIZE).toBe(5);
     const cards = [qa('q7', 70), mcq('m1', 10), qa('q2', 20), qa('q3', 30), mcq('m4', 40), qa('q5', 50), qa('q6', 60), qa('q8', 80)];
     expect(pickStarterUids(cards)).toEqual(['q2', 'q3', 'q5', 'q6', 'q7']);
-    expect(pickStarterUids([mcq('m1', 1), qa('q1', 2)])).toEqual(['q1']);
     expect(pickStarterUids([])).toEqual([]);
+  });
+
+  // Card translations round (2026-10-18): an exam deck is MCQ only, so a deck that cannot fill the
+  // lesson with Q/A cards teaches its first 5 cards of any kind instead of a short or empty lesson.
+  it('falls back to the first 5 cards of any kind when the deck holds fewer than 5 Q/A cards', () => {
+    const mcqOnly = [mcq('m3', 30), mcq('m1', 10), mcq('m2', 20), mcq('m6', 60), mcq('m4', 40), mcq('m5', 50)];
+    expect(pickStarterUids(mcqOnly)).toEqual(['m1', 'm2', 'm3', 'm4', 'm5']);
+    // Four Q/A cards are not enough for a Q/A lesson: deck order, kinds mixed.
+    const fewQa = [mcq('m1', 1), qa('q2', 2), qa('q3', 3), mcq('m4', 4), qa('q5', 5), qa('q6', 6), mcq('m7', 7)];
+    expect(pickStarterUids(fewQa)).toEqual(['m1', 'q2', 'q3', 'm4', 'q5']);
+    expect(pickStarterUids([mcq('m1', 1), qa('q1', 2)])).toEqual(['m1', 'q1']);
+    // Five Q/A cards anywhere in the deck keep today's Q/A-only lesson.
+    expect(pickStarterUids([...fewQa, qa('q8', 8)])).toEqual(['q2', 'q3', 'q5', 'q6', 'q8']);
   });
 
   it('opens with the goal step and records the goal deck lesson once', async () => {
