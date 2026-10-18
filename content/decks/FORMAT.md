@@ -583,11 +583,6 @@ from the AWS documentation, no exam-deck stems, options or numbers. Plan: `docs/
 | CloudWatch, CloudTrail, Config, cost tools | `Monitoring, governance and cost` |
 | Athena, Glue, Redshift, AI services | `Analytics and ML` |
 
----|---|
-| network connectivity | `3.4 网络连接 · 基础` |
-| network connectivity | `3.4 网络连接 · VPC 之间` |
-| network connectivity | `3.4 网络连接 · 机房连 AWS` |
-
 ---
 
 ## 6. Deck files in this directory
