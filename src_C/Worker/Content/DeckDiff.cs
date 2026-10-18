@@ -16,7 +16,7 @@ public sealed class DeckDiffResult
 
 /// <summary>
 /// 纯逻辑卡组差异计算（无 IO，可单测）。
-/// updated = stableUid 同时存在于新旧两版且 11 个卡片字段任一不同。
+/// updated = the stableUid is in both versions and any compared card field differs, translations included.
 /// </summary>
 public static class DeckDiff
 {
@@ -72,7 +72,8 @@ public static class DeckDiff
       || a.Revision != b.Revision
       || !string.Equals(a.Topic, b.Topic, StringComparison.Ordinal)
       || !McqEquals(a.Mcq, b.Mcq)
-      || !McqEquals(a.Source, b.Source);
+      || !McqEquals(a.Source, b.Source)
+      || !McqEquals(a.Translations, b.Translations);
   }
 
   /// <summary>

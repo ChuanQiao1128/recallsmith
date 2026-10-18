@@ -147,20 +147,104 @@ public static class Publish
     }
   }
 
-  /// <summary>First 16 lowercase hex chars of SHA-256 over question, explanation, difficulty and the mcq jsonb text.</summary>
+  /// <summary>
+  /// First 16 lowercase hex chars of SHA-256 over question, explanation, difficulty and the mcq jsonb text, plus the
+  /// translations and translation_basis jsonb text when the card has translations (so an untranslated card keeps its
+  /// fingerprint, and a fixed or restamped translation is a new defect).
+  /// </summary>
   internal static string GateFingerprint(IReadOnlyDictionary<string, object?> row)
   {
     static string Cell(IReadOnlyDictionary<string, object?> r, string key) =>
       Convert.ToString(r.TryGetValue(key, out var v) ? v : null, CultureInfo.InvariantCulture) ?? string.Empty;
 
     var text = Cell(row, "question") + "\n" + Cell(row, "explanation") + "\n" + Cell(row, "difficulty") + "\n" + Cell(row, "mcq");
+    if (Cell(row, "translations").Length > 0) text += "\n" + Cell(row, "translations") + "\n" + Cell(row, "translationBasis");
     var hash = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text));
     return Convert.ToHexString(hash).ToLowerInvariant()[..16];
   }
 
   /// <summary>
+  /// First card that is not publishable in one of the deck's declared translation locales, or null when every row
+  /// passes (or the deck declares none). Pure (no IO), rows in order_in_deck order. Per row: every declared locale is
+  /// present (TRANSLATION_MISSING), the stored translations still mirror the card's English (the specific
+  /// TranslationValidation code), and the stored basis is the current English (TRANSLATION_STALE).
+  /// </summary>
+  internal static (string StableUid, string Code)? FirstTranslationGateFailure(IReadOnlyList<Dictionary<string, object?>> cardRows,
+    IReadOnlyList<string> translationLocales, string? deckLocale)
+  {
+    if (translationLocales.Count == 0) return null;
+
+    foreach (var c in cardRows)
+    {
+      var stableUid = Convert.ToString(c["stableUid"], CultureInfo.InvariantCulture) ?? string.Empty;
+      var translations = Helpers.JsonbElement(c, "translations");
+      if (translations is not { ValueKind: JsonValueKind.Object } stored ||
+          translationLocales.Any(locale => !stored.TryGetProperty(locale, out _)))
+      {
+        return (stableUid, "TRANSLATION_MISSING");
+      }
+
+      var english = TranslationValidation.EnglishFromRow(c);
+      try
+      {
+        TranslationValidation.Canonicalize(stored, english, deckLocale);
+      }
+      catch (TranslationValidationError tex)
+      {
+        return (stableUid, tex.Code);
+      }
+
+      var status = TranslationValidation.Status(stored.GetRawText(),
+        Convert.ToString(c.TryGetValue("translationBasis", out var b) ? b : null, CultureInfo.InvariantCulture), english);
+      if (status is null || translationLocales.Any(locale => !status.TryGetValue(locale, out var s) || s != "ok"))
+      {
+        return (stableUid, "TRANSLATION_STALE");
+      }
+    }
+
+    return null;
+  }
+
+  /// <summary>
+  /// <c>decks.translation_locales</c> read as <c>coalesce(to_jsonb(decks) -&gt; 'translation_locales', '[]')</c>: the jsonb
+  /// array text (or a string[] read from the column itself); anything else → empty.
+  /// </summary>
+  internal static IReadOnlyList<string> TranslationLocales(object? value)
+  {
+    switch (value)
+    {
+      case string[] locales:
+        return locales;
+      case string json when !string.IsNullOrWhiteSpace(json):
+        using (var doc = JsonDocument.Parse(json))
+        {
+          return doc.RootElement.ValueKind == JsonValueKind.Array
+            ? doc.RootElement.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!).ToList()
+            : [];
+        }
+      default:
+        return [];
+    }
+  }
+
+  /// <summary>
+  /// <see cref="FirstTranslationGateFailure"/> for <paramref name="deckId"/>, reading the deck's declared locales and
+  /// own locale. For callers that hold the export rows but not the deck row (the automation's dry run).
+  /// </summary>
+  internal static async Task<(string StableUid, string Code)?> TranslationGateFailureAsync(NpgsqlConnection conn, long deckId,
+    IReadOnlyList<Dictionary<string, object?>> cardRows)
+  {
+    var deck = await DbUtil.QueryAsync(conn, null,
+      """select locale, coalesce(to_jsonb(decks) -> 'translation_locales', '[]'::jsonb) as "translationLocales" from decks where id = $1""", [deckId]);
+    if (deck.Count == 0) return null;
+    return FirstTranslationGateFailure(cardRows, TranslationLocales(deck[0]["translationLocales"]), deck[0]["locale"] as string);
+  }
+
+  /// <summary>
   /// The cards a publish exports, in export order. Internal so the gate test reads rows with
   /// the exact production text (jsonb comes back as PG text, and that is what the gate parses).
+  /// The migration-047 columns are read through the row's jsonb image (null before 047 runs), so the
+  /// console publish and the automation keep working in the window between a code deploy and Migrate.
   /// </summary>
   internal const string CardsSql = """
     select
@@ -175,7 +259,9 @@ public static class Publish
       revision,
       topic,
       mcq,
-      source
+      source,
+      nullif(to_jsonb(cards) -> 'translations', 'null'::jsonb) as translations,
+      nullif(to_jsonb(cards) -> 'translation_basis', 'null'::jsonb) as "translationBasis"
     from cards
     where deck_id = $1 and is_deleted = 0
     order by order_in_deck asc, id asc
@@ -242,6 +328,7 @@ public static class Publish
         topic = c.TryGetValue("topic", out var tp) ? tp as string : null,
         mcq = Helpers.JsonbElement(c, "mcq"),
         source = Helpers.JsonbElement(c, "source"),
+        translations = Helpers.JsonbElement(c, "translations"),
       }).ToList();
 
       var baseDeckJson = new
@@ -346,6 +433,16 @@ public static class Publish
     {
       await RecordGateDefectAsync(conn, deckId, gate.Value.StableUid, gate.Value.Code, cardRows);
       return Refuse(400, "MCQ_PUBLISH_GATE", $"{gate.Value.StableUid}: {gate.Value.Code}");
+    }
+
+    // Translation gate: a deck that declares translation locales ships only cards whose translations are complete and
+    // were written against the current English. A deck that declares none is not checked.
+    var translationGate = FirstTranslationGateFailure(cardRows, TranslationLocales(loaded.Deck!["translationLocales"]),
+      loaded.Deck!["locale"] as string);
+    if (translationGate is not null)
+    {
+      await RecordGateDefectAsync(conn, deckId, translationGate.Value.StableUid, translationGate.Value.Code, cardRows);
+      return Refuse(400, "TRANSLATION_PUBLISH_GATE", $"{translationGate.Value.StableUid}: {translationGate.Value.Code}");
     }
 
     // AI QA gate (contract §7.10): refuses only when AI_QA_ENABLED and AI_QA_REQUIRED are both truthy. A refusal
@@ -522,6 +619,7 @@ public static class Publish
         tier,
         total_cards as "totalCards",
         preview_cards as "previewCards",
+        coalesce(to_jsonb(decks) -> 'translation_locales', '[]'::jsonb) as "translationLocales",
         is_deleted as "isDeleted",
         updated_at as "updatedAt"
       from decks

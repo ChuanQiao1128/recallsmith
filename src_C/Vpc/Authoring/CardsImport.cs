@@ -38,7 +38,9 @@ public static class CardsImport
     int OrderInDeck,
     string? Topic,
     string? Mcq,
-    string? Source);
+    string? Source,
+    string? Translations,
+    string? TranslationBasis);
 
   /// <summary>What the core learned about the import, for the after-response side effects.</summary>
   private sealed class ImportOutcome
@@ -163,6 +165,9 @@ public static class CardsImport
       outcome.DeckId = deckId;
       outcome.CardCount = count;
 
+      // A translation into the deck's own locale is refused; an unknown deck answers DECK_NOT_FOUND below.
+      var deckLocale = await Helpers.DeckLocaleAsync(conn, deckId);
+
       cards = new List<ImportCard>(count);
       var i = 0;
       foreach (var cardEl in cardsEl.EnumerateArray())
@@ -219,9 +224,25 @@ public static class CardsImport
           // Whole-file import: an absent source is null and clears a stored one.
           var source = Helpers.ParseOptionalSource(cardEl);
 
-          cards.Add(new ImportCard(i, uid, question, explanation, codeSnippet, codeLanguage, realWorldUsage, difficulty, orderInDeck, topic, mcq, source));
+          // Whole-file import too: absent translations are null and clear stored ones (with their basis). Present ones
+          // mirror this card's English and are restamped, so the file is the translation's new basis.
+          string? translations = null;
+          string? translationBasis = null;
+          if (cardEl.TryGetProperty("translations", out var trEl))
+          {
+            var english = new TranslationValidation.EnglishCard(question, explanation, realWorldUsage, mcq);
+            translations = TranslationValidation.Canonicalize(trEl, english, deckLocale);
+            translationBasis = TranslationValidation.BasisJson(translations, english);
+          }
+
+          cards.Add(new ImportCard(i, uid, question, explanation, codeSnippet, codeLanguage, realWorldUsage, difficulty, orderInDeck, topic, mcq, source,
+            translations, translationBasis));
         }
         catch (McqValidationError ex)
+        {
+          return res.BadRequest(ex.Code, $"cards[{i}] ({uid}): {ex.Message}");
+        }
+        catch (TranslationValidationError ex)
         {
           return res.BadRequest(ex.Code, $"cards[{i}] ({uid}): {ex.Message}");
         }
@@ -266,6 +287,10 @@ public static class CardsImport
       await using var tx = await conn.BeginTransactionAsync();
 
       await DbUtil.ExecuteAsync(conn, tx, "set constraints uq_cards_deck_order deferred", []);
+
+      // Before migration 047 a file without translations upserts exactly as before; one with translations needs the columns.
+      var translationsReady = await Helpers.ColumnExistsAsync(conn, tx, "cards", "translations");
+      if (!translationsReady && cards.Any(c => c.Translations is not null)) return Helpers.TranslationsNotMigrated(res);
 
       var deckRows = await DbUtil.QueryAsync(conn, tx,
         "select id from decks where id = $1 and is_deleted = 0 for update", [deckId]);
@@ -317,6 +342,35 @@ public static class CardsImport
       const string upsertSql = """
         insert into cards (
           deck_id, stable_uid, question, explanation, code_snippet, code_language,
+          real_world_usage, difficulty, order_in_deck, topic, mcq, source, translations, translation_basis
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb)
+        on conflict (deck_id, stable_uid) do update set
+          question = excluded.question,
+          explanation = excluded.explanation,
+          code_snippet = excluded.code_snippet,
+          code_language = excluded.code_language,
+          real_world_usage = excluded.real_world_usage,
+          difficulty = excluded.difficulty,
+          order_in_deck = excluded.order_in_deck,
+          topic = excluded.topic,
+          mcq = excluded.mcq,
+          source = excluded.source,
+          translations = excluded.translations,
+          translation_basis = excluded.translation_basis,
+          version = cards.version + 1,
+          updated_at = now()
+        where (cards.question, cards.explanation, cards.code_snippet, cards.code_language, cards.real_world_usage,
+               cards.difficulty, cards.order_in_deck, cards.topic, cards.mcq, cards.source, cards.translations, cards.translation_basis)
+          is distinct from
+              (excluded.question, excluded.explanation, excluded.code_snippet, excluded.code_language, excluded.real_world_usage,
+               excluded.difficulty, excluded.order_in_deck, excluded.topic, excluded.mcq, excluded.source, excluded.translations,
+               excluded.translation_basis)
+        returning id, (xmax = 0) as inserted
+        """;
+      const string upsertSqlPre047 = """
+        insert into cards (
+          deck_id, stable_uid, question, explanation, code_snippet, code_language,
           real_world_usage, difficulty, order_in_deck, topic, mcq, source
         )
         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb)
@@ -343,11 +397,17 @@ public static class CardsImport
 
       foreach (var c in cards)
       {
-        var rows = await DbUtil.QueryAsync(conn, tx, upsertSql, new object?[]
-        {
-          deckId, c.StableUid, c.Question, c.Explanation, c.CodeSnippet, c.CodeLanguage,
-          c.RealWorldUsage, c.Difficulty, c.OrderInDeck, c.Topic, c.Mcq, c.Source,
-        });
+        var rows = translationsReady
+          ? await DbUtil.QueryAsync(conn, tx, upsertSql, new object?[]
+          {
+            deckId, c.StableUid, c.Question, c.Explanation, c.CodeSnippet, c.CodeLanguage,
+            c.RealWorldUsage, c.Difficulty, c.OrderInDeck, c.Topic, c.Mcq, c.Source, c.Translations, c.TranslationBasis,
+          })
+          : await DbUtil.QueryAsync(conn, tx, upsertSqlPre047, new object?[]
+          {
+            deckId, c.StableUid, c.Question, c.Explanation, c.CodeSnippet, c.CodeLanguage,
+            c.RealWorldUsage, c.Difficulty, c.OrderInDeck, c.Topic, c.Mcq, c.Source,
+          });
 
         if (rows.Count == 0)
         {

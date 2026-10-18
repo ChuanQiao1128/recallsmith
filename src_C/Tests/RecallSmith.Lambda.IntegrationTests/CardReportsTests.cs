@@ -30,7 +30,7 @@ public sealed class CardReportsTests
   private static readonly string[] AdminItemKeys =
   [
     "reportId", "deckId", "deckSlug", "cardId", "stableUid", "question", "reason", "note", "status", "resolution", "resolutionNote",
-    "clientVersion", "createdAt", "resolvedAt", "anonymous",
+    "clientVersion", "createdAt", "resolvedAt", "anonymous", "displayLocale",
   ];
 
   private readonly PostgresFixture _db;

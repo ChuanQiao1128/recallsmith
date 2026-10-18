@@ -82,6 +82,7 @@ public static class CardsPage
       // jsonb arrives from DbUtil as PG text; the console reads an object (C08's JsonbCell).
       foreach (var row in rows)
       {
+        TranslationValidation.ShapeRow(row);
         Helpers.JsonbCell(row, "mcq");
         Helpers.JsonbCell(row, "source");
       }
@@ -133,6 +134,7 @@ public static class CardsPage
     CardsPageCursor? cursor,
     int limit)
   {
+    // The migration-047 columns through the row's jsonb image, as in the full endpoint (null before 047 runs).
     var sql = """
       select
         c.id,
@@ -152,7 +154,9 @@ public static class CardsPage
         c.updated_at    as "updatedAt",
         c.topic,
         c.mcq,
-        c.source
+        c.source,
+        nullif(to_jsonb(c) -> 'translations', 'null'::jsonb) as translations,
+        nullif(to_jsonb(c) -> 'translation_basis', 'null'::jsonb) as "translationBasis"
       from cards c
       """;
 
