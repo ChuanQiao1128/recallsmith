@@ -70,11 +70,11 @@ describe('2.1.0 store texts', () => {
   it('the description states the 2.1.0 facts', () => {
     const text = read('description-2.1.0.txt');
     for (const fact of [
-      'AWS Architect Basics: 41 short foundation cards in Chinese',
+      'AWS Architect Basics: 41 short foundation cards in Chinese on the AWS networking basics',
       '371 cards in English for the SAA-C03, including 165 multiple-choice cards',
       '465 cards in English across all 8 exam domains, including 149 multiple-choice cards',
       'Each pack gets a one-time grant of 5 draws',
-      'Open up to 5 packs at once, or Open 1.',
+      'Open up to 5 cards at once, or Open 1.',
       'Each pack saves up to 60 draws, plus 5 extra draws waiting.',
       'After 10 Commons in a row, a rare card is guaranteed',
       'No repeat draws: a card you have drawn never comes up again.',
@@ -93,6 +93,9 @@ describe('2.1.0 store texts', () => {
     // The bundled starter packs cover the AWS Associate Architect and Claude decks only (starter/index.ts).
     expect(text).toContain('The first cards of the AWS Associate Architect and Claude decks ship inside the app');
     expect(text).not.toMatch(/\b3 draws\b|Open 10/);
+    // Fact-check 2026-10-18: a batch is cards from one pack, and there is no same-session recall check.
+    expect(text).not.toMatch(/5 packs|check what you recall|recall check/i);
+    expect(text).toContain('read the question, tap Show answer, then Got it');
   });
 
   it('copies the Terms/Privacy lines verbatim from 2.0.0', () => {
@@ -120,7 +123,7 @@ describe('2.1.0 store texts', () => {
 
   it("What's New names the 2.1.0 changes and does not advertise Chinese cards no deck ships yet", () => {
     const text = read('whats-new-2.1.0.txt');
-    for (const fact of ['Swipe left or right on the Home cover', 'AWS Architect Basics', 'Open up to 5 packs at once', '5 draws']) {
+    for (const fact of ['Swipe left or right on the Home cover', 'AWS Architect Basics', 'Open up to 5 cards from a pack at once', '5 draws']) {
       expect(text, fact).toContain(fact);
     }
     expect(text).not.toMatch(/translation|Card language|中文/i);

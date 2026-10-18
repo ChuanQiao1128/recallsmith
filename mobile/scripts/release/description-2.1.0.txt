@@ -2,29 +2,29 @@ Preparing for the AWS SAA-C03 or the Claude Developer Foundations exam? Develope
 
 WHAT'S INSIDE
 Three free decks:
-• AWS Architect Basics: 41 short foundation cards in Chinese on the basics behind the SAA-C03. A good place to start.
+• AWS Architect Basics: 41 short foundation cards in Chinese on the AWS networking basics behind the SAA-C03 (VPCs, VPN, Direct Connect). A good place to start.
 • AWS Associate Architect: 371 cards in English for the SAA-C03, including 165 multiple-choice cards with every wrong option explained.
 • Claude Developer Foundations (CCDV-F): 465 cards in English across all 8 exam domains, including 149 multiple-choice cards with every wrong option explained.
 
 HOW DRAWS WORK
-• Pick a goal (add an exam date if you have one: reviews finish the day before the exam), then take a 5-card starter lesson: study each card, then check what you recall.
-• Each pack gets a one-time grant of 5 draws: the first time you open it, or when your first lesson on it ends, whichever comes first.
-• Learn a new card to earn a draw for its pack: the first time you answer Remembered, Hard, Good or Easy, or get a multiple-choice card right. Clearing all due cards adds one more draw, once a day.
+• Pick a goal (add an exam date if you have one: reviews finish the day before the exam), then take a 5-card starter lesson: for each card, read the question, tap Show answer, then Got it.
+• Each pack gets a one-time grant of 5 draws: your first pack when the starter lesson ends, every other pack the first time you open it after that.
+• Learn a new card to earn a draw for its pack: tap Got it on a new card, or get a new multiple-choice card right. Starter-lesson cards earn the pack's 5-draw grant instead. Clearing all due cards adds one more draw, once a day.
 • Draws are earned, never sold.
 • No repeat draws: a card you have drawn never comes up again.
 • After 10 Commons in a row, a rare card is guaranteed: the next card is Rare or better while the pack still has a Rare or Legendary you are missing.
-• Open up to 5 packs at once, or Open 1. You only spend draws for cards you receive.
+• Open up to 5 cards at once, or Open 1. You only spend draws for cards you receive.
 • Each pack saves up to 60 draws, plus 5 extra draws waiting. With nothing left to study and no draws, you get 1 free draw a day per pack.
 • Swipe left or right on the Home cover to switch packs.
 
 HOW STUDY WORKS
-A new card shows its question first: tap Show answer, read it, then Got it. When a card comes back for review, rate it with two buttons by default, Forgot and Remembered; turn on all four (Again / Hard / Good / Easy) in Settings › Study. On a multiple-choice card you decide first, tap Show options, then answer Sure, Not sure or I don't know. Reviews are scheduled with FSRS, the open-source spaced-repetition algorithm (default parameters), never more than 90 days out. A card counts as Mastered once its next review is 15 or more days away. Cards you miss go to the Mistake Book. Progress by domain shows card counts for each exam domain, never a score. Many cards show their source. Reminders are optional and you can turn them off.
+A new card shows its question first: tap Show answer, read it, then Got it. When a card comes back for review, rate it with two buttons by default, Forgot and Remembered; turn on all four (Again / Hard / Good / Easy) in Settings › Study. On a multiple-choice card you decide first, tap Show options, pick your answer, then tap Sure or Not sure, or tap I don't know to see the explanations. Reviews are scheduled with FSRS, the open-source spaced-repetition algorithm (default parameters), never more than 90 days out. A card counts as Mastered once its next review is 15 or more days away. Cards you miss go to the Mistake Book. Progress by domain shows card counts for each exam domain, never a score. Many cards show their source. Reminders are optional and you can turn them off.
 
 OFFLINE AND ACCOUNT
 The first cards of the AWS Associate Architect and Claude decks ship inside the app, so a first lesson on them works with no connection. The full deck downloads when your phone is online; after that, study works offline. An account is optional: signing in adds cloud backup and lets you report a problem with a card.
 
 FROM TIME AWAKE
-DeveloperCards is made by Time Awake in Auckland. Cards are drafted with AI assistance from official documentation (AWS, Anthropic), checked by automated checks and AI review passes. If a card looks wrong, sign in and tap Report a problem under its answer. All three decks are free.
+DeveloperCards is made by Time Awake in Auckland. Cards are drafted with AI assistance; the AWS Associate Architect and Claude cards come from official documentation (AWS, Anthropic) and are checked by automated checks and AI review passes. If a card looks wrong, sign in and tap Report a problem under its answer. All three decks are free.
 
 LINKS
 Terms of Use (EULA): https://www.apple.com/legal/internet-services/itunes/dev/stdeula/
