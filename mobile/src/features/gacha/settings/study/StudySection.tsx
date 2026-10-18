@@ -6,7 +6,9 @@ import { typography } from '../../../../theme/typography';
 import { ToggleRow } from '../feedback/FeedbackSection';
 import type { StudyPrefs } from '../../study/studyPrefs';
 import type { StudyGoal } from '../../../goal/studyGoal';
+import type { CardDisplayLang } from '../../../../content/localizeCard';
 import { StudyGoalRow } from './StudyGoalRow';
+import { CardLangRow } from './CardLangRow';
 
 export const STUDY_COPY = {
   title: 'Study',
@@ -19,8 +21,10 @@ export function StudySection(props: {
   onToggleFourButtons: (value: boolean) => void;
   /** U4: the study goal row. Omitted, the section shows only the rating-button toggle. */
   goal?: { value: StudyGoal | null; fallbackDeckSlug: string | null; onSaved: (goal: StudyGoal | null) => void };
+  /** Card translations: the remembered card language. Omitted, the section shows no language row. */
+  cardLang?: { value: CardDisplayLang; onSelect: (next: CardDisplayLang) => void };
 }) {
-  const { prefs, onToggleFourButtons, goal } = props;
+  const { prefs, onToggleFourButtons, goal, cardLang } = props;
   return (
     <View style={styles.sectionCard}>
       <Text style={styles.sectionTitle} numberOfLines={1}>
@@ -34,6 +38,7 @@ export function StudySection(props: {
         value={prefs.fourButtons}
         onPress={() => onToggleFourButtons(!prefs.fourButtons)}
       />
+      {cardLang ? <CardLangRow value={cardLang.value} onSelect={cardLang.onSelect} /> : null}
     </View>
   );
 }

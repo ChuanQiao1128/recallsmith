@@ -16,6 +16,10 @@ import {
   mcqWhyNotA11yLabel,
   mcqOverLimitAnnouncement,
   MCQ_OVER_LIMIT_HINT_MS,
+  MCQ_COPY_ZH,
+  mcqQualifierBodyZh,
+  mcqOptionA11yLabelZh,
+  mcqWhyNotA11yLabelZh,
 } from '../../src/features/gacha/mcq/mcqConstants';
 
 describe('mcqConstants', () => {
@@ -74,5 +78,23 @@ describe('mcqConstants', () => {
     expect(MCQ_TEST_IDS.summaryPicks).toBe('session-summary-picks');
     expect(MCQ_TEST_IDS.drawFeaturedKind).toBe('draw-result-featured-kind');
     expect(MCQ_TEST_IDS.cardDetailKind).toBe('card-detail-kind-chip');
+  });
+
+  // Card translations: the in-card labels of a card shown in Chinese; the chrome has no zh copy.
+  it('carries Chinese copy for the in-card labels only', () => {
+    expect(MCQ_COPY_ZH).toEqual({
+      rowCorrectPicked: '正确',
+      rowCorrectMissed: '漏选了这一项',
+      rowWrongPicked: '你的选择',
+      rowWhyNot: '为什么不选？',
+      sectionExplanation: '解析',
+      sectionQualifier: '为什么看限定词',
+      sectionUsage: '实际应用',
+      sectionCode: '代码示例',
+    });
+    for (const key of Object.keys(MCQ_COPY_ZH)) expect(MCQ_COPY).toHaveProperty(key);
+    expect(mcqQualifierBodyZh('运维开销最低')).toBe('题干要求的是「运维开销最低」的方案。有几个选项都能用，最符合这个说法的那一项才是答案。');
+    expect(mcqOptionA11yLabelZh(1, 4, '用队列')).toBe('选项 B，共 4 项：用队列');
+    expect([0, 4].map((i) => mcqWhyNotA11yLabelZh(i))).toEqual(['为什么不选选项 A', '为什么不选选项 E']);
   });
 });

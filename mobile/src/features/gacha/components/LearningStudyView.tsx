@@ -9,6 +9,7 @@ import { getFeatureFlags } from '../../../config/featureFlags';
 import { formatRank } from '../library/libraryMapper';
 import { CardAnswerSections } from './CardAnswerSections';
 import { InlineCodeText } from './InlineCodeText';
+import { cardSectionLabels, cardTextA11yProps, useCardTextLang } from './CardTextLang';
 import { QuestionCodeBlock } from '../session/QuestionCodeBlock';
 import { colors } from '../../../theme/colors';
 import { spacing } from '../../../theme/spacing';
@@ -64,6 +65,9 @@ export type LearningStudyViewProps = {
 
 export const LearningStudyView = React.memo(function LearningStudyView(props: LearningStudyViewProps) {
   const { card, deckSlug, rank = null, revealed = false } = props;
+  // `card` arrives as the display card (English, or its Chinese translation); the SOURCE label
+  // follows that language, the quote itself is always the English original.
+  const lang = useCardTextLang();
   const orderBadge = typeof rank === 'number' && rank > 0 ? `#${formatRank(rank)}` : `#${card.OrderInDeck}`;
   const [source, setSource] = useState<LoadedSource | null>(null);
   const uid = card.StableUid;
@@ -116,8 +120,13 @@ export const LearningStudyView = React.memo(function LearningStudyView(props: Le
           style={({ pressed }) => [styles.sourceRow, pressed && styles.pressed]}
           onPress={() => openSourceUrl(source.url)}
         >
-          <Text style={styles.sourceLabel} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
-            SOURCE
+          <Text
+            style={styles.sourceLabel}
+            numberOfLines={1}
+            maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}
+            {...cardTextA11yProps(lang)}
+          >
+            {cardSectionLabels(lang).source}
           </Text>
           <Text testID="learning-study-source-host" style={styles.sourceHost} numberOfLines={1}>
             {source.host}

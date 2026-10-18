@@ -338,6 +338,78 @@ describe('SessionCardScreen starter lesson', () => {
     }
   });
 
+  // Card translations round (2026-10-18): exam decks are MCQ only. The lesson then teaches the
+  // deck's first five cards as multiple choice, and the per-run MCQ cap (maxPerRun 2) does not cut
+  // the lesson short: with no Q/A new card left the planner keeps dealing MCQ new cards.
+  it('teaches an MCQ-only deck through the multiple-choice flow, past the per-run cap, then opens Draw', async () => {
+    const mcqCards = [1, 2, 3, 4, 5, 6, 7].map((order) => ({ ...card(`m${order}`, order), Mcq: MCQ_CARD.Mcq }));
+    deckRepo.resolveDeckBySlug.mockResolvedValue({ ...DECK, Cards: mcqCards, TotalCards: mcqCards.length });
+    progressState = mcqCards.map((c) => untouched(c.StableUid));
+    const { tree, navigation } = await mount();
+
+    const byTestID = (id: string) => tree.root.findAll((node) => typeof node.type === 'string' && node.props?.testID === id);
+    const pressID = async (id: string) => {
+      await act(async () => {
+        byTestID(id)[0].props.onPress();
+        await Promise.resolve();
+      });
+      await flush();
+    };
+
+    const served: string[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      expect(byTestID('mcq-review-body')).toHaveLength(1);
+      expect(byTestID('learning-study-view')).toHaveLength(0);
+      const stem = byTestID('mcq-stem')[0];
+      served.push(String(stem.props.children.map((seg: any) => seg.props?.children ?? '').join('')).replace(/^Question /, ''));
+      expect(navigation.replace).not.toHaveBeenCalled();
+      await pressID('mcq-show-options');
+      await pressID('mcq-option-b');
+      await pressID('mcq-submit-sure');
+      expect(byTestID('mcq-verdict-banner')).toHaveLength(1);
+      await pressID('mcq-next');
+    }
+    expect(served).toEqual(['m1', 'm2', 'm3', 'm4', 'm5']);
+    expect(vi.mocked(recordReviewEvent).mock.calls.map((call) => [(call[0] as any).stableUid, (call[0] as any).reviewStage])).toEqual(
+      ['m1', 'm2', 'm3', 'm4', 'm5'].map((uid) => [uid, 'first_review']),
+    );
+
+    // The 5th answer completes the lesson: Draw with the bootstrap, not a summary.
+    expect(navigation.replace).toHaveBeenCalledTimes(1);
+    expect(navigation.replace).toHaveBeenCalledWith('Draw', { slug: 'csharp', rewardPending: true });
+    expect(store.get(STAGE_KEY)).toBe('done');
+    expect(await loadDeckWallet('csharp')).toEqual({ availablePulls: DECK_BOOTSTRAP_GRANT, reservePulls: 0 });
+    expect(progressState.filter((p) => (p.lastReviewedAt ?? 0) > 0).map((p) => p.stableUid)).toEqual(['m1', 'm2', 'm3', 'm4', 'm5']);
+  });
+
+  it('an ordinary run on an MCQ-only deck deals every planned new card, not just maxPerRun of them', async () => {
+    store.set(STAGE_KEY, 'done');
+    const mcqCards = [1, 2, 3, 4, 5].map((order) => ({ ...card(`m${order}`, order), Mcq: MCQ_CARD.Mcq }));
+    deckRepo.resolveDeckBySlug.mockResolvedValue({ ...DECK, Cards: mcqCards, TotalCards: mcqCards.length });
+    progressState = mcqCards.map((c) => untouched(c.StableUid));
+    await saveDrawState('csharp', { owned: ['m1', 'm2', 'm3', 'm4'], pity: null });
+    const { tree, navigation } = await mount();
+
+    const byTestID = (id: string) => tree.root.findAll((node) => typeof node.type === 'string' && node.props?.testID === id);
+    const pressID = async (id: string) => {
+      await act(async () => {
+        byTestID(id)[0].props.onPress();
+        await Promise.resolve();
+      });
+      await flush();
+    };
+    for (let i = 0; i < 4; i += 1) {
+      expect(byTestID('mcq-review-body')).toHaveLength(1);
+      await pressID('mcq-show-options');
+      await pressID('mcq-option-b');
+      await pressID('mcq-submit-sure');
+      await pressID('mcq-next');
+    }
+    // Four owned new MCQ cards, all four dealt (maxPerRun is 2), then the summary.
+    expect(vi.mocked(recordReviewEvent).mock.calls.map((call) => (call[0] as any).stableUid)).toEqual(['m1', 'm2', 'm3', 'm4']);
+    expect(navigation.replace).toHaveBeenCalledWith('SessionSummary', expect.objectContaining({ picks: { landed: 4, answered: 4 } }));
+  });
+
   it('after the lesson, Got it on a drawn new card pays its draw (R1) at once', async () => {
     store.set(STAGE_KEY, 'done');
     progressState = CARDS.map((c) => (['c1', 'c2', 'c3', 'c4', 'c5'].includes(c.StableUid) ? learned(c.StableUid) : untouched(c.StableUid)));

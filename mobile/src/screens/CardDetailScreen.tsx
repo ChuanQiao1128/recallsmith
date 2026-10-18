@@ -9,6 +9,7 @@ import type { CardExport, DeckExport } from '../types/deckExport';
 import { withoutHiddenDecks } from '../content/hiddenDecks';
 import { questionA11yLabel, splitQuestionCode } from '../content/questionCode';
 import { stripInlineCode } from '../content/inlineCode';
+import { cardTranslationFor, hasCompleteTranslation, localizeForDisplay } from '../content/localizeCard';
 import type { CardProgress } from '../review/model';
 import { colors } from '../theme/colors';
 import { CHROME_MAX_FONT_SCALE } from '../theme/dynamicType';
@@ -20,6 +21,10 @@ import { getFeatureFlags } from '../config/featureFlags';
 import { mcqRequiredCount, resolveMcq } from '../features/gacha/mcq/normalizeMcq';
 import { MCQ_COPY } from '../features/gacha/mcq/mcqConstants';
 import { CardAnswerSections } from '../features/gacha/components/CardAnswerSections';
+import { CardLangToggle } from '../features/gacha/components/CardLangToggle';
+import { CardTextLangContext, cardSectionLabels, cardTextA11yProps } from '../features/gacha/components/CardTextLang';
+import { setCardLangPref, useCardLangPref } from '../features/gacha/study/cardLangPrefs';
+import { translationsForCard, useDeckTranslations } from '../features/gacha/study/useDeckTranslations';
 import { InlineCodeText } from '../features/gacha/components/InlineCodeText';
 import { QuestionCodeBlock } from '../features/gacha/session/QuestionCodeBlock';
 import { cardDetailStatus } from '../features/gacha/library/cardDetailStatus';
@@ -270,9 +275,17 @@ export function CardDetailScreen({ navigation, route }: Props) {
     };
   }, [answerOpen, isLocked, sourceDeckSlug, sourceCardUid]);
 
+  // Card translations (contract §5): the remembered card language and the deck's built-in
+  // translations. Read for an owned card only, below; a locked card shows nothing to translate.
+  const cardLang = useCardLangPref();
+  const deckTranslations = useDeckTranslations(deck?.Slug ?? null, deck?.Version ?? null);
+  // A learner who chose 中文 must not see the English card first: the skeleton stays up until the
+  // deck's translations are read. Reading English never waits on them.
+  const translationsPending = cardLang === 'zh-CN' && !isLocked && deckTranslations.status === 'loading';
+
   // While loading we cannot honestly draw the hero (#000 Common New) or claim
   // the card is missing — a neutral skeleton stands in until the lookup lands.
-  if (status === 'loading') {
+  if (status === 'loading' || translationsPending) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <LinearGradient colors={[colors.softCream, colors.softPeach, colors.softLavender]} style={styles.gradient}>
@@ -336,12 +349,26 @@ export function CardDetailScreen({ navigation, route }: Props) {
     );
   }
 
+  // Read once per render, never as live policy (featureFlags.ts:57-62). A locked
+  // card names no kind: the kind is one more thing the pull is supposed to reveal.
+  const mcq = card && !isLocked ? resolveMcq(card, getFeatureFlags()) : null;
+  // The card as it is shown: its Chinese translation when the learner chose 中文 and the
+  // translation is complete, else the English card itself (same objects).
+  const translation = card && deck && !isLocked ? cardTranslationFor(translationsForCard(deckTranslations, card.StableUid), deck.Locale) : null;
+  const canSwitchCardLang = !!card && !isLocked && hasCompleteTranslation(card, mcq, translation);
+  const display = card && !isLocked
+    ? localizeForDisplay({ card, mcq, shownOrder: mcq?.options ?? [], translation, lang: cardLang })
+    : null;
+  const displayCard = display?.card ?? card;
+  const displayMcq = display?.mcq ?? mcq;
+  const cardTextLang = display?.lang === 'zh-CN' ? 'zh-CN' : undefined;
+  const sectionLabels = cardSectionLabels(cardTextLang);
   // A locked card shows its slot and nothing else it could be recognised by.
   // The Library's silhouette tile makes the same trade: the registry admits
   // the card exists, the pull is still the moment you learn what it says.
   // Y01: a fenced code block in the question is lifted out — the title is the
   // prose only and the question card renders the code as a CodeBlock below it.
-  const question = isLocked || !card ? null : splitQuestionCode(card.Question ?? '');
+  const question = isLocked || !displayCard ? null : splitQuestionCode(displayCard.Question ?? '');
   const title = isLocked ? 'Not in your collection yet' : (question?.text ?? '');
   const questionCode = question?.code ?? null;
   // Rank in the deck, not OrderInDeck: the tile the user just tapped says
@@ -350,15 +377,17 @@ export function CardDetailScreen({ navigation, route }: Props) {
   const difficulty = card?.Difficulty ?? 1;
   const rarity = rarityFromDifficulty(difficulty);
   const cardStatus = cardDetailStatus(cardProgress);
-  // Read once per render, never as live policy (featureFlags.ts:57-62). A locked
-  // card names no kind: the kind is one more thing the pull is supposed to reveal.
-  const mcq = card && !isLocked ? resolveMcq(card, getFeatureFlags()) : null;
   const kindChip =
     mcq === null ? null : mcqRequiredCount(mcq) >= 2 ? MCQ_COPY.detailChipPick(mcqRequiredCount(mcq)) : MCQ_COPY.detailChip;
   const slotLabel = `#${formatRank(slot)}`;
   const totalInDeck = deck?.Cards?.length ?? 0;
   const lastSeen = formatRelativeTime(cardProgress?.lastReviewedAt);
   const nextReview = formatNextReview(cardProgress?.nextReviewAt);
+  const topSlot = (
+    <Text style={styles.topSlot} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
+      {slotLabel}{totalInDeck > 0 ? ` / ${String(totalInDeck).padStart(3, '0')}` : ''}
+    </Text>
+  );
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -374,9 +403,14 @@ export function CardDetailScreen({ navigation, route }: Props) {
             >
               <Text style={styles.backChipText} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>← Back</Text>
             </Pressable>
-            <Text style={styles.topSlot} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
-              {slotLabel}{totalInDeck > 0 ? ` / ${String(totalInDeck).padStart(3, '0')}` : ''}
-            </Text>
+            {canSwitchCardLang ? (
+              <View style={styles.topRight}>
+                <CardLangToggle lang={cardLang} onChange={(next) => void setCardLangPref(next)} />
+                {topSlot}
+              </View>
+            ) : (
+              topSlot
+            )}
           </View>
 
           {/* HERO CARD — same featured style as DrawResult */}
@@ -448,14 +482,16 @@ export function CardDetailScreen({ navigation, route }: Props) {
           {/* QUESTION — the canonical "view this card's full content" surface.
               Moved out of the fixed overflow-hidden hero (MCORE-01): normal-flow
               text, no numberOfLines, no fixed height. The page already scrolls. */}
-          <View testID="card-detail-question" style={styles.questionCard}>
-            <InlineCodeText
-              style={styles.questionText}
-              accessibilityLabel={questionCode && question ? stripInlineCode(questionA11yLabel(question)) : undefined}
-              text={title}
-            />
-            {questionCode ? <QuestionCodeBlock code={questionCode} /> : null}
-          </View>
+          <CardTextLangContext.Provider value={cardTextLang}>
+            <View testID="card-detail-question" style={styles.questionCard}>
+              <InlineCodeText
+                style={styles.questionText}
+                accessibilityLabel={questionCode && question ? stripInlineCode(questionA11yLabel(question)) : undefined}
+                text={title}
+              />
+              {questionCode ? <QuestionCodeBlock code={questionCode} /> : null}
+            </View>
+          </CardTextLangContext.Provider>
 
           {/* META STRIP — slot, last seen, next review, mastery */}
           <View style={styles.metaStrip}>
@@ -499,59 +535,66 @@ export function CardDetailScreen({ navigation, route }: Props) {
                 </Text>
               </Pressable>
               {answerOpen ? (
-                <View testID="card-detail-answer" style={styles.answerBody}>
-                  {mcq ? (
-                    <View testID="card-detail-mcq-correct" style={styles.mcqCorrectBlock}>
-                      <Text style={styles.mcqCorrectHeader} numberOfLines={1}>
-                        CORRECT ANSWER
-                      </Text>
-                      {mcq.options
-                        .filter((option) => option.correct)
-                        .map((option) => (
-                          <InlineCodeText key={option.key} style={styles.mcqCorrectText} text={option.text} />
-                        ))}
-                    </View>
-                  ) : null}
-                  <CardAnswerSections card={card} />
-                  {source ? (
-                    <Pressable
-                      testID="card-detail-source"
-                      accessibilityRole="link"
-                      // The label replaces the children's text for VoiceOver, so it carries the quote
-                      // (the evidence) as well as the host; the action lives in the hint.
-                      accessibilityLabel={`Source, ${source.host}${source.quote !== null ? `: ${source.quote}` : ''}`}
-                      accessibilityHint="Opens the source in your browser"
-                      style={({ pressed }) => [styles.sourceRow, pressed && styles.pressed]}
-                      onPress={() => openSourceUrl(source.url)}
-                    >
-                      <Text style={styles.sourceLabel} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
-                        SOURCE
-                      </Text>
-                      <Text testID="card-detail-source-host" style={styles.sourceHost} numberOfLines={1}>
-                        {source.host}
-                      </Text>
-                      {source.quote !== null ? (
-                        <Text testID="card-detail-source-quote" style={styles.sourceQuote} numberOfLines={3}>
-                          {source.quote}
+                <CardTextLangContext.Provider value={cardTextLang}>
+                  <View testID="card-detail-answer" style={styles.answerBody}>
+                    {displayMcq ? (
+                      <View testID="card-detail-mcq-correct" style={styles.mcqCorrectBlock}>
+                        <Text style={styles.mcqCorrectHeader} numberOfLines={1} {...cardTextA11yProps(cardTextLang)}>
+                          {sectionLabels.correctAnswer}
                         </Text>
-                      ) : null}
-                    </Pressable>
-                  ) : null}
-                  {showReport && deck ? (
-                    <Pressable
-                      testID="card-detail-report"
-                      accessibilityRole="button"
-                      accessibilityLabel="Report a problem with this card"
-                      accessibilityHint="Opens a short form to tell the author what is wrong"
-                      style={({ pressed }) => [styles.reportRow, pressed && styles.pressed]}
-                      onPress={() => setReportOpen(true)}
-                    >
-                      <Text style={styles.reportText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
-                        {CARD_REPORT_COPY.entry}
-                      </Text>
-                    </Pressable>
-                  ) : null}
-                </View>
+                        {displayMcq.options
+                          .filter((option) => option.correct)
+                          .map((option) => (
+                            <InlineCodeText key={option.key} style={styles.mcqCorrectText} text={option.text} />
+                          ))}
+                      </View>
+                    ) : null}
+                    <CardAnswerSections card={displayCard ?? card} />
+                    {source ? (
+                      <Pressable
+                        testID="card-detail-source"
+                        accessibilityRole="link"
+                        // The label replaces the children's text for VoiceOver, so it carries the quote
+                        // (the evidence) as well as the host; the action lives in the hint.
+                        accessibilityLabel={`Source, ${source.host}${source.quote !== null ? `: ${source.quote}` : ''}`}
+                        accessibilityHint="Opens the source in your browser"
+                        style={({ pressed }) => [styles.sourceRow, pressed && styles.pressed]}
+                        onPress={() => openSourceUrl(source.url)}
+                      >
+                        <Text
+                          style={styles.sourceLabel}
+                          numberOfLines={1}
+                          maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}
+                          {...cardTextA11yProps(cardTextLang)}
+                        >
+                          {sectionLabels.source}
+                        </Text>
+                        <Text testID="card-detail-source-host" style={styles.sourceHost} numberOfLines={1}>
+                          {source.host}
+                        </Text>
+                        {source.quote !== null ? (
+                          <Text testID="card-detail-source-quote" style={styles.sourceQuote} numberOfLines={3}>
+                            {source.quote}
+                          </Text>
+                        ) : null}
+                      </Pressable>
+                    ) : null}
+                    {showReport && deck ? (
+                      <Pressable
+                        testID="card-detail-report"
+                        accessibilityRole="button"
+                        accessibilityLabel="Report a problem with this card"
+                        accessibilityHint="Opens a short form to tell the author what is wrong"
+                        style={({ pressed }) => [styles.reportRow, pressed && styles.pressed]}
+                        onPress={() => setReportOpen(true)}
+                      >
+                        <Text style={styles.reportText} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
+                          {CARD_REPORT_COPY.entry}
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                </CardTextLangContext.Provider>
               ) : null}
             </View>
           ) : null}
@@ -617,6 +660,11 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: spacing.md,
+  },
+  topRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
   },
   backChip: {
     paddingHorizontal: 14,

@@ -25,6 +25,7 @@ import { listVisibleManifestDecks } from '../content/visibleManifest';
 import { loadActiveDeckSlug, setActiveDeckSlug } from '../content/activeDeck';
 import { deckShortTitle } from '../content/deckShortTitle';
 import { hasKeyLine } from '../content/answerKeyLine';
+import { cardTranslationFor, hasCompleteTranslation, localizeForDisplay } from '../content/localizeCard';
 import type { CardProgress, ReviewRating } from '../review/model';
 import {
   loadDeckProgress,
@@ -84,6 +85,10 @@ import { CardSourceLine } from '../features/gacha/components/CardSourceLine';
 import { loadExpoHaptics } from '../components/ceremonyHaptics';
 import { getFeedbackPrefsSync } from '../features/gacha/settings/feedbackPrefs';
 import { getStudyPrefsSync, loadStudyPrefs } from '../features/gacha/study/studyPrefs';
+import { setCardLangPref, useCardLangPref } from '../features/gacha/study/cardLangPrefs';
+import { translationsForCard, useDeckTranslations } from '../features/gacha/study/useDeckTranslations';
+import { CardLangToggle } from '../features/gacha/components/CardLangToggle';
+import { CardTextLangContext } from '../features/gacha/components/CardTextLang';
 import { getStudyGoal } from '../features/goal/studyGoal';
 import { studyHaptic } from '../features/gacha/session/studyHaptics';
 import type { McqExport, McqOption } from '../types/deckExport';
@@ -326,6 +331,35 @@ export function SessionCardScreen({ navigation, route }: Props) {
     scrollRef,
     current ? `${current.card.StableUid}:${mcqState.attemptIndex}:${sessionDone}` : null,
   );
+  // Card translations (contract §5): the current card as it is shown. The text alone follows the
+  // remembered card language; every handler below (grading, verdict, picks, Mistake Book,
+  // telemetry, progress) keeps reading current.card and mcqState, the English card. Without a
+  // complete translation, or in English, display holds the very same objects.
+  const cardLang = useCardLangPref();
+  const deckTranslations = useDeckTranslations(deck?.Slug ?? slug, deck?.Version ?? null);
+  const currentTranslation =
+    current && deck ? cardTranslationFor(translationsForCard(deckTranslations, current.card.StableUid), deck.Locale) : null;
+  const display = useMemo(
+    () =>
+      current
+        ? localizeForDisplay({
+            card: current.card,
+            mcq: mcqState.mcq,
+            shownOrder: mcqState.shownOrder,
+            translation: currentTranslation,
+            lang: cardLang,
+          })
+        : null,
+    [current, mcqState.mcq, mcqState.shownOrder, currentTranslation, cardLang],
+  );
+  const canSwitchCardLang = useMemo(
+    () => !!current && hasCompleteTranslation(current.card, mcqState.mcq, currentTranslation),
+    [current, mcqState.mcq, currentTranslation],
+  );
+  const cardTextLang = display?.lang === 'zh-CN' ? 'zh-CN' : undefined;
+  // A learner who chose 中文 must not see the English card first: the loading view stays up until
+  // the deck's translations are read. Reading English never waits on them.
+  const translationsPending = cardLang === 'zh-CN' && deckTranslations.status === 'loading';
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
@@ -1096,7 +1130,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
       </SafeAreaView>
     );
   }
-  if (loading || !dailyStats || !deck) {
+  if (loading || !dailyStats || !deck || translationsPending) {
     return (
       <SafeAreaView style={styles.safeArea} testID="screen-session-card-root">
         <LinearGradient
@@ -1213,6 +1247,9 @@ export function SessionCardScreen({ navigation, route }: Props) {
                 {sessionVm.subtitle}
               </Text>
             </View>
+            {canSwitchCardLang ? (
+              <CardLangToggle lang={cardLang} onChange={(next) => void setCardLangPref(next)} />
+            ) : null}
           </View>
           <SessionProgressHeader vm={sessionVm} />
           {loadForecast ? (
@@ -1278,34 +1315,40 @@ export function SessionCardScreen({ navigation, route }: Props) {
                 {/* The one-time coach card renders at the top of the scroll content, above the question,
                     so it scrolls with the card instead of stacking inside the pinned dock (G33). */}
                 <McqCoachLine visible={renderAsMcq && coachSeen === false} onDismiss={handleCoachDismiss} />
-                <McqReviewBody
-                card={current.card}
-                mcq={mcqState.mcq}
-                rank={rankMapRef.current.get(current.card.StableUid) ?? null}
-                stage={mcqState.stage}
-                shownOrder={mcqState.shownOrder}
-                picks={mcqState.picks}
-                verdict={mcqState.verdict}
-                scheduleLine={mcqState.scheduleLine}
-                attemptIndex={mcqState.attemptIndex}
-                onToggleOption={stableToggleOption}
-                onOverLimit={stableOverLimit}
-              />
+                <CardTextLangContext.Provider value={cardTextLang}>
+                  <McqReviewBody
+                    card={display?.card ?? current.card}
+                    mcq={display?.mcq ?? mcqState.mcq}
+                    rank={rankMapRef.current.get(current.card.StableUid) ?? null}
+                    stage={mcqState.stage}
+                    shownOrder={display?.shownOrder ?? mcqState.shownOrder}
+                    picks={mcqState.picks}
+                    verdict={mcqState.verdict}
+                    scheduleLine={mcqState.scheduleLine}
+                    attemptIndex={mcqState.attemptIndex}
+                    onToggleOption={stableToggleOption}
+                    onOverLimit={stableOverLimit}
+                  />
+                </CardTextLangContext.Provider>
               </>
             ) : learningPhase === 'study' ? (
-              <LearningStudyView
-                card={current.card}
-                deckSlug={deck.Slug}
-                rank={rankMapRef.current.get(current.card.StableUid) ?? null}
-                revealed={showAnswer}
-              />
+              <CardTextLangContext.Provider value={cardTextLang}>
+                <LearningStudyView
+                  card={display?.card ?? current.card}
+                  deckSlug={deck.Slug}
+                  rank={rankMapRef.current.get(current.card.StableUid) ?? null}
+                  revealed={showAnswer}
+                />
+              </CardTextLangContext.Provider>
             ) : (
-              <ReviewBody
-                card={current.card}
-                rank={rankMapRef.current.get(current.card.StableUid) ?? null}
-                faceUp={showAnswer}
-                onFlip={handleFlip}
-              />
+              <CardTextLangContext.Provider value={cardTextLang}>
+                <ReviewBody
+                  card={display?.card ?? current.card}
+                  rank={rankMapRef.current.get(current.card.StableUid) ?? null}
+                  faceUp={showAnswer}
+                  onFlip={handleFlip}
+                />
+              </CardTextLangContext.Provider>
             )}
             {/* U3: the card's source once the answer is on screen — the MCQ verdict (right or wrong)
                 and the Q/A answer after reveal. The study view shows its own SOURCE block. */}
@@ -1370,7 +1413,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
                   revealed={showAnswer}
                   fourButtons={fourButtons}
                   // B3: an answer that opens with 答： is judged on that highlighted line.
-                  keyLine={hasKeyLine(current.card.Explanation)}
+                  keyLine={hasKeyLine((display?.card ?? current.card).Explanation)}
                   onRate={handleRating}
                 />
               )}

@@ -7,6 +7,7 @@ import { splitKeyLine, type AnswerKeyLine } from '../../../content/answerKeyLine
 import { stripInlineCode } from '../../../content/inlineCode';
 import { normalizeCodeLanguage, renderSimpleMarkdown } from '../session/reviewContentHelpers';
 import { InlineCodeText } from './InlineCodeText';
+import { cardSectionLabels, cardTextA11yProps, useCardTextLang, type CardTextLang } from './CardTextLang';
 import { colors } from '../../../theme/colors';
 import { spacing } from '../../../theme/spacing';
 import { typography } from '../../../theme/typography';
@@ -61,23 +62,24 @@ export function friendlyCodeLanguage(raw: string): string {
 export const ANSWER_KEY_LINE_TEST_ID = 'answer-key-line';
 
 // Spoken label for the highlighted key line: VoiceOver cannot see the highlight
-// the rating hint points at, so the line says what it is before its text.
-export function keyLineA11yLabel(keyLine: string): string {
-  return `Highlighted line, ${stripInlineCode(keyLine)}`;
+// the rating hint points at, so the line says what it is before its text. A card
+// shown in Chinese is spoken in Chinese, so its prefix is Chinese too.
+export function keyLineA11yLabel(keyLine: string, lang?: CardTextLang): string {
+  return lang === 'zh-CN' ? `重点句：${stripInlineCode(keyLine)}` : `Highlighted line, ${stripInlineCode(keyLine)}`;
 }
 
 // 2026-10-14 learning flow (B3): an answer that opens with 答： shows that line
 // first, bold, in a tinted block with an accent rule, then the remaining lines
 // exactly as the plain explanation renders them. It is the first thing read
 // after the EXPLANATION caption, on screen and by VoiceOver.
-function ExplanationWithKeyLine(props: { split: AnswerKeyLine }) {
-  const { split } = props;
+function ExplanationWithKeyLine(props: { split: AnswerKeyLine; lang: CardTextLang }) {
+  const { split, lang } = props;
   return (
     <View>
       <View style={styles.keyLineBlock} testID={ANSWER_KEY_LINE_TEST_ID}>
         <InlineCodeText
           style={styles.keyLineText}
-          accessibilityLabel={keyLineA11yLabel(split.keyLine)}
+          accessibilityLabel={keyLineA11yLabel(split.keyLine, lang)}
           text={split.keyLine}
         />
       </View>
@@ -92,9 +94,12 @@ function ExplanationWithKeyLine(props: { split: AnswerKeyLine }) {
 // dividers, with the empty-state hint when a card carries no answer body.
 // Extracted from ReviewBody so every surface renders byte-for-byte the same
 // sections — the same labels, order, CodeBlock wiring and empty hint — instead
-// of drifting apart.
+// of drifting apart. The section labels follow the card's language
+// (CardTextLangContext); the body text is whatever card the caller passes.
 export function CardAnswerSections(props: { card: CardExport; testID?: string }) {
   const { card, testID } = props;
+  const lang = useCardTextLang();
+  const labels = cardSectionLabels(lang);
 
   const codeLanguageLabel = card.CodeLanguage
     ? friendlyCodeLanguage(card.CodeLanguage)
@@ -106,9 +111,9 @@ export function CardAnswerSections(props: { card: CardExport; testID?: string })
     const keySplit = splitKeyLine(card.Explanation);
     sections.push({
       key: 'explanation',
-      label: 'EXPLANATION',
+      label: labels.explanation,
       node: keySplit ? (
-        <ExplanationWithKeyLine split={keySplit} />
+        <ExplanationWithKeyLine split={keySplit} lang={lang} />
       ) : (
         <InlineCodeText style={styles.sectionBody} text={card.Explanation} />
       ),
@@ -117,7 +122,7 @@ export function CardAnswerSections(props: { card: CardExport; testID?: string })
   if (card.CodeSnippet) {
     sections.push({
       key: 'code',
-      label: 'CODING SAMPLE',
+      label: labels.code,
       node: (
         <View style={styles.codeContainer}>
           <CodeBlock
@@ -132,7 +137,7 @@ export function CardAnswerSections(props: { card: CardExport; testID?: string })
   if (card.RealWorldUsage) {
     sections.push({
       key: 'usage',
-      label: 'REAL USAGE',
+      label: labels.usage,
       node: <View style={styles.mdContainer}>{renderSimpleMarkdown(card.RealWorldUsage, styles)}</View>,
     });
   }
@@ -151,7 +156,7 @@ export function CardAnswerSections(props: { card: CardExport; testID?: string })
           <View key={section.key}>
             {index > 0 ? <View style={styles.sectionDivider} /> : null}
             <View style={styles.sectionBlock}>
-              <Text style={styles.sectionHeader} numberOfLines={1}>
+              <Text style={styles.sectionHeader} numberOfLines={1} {...cardTextA11yProps(lang)}>
                 {section.label}
               </Text>
               {section.node}

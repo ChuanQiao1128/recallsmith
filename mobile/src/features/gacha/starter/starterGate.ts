@@ -9,7 +9,9 @@ import { isLearnedProgress } from '../selectors/progressSelectors';
 
 /**
  * R22 §1.2 / §4: a new learner learns before drawing. The starter lesson is an ordinary session of the
- * first STARTER_LESSON_SIZE non-MCQ cards of the goal deck, in deck order. Those cards are studiable
+ * first STARTER_LESSON_SIZE non-MCQ cards of the goal deck, in deck order — or, for a deck with fewer
+ * Q/A cards than that (an exam deck is MCQ only), its first STARTER_LESSON_SIZE cards, which the
+ * session then serves as multiple choice. Those cards are studiable
  * without being owned: resolveEffectiveOwned unions them into the owned gate while the lesson is open
  * (onboarding stage 'starter'), and they are never written into drawState.owned -- that would make the
  * pack look drawn and stop ensureDeckBootstrap, which is the first-pack reward for finishing.
@@ -32,16 +34,30 @@ export type StarterLesson = {
 type StarterCardLike = { StableUid: string; OrderInDeck: number; Mcq?: unknown };
 type StarterDeckLike = { Slug: string; Cards?: ReadonlyArray<StarterCardLike> | null };
 
-/** The first `size` cards in deck order, MCQ cards excluded (the lesson teaches; MCQ comes later). */
+/**
+ * The lesson's cards: the first `size` cards in deck order with MCQ cards excluded (the lesson teaches;
+ * MCQ comes later). A deck that holds fewer than `size` Q/A cards cannot fill that lesson, so it takes
+ * its first `size` cards of any kind instead (an MCQ-only exam deck: its first `size` MCQ cards).
+ */
 export function pickStarterUids(cards: ReadonlyArray<StarterCardLike>, size = STARTER_LESSON_SIZE): string[] {
+  // Ties keep array order (Array.prototype.sort is stable), the same rule cardRank uses.
+  const sorted = [...cards].sort((a, b) => a.OrderInDeck - b.OrderInDeck);
+  const qa = firstUids(sorted, size, (card) => normalizeMcq(card.Mcq) === null);
+  return qa.length >= size ? qa : firstUids(sorted, size, () => true);
+}
+
+function firstUids(
+  sorted: ReadonlyArray<StarterCardLike>,
+  size: number,
+  admit: (card: StarterCardLike) => boolean,
+): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
-  // Ties keep array order (Array.prototype.sort is stable), the same rule cardRank uses.
-  for (const card of [...cards].sort((a, b) => a.OrderInDeck - b.OrderInDeck)) {
+  for (const card of sorted) {
     if (out.length >= size) break;
     const uid = typeof card?.StableUid === 'string' ? card.StableUid : '';
     if (!uid || seen.has(uid)) continue;
-    if (normalizeMcq(card.Mcq) !== null) continue;
+    if (!admit(card)) continue;
     seen.add(uid);
     out.push(uid);
   }

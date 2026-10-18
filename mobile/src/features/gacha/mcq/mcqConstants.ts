@@ -39,6 +39,19 @@ export const MCQ_COPY = Object.freeze({
   detailChipPick: (n: number) => `Multiple choice · pick ${n}`,
 });
 
+/** The in-card MCQ labels of a card shown in Chinese (card translations contract §5). Only the labels
+ *  that annotate the card's own content switch; the stage hints, banners, chips and dock stay English. */
+export const MCQ_COPY_ZH = Object.freeze({
+  rowCorrectPicked: '正确',
+  rowCorrectMissed: '漏选了这一项',
+  rowWrongPicked: '你的选择',
+  rowWhyNot: '为什么不选？',
+  sectionExplanation: '解析',
+  sectionQualifier: '为什么看限定词',
+  sectionUsage: '实际应用',
+  sectionCode: '代码示例',
+});
+
 /** requiredCount → kind chip label (gap #4): >= 3 → three, === 2 → two, else (0, 1, NaN) → single. */
 export function mcqKindChip(requiredCount: number): string {
   if (requiredCount >= 3) return MCQ_COPY.kindChip.three;
@@ -58,14 +71,29 @@ export function mcqQualifierBody(qualifier: string): string {
   return `The stem asked for the ${qualifier} option. Several options would work; the one that best satisfies that phrase wins.`;
 }
 
+/** mcqQualifierBody for a card shown in Chinese; the qualifier is the translated one. */
+export function mcqQualifierBodyZh(qualifier: string): string {
+  return `题干要求的是「${qualifier}」的方案。有几个选项都能用，最符合这个说法的那一项才是答案。`;
+}
+
 export function mcqOptionA11yLabel(index: number, total: number, text: string): string {
   return `Option ${mcqLetter(index)} of ${total}: ${text}`;
+}
+
+/** mcqOptionA11yLabel for a card shown in Chinese (spoken with the zh-CN voice). */
+export function mcqOptionA11yLabelZh(index: number, total: number, text: string): string {
+  return `选项 ${mcqLetter(index)}，共 ${total} 项：${text}`;
 }
 
 /** Accessibility label of a wrong-unpicked row's "Why not?" toggle (review 2026-09-22 #6): one label per
  *  displayed position so VoiceOver does not read five identical buttons. Letter by DISPLAYED index. */
 export function mcqWhyNotA11yLabel(index: number): string {
   return `Why not option ${mcqLetter(index)}`;
+}
+
+/** mcqWhyNotA11yLabel for a card shown in Chinese. */
+export function mcqWhyNotA11yLabelZh(index: number): string {
+  return `为什么不选选项 ${mcqLetter(index)}`;
 }
 
 /** How long the inline over-limit hint stays on screen after an ignored tap (review 2026-09-22 #5). */

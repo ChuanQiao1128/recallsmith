@@ -52,6 +52,7 @@ import {
   type FeedbackPrefs,
 } from '../features/gacha/settings/feedbackPrefs';
 import { StudySection } from '../features/gacha/settings/study/StudySection';
+import { loadCardLangPref, setCardLangPref, useCardLangPref } from '../features/gacha/study/cardLangPrefs';
 import { getStudyGoal, type StudyGoal } from '../features/goal/studyGoal';
 import { loadActiveDeckSlug } from '../content/activeDeck';
 import {
@@ -132,6 +133,8 @@ export function SettingsScreen({ navigation }: Props) {
   const [feedbackPrefs, setFeedbackPrefs] = useState<FeedbackPrefs>(() => getFeedbackPrefsSync());
   // Device-global study prefs (two vs four rating buttons), same seeding as above.
   const [studyPrefs, setStudyPrefsState] = useState<StudyPrefs>(() => getStudyPrefsSync());
+  // Device-global card language (card translations), the same value the study toggle writes.
+  const cardLang = useCardLangPref();
   // Device-global "Share anonymous usage counts" (R24 M01), same seeding as above.
   const [privacyPrefs, setPrivacyPrefsState] = useState<PrivacyPrefs>(() => getPrivacyPrefsSync());
   // U4: the study goal (onboarding's deck + exam date), editable here. Device-local, like onboarding.
@@ -162,6 +165,8 @@ export function SettingsScreen({ navigation }: Props) {
         // Neither read throws: a storage error reads as "no goal" / "no active deck".
         getStudyGoal(),
         loadActiveDeckSlug(),
+        // The card language is a subscribed store (useCardLangPref below); this only refreshes it.
+        loadCardLangPref(),
       ]);
 
       setStudyGoalState(nextGoal);
@@ -454,6 +459,7 @@ export function SettingsScreen({ navigation }: Props) {
             prefs={studyPrefs}
             onToggleFourButtons={onToggleFourButtons}
             goal={{ value: studyGoal, fallbackDeckSlug: activeDeckSlug, onSaved: setStudyGoalState }}
+            cardLang={{ value: cardLang, onSelect: (next) => void setCardLangPref(next) }}
           />
 
           <PrivacySection prefs={privacyPrefs} onToggleShare={onToggleShareUsageCounts} />

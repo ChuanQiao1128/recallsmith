@@ -9,16 +9,21 @@ import { formatRank } from '../library/cardRank';
 import { normalizeCodeLanguage, renderSimpleMarkdown } from '../session/reviewContentHelpers';
 import { QuestionCodeBlock } from '../session/QuestionCodeBlock';
 import { InlineCodeText, inlineCodeNodes, useInlineCodeStyle } from './InlineCodeText';
+import { cardTextA11yProps, useCardTextLang, type CardTextLang } from './CardTextLang';
 import {
   MCQ_COPY,
+  MCQ_COPY_ZH,
   MCQ_OVER_LIMIT_HINT_MS,
   MCQ_TEST_IDS,
   mcqBannerPartial,
   mcqKindChip,
   mcqLetter,
   mcqOptionA11yLabel,
+  mcqOptionA11yLabelZh,
   mcqQualifierBody,
+  mcqQualifierBodyZh,
   mcqWhyNotA11yLabel,
+  mcqWhyNotA11yLabelZh,
 } from '../mcq/mcqConstants';
 import { mcqRequiredCount } from '../mcq/normalizeMcq';
 import { splitStemForOptions } from '../mcq/stemAsk';
@@ -180,10 +185,11 @@ function glyphFor(state: McqOptionRowState): string {
   return '';
 }
 
-function labelFor(state: McqOptionRowState): string {
-  if (state === 'correct-picked') return MCQ_COPY.rowCorrectPicked;
-  if (state === 'correct-missed') return MCQ_COPY.rowCorrectMissed;
-  if (state === 'wrong-picked') return MCQ_COPY.rowWrongPicked;
+function labelFor(state: McqOptionRowState, lang: CardTextLang): string {
+  const copy = lang === 'zh-CN' ? MCQ_COPY_ZH : MCQ_COPY;
+  if (state === 'correct-picked') return copy.rowCorrectPicked;
+  if (state === 'correct-missed') return copy.rowCorrectMissed;
+  if (state === 'wrong-picked') return copy.rowWrongPicked;
   return '';
 }
 
@@ -220,6 +226,12 @@ export const McqReviewBody = React.memo(function McqReviewBody(props: McqReviewB
     onToggleOption,
     onOverLimit,
   } = props;
+
+  // Card translations: `card`, `mcq` and `shownOrder` arrive as the display values (English or
+  // Chinese, matched by option key); the labels that annotate them follow the same language.
+  const lang = useCardTextLang();
+  const copy = lang === 'zh-CN' ? MCQ_COPY_ZH : MCQ_COPY;
+  const textLang = cardTextA11yProps(lang);
 
   const [stemExpanded, setStemExpanded] = useState(false);
   const [overLimit, setOverLimit] = useState(false);
@@ -296,7 +308,7 @@ export const McqReviewBody = React.memo(function McqReviewBody(props: McqReviewB
       sections.push({
         key: 'explanation',
         testID: MCQ_TEST_IDS.sectionExplanation,
-        label: MCQ_COPY.sectionExplanation,
+        label: copy.sectionExplanation,
         node: <InlineCodeText style={styles.sectionBody} text={card.Explanation} />,
       });
     }
@@ -304,15 +316,19 @@ export const McqReviewBody = React.memo(function McqReviewBody(props: McqReviewB
       sections.push({
         key: 'qualifier',
         testID: MCQ_TEST_IDS.sectionQualifier,
-        label: MCQ_COPY.sectionQualifier,
-        node: <Text style={styles.sectionBody}>{mcqQualifierBody(mcq.qualifier)}</Text>,
+        label: copy.sectionQualifier,
+        node: (
+          <Text style={styles.sectionBody} {...textLang}>
+            {lang === 'zh-CN' ? mcqQualifierBodyZh(mcq.qualifier) : mcqQualifierBody(mcq.qualifier)}
+          </Text>
+        ),
       });
     }
     if (card.RealWorldUsage) {
       sections.push({
         key: 'usage',
         testID: MCQ_TEST_IDS.sectionUsage,
-        label: MCQ_COPY.sectionUsage,
+        label: copy.sectionUsage,
         node: <View style={styles.mdContainer}>{renderSimpleMarkdown(card.RealWorldUsage, styles)}</View>,
       });
     }
@@ -320,7 +336,7 @@ export const McqReviewBody = React.memo(function McqReviewBody(props: McqReviewB
       sections.push({
         key: 'code',
         testID: MCQ_TEST_IDS.sectionCode,
-        label: MCQ_COPY.sectionCode,
+        label: copy.sectionCode,
         node: (
           <View style={styles.codeContainer}>
             <CodeBlock
@@ -363,7 +379,7 @@ export const McqReviewBody = React.memo(function McqReviewBody(props: McqReviewB
         />
       ) : null}
 
-      <Text testID={MCQ_TEST_IDS.stem} style={styles.stem} accessibilityLabel={stemLabel}>
+      <Text testID={MCQ_TEST_IDS.stem} style={styles.stem} accessibilityLabel={stemLabel} {...textLang}>
         {segments.map((seg, i) =>
           seg.emphasis === null ? (
             <React.Fragment key={i}>{inlineCodeNodes(seg.text, stemCodeStyle)}</React.Fragment>
@@ -406,9 +422,13 @@ export const McqReviewBody = React.memo(function McqReviewBody(props: McqReviewB
             const picked = picks.includes(option.key);
             const state = rowStateFor(option, picked, stage);
             const letter = mcqLetter(index);
-            const label = mcqOptionA11yLabel(index, shownOrder.length, stripInlineCode(option.text));
+            const label = (lang === 'zh-CN' ? mcqOptionA11yLabelZh : mcqOptionA11yLabel)(
+              index,
+              shownOrder.length,
+              stripInlineCode(option.text),
+            );
             const glyph = glyphFor(state);
-            const rowLabel = labelFor(state);
+            const rowLabel = labelFor(state, lang);
             const expanded = expandedWhy.includes(option.key);
             return (
               <View key={option.key}>
@@ -416,7 +436,8 @@ export const McqReviewBody = React.memo(function McqReviewBody(props: McqReviewB
                   testID={MCQ_TEST_IDS.option(option.key)}
                   accessibilityRole={requiredCount === 1 ? 'radio' : 'checkbox'}
                   accessibilityState={stage === 'verdict' ? { checked: picked, disabled: true } : { checked: picked }}
-                  accessibilityLabel={stage === 'verdict' && rowLabel ? `${label}. ${rowLabel}` : label}
+                  accessibilityLabel={stage === 'verdict' && rowLabel ? `${label}${lang === 'zh-CN' ? '。' : '. '}${rowLabel}` : label}
+                  {...textLang}
                   disabled={stage === 'verdict'}
                   onPress={stage === 'verdict' ? undefined : () => handleTap(option.key, picked)}
                   style={[styles.optionRow, styles[rowStyleKey(state)]]}
@@ -435,7 +456,7 @@ export const McqReviewBody = React.memo(function McqReviewBody(props: McqReviewB
                           </Text>
                         ) : null}
                         {rowLabel ? (
-                          <Text testID={MCQ_BODY_TEST_IDS.rowLabel(option.key)} style={styles.rowLabel}>
+                          <Text testID={MCQ_BODY_TEST_IDS.rowLabel(option.key)} style={styles.rowLabel} {...textLang}>
                             {rowLabel}
                           </Text>
                         ) : null}
@@ -456,13 +477,14 @@ export const McqReviewBody = React.memo(function McqReviewBody(props: McqReviewB
                   <Pressable
                     testID={MCQ_TEST_IDS.whyToggle(option.key)}
                     accessibilityRole="button"
-                    accessibilityLabel={mcqWhyNotA11yLabel(index)}
+                    accessibilityLabel={lang === 'zh-CN' ? mcqWhyNotA11yLabelZh(index) : mcqWhyNotA11yLabel(index)}
                     accessibilityState={{ expanded }}
                     onPress={toggleWhy(option.key)}
                     style={({ pressed }) => [styles.whyToggle, pressed && styles.pressed]}
+                    {...textLang}
                   >
                     <Text numberOfLines={1} style={styles.whyToggleText}>
-                      {MCQ_COPY.rowWhyNot}
+                      {copy.rowWhyNot}
                     </Text>
                   </Pressable>
                 ) : null}
@@ -502,7 +524,7 @@ export const McqReviewBody = React.memo(function McqReviewBody(props: McqReviewB
             <View key={section.key} testID={section.testID}>
               {index > 0 ? <View style={styles.sectionDivider} /> : null}
               <View style={styles.sectionBlock}>
-                <Text style={styles.sectionHeader} numberOfLines={1}>
+                <Text style={styles.sectionHeader} numberOfLines={1} {...textLang}>
                   {section.label}
                 </Text>
                 {section.node}
