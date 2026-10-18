@@ -152,6 +152,7 @@ import {
   executeDeckAction,
   loadHomeDeckSummaries,
   resolveDeckAction,
+  autoApplyFreeDeckUpdates,
 } from '../../src/features/gacha/home/deckActionResolver';
 import { DECK_ORDER } from '../../src/content/hiddenDecks';
 
@@ -642,5 +643,95 @@ describe('HomeScreen cover carousel', () => {
     expect(textOf(tree, 'home-hero-title')).toBe('You are clear for now');
     expect(textOf(tree, 'home-header-subtitle')).toBe('Caught up');
     expect(primaryCtaLabel(tree)).toBe('Open library');
+  });
+
+  // 2026-10-18 owner: swiping the cover must not move the button under it. The header line comes
+  // and goes, the title is one line or two, and the Today card is a grid or one line, depending on
+  // the pack: each keeps a fixed slot (an invisible spacer in the same style when it is short).
+  it('keeps the header line, the two-line title box and the draw line on every page', async () => {
+    // Claude with new cards and nothing due: no header status, so its line is the spacer.
+    deckSummariesFixture = [
+      BASICS(),
+      SAA(),
+      deck('claude-ccdv-f', 'Claude Developer Foundations (CCDV-F)', { newToday: 3, plannedToday: 3 }),
+    ];
+    const tree = await renderHome();
+    const seen = new Set<string>();
+    for (const page of [0, 1, 2]) {
+      if (page > 0) await swipeEnd(tree, page * HOME_PACK_PAGE_WIDTH);
+      const status = hostNodes(tree, (node) => node.props?.testID === 'home-header-subtitle');
+      const spacer = hostNodes(tree, (node) => node.props?.testID === 'home-header-subtitle-spacer');
+      expect(status.length + spacer.length).toBe(1);
+      if (spacer.length) {
+        expect(spacer[0].props.accessibilityElementsHidden).toBe(true);
+        seen.add('spacer');
+      } else {
+        seen.add('status');
+      }
+      const titleSpacers = hostNodes(
+        tree,
+        (node) => (node.type as any) === 'Text' && node.props?.children === '\u00A0\n\u00A0',
+      );
+      expect(titleSpacers).toHaveLength(1);
+      expect(titleSpacers[0].props.accessibilityElementsHidden).toBe(true);
+      expect(textOf(tree, 'home-hero-title')?.trim().length).toBeGreaterThan(0);
+      expect(textOf(tree, 'home-draw-status-badge')?.length).toBeGreaterThan(0);
+    }
+    expect([...seen].sort()).toEqual(['spacer', 'status']);
+  });
+
+  it('keeps one fixed line under the Today card: the update notice, else the goal line, else nothing', async () => {
+    // Basics: a goal line. SAA-C03: its auto-update is running, so "Updating …" shows.
+    // Claude: an update waits and nothing is due or new, so the "tap the pack" hint shows.
+    // The slot and its hidden spacer stay on every page.
+    const update = (slug: string) => ({
+      slug,
+      installedVersion: '1',
+      remoteVersion: '2',
+      hasUpdate: true,
+      remoteUrl: `https://example.test/${slug}.json`,
+      remoteSha256: null,
+    });
+    updatesFixture = { 'aws-saa-c03': update('aws-saa-c03'), 'claude-ccdv-f': update('claude-ccdv-f') };
+    deckSummariesFixture = [BASICS(), { ...SAA(), totalCards: 12 }, { ...CLAUDE(), totalCards: 12 }];
+    vi.mocked(autoApplyFreeDeckUpdates).mockImplementation(((params: any) =>
+      Object.keys(params?.updates ?? {})
+        .filter((slug) => slug === 'aws-saa-c03')
+        .map((slug) => ({ slug, done: new Promise<boolean>(() => {}) }))) as any);
+    try {
+      const shownOn = async (tree: renderer.ReactTestRenderer) => {
+        const slot = hostNodes(tree, (node) => node.props?.testID === 'home-below-today-slot');
+        expect(slot).toHaveLength(1);
+        const spacer = slot[0].findAll(
+          (node) => (node.type as any) === 'Text' && node.props?.accessibilityElementsHidden === true,
+        );
+        expect(spacer).toHaveLength(1);
+        expect(spacer[0].props.importantForAccessibility).toBe('no-hide-descendants');
+        const notice = hostNodes(tree, (node) => node.props?.testID === 'home-update-notice');
+        const goal = hostNodes(tree, (node) => node.props?.testID === 'home-goal-line');
+        expect(notice.length + goal.length).toBeLessThanOrEqual(1);
+        if (notice.length) return String(notice[0].props.children).startsWith('Updating') ? 'updating' : 'install-hint';
+        return goal.length ? 'goal' : 'none';
+      };
+      const tree = await renderHome();
+      const shown: string[] = [];
+      for (const page of [0, 1, 2]) {
+        if (page > 0) await swipeEnd(tree, page * HOME_PACK_PAGE_WIDTH);
+        shown.push(await shownOn(tree));
+      }
+      expect(shown).toEqual(['goal', 'updating', 'install-hint']);
+
+      // The same SAA-C03 update once the auto-update has stopped (failed or not started): the
+      // install hint keeps the line (home-auto-update.spec pins that fallback) over its goal line,
+      // in the same slot, and the cover's update chip offers the update too.
+      vi.mocked(autoApplyFreeDeckUpdates).mockImplementation(() => []);
+      const idle = await renderHome();
+      await swipeEnd(idle, HOME_PACK_PAGE_WIDTH);
+      expect(textOf(idle, 'home-pack-caption')).toBe('AWS SAA-C03');
+      expect(await shownOn(idle)).toBe('install-hint');
+      expect(hostNodes(idle, (node) => node.props?.testID === 'home-pack-update-chip-aws-saa-c03')).toHaveLength(1);
+    } finally {
+      vi.mocked(autoApplyFreeDeckUpdates).mockImplementation(() => []);
+    }
   });
 });

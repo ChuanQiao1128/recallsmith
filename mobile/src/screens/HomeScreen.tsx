@@ -762,7 +762,19 @@ export function HomeScreen({ navigation, route }: Props) {
                   <Text testID="home-header-subtitle" style={styles.headerStatusSubtitle} numberOfLines={1}>
                     {headerStatus}
                   </Text>
-                ) : null}
+                ) : (
+                  // The status line comes and goes with the selected pack; an empty line of the same
+                  // style keeps its height so a swipe never moves the cover and the button below it.
+                  <Text
+                    testID="home-header-subtitle-spacer"
+                    style={styles.headerStatusSubtitle}
+                    numberOfLines={1}
+                    accessibilityElementsHidden
+                    importantForAccessibility="no-hide-descendants"
+                  >
+                    {'\u00A0'}
+                  </Text>
+                )}
                 {/* U5: the goal deck's daily target under the countdown (one line, only with a date). */}
                 {examCountdownLabel && examPaceLine ? (
                   <Text testID="home-exam-pace" style={styles.headerStatusSubtitle} numberOfLines={1}>
@@ -894,16 +906,31 @@ export function HomeScreen({ navigation, route }: Props) {
                     {/* Action-driven title — never duplicates the pack
                         name. "12 cards waiting" beats "C#" every time; the
                         count is the selected pack's.
-                        R22 §5: two lines, shrinking rather than cutting off. */}
-                    <Text
-                      testID="home-hero-title"
-                      style={styles.heroTitle}
-                      numberOfLines={2}
-                      adjustsFontSizeToFit
-                      minimumFontScale={0.75}
-                    >
-                      {heroTitle}
-                    </Text>
+                        R22 §5: two lines, shrinking rather than cutting off.
+                        The box is always two lines tall (an invisible two-line
+                        spacer in the same style, so it follows Dynamic Type)
+                        and a one-line title sits centred in it: swiping
+                        between packs never moves the button below. */}
+                    <View style={styles.heroTitleBox}>
+                      <Text
+                        style={[styles.heroTitle, styles.heroTitleSpacer]}
+                        accessibilityElementsHidden
+                        importantForAccessibility="no-hide-descendants"
+                      >
+                        {'\u00A0\n\u00A0'}
+                      </Text>
+                      <View style={styles.heroTitleCentre}>
+                        <Text
+                          testID="home-hero-title"
+                          style={styles.heroTitle}
+                          numberOfLines={2}
+                          adjustsFontSizeToFit
+                          minimumFontScale={0.75}
+                        >
+                          {heroTitle}
+                        </Text>
+                      </View>
+                    </View>
                   </View>
 
                   {/* ─── PRIMARY CTA — directly under the hero so it is on
@@ -932,7 +959,7 @@ export function HomeScreen({ navigation, route }: Props) {
                     style={styles.rewardStatusText}
                     numberOfLines={1}
                   >
-                    {homeState.vm.draw.label}
+                    {homeState.vm.draw.label || '\u00A0'}
                   </Text>
 
                   {/* ─── TODAY GROUP — pressure card + update notice + goal ──── */}
@@ -941,27 +968,53 @@ export function HomeScreen({ navigation, route }: Props) {
                       counts={homeState.vm.counts}
                       selectedDeckTitle={homeState.vm.selectedDeckTitle}
                     />
-                    {/* One line for the selected deck while a newer build exists:
-                        "Updating …" while the free-deck auto-installer runs, and the
-                        manual fallback ("tap the pack to install") when it has not
-                        or could not. */}
-                    {homeState.vm.updateNotice ? (
+                    {/* One fixed line under the Today card, about the selected pack:
+                        the update notice while a newer build exists ("Updating …"
+                        while the free-deck auto-installer runs, or the manual
+                        fallback, "tap the pack to install"), otherwise the goal
+                        line. Both come and go with the pack, so the slot keeps the
+                        height of the taller one (an invisible notice pill in the
+                        same style, so it follows Dynamic Type) and a swipe never
+                        moves anything below it. The notice wins: "Updating …" for
+                        the few seconds the auto-update runs, and the "tap the pack
+                        to install" fallback (home-auto-update.spec pins it) after a
+                        failed or skipped one. The free-deck auto-update is tried
+                        once per pack per session, so the goal line comes back when
+                        the update is installed, from the cover or on the next
+                        launch. */}
+                    <View testID="home-below-today-slot" style={styles.belowTodaySlot}>
                       <Text
-                        testID="home-update-notice"
-                        style={[
-                          styles.updateNotice,
-                          homeState.vm.updateNotice.state === 'updating' && styles.updateNoticeUpdating,
-                        ]}
+                        style={[styles.updateNotice, styles.belowTodaySpacer]}
                         numberOfLines={1}
+                        accessibilityElementsHidden
+                        importantForAccessibility="no-hide-descendants"
                       >
-                        {homeState.vm.updateNotice.text}
+                        {'\u00A0'}
                       </Text>
-                    ) : null}
-                    {homeState.vm.goal ? (
-                      <Text testID="home-goal-line" style={styles.goalLine} numberOfLines={1}>
-                        {homeState.vm.goal.text}
-                      </Text>
-                    ) : null}
+                      <View style={styles.belowTodayLine}>
+                        {homeState.vm.updateNotice ? (
+                          <Text
+                            testID="home-update-notice"
+                            style={[
+                              styles.updateNotice,
+                              styles.belowTodayContent,
+                              homeState.vm.updateNotice.state === 'updating' && styles.updateNoticeUpdating,
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {homeState.vm.updateNotice.text}
+                          </Text>
+                        ) : homeState.vm.goal ? (
+                          <Text
+                            testID="home-goal-line"
+                            style={[styles.goalLine, styles.belowTodayContent]}
+                            numberOfLines={1}
+                          >
+                            {homeState.vm.goal.text}
+                          </Text>
+                        ) : null}
+                      </View>
+                    </View>
                     {homeState.error ? (
                       <View style={styles.errorBlock}>
                         <Text style={styles.errorText} numberOfLines={3}>
@@ -1151,8 +1204,20 @@ const styles = StyleSheet.create({
     paddingTop: 4,
     paddingBottom: spacing.md,
   },
-  heroTitle: {
+  heroTitleBox: {
+    alignSelf: 'stretch',
     marginTop: 6,
+  },
+  heroTitleSpacer: { opacity: 0 },
+  heroTitleCentre: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    justifyContent: 'center',
+  },
+  heroTitle: {
     fontSize: typography.title1,
     lineHeight: 34,
     fontWeight: '900',
@@ -1166,6 +1231,18 @@ const styles = StyleSheet.create({
   actionGroup: {
     marginTop: spacing.md,
   },
+  belowTodaySlot: { alignSelf: 'stretch' },
+  belowTodaySpacer: { opacity: 0 },
+  // Over the spacer, less its bottom margin, so the line sits centred on the pill's box.
+  belowTodayLine: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: spacing.xs,
+    left: 0,
+    justifyContent: 'center',
+  },
+  belowTodayContent: { marginBottom: 0 },
   goalLine: {
     marginBottom: spacing.xs,
     color: colors.inkSecondary,
