@@ -502,7 +502,11 @@ describe('the runner and translations', () => {
   });
 });
 
-describe('every deck file in content/decks is untouched by the _ZH support', () => {
+describe('every deck file in content/decks round trips; only the bilingual deck carries _ZH sections', () => {
+  // AWS Architect Basics (aws-saa-fundamentals) is the first deck written English-first with a built-in zh-CN
+  // translation on every card (2026-10-18 rewrite); every other deck file stays English-only.
+  const TRANSLATED_DECKS = new Set(['aws-saa-fundamentals.md']);
+
   function deckFiles(dir: string): string[] {
     const out: string[] = [];
     for (const name of readdirSync(dir).sort()) {
@@ -518,22 +522,29 @@ describe('every deck file in content/decks is untouched by the _ZH support', () 
   it('finds the deck files', () => {
     expect(files.length).toBeGreaterThanOrEqual(4);
     expect(files.some((f) => f.endsWith('claude-ccdv-f.md'))).toBe(true);
+    expect(files.some((f) => f.endsWith('aws-saa-fundamentals.md'))).toBe(true);
   });
 
-  it.each(files.map((f) => [f.slice(DECKS_DIR.length), f]))('%s parses, carries no translation, and round trips unchanged', (_name, path) => {
+  it.each(files.map((f) => [f.slice(DECKS_DIR.length), f]))('%s parses, has translations only if it is the bilingual deck, and round trips unchanged', (name, path) => {
+    const translated = TRANSLATED_DECKS.has(name.split('/').pop() ?? name);
     const parsed = parseDeckMarkdown(readFileSync(path, 'utf8'));
     expect(parsed.errors).toEqual([]);
-    expect(parsed.cards.some((c) => Object.hasOwn(c, 'translations'))).toBe(false);
+    if (translated) {
+      expect(parsed.cards.length).toBeGreaterThan(0);
+      expect(parsed.cards.every((c) => Boolean(c.translations?.['zh-CN']?.question) && Boolean(c.translations?.['zh-CN']?.explanation))).toBe(true);
+    } else {
+      expect(parsed.cards.some((c) => Object.hasOwn(c, 'translations'))).toBe(false);
+    }
     expect(parsed.warnings.some((w) => w.code.startsWith('ZH_'))).toBe(false);
 
     const text = serializeDeckMarkdown(parsed.deckSlug ?? 'deck', parsed.cards);
-    expect(/^[A-Z]+_ZH:/m.test(text)).toBe(false);
+    expect(/^[A-Z]+_ZH:/m.test(text)).toBe(translated);
     const again = parseDeckMarkdown(text);
     expect(again.errors).toEqual([]);
     expect(contentOf(again.cards)).toEqual(contentOf(parsed.cards));
     expect(serializeDeckMarkdown(again.deckSlug ?? 'deck', again.cards)).toBe(text);
     // Importing the file over its own server state is still a no-op.
-    const server = parsed.cards.map((c, i) => serverCard(c, { id: i + 1, translations: null }));
+    const server = parsed.cards.map((c, i) => serverCard(c, { id: i + 1, translations: translated ? (c.translations ?? null) : null }));
     const plan = planImport(parsed, server);
     expect(plan.updates).toEqual([]);
     expect(plan.conflicts).toEqual([]);

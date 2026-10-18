@@ -57,7 +57,8 @@ Exactly once, before the first card. Slug: `^[a-z0-9]+(?:[-_][a-z0-9]+)*$`. Miss
 `DUPLICATE_DECK_HEADER`; bad slug → `BAD_DECK_SLUG`. The console additionally blocks the import
 when the file slug differs from the deck you opened (`slugMismatch`). Live slugs:
 `aws-saa-c03` (AWS deck), `claude-ccdv-f` (CCDV-F deck), `csharp-basics` (.NET 8 / C# 12 interview deck,
-rebuilt in R23), `aws-saa-fundamentals` (Chinese AWS SAA foundation cards, Q/A only).
+rebuilt in R23), `aws-saa-fundamentals` ("AWS Architect Basics": English-first AWS SAA foundation cards with a built-in
+zh-CN translation, Q/A only; rewritten 2026-10-18).
 
 Any non-blank line before the first card header that is not the deck header →
 `TEXT_BEFORE_CARD` (reported once per stretch). No prose, comments, or headings outside cards.
@@ -216,8 +217,7 @@ changes nothing about scheduling, grading or the shuffle order.
   sections of a translated card must contain none (`EN_FIELD_HAS_CJK`): Chinese pasted into an
   English section, or a mistyped `_ZH` marker whose text joined the section above, is the usual
   cause. Once a file has one translated card the check covers every card in it; a file with no
-  translated card is not checked, so a deck written in Chinese (`aws-saa-fundamentals`) parses as
-  before.
+  translated card is not checked, so a deck written entirely in Chinese still parses as before.
 - `QUALIFIER_ZH:` is the Chinese of the exam qualifier (e.g. `最安全` for `MOST secure`) and must
   appear verbatim (case-insensitive) in `Q_ZH:` (`TRANSLATION_QUALIFIER_NOT_IN_STEM`); present iff
   `QUALIFIER:` is (`TRANSLATION_QUALIFIER_MISMATCH`).
@@ -227,8 +227,9 @@ changes nothing about scheduling, grading or the shuffle order.
 - Option text: non-empty (`TRANSLATION_OPTION_EMPTY`), ≤ 600 characters
   (`TRANSLATION_OPTION_TOO_LONG`), unique within the card (`TRANSLATION_OPTION_TEXT_DUPLICATE`).
 - The remaining codes mostly guard the JSON shape the API takes: `TRANSLATION_BAD_SHAPE` (unknown
-  keys, `v` ≠ 1), `TRANSLATION_BAD_LOCALE` (v1 is `zh-CN` only, and never the deck's own locale: the
-  `aws-saa-fundamentals` deck is already Chinese, so its import refuses `_ZH` sections),
+  keys, `v` ≠ 1), `TRANSLATION_BAD_LOCALE` (v1 is `zh-CN` only, and never the deck's own locale: a deck
+  whose locale is zh-CN refuses `_ZH` sections, so `aws-saa-fundamentals` moved to locale `en` before its
+  2026-10-18 bilingual rewrite),
   `TRANSLATION_OPTION_KEYS_MISMATCH`, and `TRANSLATION_QUESTION_EMPTY` / `TRANSLATION_ANSWER_EMPTY`
   (a `Q_ZH:` or `A_ZH:` marker with no text under it). The console reports every issue of a card; the
   server refuses a write with the first one, in the same check order.
@@ -556,14 +557,33 @@ gets `D2 services` even when its service is also named by a task.
 | testing | `6.1 Unit and Integration Testing` |
 | design | `7.1 Design Principles` |
 
-### 5.4 AWS SAA fundamentals (`aws-saa-fundamentals`): one label per section of a family
+### 5.4 AWS Architect Basics (`aws-saa-fundamentals`): one label per chapter
 
-Chinese Q/A cards that teach the prerequisites of the `aws-saa-c03` scenarios: one condition per card,
-three answer lines (答 / 因为 / 考法), no exam-deck stems, options or numbers. The number is the SAA-C03
-task statement the family serves.
+English-first Q/A cards with a built-in zh-CN translation (`Q_ZH:` / `A_ZH:`) that teach the prerequisites of the
+`aws-saa-c03` scenarios: one condition per card, three answer lines (`Answer:` / `Because:` / `Exam:`, in Chinese
+`答：` / `因为：` / `考法：`), every abbreviation followed by its English full name on first use, a `SOURCE:` passage
+from the AWS documentation, no exam-deck stems, options or numbers. Plan: `docs/aws-basics-deck-plan-v2-2026-10-18.md`.
 
-| family | `TOPIC:` label |
+| chapter | `TOPIC:` label |
 |---|---|
+| reading exam questions | `Reading the question` |
+| IAM, accounts, Organizations | `Identity and accounts` |
+| VPC basics, subnets, endpoints | `VPC networking` |
+| VPN, Direct Connect, Transit Gateway | `Hybrid networking` |
+| CloudFront, Global Accelerator, Route 53 | `Edge and DNS` |
+| EC2, Auto Scaling, load balancing, purchase options | `Compute and scaling` |
+| Lambda, API Gateway, ECS, EKS, Fargate | `Serverless and containers` |
+| SQS, SNS, EventBridge, Kinesis | `Messaging and streaming` |
+| Amazon S3 | `S3 storage` |
+| EBS, instance store, EFS, FSx | `Block and file storage` |
+| RDS, Aurora, DynamoDB, ElastiCache | `Databases` |
+| KMS, secrets, certificates, WAF, GuardDuty | `Encryption and threat detection` |
+| AWS Backup, RPO/RTO, DR strategies | `Backup and disaster recovery` |
+| DataSync, Snowball, Storage Gateway, DMS | `Migration and transfer` |
+| CloudWatch, CloudTrail, Config, cost tools | `Monitoring, governance and cost` |
+| Athena, Glue, Redshift, AI services | `Analytics and ML` |
+
+---|---|
 | network connectivity | `3.4 网络连接 · 基础` |
 | network connectivity | `3.4 网络连接 · VPC 之间` |
 | network connectivity | `3.4 网络连接 · 机房连 AWS` |
