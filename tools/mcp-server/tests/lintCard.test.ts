@@ -162,10 +162,24 @@ describe('lint_card', () => {
     expect(claude.length).toBeGreaterThanOrEqual(8);
     expect(aws).not.toContain('`TOPIC:` label');
     expect(aws).not.toContain('TOPIC:');
+    // AWS Architect Basics, rewritten 2026-10-18 as English-first cards: one label per chapter.
     expect(vocabulary.get('aws-saa-fundamentals')).toEqual([
-      '3.4 网络连接 · 基础',
-      '3.4 网络连接 · VPC 之间',
-      '3.4 网络连接 · 机房连 AWS',
+      'Reading the question',
+      'Identity and accounts',
+      'VPC networking',
+      'Hybrid networking',
+      'Edge and DNS',
+      'Compute and scaling',
+      'Serverless and containers',
+      'Messaging and streaming',
+      'S3 storage',
+      'Block and file storage',
+      'Databases',
+      'Encryption and threat detection',
+      'Backup and disaster recovery',
+      'Migration and transfer',
+      'Monitoring, governance and cost',
+      'Analytics and ML',
     ]);
     expect([...vocabulary.keys()].sort()).toEqual(['aws-saa-c03', 'aws-saa-fundamentals', 'claude-ccdv-f', 'csharp-basics']);
   });
