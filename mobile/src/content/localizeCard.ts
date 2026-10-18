@@ -40,7 +40,11 @@ function hasText(value: unknown): boolean {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-/** The deck's own locale is Chinese (aws-saa-fundamentals): there is nothing to switch to. */
+/**
+ * The deck's own locale is Chinese: there is nothing to switch to. No live deck is one since
+ * aws-saa-fundamentals became en-US with a built-in zh-CN translation (2026-10-18 rewrite), but a
+ * device can still have its old zh-CN deck file installed.
+ */
 export function isChineseDeckLocale(locale: unknown): boolean {
   return typeof locale === 'string' && locale.trim().toLowerCase() === CARD_TRANSLATION_LOCALE.toLowerCase();
 }
