@@ -32,7 +32,7 @@ export const FAQ_LIST: readonly FaqEntry[] = [
   },
   {
     q: 'What do I study?',
-    a: 'Three free decks: AWS Architect Basics (the basics behind SAA-C03, in Chinese), AWS Associate Architect (SAA-C03, in English) and Claude Developer Foundations (CCDV-F across 8 domains, in English). Multiple-choice cards in the SAA-C03 deck explain every wrong option. Reviews are scheduled with FSRS, the open-source spaced-repetition algorithm, never more than 90 days out, and a card is Mastered once its next review is 15 or more days away. The app is iOS only.',
+    a: 'Three free decks: AWS Architect Basics (the basics behind SAA-C03, in English with a built-in Chinese translation), AWS Associate Architect (SAA-C03, in English) and Claude Developer Foundations (CCDV-F across 8 domains, in English). Multiple-choice cards in the SAA-C03 deck explain every wrong option. Reviews are scheduled with FSRS, the open-source spaced-repetition algorithm, never more than 90 days out, and a card is Mastered once its next review is 15 or more days away. The app is iOS only.',
   },
   {
     q: 'Why is a card locked in the Library?',

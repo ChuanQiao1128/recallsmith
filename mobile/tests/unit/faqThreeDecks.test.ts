@@ -40,7 +40,7 @@ describe('Help FAQ, 2026-10-14 three decks', () => {
     const positions = DECK_ORDER.map((slug) => a.indexOf(STUDY_NAME[slug]));
     for (const position of positions) expect(position).toBeGreaterThanOrEqual(0);
     expect([...positions].sort((x, y) => x - y)).toEqual(positions);
-    expect(a).toContain('AWS Architect Basics (the basics behind SAA-C03, in Chinese)');
+    expect(a).toContain('AWS Architect Basics (the basics behind SAA-C03, in English with a built-in Chinese translation)');
   });
 
   it('promises an offline first lesson only for the decks that ship starter cards', () => {

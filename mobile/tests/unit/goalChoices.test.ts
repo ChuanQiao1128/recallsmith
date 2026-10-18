@@ -19,7 +19,7 @@ describe('goal choices (R22 contract §3)', () => {
     // 2026-10-14 three decks: fundamentals, SAA-C03, Claude; csharp-basics is hidden, so not offered.
     expect(GOAL_CHOICES.map((c) => c.deckSlug)).toEqual(['aws-saa-fundamentals', 'aws-saa-c03', 'claude-ccdv-f']);
     expect(GOAL_CHOICES.map((c) => c.label)).toEqual([
-      'AWS Architect Basics (Chinese)',
+      'AWS Architect Basics (English + Chinese)',
       'AWS Solutions Architect (SAA-C03)',
       'Claude Developer (CCDV-F)',
     ]);

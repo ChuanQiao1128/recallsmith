@@ -13,13 +13,13 @@ export type GoalChoice = {
 };
 
 /**
- * Every goal deck, in the 2026-10-14 three-decks order (owner): AWS Architect Basics (the Chinese
- * foundation cards), SAA-C03, Claude CCDV-F. A deck in content/hiddenDecks.ts HIDDEN_DECK_SLUGS
+ * Every goal deck, in the 2026-10-14 three-decks order (owner): AWS Architect Basics (the foundation
+ * cards, English with a built-in Chinese translation since the 2026-10-18 rewrite), SAA-C03, Claude CCDV-F. A deck in content/hiddenDecks.ts HIDDEN_DECK_SLUGS
  * (csharp-basics for now) keeps its entry here but is not offered: taking it off that list offers
  * it again, with its label, in onboarding and Settings › Study goal.
  */
 const ALL_GOAL_CHOICES: readonly GoalChoice[] = [
-  { deckSlug: 'aws-saa-fundamentals', label: 'AWS Architect Basics (Chinese)', highlighted: true },
+  { deckSlug: 'aws-saa-fundamentals', label: 'AWS Architect Basics (English + Chinese)', highlighted: true },
   { deckSlug: 'aws-saa-c03', label: 'AWS Solutions Architect (SAA-C03)', highlighted: false },
   { deckSlug: 'claude-ccdv-f', label: 'Claude Developer (CCDV-F)', highlighted: false },
   { deckSlug: 'csharp-basics', label: '.NET interview questions', highlighted: false },

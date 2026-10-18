@@ -1,13 +1,17 @@
 // 2026-10-14 three decks (owner): for now the app shows exactly three decks, in this order:
 // aws-saa-fundamentals, aws-saa-c03, claude-ccdv-f. csharp-basics is hidden.
 //
-// The server drops a hidden deck from manifest.json (soft-deleted in the console, not
-// availability=retired: a retire purges the deck's files and progress on the device). The app does
-// not rely on that alone: a device can still hold a cached manifest that lists the deck, have it
-// installed, have it as its active deck or study goal, or have recorded its starter lesson on it.
-// Every deck list, the active deck, the study goal and the starter lesson read through this
-// module, so a hidden deck is never listed, opened or offered. Nothing is deleted: its installed
-// file, progress, owned cards and wallet stay on the device untouched.
+// The plan was for the server to drop a hidden deck from manifest.json (soft-deleted in the
+// console, not availability=retired). The app does not rely on that alone: a device can still hold a
+// cached manifest that lists the deck, have it installed, have it as its active deck or study goal,
+// or have recorded its starter lesson on it. Every deck list, the active deck, the study goal and the
+// starter lesson read through this module, so a hidden deck is never listed, opened or offered.
+// Hiding deletes nothing.
+//
+// The live manifest, however, lists csharp-basics as availability=retired (retiredAtMs 2026-10-14
+// 10:37:54 UTC). A device that reads it purges that deck's local data (deckRepository.ts
+// reconcileRetiredDecks): its installed file, progress and owned cards. The reward wallet's per-pack
+// draws stay, and server-side progress is untouched.
 //
 // The order is held here too, not taken from the server's manifest_order: a manifest from before the
 // console change (SAA-C03 and fundamentals both at 1000, SAA-C03 listed first) or a device's cached
@@ -19,6 +23,8 @@
 // stack into their module graph.
 //
 // To bring csharp-basics back:
+//   0. set its availability back to live in the console first: while the manifest marks it retired,
+//      every device keeps purging it;
 //   1. remove it from HIDDEN_DECK_SLUGS below and add it to DECK_ORDER where it should be listed;
 //   2. add it back to STARTER_SLUGS in scripts/content/build-starter-packs.mjs and re-run the script
 //      (it needs the deck back in the live manifest), so an offline first run can open it again;

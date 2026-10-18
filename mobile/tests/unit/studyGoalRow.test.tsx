@@ -83,7 +83,7 @@ const stored = () => JSON.parse(asyncStore.get(STUDY_GOAL_KEY) ?? 'null');
 describe('study goal editor helpers', () => {
   it('labels decks like onboarding and keeps an unknown slug as itself', () => {
     expect(goalDeckLabel('aws-saa-c03')).toBe('AWS Solutions Architect (SAA-C03)');
-    expect(goalDeckLabel('aws-saa-fundamentals')).toBe('AWS Architect Basics (Chinese)');
+    expect(goalDeckLabel('aws-saa-fundamentals')).toBe('AWS Architect Basics (English + Chinese)');
     // Hidden since 2026-10-14 (a stored csharp-basics goal reads as no goal), but the label is kept.
     expect(goalDeckLabel('csharp-basics')).toBe('.NET interview questions');
     expect(goalDeckLabel('some-future-deck')).toBe('some-future-deck');
