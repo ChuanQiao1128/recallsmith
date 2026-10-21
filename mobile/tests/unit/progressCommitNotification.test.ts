@@ -71,6 +71,9 @@ describe('progress commit to view notification', () => {
       const pending = forceProgressSync('manual');
       await vi.advanceTimersByTimeAsync(1);
       expect(requested).toBe(true);
+      // The held A response already captured its rows. B's own follow-up
+      // must receive B's empty history, rather than replaying A's fixture.
+      rows = [];
       await setActiveUserSub('B');
       release(); await vi.advanceTimersByTimeAsync(500); await pending;
       expect(store.has('devcards:u:B:deck-progress:deck')).toBe(false);

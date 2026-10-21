@@ -21,7 +21,7 @@ export function ProgressSyncStatus() {
     return () => { live = false; clearInterval(timer); };
   }, [user]);
   const text = !status ? 'Checking sync status…' : !status.signedIn ? 'Saved on this device · Sign in to sync'
-    : status.error ? 'Saved on this device · Sync needs retry'
+    : status.error ? status.automaticRetry ? 'Saved on this device · Will retry automatically' : 'Saved on this device · Sync needs retry'
     : status.pending > 0 ? `Saved on this device · ${status.pending} waiting to sync`
     : status.syncing || retrying ? 'Saved on this device · Syncing…'
     : status.lastPullAtMs && status.lastPullAtMs >= (status.lastPushAtMs ?? 0) ? 'Progress synced' : 'Saved on this device · Sync not confirmed';
