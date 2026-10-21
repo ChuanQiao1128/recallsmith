@@ -116,7 +116,8 @@ vi.mock('../../src/content/installedDeckIndex', () => ({
   }),
   getInstalledDeckIndex: vi.fn(async () => null),
 }));
-vi.mock('../../src/review/storage', () => ({ loadDeckProgress: vi.fn(async () => []) }));
+vi.mock('../../src/review/storage', () => ({
+loadDeckProgress: vi.fn(async () => []) }));
 let ownedFixture: Set<string> | null = null;
 vi.mock('../../src/features/gacha/draw/effectiveOwned', () => ({ resolveEffectiveOwned: vi.fn(async () => ownedFixture) }));
 

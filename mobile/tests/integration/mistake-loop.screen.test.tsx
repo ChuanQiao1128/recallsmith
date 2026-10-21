@@ -1,3 +1,4 @@
+vi.mock('expo-crypto', () => ({ randomUUID: () => 'review-intent-id' }));
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -130,6 +131,15 @@ vi.mock('../../src/content/activeDeck', () => ({
 }));
 
 vi.mock('../../src/review/storage', () => ({
+  captureProgressUserSub: vi.fn(async () => 'anon'),
+  updateDeckProgress: vi.fn(async (deck: any, update: any, sub?: string) => {
+    const storage = await import('../../src/review/storage');
+    const fresh = await storage.loadDeckProgress(deck, sub);
+    const next = await update(fresh);
+    if (next !== fresh) await storage.saveDeckProgress(deck, next, sub);
+    vi.mocked(storage.loadDeckProgress).mockResolvedValue(next);
+    return next;
+  }),
   getUserScopedKey: vi.fn(async (key: string) => `devcards:u:test:${key}`),
   loadDeckProgress: vi.fn(async () => []),
   saveDeckProgress: vi.fn(async () => {}),

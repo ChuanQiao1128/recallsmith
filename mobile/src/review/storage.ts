@@ -76,8 +76,8 @@ async function getUserScopePrefix(syncUserSub?: string): Promise<string> {
  * scope in one call: a second copy of this rule would keep serving the
  * previous account's data for the length of its own cache.
  */
-export async function getUserScopedKey(baseKey: string): Promise<string> {
-  return `${await getUserScopePrefix()}${baseKey}`;
+export async function getUserScopedKey(baseKey: string, syncUserSub?: string): Promise<string> {
+  return `${await getUserScopePrefix(syncUserSub)}${baseKey}`;
 }
 
 /**
@@ -584,7 +584,7 @@ async function removeGlobalProgressKeysForDeck(deck: DeckExport): Promise<void> 
   }
 }
 
-export async function loadDeckProgress(deck: DeckExport, syncUserSub?: string): Promise<CardProgress[]> {
+async function loadDeckProgressUnlocked(deck: DeckExport, syncUserSub?: string): Promise<CardProgress[]> {
   // Pin sync reads/writes, including legacy migration and metadata, to the
   // request's original account. UI callers keep using the active partition.
   const now = new Date();
@@ -639,13 +639,13 @@ export async function loadDeckProgress(deck: DeckExport, syncUserSub?: string): 
  * screen's back, and this is how such a reader sees the merge. Throws on a
  * storage error so that reader can fail closed instead of seeding from nothing.
  */
-export async function readStoredDeckProgress(slug: string): Promise<CardProgress[] | null> {
-  const raw = await readJson<unknown>(await progressKey(slug));
+export async function readStoredDeckProgress(slug: string, syncUserSub?: string): Promise<CardProgress[] | null> {
+  const raw = await readJson<unknown>(await progressKey(slug, syncUserSub));
   if (!Array.isArray(raw)) return null;
   return raw.map(normalizeProgressEntry).filter((p): p is CardProgress => p != null);
 }
 
-export async function saveDeckProgress(deck: DeckExport, progress: CardProgress[], syncUserSub?: string): Promise<void> {
+async function saveDeckProgressUnlocked(deck: DeckExport, progress: CardProgress[], syncUserSub?: string): Promise<void> {
   // do not reconcile here (avoid side-effects while writing)
   // This is a wholesale overwrite, not a merge: the only membership test it
   // applies is "is this uid still in the deck". Never hand it an ownership-
@@ -656,6 +656,43 @@ export async function saveDeckProgress(deck: DeckExport, progress: CardProgress[
   const key = await progressKey(deck.Slug, syncUserSub);
   await writeJson(key, filtered);
   await upsertDeckMeta(deck, new Date(), syncUserSub);
+}
+
+// One serializer for reconciliation, rating and remote merges. The scope is
+// captured before waiting so a queued write cannot follow an account switch.
+const progressLocks = new Map<string, Promise<unknown>>();
+export async function captureProgressUserSub(): Promise<string> {
+  return (await getActiveUserSub()) ?? 'anon';
+}
+async function withProgressLock<T>(slug: string, sub: string, action: () => Promise<T>): Promise<T> {
+  const key = `${sub}:${slug}`;
+  const run = (progressLocks.get(key) ?? Promise.resolve()).then(action);
+  const tail = run.catch(() => undefined);
+  progressLocks.set(key, tail);
+  try { return await run; }
+  finally { if (progressLocks.get(key) === tail) progressLocks.delete(key); }
+}
+export async function loadDeckProgress(deck: DeckExport, syncUserSub?: string): Promise<CardProgress[]> {
+  const sub = syncUserSub ?? await captureProgressUserSub();
+  return withProgressLock(deck.Slug, sub, () => loadDeckProgressUnlocked(deck, sub));
+}
+export async function saveDeckProgress(deck: DeckExport, progress: CardProgress[], syncUserSub?: string): Promise<void> {
+  const sub = syncUserSub ?? await captureProgressUserSub();
+  return withProgressLock(deck.Slug, sub, () => saveDeckProgressUnlocked(deck, progress, sub));
+}
+/** Update from the latest durable snapshot. Never pass a component's full-deck snapshot here. */
+export async function updateDeckProgress(
+  deck: DeckExport,
+  update: (fresh: CardProgress[]) => Promise<CardProgress[]> | CardProgress[],
+  syncUserSub?: string,
+): Promise<CardProgress[]> {
+  const sub = syncUserSub ?? await captureProgressUserSub();
+  return withProgressLock(deck.Slug, sub, async () => {
+    const fresh = await loadDeckProgressUnlocked(deck, sub);
+    const next = await update(fresh);
+    if (next !== fresh) await saveDeckProgressUnlocked(deck, next, sub);
+    return next;
+  });
 }
 
 export async function resetDeckProgress(deck: DeckExport): Promise<void> {

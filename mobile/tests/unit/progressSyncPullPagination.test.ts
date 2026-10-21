@@ -101,6 +101,14 @@ vi.mock('../../src/content/deckRepository', () => ({
 const localProgress = new Map<string, any[]>();
 const saveCalls: Array<{ slug: string; merged: any[] }> = [];
 vi.mock('../../src/review/storage', () => ({
+  captureProgressUserSub: vi.fn(async () => 'anon'),
+  updateDeckProgress: vi.fn(async (deck: any, update: any, sub?: string) => {
+    const storage = await import('../../src/review/storage');
+    const fresh = await storage.loadDeckProgress(deck, sub);
+    const next = await update(fresh);
+    if (next !== fresh) await storage.saveDeckProgress(deck, next, sub);
+    return next;
+  }),
   loadDeckProgress: vi.fn(async (deck: any) => localProgress.get(String(deck?.slug)) ?? []),
   saveDeckProgress: vi.fn(async (deck: any, merged: any[]) => {
     saveCalls.push({ slug: String(deck?.slug), merged });

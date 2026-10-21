@@ -33,6 +33,15 @@ vi.mock('../../src/api/apiClient', () => ({
 }));
 vi.mock('../../src/content/deckRepository', () => ({ resolveDeckBySlug: vi.fn(async () => null) }));
 vi.mock('../../src/review/storage', () => ({
+  captureProgressUserSub: vi.fn(async () => 'anon'),
+  updateDeckProgress: vi.fn(async (deck: any, update: any, sub?: string) => {
+    const storage = await import('../../src/review/storage');
+    const fresh = await storage.loadDeckProgress(deck, sub);
+    const next = await update(fresh);
+    if (next !== fresh) await storage.saveDeckProgress(deck, next, sub);
+    vi.mocked(storage.loadDeckProgress).mockResolvedValue(next);
+    return next;
+  }),
   loadDeckProgress: vi.fn(async () => []),
   saveDeckProgress: vi.fn(async () => undefined),
   setActiveUserSubForStorage: vi.fn(),

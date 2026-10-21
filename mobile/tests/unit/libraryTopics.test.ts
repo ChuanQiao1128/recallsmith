@@ -156,7 +156,7 @@ describe('library topics', () => {
     // 1.2 Secure …" because the first card of each domain set the order.
     const vm = buildLibraryVM({ deck, progress: [], now: NOW });
     expect(vm.topics.map(key)).toEqual(['all', 'compute-ec2', 'iam', 'untagged']);
-    expect(vm.topics.map((chip) => chip.label)).toEqual(['All', 'Compute / EC2', 'IAM', 'Untagged']);
+    expect(vm.topics.map((chip) => chip.label)).toEqual(['All topics', 'Compute / EC2', 'IAM', 'Untagged']);
     expect(vm.topics.map((chip) => chip.count)).toEqual([5, 1, 2, 2]);
   });
 
@@ -164,7 +164,7 @@ describe('library topics', () => {
     const numbered = deckFromTopics(['4.1 Cost-optimized storage', '1.2 Secure workloads', null, '1.10 Ten', '1.1 Design', 'D2 Apps', 'D10 Ops', 'D1 Agents', '2.1 Resilient']);
     const vm = buildLibraryVM({ deck: numbered, progress: [], now: NOW });
     expect(vm.topics.map((chip) => chip.label)).toEqual([
-      'All',
+      'All topics',
       '1.1 Design',
       '1.2 Secure workloads',
       '1.10 Ten',
@@ -200,7 +200,7 @@ describe('library topics', () => {
   it('orders cards by topic group then orderInDeck when any topic exists', () => {
     const vm = buildLibraryVM({ deck, progress: [], now: NOW });
     expect(vm.cards.map(uid)).toEqual(['2', '1', '4', '3', '5']);
-    expect(vm.filters.map(key)).toEqual(['all', 'new', 'learning', 'mastered', 'rare', 'legendary']);
+    expect(vm.filters.map(key)).toEqual(['owned', 'all', 'new', 'learning', 'mastered', 'rare', 'legendary']);
   });
 
   it('keeps only the selected group and treats an unknown key as All', () => {

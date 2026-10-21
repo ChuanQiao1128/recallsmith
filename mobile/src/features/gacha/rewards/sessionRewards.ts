@@ -12,8 +12,11 @@ import {
 import { readProgressSettled } from './progressSettled';
 import { readStorageFreshLearned } from './storageFreshLearned';
 import { isStarterLessonCard } from '../starter/starterGate';
+import { getUserScopedKey } from '../../../review/storage';
 
 export type RatingRewardInput = {
+  /** Partition captured by the rating intent; never follow a later account switch. */
+  userSub?: string;
   slug: string;
   stableUid: string;
   rating: ReviewRating;
@@ -85,11 +88,14 @@ export const ZERO_REWARD_STEP: RatingRewardStep = Object.freeze({
  *  step, skipped:'storage-error', nothing written. */
 export async function settleRatingReward(input: RatingRewardInput): Promise<RatingRewardStep> {
   const { slug, stableUid, rating, progressBefore, newCardEligible, dueBefore, remainingDueCount, now } = input;
+  // Capture the canonical storage partition once for compatibility callers too.
+  // Storage owns key construction; this extracts the sub from its returned prefix.
+  const userSub = input.userSub ?? (await getUserScopedKey('')).slice('devcards:u:'.length, -1);
 
   // (0) The seed only knows what this device knows. Until the account's remote progress has
   // landed here, a seed would miss every card learned elsewhere and R1 would pay them all on
   // their next hard+ (review finding B). Unsettled → no seed, no R1; R2 is unaffected.
-  const settledState = await readProgressSettled(slug);
+  const settledState = await readProgressSettled(slug, userSub);
   let skipped: RatingRewardSkipReason | undefined;
   let ledger: NewCardLedger;
 
@@ -104,10 +110,10 @@ export async function settleRatingReward(input: RatingRewardInput): Promise<Rati
         // saved this rating there, so for that one uid that view is not "before" and
         // progressBefore keeps the decision. The remote cache cannot hold this rating
         // yet, so its row for the current card (if any) is the account's earlier review.
-        const fresh = await readStorageFreshLearned(slug);
+        const fresh = await readStorageFreshLearned(slug, userSub);
         fresh.storedProgress.delete(stableUid);
         return new Set([...fresh.storedProgress, ...fresh.remoteCache]);
-      });
+      }, userSub);
     } catch {
       return { ...ZERO_REWARD_STEP, skipped: 'storage-error' };
     }
@@ -116,7 +122,7 @@ export async function settleRatingReward(input: RatingRewardInput): Promise<Rati
     // The ledger may already hold adopted anon stamps from today; count them for R7 but
     // never seed or write. A read failure only costs the count.
     try {
-      ledger = (await readNewCardLedger(slug)).ledger;
+      ledger = (await readNewCardLedger(slug, userSub)).ledger;
     } catch {
       ledger = {};
     }
@@ -131,7 +137,7 @@ export async function settleRatingReward(input: RatingRewardInput): Promise<Rati
   if (settledState.settled && newCardEligible) {
     const starterCard = await isStarterLessonCard(slug, stableUid);
     if (starterCard || rating !== 'again') {
-      const payResult = await payNewCardIfUnpaid(slug, stableUid, now.getTime());
+      const payResult = await payNewCardIfUnpaid(slug, stableUid, now.getTime(), userSub);
       newCardPaid = payResult.paid && !starterCard;
       ledger = payResult.ledger;
     }
@@ -142,7 +148,7 @@ export async function settleRatingReward(input: RatingRewardInput): Promise<Rati
   // (3) R2: clearing today's due cards pays one pull, at most once per local day.
   let dueClearPaid = false;
   if (dueBefore > 0 && remainingDueCount === 0) {
-    dueClearPaid = await markDueClearedIfFirstToday(now, slug);
+    dueClearPaid = await markDueClearedIfFirstToday(now, slug, userSub);
   }
 
   const pulls = Number(newCardPaid) + Number(dueClearPaid);
@@ -152,7 +158,7 @@ export async function settleRatingReward(input: RatingRewardInput): Promise<Rati
   // here reports the pulls with a null wallet -- under-grant, never double-grant.
   if (pulls > 0) {
     try {
-      const grant = await grantDeckPulls(slug, pulls);
+      const grant = await grantDeckPulls(slug, pulls, userSub);
       return {
         newCardPaid,
         dueClearPaid,

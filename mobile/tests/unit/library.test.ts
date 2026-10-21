@@ -99,7 +99,7 @@ describe('buildLibraryVM', () => {
     expect(vm.cards.map((item) => item.stableUid)).toEqual(expected);
   });
 
-  it('exposes six filter chips including rarity tiers (all/new/learning/mastered/rare/legendary)', () => {
+  it('exposes My cards, all statuses and optional rarity filters', () => {
     const vm = buildLibraryVM({
       deck: sampleDeck,
       progress: sampleProgress,
@@ -108,6 +108,7 @@ describe('buildLibraryVM', () => {
     });
 
     expect(vm.filters.map((item) => item.key)).toEqual([
+      'owned',
       'all',
       'new',
       'learning',
@@ -127,4 +128,19 @@ describe('buildLibraryVM', () => {
 
     expect(rows.map((row) => row.rarity)).toEqual(['COM', 'RAR', 'LEG', 'RAR']);
   });
+  it('My cards includes drawn but unstudied cards and excludes every missing card', () => {
+    const vm = buildLibraryVM({ deck: sampleDeck, progress: sampleProgress, filter: 'owned',
+      ownedSet: new Set(['1', '2']) });
+    expect(vm.cards.map((card) => card.stableUid)).toEqual(['1', '2']);
+    expect(vm.filters.find((chip) => chip.key === 'owned')?.count).toBe(2);
+    expect(vm.filters.find((chip) => chip.key === 'all')?.label).toBe('All cards');
+  });
+
+  it('search uses display rank rather than the authoring OrderInDeck gaps', () => {
+    const deck = { ...sampleDeck, Cards: sampleDeck.Cards.map((card: any) => ({ ...card, OrderInDeck: card.OrderInDeck * 100 })) };
+    expect(buildLibraryVM({ deck, progress: sampleProgress, searchQuery: '#003' }).cards.map((card) => card.stableUid)).toEqual(['3']);
+    expect(buildLibraryVM({ deck, progress: sampleProgress, searchQuery: ' q2 ' }).cards.map((card) => card.stableUid)).toEqual(['2']);
+    expect(buildLibraryVM({ deck, progress: sampleProgress, searchQuery: 'does-not-exist' }).cards).toEqual([]);
+  });
+
 });

@@ -6,7 +6,7 @@ import { Platform } from 'react-native';
 
 import { apiJson } from '../api/apiClient';
 import { resolveDeckBySlug } from '../content/deckRepository';
-import { loadDeckProgress, saveDeckProgress, setActiveUserSubForStorage } from '../review/storage';
+import { loadDeckProgress, updateDeckProgress, setActiveUserSubForStorage } from '../review/storage';
 import { syncDrawStateNow } from './drawStateSync';
 import { invalidateDrawStateCache } from '../features/gacha/draw/drawStateCache';
 import { getClientCapabilities } from './clientCapabilities';
@@ -187,6 +187,13 @@ function kLastSync(userSub: string) {
 }
 function kLastError(userSub: string) {
   return `${userPrefix(userSub)}sync:lastError:v1`;
+}
+function kStatus(userSub: string) { return `${userPrefix(userSub)}sync:status:v1`; }
+async function markSyncStatus(userSub: string, patch: Record<string, unknown>) {
+  try {
+    const previous = JSON.parse(await AsyncStorage.getItem(kStatus(userSub)) ?? '{}');
+    await AsyncStorage.setItem(kStatus(userSub), JSON.stringify({ ...previous, ...patch }));
+  } catch { /* diagnostics must not interrupt durable review storage */ }
 }
 function remoteCachePrefix(userSub: string) {
   return `${userPrefix(userSub)}sync:remoteCache:v1:`; // + deckSlug
@@ -480,15 +487,11 @@ async function addDroppedCount(userSub: string, n: number): Promise<void> {
  * with app startup rather than with a tap.
  */
 async function loadQueueFromStorage(userSub: string): Promise<ProgressEvent[]> {
-  try {
-    const raw = await AsyncStorage.getItem(kQueue(userSub));
-    if (!raw) return [];
-    const arr = JSON.parse(raw);
-    if (!Array.isArray(arr)) return [];
-    return arr as ProgressEvent[];
-  } catch {
-    return [];
-  }
+  const raw = await AsyncStorage.getItem(kQueue(userSub));
+  if (!raw) return [];
+  const arr = JSON.parse(raw);
+  if (!Array.isArray(arr)) throw new Error('Invalid review queue');
+  return arr as ProgressEvent[];
 }
 
 /**
@@ -544,8 +547,9 @@ async function writeQueue(userSub: string, arr: ProgressEvent[]): Promise<void> 
   setCachedQueue(userSub, arr);
   try {
     await AsyncStorage.setItem(kQueue(userSub), JSON.stringify(arr));
-  } catch {
+  } catch (error) {
     invalidateProgressQueueCache(userSub);
+    throw error;
   }
 }
 
@@ -577,7 +581,8 @@ async function enqueueProgressEvent(userSub: string, ev: ProgressEvent): Promise
     // is the one caller allowed to mutate what readQueue returned (see its
     // contract note), and it is why the common case is an O(1) push instead of
     // parse-copy-serialise.
-    const q = await readQueue(userSub);
+    const q = [...await readQueue(userSub)];
+    if (q.some((item) => item.eventId === ev.eventId)) return;
     q.push(ev);
 
     // 保护上限：最多保留 3000 条（避免极端情况下 AsyncStorage 膨胀）
@@ -895,6 +900,7 @@ export async function recordReviewEvent(...args: any[]): Promise<string | null> 
   const resolvedSub = accessToken ? await ensureUserSubReady(accessToken) : null;
   const queueSub = resolvedSub ?? PENDING_SUB;
 
+  let eventId: string | undefined;
   let deckSlug: string | null = null;
   let stableUid: string | null = null;
   let rating: any = null;
@@ -917,6 +923,8 @@ export async function recordReviewEvent(...args: any[]): Promise<string | null> 
     if (args[3] != null && Number.isFinite(Number(args[3]))) reviewedAtMs = Number(args[3]);
   } else {
     const obj = args[0] ?? {};
+    eventId = optionalString(obj.eventId) ?? undefined;
+    if (obj.userSub != null && obj.userSub !== (resolvedSub ?? 'anon')) throw new Error('Review account changed');
     deckSlug = pickDeckSlugFromAny(obj);
     stableUid = pickStableUidFromAny(obj);
     rating = obj.rating ?? obj.uiRating ?? obj.reviewRating ?? obj.r ?? null;
@@ -945,7 +953,7 @@ export async function recordReviewEvent(...args: any[]): Promise<string | null> 
   const resolvedRevision = cardRevision ?? lastSeenRevision ?? optionalPositiveInt(progressAfter?.lastSeenRevision);
 
   const ev: ProgressEvent = {
-    eventId: Crypto.randomUUID(),
+    eventId: eventId ?? Crypto.randomUUID(),
     schemaVersion: 1,
     eventType: 'card_reviewed',
     deckSlug,
@@ -987,9 +995,7 @@ async function getCursorMs(userSub: string): Promise<number | null> {
 }
 
 async function setCursorMs(userSub: string, ms: number): Promise<void> {
-  try {
-    await AsyncStorage.setItem(kCursor(userSub), String(Math.floor(ms)));
-  } catch {}
+  await AsyncStorage.setItem(kCursor(userSub), String(Math.floor(ms)));
 }
 
 async function clearCursorMs(userSub: string): Promise<void> {
@@ -1009,9 +1015,7 @@ async function getCursorToken(userSub: string): Promise<string | null> {
 }
 
 async function setCursorToken(userSub: string, token: string): Promise<void> {
-  try {
-    await AsyncStorage.setItem(kCursorToken(userSub), token);
-  } catch {}
+  await AsyncStorage.setItem(kCursorToken(userSub), token);
 }
 
 async function clearCursorToken(userSub: string): Promise<void> {
@@ -1025,15 +1029,11 @@ function remoteCacheKey(userSub: string, deckSlug: string) {
 }
 
 async function getRemoteCache(userSub: string, deckSlug: string): Promise<Record<string, ProgressItem>> {
-  try {
-    const raw = await AsyncStorage.getItem(remoteCacheKey(userSub, deckSlug));
-    if (!raw) return {};
-    const obj = JSON.parse(raw);
-    if (!obj || typeof obj !== 'object') return {};
-    return obj as Record<string, ProgressItem>;
-  } catch {
-    return {};
-  }
+  const raw = await AsyncStorage.getItem(remoteCacheKey(userSub, deckSlug));
+  if (!raw) return {};
+  const obj = JSON.parse(raw);
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) throw new Error('Invalid progress cache');
+  return obj as Record<string, ProgressItem>;
 }
 
 async function setRemoteCache(
@@ -1041,11 +1041,7 @@ async function setRemoteCache(
   deckSlug: string,
   cache: Record<string, ProgressItem>,
 ): Promise<void> {
-  try {
-    await AsyncStorage.setItem(remoteCacheKey(userSub, deckSlug), JSON.stringify(cache));
-  } catch {
-    // ignore
-  }
+  await AsyncStorage.setItem(remoteCacheKey(userSub, deckSlug), JSON.stringify(cache));
 }
 
 async function writeLastSync(userSub: string, payload: any) {
@@ -1456,28 +1452,26 @@ async function pullProgressPageAndApply(
     const filteredRows =
       uidSet.size > 0 ? rows.filter((r) => uidSet.has(String(r?.stableUid ?? '').trim())) : rows;
 
-    const local = await loadDeckProgress(deck, userSub);
-    if (_userSubMem !== userSub) return { pulled: items.length, applied, hasMore: false };
-    const { merged, changed, appliedCount } = mergeRemoteIntoLocalProgress(local, filteredRows);
-
-    if (changed) {
-      await saveDeckProgress(deck, merged, userSub);
-      if (_userSubMem === userSub) notifyProgressChanged({ userSub, deckSlug });
-      applied += appliedCount;
-    }
+    await updateDeckProgress(deck, (local) => {
+      if (_userSubMem !== userSub) return local;
+      const { merged, changed, appliedCount } = mergeRemoteIntoLocalProgress(local, filteredRows);
+      if (changed) applied += appliedCount;
+      return changed ? merged : local;
+    }, userSub);
+    if (_userSubMem === userSub) notifyProgressChanged({ userSub, deckSlug });
   }
 
-  // 3) advance cursor only if caching succeeded
+  if (!cacheAllOk) throw new Error('Progress cache could not be saved');
+
+  // 3) advance cursor only after every required local write succeeded
   if (cacheAllOk) {
-    if (maxUpdatedAt > (cursorBefore ?? 0)) {
-      await setCursorMs(userSub, maxUpdatedAt);
-    }
     // ✅ 无论 hasMore 与否都持久化 nextCursor：
     // 最后一页的 cursor 是精确的 keyset 元组，下一次 sync 从它续拉，
     // 才能修复“同一 updated_at 跨页/跨 sync 边界被 strict > 永久跳过”的 bug。
     if (nextCursor != null) {
       await setCursorToken(userSub, nextCursor);
     }
+    if (maxUpdatedAt > (cursorBefore ?? 0)) await setCursorMs(userSub, maxUpdatedAt);
   }
 
   // 缓存失败时不推进 cursor，也不要继续排水（否则会在同一页上打转）。
@@ -1505,6 +1499,8 @@ async function syncProgressOnce(
     remaining: await progressQueueSize(userSub),
   });
   if (isSyncBlocked()) return stopped(0);
+
+  await markSyncStatus(userSub, { lastAttemptAtMs: Date.now() });
 
   // best-effort bootstrap（也可以顺便用它来拿 userSub）
   try {
@@ -1589,6 +1585,8 @@ async function syncProgressOnce(
     if (batch.length < BATCH) break;
   }
 
+  await markSyncStatus(userSub, { lastPushAtMs: Date.now() });
+
   // 2) pull (throttled)
   let pulled = 0;
   let applied = 0;
@@ -1641,15 +1639,17 @@ async function syncProgressOnce(
       const r = await pullProgressAndApply(userSub, accessToken);
       pulled = r.pulled;
       applied = r.applied;
+      await markSyncStatus(userSub, { lastPullAtMs: Date.now() });
+      await writeLastError(userSub, null);
     } catch (e) {
-      console.warn('[progressSync] pull failed:', (e as any)?.message ?? e);
+      await writeLastError(userSub, 'Pull failed. Your local progress is saved.');
+      throw e;
     }
   }
 
   const remaining = await progressQueueSize(userSub);
 
   await writeLastSync(userSub, { atMs: Date.now(), reason, pushed, pulled, applied, remaining });
-  await writeLastError(userSub, null);
 
   return { pushed, pulled, applied, remaining };
 }
@@ -1668,6 +1668,7 @@ async function runSyncNow(reason: string): Promise<void> {
   _inFlight = true;
   _pending = false;
 
+  let runUserSub: string | null = null;
   try {
     const token = await getSyncAccessToken();
     if (!token) {
@@ -1681,17 +1682,12 @@ async function runSyncNow(reason: string): Promise<void> {
       return;
     }
 
+    runUserSub = userSub;
     await syncProgressOnce(userSub, token, reason);
   } catch (e) {
     const msg = (e as any)?.message ?? String(e);
 
-    try {
-      const token = await getSyncAccessToken();
-      if (token) {
-        const userSub = await ensureUserSubReady(token);
-        if (userSub) await writeLastError(userSub, msg);
-      }
-    } catch {}
+    if (runUserSub) await writeLastError(runUserSub, 'Sync could not finish. Your local progress is saved.');
 
     console.warn('[progressSync] failed:', msg);
   } finally {
@@ -1877,14 +1873,14 @@ export async function applyCachedRemoteProgress(deckSlug: string): Promise<numbe
   if (rows.length === 0) return 0;
 
   if (_userSubMem !== userSub) return 0;
-  const local = await loadDeckProgress(deck, userSub);
-  if (_userSubMem !== userSub) return 0;
-  const { merged, changed, appliedCount } = mergeRemoteIntoLocalProgress(local, rows);
-
-  if (changed) {
-    await saveDeckProgress(deck, merged, userSub);
-    if (_userSubMem === userSub) notifyProgressChanged({ userSub, deckSlug });
-  }
+  let appliedCount = 0;
+  await updateDeckProgress(deck, (local) => {
+    if (_userSubMem !== userSub) return local;
+    const result = mergeRemoteIntoLocalProgress(local, rows);
+    appliedCount = result.appliedCount;
+    return result.changed ? result.merged : local;
+  }, userSub);
+  if (_userSubMem === userSub && appliedCount > 0) notifyProgressChanged({ userSub, deckSlug });
 
   return appliedCount;
 }
@@ -1933,4 +1929,19 @@ export async function resetProgressSyncState(): Promise<void> {
 
   _lastPullAtMs = 0;
   _healedOnce = false;
+}
+
+/** Public status contains no account ids, tokens, device ids or transport errors. */
+export async function getProgressSyncStatus(): Promise<{
+  signedIn: boolean; pending: number; error: boolean; syncing: boolean;
+  lastAttemptAtMs?: number; lastPushAtMs?: number; lastPullAtMs?: number;
+}> {
+  const sub = _userSubMem;
+  const pending = await progressQueueSize(sub ?? PENDING_SUB);
+  if (!sub) return { signedIn: false, pending, error: false, syncing: false };
+  const [raw, error] = await Promise.all([
+    AsyncStorage.getItem(kStatus(sub)), AsyncStorage.getItem(kLastError(sub)),
+  ]);
+  const status = raw ? JSON.parse(raw) : {};
+  return { ...status, signedIn: true, pending, error: !!error, syncing: _inFlight };
 }

@@ -306,6 +306,26 @@ public static class ProgressEvents
 
       var allEventIds = normalized.Select(x => x.EventId).ToList();
 
+      var schedulerStateReady = await ProgressSchedulerSchema.IsReadyAsync(conn);
+      if (!schedulerStateReady && normalized.Any(ev => ev.SchedulerState is not null))
+      {
+        // Nothing is inserted or acknowledged: the client's durable queue must
+        // retain this event until the migration can store its complete model.
+        // Legacy stage-only events can still use the pre-048 schema below.
+        return RecallSmith.Lambda.Vpc.Authoring.Helpers.ErrorEnvelope(res, 503,
+          "SCHEDULER_STATE_NOT_READY", "Progress sync is temporarily unavailable. Please try again.");
+      }
+
+      var schedulerStateColumn = schedulerStateReady ? ", scheduler_state" : "";
+      var schedulerStateValue = schedulerStateReady ? ", scheduler_state" : "";
+      var schedulerStateUpdate = schedulerStateReady ? """
+            scheduler_state = case
+              when excluded.last_reviewed_at >= coalesce(user_progress.last_reviewed_at, 'epoch'::timestamptz)
+                then excluded.scheduler_state
+              else user_progress.scheduler_state
+            end,
+        """ : "";
+
       var swSql = Stopwatch.StartNew();
       var values = new List<string>();
       var parameters = new List<object?>();
@@ -519,7 +539,7 @@ public static class ProgressEvents
             status, last_rating, last_reviewed_at,
             review_count, due_at,
             last_seen_revision,
-            srs_stage, last_scheduler_version, scheduler_state,
+            srs_stage, last_scheduler_version{schedulerStateColumn},
             updated_at
           )
           select
@@ -531,8 +551,7 @@ public static class ProgressEvents
             next_review_at as due_at,
             last_seen_revision,
             srs_stage,
-            scheduler_version as last_scheduler_version,
-            scheduler_state,
+            scheduler_version as last_scheduler_version{schedulerStateValue},
             now() as updated_at
           from merged
           on conflict (user_sub, deck_slug, stable_uid)
@@ -585,11 +604,7 @@ public static class ProgressEvents
               else user_progress.last_scheduler_version
             end,
 
-            scheduler_state = case
-              when excluded.last_reviewed_at >= coalesce(user_progress.last_reviewed_at, 'epoch'::timestamptz)
-                then excluded.scheduler_state
-              else user_progress.scheduler_state
-            end,
+        {schedulerStateUpdate}
 
             last_seen_revision = greatest(
               coalesce(user_progress.last_seen_revision, 0),

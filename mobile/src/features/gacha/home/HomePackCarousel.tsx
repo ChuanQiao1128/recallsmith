@@ -43,14 +43,14 @@ const A: any = readRN('Animated', {});
 const AnimatedView: any = A.View ?? View;
 const hasAnimated = typeof A.Value === 'function';
 
-/** The cover's size on Home (the same as the single hero pack it replaces). */
-const PACK_WIDTH = 168;
-const PACK_HEIGHT = 240;
+/** Compact artwork keeps the study action and Today summary within reach. */
+const PACK_WIDTH = 126;
+const PACK_HEIGHT = 180;
 /** One page: the cover plus the gap that leaves its neighbours peeking in. Also the snap interval. */
 export const HOME_PACK_PAGE_WIDTH = 208;
 const PAGE_PADDING_TOP = 6;
 // Room under the cover for its drop shadow: the ScrollView clips its content.
-const PAGE_PADDING_BOTTOM = 22;
+const PAGE_PADDING_BOTTOM = 14;
 
 export const NEXT_PACK_ACTION = 'nextPack';
 export const PREVIOUS_PACK_ACTION = 'previousPack';
@@ -71,6 +71,7 @@ export type HomePackPage = {
 };
 
 type Props = {
+  compact?: boolean;
   /** At least one page: the placeholder when no pack has loaded. */
   pages: readonly HomePackPage[];
   currentIndex: number;
@@ -145,7 +146,7 @@ function usePackFloat(reduceMotion: boolean | null): unknown {
     : 0;
 }
 
-function PackCover({ page }: { page: HomePackPage }) {
+function PackCover({ page, compact = false }: { page: HomePackPage; compact?: boolean }) {
   if (page.cover && RNImage) {
     return <RNImage source={page.cover} resizeMode="contain" style={styles.packImage} />;
   }
@@ -154,7 +155,7 @@ function PackCover({ page }: { page: HomePackPage }) {
       colors={page.palette.cover}
       start={{ x: 0.1, y: 0 }}
       end={{ x: 0.9, y: 1 }}
-      style={styles.packFallback}
+      style={[styles.packFallback, compact && styles.packCompact]}
     >
       <Text style={styles.packFallbackTitle} numberOfLines={2}>
         {page.title}
@@ -164,6 +165,7 @@ function PackCover({ page }: { page: HomePackPage }) {
 }
 
 export default function HomePackCarousel({
+  compact = false,
   pages,
   currentIndex,
   locked,
@@ -266,7 +268,7 @@ export default function HomePackCarousel({
       }}
     >
       {/* Gold halo behind the current cover: faint ambient light, no frame. */}
-      <View pointerEvents="none" style={styles.halo} />
+      <View pointerEvents="none" style={[styles.halo, compact && styles.haloCompact]} />
       <ScrollView
         testID="home-pack-carousel"
         ref={scrollRef}
@@ -316,7 +318,7 @@ export default function HomePackCarousel({
             <View
               key={page.slug}
               testID={`home-pack-page-${page.slug}`}
-              style={styles.page}
+              style={[styles.page, compact && styles.pageCompact]}
               accessibilityElementsHidden={!isCurrent}
               importantForAccessibility={isCurrent ? 'auto' : 'no-hide-descendants'}
             >
@@ -338,15 +340,15 @@ export default function HomePackCarousel({
                     hitSlop={8}
                   >
                     <AnimatedView
-                      style={[styles.packFloat, hasAnimated ? { transform: [{ translateY: floatY }] } : null]}
+                      style={[styles.packFloat, compact && styles.packCompact, hasAnimated ? { transform: [{ translateY: floatY }] } : null]}
                     >
-                      <PackCover page={page} />
+                      <PackCover page={page} compact={compact} />
                     </AnimatedView>
                   </Pressable>
                 ) : (
                   <Pressable accessible={false} onPress={() => select(i, 'tap')}>
-                    <View style={styles.packFloat}>
-                      <PackCover page={page} />
+                    <View style={[styles.packFloat, compact && styles.packCompact]}>
+                      <PackCover page={page} compact={compact} />
                     </View>
                   </Pressable>
                 )}
@@ -425,6 +427,9 @@ const styles = StyleSheet.create({
     paddingTop: PAGE_PADDING_TOP,
     paddingBottom: PAGE_PADDING_BOTTOM,
   },
+  pageCompact: { paddingTop: 0, paddingBottom: 4 },
+  packCompact: { width: 84, height: 120 },
+  haloCompact: { width: 156, height: 156, borderRadius: 156 },
   // The neighbours: smaller and dimmed, static (no animated interpolation).
   peek: {
     opacity: 0.5,

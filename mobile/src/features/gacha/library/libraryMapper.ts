@@ -20,7 +20,7 @@ export type LibraryCardStatus = 'missing' | 'new' | 'learning' | 'mastered';
 export type LibraryCardBadgeTone = LibraryCardStatus;
 // Now includes the gacha rarity dimension. Real Pokedex players
 // also want to slice by COM/RAR/LEG, not just by SRS state.
-export type LibraryFilter = 'all' | 'new' | 'learning' | 'mastered' | 'rare' | 'legendary';
+export type LibraryFilter = 'owned' | 'all' | 'new' | 'learning' | 'mastered' | 'rare' | 'legendary';
 
 export type LibraryCardRow = {
   stableUid: string;
@@ -63,7 +63,7 @@ export type LibraryCardRow = {
 
 export type LibraryFilterChip = {
   key: LibraryFilter;
-  label: 'All' | 'New' | 'Learning' | 'Mastered' | 'Rare' | 'Legendary';
+  label: 'My cards' | 'All cards' | 'New' | 'Learning' | 'Mastered' | 'Rare' | 'Legendary';
   count: number;
 };
 
@@ -207,6 +207,7 @@ export function buildLibraryVM(params: {
   ownedSet?: OwnedGate;
   topicFilter?: string | null;
   mcqEnabled?: boolean;
+  searchQuery?: string;
 }): LibraryViewModel {
   const {
     deck,
@@ -220,6 +221,7 @@ export function buildLibraryVM(params: {
     ownedSet = null,
     topicFilter = null,
     mcqEnabled = true,
+    searchQuery = '',
   } = params;
   const rows = buildLibraryCardRows({ deck, progress, now, isTrial, previewTotal, ownedSet, mcqEnabled });
   // Gated, these three read "of the cards you hold" -- an unowned card carries
@@ -253,7 +255,9 @@ export function buildLibraryVM(params: {
   // Filter resolver — SRS dimensions and rarity dimensions are
   // independent. Only one filter active at a time (single-select chips).
   const statusFiltered =
-    filter === 'all'
+    filter === 'owned'
+      ? rows.filter((item) => !item.isMissing)
+      : filter === 'all'
       ? rows
       : filter === 'new'
         ? rows.filter((item) => item.status === 'new')
@@ -291,7 +295,7 @@ export function buildLibraryVM(params: {
   const untaggedCount = rows.filter((row) => row.topic === null).length;
   const topics: LibraryTopicChip[] = hasTopics
     ? [
-        { key: 'all', label: 'All', count: rows.length },
+        { key: 'all', label: 'All topics', count: rows.length },
         ...topicOrder.map((key) => ({ key, label: topicLabel.get(key) ?? key, count: topicCount.get(key) ?? 0 })),
         ...(untaggedCount > 0 ? [{ key: UNTAGGED_TOPIC_KEY, label: UNTAGGED_TOPIC_LABEL, count: untaggedCount }] : []),
       ]
@@ -303,14 +307,22 @@ export function buildLibraryVM(params: {
   // Grouping IS the order: topic groups in chip order (All first, sorted topics, Untagged last),
   // OrderInDeck inside a group. Copy before sorting —
   // for filter === 'all' the resolver hands back `rows` itself.
+  const query = searchQuery.trim().toLocaleLowerCase();
+  const numberQuery = /^#?0*(\d+)$/.exec(query);
+  const searched = !query ? statusFiltered : statusFiltered.filter((row) =>
+    row.stableUid.toLocaleLowerCase().includes(query) ||
+    row.question.toLocaleLowerCase().includes(query) ||
+    (numberQuery !== null && row.rank === Number(numberQuery[1])),
+  );
   const cards = !hasTopics
-    ? statusFiltered
-    : [...statusFiltered]
+    ? searched
+    : [...searched]
         .filter((row) => effectiveTopicFilter === null || groupKeyOf(row) === effectiveTopicFilter)
         .sort((a, b) => rank(a) - rank(b) || a.orderInDeck - b.orderInDeck);
 
   const filters: LibraryFilterChip[] = [
-    { key: 'all', label: 'All', count: rows.length },
+    { key: 'owned', label: 'My cards', count: ownedCount },
+    { key: 'all', label: 'All cards', count: rows.length },
     { key: 'new', label: 'New', count: newCount },
     { key: 'learning', label: 'Learning', count: learningCount },
     { key: 'mastered', label: 'Mastered', count: masteredCount },

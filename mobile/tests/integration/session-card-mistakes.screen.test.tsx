@@ -1,3 +1,4 @@
+vi.mock('expo-crypto', () => ({ randomUUID: () => 'review-intent-id' }));
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -125,6 +126,15 @@ vi.mock('../../src/content/activeDeck', () => ({
 }));
 
 vi.mock('../../src/review/storage', () => ({
+  captureProgressUserSub: vi.fn(async () => 'anon'),
+  updateDeckProgress: vi.fn(async (deck: any, update: any, sub?: string) => {
+    const storage = await import('../../src/review/storage');
+    const fresh = await storage.loadDeckProgress(deck, sub);
+    const next = await update(fresh);
+    if (next !== fresh) await storage.saveDeckProgress(deck, next, sub);
+    vi.mocked(storage.loadDeckProgress).mockResolvedValue(next);
+    return next;
+  }),
   loadDeckProgress: vi.fn(async () => []),
   saveDeckProgress: vi.fn(async () => {}),
   loadOrInitDailyStats: vi.fn(async () => ({ dateKey: '2026-09-22', plannedCount: 0, doneCount: 0 })),
@@ -404,14 +414,15 @@ describe('SessionCardScreen Mistake Book hook', () => {
       rating: 'again',
       mcqVerdict: null,
       at: FIXED_NOW_MS,
-    });
+    }, 'anon');
     expect(vi.mocked(recordMistakeOutcome).mock.calls[0][0].at).toEqual(expect.any(Number));
     expect(recordReviewEvent).toHaveBeenCalledTimes(1);
     const eventOrder = vi.mocked(recordReviewEvent).mock.invocationCallOrder[0];
     const mistakeOrder = vi.mocked(recordMistakeOutcome).mock.invocationCallOrder[0];
     const saveOrder = vi.mocked(saveDeckProgress).mock.invocationCallOrder[0];
     expect(mistakeOrder).toBeGreaterThan(eventOrder);
-    expect(saveOrder).toBeGreaterThan(mistakeOrder);
+    expect(saveOrder).toBeGreaterThan(eventOrder);
+    expect(mistakeOrder).toBeGreaterThan(saveOrder);
     expect(navigation.replace).toHaveBeenCalledWith('SessionSummary', SUMMARY);
   });
 
@@ -478,7 +489,7 @@ describe('SessionCardScreen Mistake Book hook', () => {
       rating: 'again',
       mcqVerdict: 'wrong',
       at: FIXED_NOW_MS,
-    });
+    }, 'anon');
     expect(navigation.replace).toHaveBeenCalledWith('SessionSummary', expect.objectContaining({ picks: { landed: 0, answered: 1 } }));
   });
 });

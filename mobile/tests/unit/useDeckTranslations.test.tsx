@@ -99,7 +99,7 @@ describe('useDeckTranslations', () => {
     expect(translationsForCard(last(), 'card-2')).toBeUndefined();
   });
 
-  it('is none for a deck without translations, an empty map or a failed read', async () => {
+  it('distinguishes no translations from a failed read and supports retry', async () => {
     await mount('claude-ccdv-f');
     await settle(0, null);
     expect(last()).toBe(DECK_TRANSLATIONS_NONE);
@@ -115,7 +115,16 @@ describe('useDeckTranslations', () => {
       reads[2].reject(new Error('read failed'));
     });
     await flush();
-    expect(last()).toBe(DECK_TRANSLATIONS_NONE);
+    expect(last().status).toBe('error');
+    const failure = last();
+    if (failure.status !== 'error') throw new Error('Expected retryable read error');
+    await act(async () => { failure.retry(); });
+    await flush();
+    expect(last().status).toBe('loading');
+    expect(reads).toHaveLength(4);
+    const restored = new Map([['card-1', ZH]]);
+    await settle(3, restored);
+    expect(mapOf(last())).toBe(restored);
     expect(translationsForCard(DECK_TRANSLATIONS_NONE, 'card-1')).toBeUndefined();
     expect(translationsForCard(DECK_TRANSLATIONS_LOADING, 'card-1')).toBeUndefined();
   });
@@ -173,7 +182,7 @@ describe('useDeckTranslations', () => {
     await act(async () => {
       vi.advanceTimersByTime(1);
     });
-    expect(last()).toBe(DECK_TRANSLATIONS_NONE);
+    expect(last().status).toBe('error');
 
     const map = new Map([['card-1', ZH]]);
     await settle(0, map);

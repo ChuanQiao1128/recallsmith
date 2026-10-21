@@ -1,3 +1,4 @@
+vi.mock('expo-crypto', () => ({ randomUUID: () => 'review-intent-id' }));
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -132,6 +133,11 @@ vi.mock('../../src/review/storage', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/review/storage')>();
   return {
     ...actual,
+    updateDeckProgress: vi.fn(async (_deck: any, update: any) => {
+      const next = await update(progressState.map(entry => ({ ...entry })));
+      progressState = next.map((entry: any) => ({ ...entry }));
+      return next;
+    }),
     loadDeckProgress: vi.fn(async () => progressState.map((entry) => ({ ...entry }))),
     saveDeckProgress: vi.fn(async (_deck: any, next: any[]) => {
       progressState = next.map((entry) => ({ ...entry }));

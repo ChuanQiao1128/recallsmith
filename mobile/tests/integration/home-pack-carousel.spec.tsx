@@ -1,3 +1,4 @@
+vi.mock('../../src/features/gacha/components/ProgressSyncStatus', () => ({ ProgressSyncStatus: () => null }));
 // 2026-10-18 home carousel: Home's cover is a horizontal swipe carousel, one page per visible pack in
 // DECK_ORDER. A swipe, a dot, a peek or a VoiceOver pack action only selects a pack; installed packs
 // become the app-wide active deck, exactly as a pack-tile tap did. The cover keeps every install,
@@ -6,6 +7,7 @@ import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+let windowHeightFixture = 844;
 let walletFixture = { availablePulls: 0, reservePulls: 0 };
 let activeSlugFixture: string | null = 'aws-saa-fundamentals';
 let deckSummariesFixture: any[] = [];
@@ -44,7 +46,7 @@ vi.mock('react-native', () => {
         { ...props, onPress },
         typeof children === 'function' ? children({ pressed: false }) : children,
       ),
-    useWindowDimensions: () => ({ width: 390, height: 844, scale: 3, fontScale: 1 }),
+    useWindowDimensions: () => ({ width: 390, height: windowHeightFixture, scale: 3, fontScale: 1 }),
     AccessibilityInfo: {
       isReduceMotionEnabled: vi.fn(async () => reduceMotionFixture),
       addEventListener: vi.fn(() => ({ remove: vi.fn() })),
@@ -290,6 +292,7 @@ async function press(node: renderer.ReactTestInstance) {
 
 describe('HomeScreen cover carousel', () => {
   beforeEach(() => {
+    windowHeightFixture = 844;
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
     walletFixture = { availablePulls: 0, reservePulls: 0 };
     activeSlugFixture = 'aws-saa-fundamentals';
@@ -628,15 +631,40 @@ describe('HomeScreen cover carousel', () => {
     else expect(loopStartMock).toHaveBeenCalled();
   });
 
-  it('counts only the selected pack in the hero headline and the header line', async () => {
+  it('keeps the real pack artwork compact so the primary task and Today summary fit sooner', async () => {
+    const tree = await renderHome();
+    const coverFrames = featured(tree).findAll((node) => {
+      const styles = Array.isArray(node.props.style) ? node.props.style : [node.props.style];
+      return styles.some((style: any) => style?.width === 126 && style?.height === 180);
+    });
+    expect(coverFrames.length).toBeGreaterThan(0);
+    expect(primaryCtaLabel(tree)).toBeTruthy();
+    expect(todayDeckTitle(tree)).toBe(featuredTitle(tree));
+  });
+
+  it('uses a single compact Today summary and smaller artwork on a 375x667 screen', async () => {
+    windowHeightFixture = 667;
+    const tree = await renderHome();
+    expect(hostNodes(tree, (node) => node.props?.testID === 'home-today-compact')).toHaveLength(1);
+    expect(hostNodes(tree, (node) => node.props?.testID === 'home-today-count-grid')).toHaveLength(1);
+    const frames = featured(tree).findAll((node) => {
+      const styles = Array.isArray(node.props.style) ? node.props.style : [node.props.style];
+      return styles.some((style: any) => style?.width === 84 && style?.height === 120);
+    });
+    expect(frames.length).toBeGreaterThan(0);
+    expect(primaryCtaLabel(tree)).toBeTruthy();
+    expect(textOf(tree, 'home-today-count-normal')).toBeDefined();
+  });
+
+  it('counts the selected pack once in the hero and avoids a repeated due-count header', async () => {
     const tree = await renderHome();
     // AWS Architect Basics has 1 due; SAA-C03 has 4; the three packs together have 5.
     expect(textOf(tree, 'home-hero-title')).toBe('1 card waiting');
-    expect(textOf(tree, 'home-header-subtitle')).toBe('1 card waiting today');
+    expect(textOf(tree, 'home-header-subtitle')).toBeNull();
 
     await swipeEnd(tree, HOME_PACK_PAGE_WIDTH);
     expect(textOf(tree, 'home-hero-title')).toBe('4 cards waiting');
-    expect(textOf(tree, 'home-header-subtitle')).toBe('4 cards waiting today');
+    expect(textOf(tree, 'home-header-subtitle')).toBeNull();
 
     // Nothing due on Claude CCDV-F: no "cards waiting" over its Open library.
     await swipeEnd(tree, 2 * HOME_PACK_PAGE_WIDTH);
@@ -677,7 +705,7 @@ describe('HomeScreen cover carousel', () => {
       expect(textOf(tree, 'home-hero-title')?.trim().length).toBeGreaterThan(0);
       expect(textOf(tree, 'home-draw-status-badge')?.length).toBeGreaterThan(0);
     }
-    expect([...seen].sort()).toEqual(['spacer', 'status']);
+    expect([...seen].sort()).toEqual(['spacer']);
   });
 
   it('keeps one fixed line under the Today card: the update notice, else the goal line, else nothing', async () => {

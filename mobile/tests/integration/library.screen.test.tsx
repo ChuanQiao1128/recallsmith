@@ -42,6 +42,7 @@ vi.mock('react-native', () => {
   return {
     View: ({ children, ...props }: any) => React.createElement('View', props, children),
     Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
+    TextInput: (props: any) => React.createElement('TextInput', props),
     ScrollView: ({ children, ...props }: any) => React.createElement('ScrollView', props, children),
     FlatList: ({ data = [], renderItem, ListHeaderComponent, ListEmptyComponent, ...props }: any) =>
       React.createElement(

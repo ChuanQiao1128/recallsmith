@@ -73,8 +73,8 @@ function parseSeed(raw: string): NewCardLedgerSeed {
 /** { ledger, present }. present=false when the key is absent. Throws on a storage error (callers
  *  fail closed). A corrupt value reads as { ledger: {}, present: true }. `present` describes the KEY,
  *  not seeded-ness -- see readNewCardLedgerSeed for that. */
-export async function readNewCardLedger(slug: string): Promise<{ ledger: NewCardLedger; present: boolean }> {
-  const key = await getUserScopedKey(`${NEW_CARD_LEDGER_PREFIX}${slug}`);
+export async function readNewCardLedger(slug: string, userSub?: string): Promise<{ ledger: NewCardLedger; present: boolean }> {
+  const key = await getUserScopedKey(`${NEW_CARD_LEDGER_PREFIX}${slug}`, userSub);
   const raw = await AsyncStorage.getItem(key);
   if (raw == null) return { ledger: {}, present: false };
   return { ledger: parseLedger(raw), present: true };
@@ -82,8 +82,8 @@ export async function readNewCardLedger(slug: string): Promise<{ ledger: NewCard
 
 /** The seeded marker for this partition and slug, or null when the partition has never been seeded.
  *  Throws on a storage error (callers fail closed). */
-export async function readNewCardLedgerSeed(slug: string): Promise<NewCardLedgerSeed | null> {
-  const key = await getUserScopedKey(`${NEW_CARD_LEDGER_SEEDED_PREFIX}${slug}`);
+export async function readNewCardLedgerSeed(slug: string, userSub?: string): Promise<NewCardLedgerSeed | null> {
+  const key = await getUserScopedKey(`${NEW_CARD_LEDGER_SEEDED_PREFIX}${slug}`, userSub);
   const raw = await AsyncStorage.getItem(key);
   if (raw == null) return null;
   return parseSeed(raw);
@@ -106,9 +106,12 @@ export async function seedNewCardLedgerIfAbsent(
   progress: CardProgress[],
   nowMs: number = Date.now(),
   extraLearnedUids?: SeedLearnedUidsSource,
+  userSub?: string,
 ): Promise<NewCardLedger> {
-  const seed = await readNewCardLedgerSeed(slug);
-  const { ledger } = await readNewCardLedger(slug);
+  const scope = await getUserScopedKey('', userSub);
+  const capturedSub = userSub ?? scope.slice('devcards:u:'.length, -1);
+  const seed = await readNewCardLedgerSeed(slug, capturedSub);
+  const { ledger } = await readNewCardLedger(slug, capturedSub);
   if (seed != null) return ledger;
 
   const seeded: NewCardLedger = { ...ledger };
@@ -129,9 +132,9 @@ export async function seedNewCardLedgerIfAbsent(
   }
   // Write even when the seed is {} -- an empty deck of learned cards still marks the
   // partition seeded, so a later brand-new card on it pays exactly once.
-  const ledgerKey = await getUserScopedKey(`${NEW_CARD_LEDGER_PREFIX}${slug}`);
+  const ledgerKey = `${scope}${NEW_CARD_LEDGER_PREFIX}${slug}`;
   await AsyncStorage.setItem(ledgerKey, JSON.stringify(seeded));
-  const markerKey = await getUserScopedKey(`${NEW_CARD_LEDGER_SEEDED_PREFIX}${slug}`);
+  const markerKey = `${scope}${NEW_CARD_LEDGER_SEEDED_PREFIX}${slug}`;
   const marker: NewCardLedgerSeed = { seededAtMs: nowMs, backfilled };
   await AsyncStorage.setItem(markerKey, JSON.stringify(marker));
   return seeded;
@@ -139,14 +142,14 @@ export async function seedNewCardLedgerIfAbsent(
 
 /** paid=false when the uid is already present (any value, including 0) or storage fails; otherwise
  *  writes ledger[uid] = nowMs FIRST and returns paid=true. Never throws. Does not seed. */
-export async function payNewCardIfUnpaid(slug: string, stableUid: string, nowMs: number): Promise<{ paid: boolean; ledger: NewCardLedger }> {
+export async function payNewCardIfUnpaid(slug: string, stableUid: string, nowMs: number, userSub?: string): Promise<{ paid: boolean; ledger: NewCardLedger }> {
   let ledger: NewCardLedger = {};
   try {
-    const read = await readNewCardLedger(slug);
-    ledger = read.ledger;
+    const key = await getUserScopedKey(`${NEW_CARD_LEDGER_PREFIX}${slug}`, userSub);
+    const raw = await AsyncStorage.getItem(key);
+    ledger = raw == null ? {} : parseLedger(raw);
     if (hasUid(ledger, stableUid)) return { paid: false, ledger };
     const next: NewCardLedger = { ...ledger, [stableUid]: nowMs };
-    const key = await getUserScopedKey(`${NEW_CARD_LEDGER_PREFIX}${slug}`);
     await AsyncStorage.setItem(key, JSON.stringify(next));
     return { paid: true, ledger: next };
   } catch {
@@ -200,10 +203,10 @@ export function countPaidOnDay(ledger: NewCardLedger, now: Date): number {
  *  differs from today. Never throws (storage error → false). DUE_CLEAR_MARKER_KEY stays exported and
  *  unchanged as the base. */
 export const DUE_CLEAR_MARKER_KEY = 'recallsmith:due-clear:v1';
-export async function markDueClearedIfFirstToday(now: Date, slug: string): Promise<boolean> {
+export async function markDueClearedIfFirstToday(now: Date, slug: string, userSub?: string): Promise<boolean> {
   const today = formatDateKey(now);
   try {
-    const key = await getUserScopedKey(`${DUE_CLEAR_MARKER_KEY}:${slug}`);
+    const key = await getUserScopedKey(`${DUE_CLEAR_MARKER_KEY}:${slug}`, userSub);
     const marker = await AsyncStorage.getItem(key);
     if (marker === today) return false;
     await AsyncStorage.setItem(key, today);

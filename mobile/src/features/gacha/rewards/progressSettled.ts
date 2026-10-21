@@ -48,18 +48,18 @@ export type ProgressSettledState =
   | { settled: false; reason: 'no-pull-landed' | 'storage-error' };
 
 /** Never throws: a storage error reads as unsettled (fail closed: no seed, no R1). */
-export async function readProgressSettled(slug: string): Promise<ProgressSettledState> {
+export async function readProgressSettled(slug: string, userSub?: string): Promise<ProgressSettledState> {
   try {
-    const scope = await getUserScopedKey('');
+    const scope = await getUserScopedKey('', userSub);
     if (scope.startsWith(ANON_USER_SCOPE_PREFIX)) return { settled: true, reason: 'anon' };
 
-    const cacheKey = await getUserScopedKey(`${REMOTE_PROGRESS_CACHE_KEY_PREFIX}${slug}`);
+    const cacheKey = `${scope}${REMOTE_PROGRESS_CACHE_KEY_PREFIX}${slug}`;
     if ((await AsyncStorage.getItem(cacheKey)) != null) return { settled: true, reason: 'remote-cache' };
 
-    const cursorMsKey = await getUserScopedKey(REMOTE_PROGRESS_CURSOR_MS_KEY);
+    const cursorMsKey = `${scope}${REMOTE_PROGRESS_CURSOR_MS_KEY}`;
     if ((await AsyncStorage.getItem(cursorMsKey)) != null) return { settled: true, reason: 'remote-cursor' };
 
-    const cursorTokenKey = await getUserScopedKey(REMOTE_PROGRESS_CURSOR_TOKEN_KEY);
+    const cursorTokenKey = `${scope}${REMOTE_PROGRESS_CURSOR_TOKEN_KEY}`;
     if ((await AsyncStorage.getItem(cursorTokenKey)) != null) return { settled: true, reason: 'remote-cursor' };
 
     return { settled: false, reason: 'no-pull-landed' };
@@ -68,6 +68,6 @@ export async function readProgressSettled(slug: string): Promise<ProgressSettled
   }
 }
 
-export async function isProgressSettled(slug: string): Promise<boolean> {
-  return (await readProgressSettled(slug)).settled;
+export async function isProgressSettled(slug: string, userSub?: string): Promise<boolean> {
+  return (await readProgressSettled(slug, userSub)).settled;
 }

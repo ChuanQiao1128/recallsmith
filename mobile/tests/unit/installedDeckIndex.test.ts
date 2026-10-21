@@ -144,4 +144,15 @@ describe('installedDeckIndex', () => {
     expect((await getDeckTranslations('aws-saa-c03'))?.has('translated')).toBe(false);
     expect(vi.mocked(FileSystem.readAsStringAsync)).toHaveBeenCalledTimes(2);
   });
+  it('reports a strict translation read failure separately from an empty language map, then retries', async () => {
+    install('empty', 'build-1', { cards: [{ stableUid: 'e1', question: 'English' }] });
+    const file = install('broken', 'build-1', '{bad-json');
+    const { getDeckTranslations } = await loadModules();
+    expect((await getDeckTranslations('empty', { throwOnError: true }))?.size).toBe(0);
+    await expect(getDeckTranslations('broken', { throwOnError: true })).rejects.toThrow();
+    expect(await getDeckTranslations('broken')).toBeNull();
+    files.set(file, JSON.stringify(DECK));
+    expect((await getDeckTranslations('broken', { throwOnError: true }))?.has('translated')).toBe(true);
+  });
+
 });

@@ -1,3 +1,5 @@
+import { writePendingRating } from '../../src/review/pendingRating';
+vi.mock('expo-crypto', () => ({ randomUUID: () => 'review-intent-id' }));
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -128,6 +130,15 @@ vi.mock('../../src/content/activeDeck', () => ({
 }));
 
 vi.mock('../../src/review/storage', () => ({
+  captureProgressUserSub: vi.fn(async () => 'anon'),
+  updateDeckProgress: vi.fn(async (deck: any, update: any, sub?: string) => {
+    const storage = await import('../../src/review/storage');
+    const fresh = await storage.loadDeckProgress(deck, sub);
+    const next = await update(fresh);
+    if (next !== fresh) await storage.saveDeckProgress(deck, next, sub);
+    vi.mocked(storage.loadDeckProgress).mockResolvedValue(next);
+    return next;
+  }),
   loadDeckProgress: vi.fn(async () => []),
   saveDeckProgress: vi.fn(async () => {}),
   loadOrInitDailyStats: vi.fn(async () => ({ dateKey: '2026-09-22', plannedCount: 0, doneCount: 0 })),
@@ -385,6 +396,76 @@ describe('SessionCardScreen learning step (R22 §6: teach before testing; 2026-1
     warnSpy.mockRestore();
   });
 
+  it('keeps the revealed card on enqueue failure and retries the same event id', async () => {
+    serve([NEW_A], [fresh('new-a')], 1);
+    vi.mocked(recordReviewEvent).mockRejectedValueOnce(new Error('storage full'));
+    const { tree, navigation } = await mount();
+    await press(tree, 'Show answer');
+    await press(tree, 'Got it');
+    expect(saveDeckProgress).not.toHaveBeenCalled();
+    expect(settleRatingReward).not.toHaveBeenCalled();
+    expect(navigation.replace).not.toHaveBeenCalled();
+    expect(pressables(tree, 'Got it')).toHaveLength(1);
+    await press(tree, 'Got it');
+    const calls = vi.mocked(recordReviewEvent).mock.calls;
+    expect((calls[0][0] as any).eventId).toBe((calls[1][0] as any).eventId);
+    expect(navigation.replace).toHaveBeenCalledWith('SessionSummary', expect.anything());
+  });
+
+  it('retries a failed projection without recording or rewarding the review twice', async () => {
+    serve([NEW_A], [fresh('new-a')], 1);
+    vi.mocked(saveDeckProgress).mockRejectedValueOnce(new Error('storage full'));
+    const { tree, navigation } = await mount();
+    await press(tree, 'Show answer'); await press(tree, 'Got it');
+    expect(recordReviewEvent).toHaveBeenCalledTimes(1);
+    expect(settleRatingReward).not.toHaveBeenCalled();
+    expect(navigation.replace).not.toHaveBeenCalled();
+    await press(tree, 'Got it');
+    expect(recordReviewEvent).toHaveBeenCalledTimes(1);
+    expect(settleRatingReward).toHaveBeenCalledTimes(1);
+    expect(navigation.replace).toHaveBeenCalledWith('SessionSummary', expect.anything());
+  });
+
+  it('recovers the same durable intent after leaving a failed projection and reopening', async () => {
+    serve([NEW_A], [fresh('new-a')], 1);
+    vi.mocked(saveDeckProgress).mockRejectedValueOnce(new Error('storage full'));
+    const first = await mount();
+    await press(first.tree, 'Show answer'); await press(first.tree, 'Got it');
+    const event = vi.mocked(recordReviewEvent).mock.calls[0][0] as any;
+    await act(async () => first.tree.unmount());
+    resetSessionStore();
+    const second = await mount();
+    await study(second.tree);
+    const calls = vi.mocked(recordReviewEvent).mock.calls;
+    expect((calls[1][0] as any).eventId).toBe(event.eventId);
+    expect((calls[1][0] as any).reviewedAtMs).toBe(event.reviewedAtMs);
+    expect(settleRatingReward).toHaveBeenCalledTimes(1);
+    expect(second.navigation.replace).toHaveBeenCalledWith('SessionSummary', expect.anything());
+  });
+
+  it('does not reuse a completed journal for a later due review', async () => {
+    const previous = learnedDue('old-c');
+    await writePendingRating('csharp', { sub: 'anon', uid: 'old-c', eventId: 'completed-old-event',
+      queued: true, now: new Date(previous.lastReviewedAt), rating: 'hard', before: [],
+      state: { updatedOne: previous, updatedProgress: [previous] } });
+    serve([LEARNED], [previous], 1);
+    const { tree } = await mount();
+    await press(tree, 'Reveal answer'); await press(tree, 'Remembered');
+    const event = vi.mocked(recordReviewEvent).mock.calls[0][0] as any;
+    expect(event.eventId).not.toBe('completed-old-event');
+    expect(event.reviewedAtMs).toBe(FIXED_NOW_MS);
+  });
+
+  it('rates from fresh durable progress without overwriting a remote update to another card', async () => {
+    serve([NEW_A, NEW_B], [fresh('new-a'), fresh('new-b')], 1);
+    const { tree } = await mount();
+    const remote = { ...learnedDue('new-b'), fsrsStability: 3.5, fsrsDifficulty: 6 };
+    vi.mocked(loadDeckProgress).mockResolvedValue([fresh('new-a'), remote]);
+    await study(tree);
+    const saved = vi.mocked(saveDeckProgress).mock.calls.at(-1)![1];
+    expect(saved.find(p => p.stableUid === 'new-b')).toEqual(remote);
+  });
+
   it('opens a never-reviewed Q/A card on the study view with the question alone and Show answer', async () => {
     serve([NEW_A], [fresh('new-a')], 1);
     const { tree } = await mount();
@@ -507,8 +588,7 @@ describe('SessionCardScreen learning step (R22 §6: teach before testing; 2026-1
     // Mistakes start once a card is learned: the book is told it is the study, and stays empty.
     expect(recordMistakeOutcome).toHaveBeenCalledTimes(1);
     expect(recordMistakeOutcome).toHaveBeenCalledWith(
-      expect.objectContaining({ stableUid: 'new-a', rating: 'hard', learningCheck: true }),
-    );
+      expect.objectContaining({ stableUid: 'new-a', rating: 'hard', learningCheck: true }), 'anon');
     expect(await storedMistakes()).toEqual({});
     // The one-card run is over: straight to the summary, with the reward it paid.
     expect(navigation.replace).toHaveBeenCalledTimes(1);
@@ -600,7 +680,7 @@ describe('SessionCardScreen learning step (R22 §6: teach before testing; 2026-1
     expect(vi.mocked(recordReviewEvent).mock.calls[0][0]).toEqual(
       expect.objectContaining({ stableUid: 'old-c', rating: 'again', reviewStage: 'repeat_review' }),
     );
-    expect(recordMistakeOutcome).toHaveBeenCalledWith(expect.not.objectContaining({ learningCheck: true }));
+    expect(recordMistakeOutcome).toHaveBeenCalledWith(expect.not.objectContaining({ learningCheck: true }), 'anon');
     expect(Object.keys(await storedMistakes())).toEqual(['csharp::old-c']);
     expect(navigation.replace).toHaveBeenCalledWith('SessionSummary', expect.objectContaining({ sessionDone: 1, sessionLimit: 1 }));
   });

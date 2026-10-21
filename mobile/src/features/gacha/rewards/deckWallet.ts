@@ -117,8 +117,8 @@ function parseMarks(raw: unknown): Record<string, number> {
   return marks;
 }
 
-function walletsKey(): Promise<string> {
-  return getUserScopedKey(DECK_WALLETS_KEY);
+function walletsKey(userSub?: string): Promise<string> {
+  return getUserScopedKey(DECK_WALLETS_KEY, userSub);
 }
 
 /** Reads the record for the given resolved key. Throws on a storage read error. */
@@ -153,9 +153,12 @@ async function withRecordWrite<T>(
   apply: (record: DeckWalletsRecord, key: string) =>
     | Promise<{ next: DeckWalletsRecord | null; result: T }>
     | { next: DeckWalletsRecord | null; result: T },
+  userSub?: string,
 ): Promise<T> {
+  // Pin the partition before entering the queue. A queued mutation belongs to
+  // its initiating account even if sign-in changes while another write runs.
+  const key = await walletsKey(userSub);
   return withLock(async () => {
-    const key = await walletsKey();
     const record = await readRecord(key);
     const { next, result } = await apply(record, key);
     if (next) await AsyncStorage.setItem(key, JSON.stringify(next));
@@ -202,6 +205,7 @@ export async function saveDeckWallet(slug: string, wallet: RewardWalletState): P
 export async function updateDeckWallet(
   slug: string,
   updater: (current: RewardWalletState) => Promise<RewardWalletState | null> | RewardWalletState | null,
+  userSub?: string,
 ): Promise<{ before: RewardWalletState; after: RewardWalletState }> {
   return withRecordWrite(async (record) => {
     const before = record.decks[slug] ?? zeroWallet();
@@ -215,13 +219,14 @@ export async function updateDeckWallet(
       decks: { ...record.decks, [slug]: after },
     };
     return { next, result: { before, after } };
-  });
+  }, userSub);
 }
 
 /** Read → applyRewardToWallet → write, for one pack. Same shape as grantPullsToStoredWallet. */
 export async function grantDeckPulls(
   slug: string,
   count: number,
+  userSub?: string,
 ): Promise<{ walletBefore: RewardWalletState; walletAfter: RewardWalletState; applied: AppliedRewardWalletState }> {
   return withRecordWrite((record) => {
     const walletBefore = record.decks[slug] ?? zeroWallet();
@@ -229,7 +234,7 @@ export async function grantDeckPulls(
     const walletAfter: RewardWalletState = { availablePulls: applied.availablePulls, reservePulls: applied.reservePulls };
     const next: DeckWalletsRecord = { ...record, decks: { ...record.decks, [slug]: walletAfter } };
     return { next, result: { walletBefore, walletAfter, applied } };
-  });
+  }, userSub);
 }
 
 /** Read → consumePullsFromWallet → write, for one pack. Same shape as consumePullsFromStoredWallet. */

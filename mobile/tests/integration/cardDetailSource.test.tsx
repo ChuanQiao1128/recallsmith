@@ -72,7 +72,8 @@ vi.mock('../../src/content/deckCache', () => ({
   getCachedDeck: vi.fn(async (slug: string) => DECKS[slug] ?? null),
   invalidateDeckCache: () => {},
 }));
-vi.mock('../../src/review/storage', () => ({ loadDeckProgress: vi.fn(async () => []) }));
+vi.mock('../../src/review/storage', () => ({
+loadDeckProgress: vi.fn(async () => []) }));
 vi.mock('../../src/features/gacha/draw/effectiveOwned', () => ({ resolveEffectiveOwned: vi.fn(async () => ownedFixture) }));
 vi.mock('../../src/content/cardSource', () => ({
   getCardSource: vi.fn(async (_slug: string, uid: string) => SOURCES[uid] ?? null),

@@ -56,7 +56,9 @@ public static class ProgressGet
         -- for exactly those rows. Sending 0 instead would be a lie a client
         -- cannot detect (0 is a real rung).
         srs_stage as "srsStage",
-        scheduler_state as "schedulerState",
+        -- A missing key yields NULL before additive migration 048. Referencing
+        -- the column directly would make every progress GET fail during rollout.
+        to_jsonb(user_progress) -> 'scheduler_state' as "schedulerState",
         (extract(epoch from updated_at) * 1000)::bigint as "updatedAtMs",
         floor(extract(epoch from updated_at) * 1000000)::bigint as "__cursorUs"
       from user_progress

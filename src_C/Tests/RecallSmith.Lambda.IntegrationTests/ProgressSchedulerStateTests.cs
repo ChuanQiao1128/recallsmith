@@ -1,4 +1,9 @@
 using System.Text.Json;
+using Amazon.Lambda.APIGatewayEvents;
+using Npgsql;
+using RecallSmith.Lambda.Common;
+using RecallSmith.Lambda.Db;
+using RecallSmith.Lambda.Vpc.Runtime;
 
 namespace RecallSmith.Lambda.IntegrationTests;
 
@@ -96,5 +101,73 @@ public class ProgressSchedulerStateTests
     await _db.ScalarAsync(sql);
     await _db.ScalarAsync(sql);
     Assert.Equal(JsonValueKind.Null, (await Get(user)).GetProperty("schedulerState").ValueKind);
+  }
+
+  [Fact]
+  public async Task RollingDeployment_WithoutColumn_ServesLegacyAndDefersModelUntilMigration() {
+    // All DDL stays in a scratch database inside the disposable test container.
+    // Never remove the column from the fixture database shared by other tests.
+    var database = $"scheduler_rollout_{Guid.NewGuid():N}";
+    var connectionString = await _db.CreateScratchDatabaseAsync(database);
+    await using var conn = new NpgsqlConnection(connectionString);
+    await conn.OpenAsync();
+    await PostgresFixture.ApplyMigrationsAsync(conn, int.MaxValue);
+    await DbUtil.ExecuteAsync(conn, null, "alter table user_progress drop column scheduler_state", []);
+
+    var previousDatabase = Environment.GetEnvironmentVariable("PGDATABASE");
+    try {
+      Environment.SetEnvironmentVariable("PGDATABASE", database);
+      Pg.Reset();
+      ProgressSchedulerSchema.ResetReadyCache();
+
+      var legacyUser = $"it-rollout-legacy-{Guid.NewGuid():N}";
+      var legacy = Ev(T, new { stage = 2 });
+      Assert.Equal(1, (await Push(legacyUser, legacy)).GetProperty("acceptedCount").GetInt32());
+      Assert.Equal(JsonValueKind.Null, (await Get(legacyUser)).GetProperty("schedulerState").ValueKind);
+
+      var user = $"it-rollout-model-{Guid.NewGuid():N}";
+      var modelId = Guid.NewGuid().ToString();
+      var legacyId = Guid.NewGuid().ToString();
+      var model = Ev(T, State(T, 3), "model", modelId);
+      var stageOnly = Ev(T, new { stage = 2 }, "legacy", legacyId);
+      var response = await PushResponse(user, new { events = new[] { stageOnly, model } });
+      Assert.Equal(503, response.StatusCode);
+      using (var body = JsonDocument.Parse(response.Body)) {
+        Assert.Equal("SCHEDULER_STATE_NOT_READY", body.RootElement.GetProperty("error").GetProperty("code").GetString());
+        // A retryable failure must not acknowledge either half of a mixed batch.
+        Assert.False(body.RootElement.TryGetProperty("acceptedEventIds", out _));
+      }
+      Assert.Equal(0L, await DbUtil.ExecuteScalarAsync(conn, null,
+        "select count(*) from user_progress_events where user_sub = $1", [user]));
+      Assert.Equal(0L, await DbUtil.ExecuteScalarAsync(conn, null,
+        "select count(*) from users where user_sub = $1", [user]));
+
+      var migration = await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "Db", "Migrations", "048_progress_scheduler_state.sql"));
+      await DbUtil.ExecuteAsync(conn, null, migration, []);
+      await DbUtil.ExecuteAsync(conn, null, migration, []);
+
+      // Do not reset readiness: a previously false result must notice the new
+      // column immediately in the same warm process. Reuse the exact event IDs.
+      Assert.Equal(2, (await Push(user, stageOnly, model)).GetProperty("acceptedCount").GetInt32());
+      Assert.Equal(3, (await Get(user, "model")).GetProperty("schedulerState").GetProperty("lapses").GetInt32());
+      Assert.Equal(JsonValueKind.Null, (await Get(user, "legacy")).GetProperty("schedulerState").ValueKind);
+      Assert.Equal(0, (await Push(user, stageOnly, model)).GetProperty("acceptedCount").GetInt32());
+      Assert.Equal(1, (await Get(user, "model")).GetProperty("reviewCount").GetInt32());
+    } finally {
+      Environment.SetEnvironmentVariable("PGDATABASE", previousDatabase);
+      Pg.Reset();
+      ProgressSchedulerSchema.ResetReadyCache();
+    }
+  }
+
+  private static Task<APIGatewayProxyResponse> PushResponse(string user, object body) {
+    var evt = JsonSerializer.SerializeToElement(new {
+      rawPath = "/api/progress/events",
+      requestContext = new { requestId = Guid.NewGuid().ToString(), http = new { method = "POST" } },
+      headers = new Dictionary<string, string>(), body = JsonSerializer.Serialize(body), isBase64Encoded = false
+    });
+    var req = new LambdaRequest(evt);
+    var auth = new AuthContext(new Dictionary<string, JsonElement>(), user, user, [], false, false, false);
+    return ProgressEvents.HandleProgressEvents(req, new Res(req.TraceId), auth);
   }
 }
