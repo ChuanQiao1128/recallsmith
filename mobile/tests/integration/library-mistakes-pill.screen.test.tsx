@@ -1,3 +1,4 @@
+vi.mock('../../src/sync/progressSync', () => ({ applyCachedRemoteProgress: vi.fn(async () => 0) }));
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';

@@ -1,3 +1,4 @@
+import { applyCachedRemoteProgress } from '../sync/progressSync';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -224,6 +225,8 @@ export function LibraryScreen({ navigation, route }: Props) {
           }
         }
 
+        // Pulls may have arrived before the account had this deck installed.
+        await applyCachedRemoteProgress(currentSlug);
         const resolvedProgress = await loadDeckProgress(resolvedDeck);
         const resolvedOwned = await resolveEffectiveOwned(currentSlug, resolvedProgress);
         await setActiveDeckSlug(currentSlug);

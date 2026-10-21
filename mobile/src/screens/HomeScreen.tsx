@@ -1,3 +1,4 @@
+import { subscribeProgressChanges } from '../sync/progressChanges';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -364,6 +365,8 @@ export function HomeScreen({ navigation, route }: Props) {
     [isPremiumUser, isSignedIn],
   );
   const runRefresh = useCallback(async () => {
+    const refreshUser = authUserSub;
+    const scopeCurrent = () => isMountedRef.current && (typeof useAuthStore.getState !== 'function' || useAuthStore.getState().userSub === refreshUser);
     // Phase 1 (cache-first): build the VM from the cached manifest and the
     // decks already on the phone -- no network -- so Home paints immediately.
     try {
@@ -371,7 +374,7 @@ export function HomeScreen({ navigation, route }: Props) {
         loadHomeDeckSummaries({ premium: isPremiumUser, remote: false }),
         loadStreakSnapshot(),
       ]);
-      if (!isMountedRef.current) return;
+      if (!scopeCurrent()) return;
       const currentSelectedSlug = selectedSlugRef.current;
       const activeSlug = currentSelectedSlug ?? summary.deckSummaries[0]?.slug ?? null;
       if (!currentSelectedSlug && activeSlug) {
@@ -390,12 +393,12 @@ export function HomeScreen({ navigation, route }: Props) {
         deckSummaries: summary.deckSummaries,
         now,
       });
-      if (!isMountedRef.current) return;
+      if (!scopeCurrent()) return;
       homeInputsRef.current = { summary, deckWallets, streak };
       startAutoUpdates(summary);
       publishReadyVm(homeInputsRef.current);
     } catch {
-      if (!isMountedRef.current) return;
+      if (!scopeCurrent()) return;
       const currentSelectedSlug = selectedSlugRef.current;
       const fallbackWallet = currentSelectedSlug
         ? await loadDeckWallet(currentSelectedSlug).catch(() => ({
@@ -403,6 +406,7 @@ export function HomeScreen({ navigation, route }: Props) {
             reservePulls: 0,
           }))
         : { availablePulls: 0, reservePulls: 0 };
+      if (!scopeCurrent()) return;
       const vm = buildHomeScreenVM({
         state: 'error',
         hasSignedInUser: isSignedIn,
@@ -422,14 +426,14 @@ export function HomeScreen({ navigation, route }: Props) {
     // Home already rendered is the wallet it keeps.
     try {
       const summary = await loadHomeDeckSummaries({ premium: isPremiumUser, remote: true });
-      if (!isMountedRef.current || !homeInputsRef.current) return;
+      if (!scopeCurrent() || !homeInputsRef.current) return;
       homeInputsRef.current = { ...homeInputsRef.current, summary };
       startAutoUpdates(summary);
       publishReadyVm(homeInputsRef.current);
     } catch {
       // Revalidation is best effort; the cache-first VM stands.
     }
-  }, [isPremiumUser, isSignedIn, publishReadyVm, startAutoUpdates]);
+  }, [authUserSub, isPremiumUser, isSignedIn, publishReadyVm, startAutoUpdates]);
   useEffect(() => {
     runRefreshRef.current = runRefresh;
   }, [runRefresh]);
@@ -443,6 +447,9 @@ export function HomeScreen({ navigation, route }: Props) {
   useEffect(() => {
     refreshHomeRef.current = refreshHome;
   }, [refreshHome]);
+  useEffect(() => subscribeProgressChanges(({ userSub }) => {
+    if (userSub === authUserSub && isMountedRef.current) void refreshHome();
+  }), [authUserSub, refreshHome]);
   // Rebuilds the VM for a newly selected pack from the inputs already in hand --
   // no loadHomeDeckSummaries, no storage read, no network -- so a swipe or a dot
   // tap switches instantly. Falls back to a full refresh only before the first

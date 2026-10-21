@@ -19,6 +19,8 @@ import {
 import { clampStage, MAX_NEXT_REVIEW_HORIZON_MS } from '../review/model';
 import { isFsrsEnabled } from '../config/featureFlags';
 import type { CardProgress } from '../review/model';
+import { notifyProgressChanged } from './progressChanges';
+import { schedulerStatePatch, schedulerStateKeys } from './schedulerState';
 
 /**
  * Progress Sync 的设计
@@ -90,6 +92,7 @@ type ProgressItem = {
   // servers), which is what keeps inferStageFromIntervalMs alive as a fallback.
   srsStage?: number | string | null;
 
+  schedulerState?: unknown;
   updatedAtMs: number | string | null;
 };
 
@@ -1129,6 +1132,9 @@ export function mergeRemoteIntoLocalProgress(
     // tie, and a tie is exactly where "first row in the array wins" comes back.
     // -1 sorts a missing stage below every real rung (0..6).
     if ((a.srsStage ?? -1) !== (b.srsStage ?? -1)) return (a.srsStage ?? -1) - (b.srsStage ?? -1);
+    const stateA = JSON.stringify(schedulerStatePatch(a.row.schedulerState, a.lastReviewedAt));
+    const stateB = JSON.stringify(schedulerStatePatch(b.row.schedulerState, b.lastReviewedAt));
+    if (stateA !== stateB) return stateA < stateB ? -1 : 1;
     const au = String(a.row?.stableUid ?? '');
     const bu = String(b.row?.stableUid ?? '');
     return au < bu ? -1 : au > bu ? 1 : 0;
@@ -1207,6 +1213,15 @@ export function mergeRemoteIntoLocalProgress(
     // A null remote stage is left alone rather than written: that is a legacy
     // row, and storage.ts still infers its stage from the interval.
     const remoteStagePatch = remote.srsStage != null ? { stage: remote.srsStage } : {};
+    const coreChanged = (remote.hasNext && remoteNext !== localNext)
+      || (remote.srsStage != null && remote.srsStage !== p.stage);
+    // Old rows remain null after migration. Do not erase the only surviving
+    // model on an existing device when that row describes the same review.
+    // A different winning review/schedule must never inherit that old model.
+    const modelPatch = remote.row.schedulerState != null || remoteLast > localLast
+      || (remoteLast === localLast && coreChanged)
+      ? schedulerStatePatch(remote.row.schedulerState, remoteLast) : {};
+    const modelChanged = schedulerStateKeys.some(key => key in modelPatch && p[key] !== modelPatch[key]);
 
     // A deck revision pulled this card back to due (see reconcileProgressWithDeck
     // in review/storage.ts) AFTER the review the remote row describes. The
@@ -1238,23 +1253,24 @@ export function mergeRemoteIntoLocalProgress(
         lastReviewedAt: remoteLast,
         nextReviewAt: remoteNext,
         ...remoteStagePatch,
+        ...modelPatch,
       } as any;
     }
 
     // Case B: lastReviewedAt 相同，但远端带 nextReviewAtMs（Phase3）
     if (
       !keepLocalSchedule &&
-      remote.hasNext &&
       remoteLast === localLast &&
-      remoteNext > 0 &&
-      remoteNext !== localNext
+      ((remote.hasNext && remoteNext > 0 && remoteNext !== localNext) ||
+       (remote.srsStage != null && remote.srsStage !== p.stage) || modelChanged)
     ) {
       changed = true;
       appliedCount += 1;
       return {
         ...p,
-        nextReviewAt: remoteNext,
+        nextReviewAt: remote.hasNext ? remoteNext : localNext,
         ...remoteStagePatch,
+        ...modelPatch,
       } as any;
     }
 
@@ -1277,6 +1293,7 @@ export function mergeRemoteIntoLocalProgress(
       // Same rule as above: adopt the server's rung when it has one, and stay
       // silent when it does not, so the interval fallback keeps its job.
       ...(remote.srsStage != null ? { stage: remote.srsStage } : {}),
+      ...schedulerStatePatch(remote.row.schedulerState, remote.lastReviewedAt),
     } as any);
   }
 
@@ -1424,11 +1441,14 @@ async function pullProgressPageAndApply(
     }
   }
 
+  if (_userSubMem !== userSub) return { pulled: items.length, applied: 0, hasMore: false };
+
   // 2) apply to installed decks only
   let applied = 0;
 
   for (const [deckSlug, rows] of byDeck.entries()) {
     const deck: any = await resolveDeckBySlug(deckSlug);
+    if (_userSubMem !== userSub) return { pulled: items.length, applied, hasMore: false };
     if (!deck) continue;
 
     // 过滤 deck 不存在的 stableUid
@@ -1436,11 +1456,13 @@ async function pullProgressPageAndApply(
     const filteredRows =
       uidSet.size > 0 ? rows.filter((r) => uidSet.has(String(r?.stableUid ?? '').trim())) : rows;
 
-    const local = await loadDeckProgress(deck);
+    const local = await loadDeckProgress(deck, userSub);
+    if (_userSubMem !== userSub) return { pulled: items.length, applied, hasMore: false };
     const { merged, changed, appliedCount } = mergeRemoteIntoLocalProgress(local, filteredRows);
 
     if (changed) {
-      await saveDeckProgress(deck, merged);
+      await saveDeckProgress(deck, merged, userSub);
+      if (_userSubMem === userSub) notifyProgressChanged({ userSub, deckSlug });
       applied += appliedCount;
     }
   }
@@ -1493,6 +1515,7 @@ async function syncProgressOnce(
       timeoutMs: 12000,
     });
 
+    if (_userSubMem !== userSub) return stopped(0);
     const serverSub = boot?.data?.userSub ? String(boot.data.userSub).trim() : null;
     if (serverSub && serverSub !== userSub) {
       // token 解析不到 / 解析错时，bootstrap 是最终真相
@@ -1853,11 +1876,14 @@ export async function applyCachedRemoteProgress(deckSlug: string): Promise<numbe
 
   if (rows.length === 0) return 0;
 
-  const local = await loadDeckProgress(deck);
+  if (_userSubMem !== userSub) return 0;
+  const local = await loadDeckProgress(deck, userSub);
+  if (_userSubMem !== userSub) return 0;
   const { merged, changed, appliedCount } = mergeRemoteIntoLocalProgress(local, rows);
 
   if (changed) {
-    await saveDeckProgress(deck, merged);
+    await saveDeckProgress(deck, merged, userSub);
+    if (_userSubMem === userSub) notifyProgressChanged({ userSub, deckSlug });
   }
 
   return appliedCount;

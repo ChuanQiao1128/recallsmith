@@ -1,3 +1,6 @@
+import { applyCachedRemoteProgress } from '../../src/sync/progressSync';
+import { loadDeckProgress } from '../../src/review/storage';
+vi.mock('../../src/sync/progressSync', () => ({ applyCachedRemoteProgress: vi.fn(async () => 0) }));
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -183,6 +186,8 @@ describe('LibraryScreen install path (I2)', () => {
       csharp: { remoteUrl: 'https://cdn.example.com/content/csharp.json', remoteVersion: 'v1', remoteSha256: null },
     };
     installDeckOkFixture = true;
+    vi.mocked(loadDeckProgress).mockClear();
+    vi.mocked(applyCachedRemoteProgress).mockClear();
 
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
@@ -204,6 +209,9 @@ describe('LibraryScreen install path (I2)', () => {
     const text = collectText(tree);
     expect(text).not.toContain('Library unavailable');
     expect(text).not.toContain('Deck is not installed yet');
+    expect(applyCachedRemoteProgress).toHaveBeenCalledWith('csharp');
+    expect(vi.mocked(applyCachedRemoteProgress).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(loadDeckProgress).mock.invocationCallOrder[0]);
   });
 
   it('shows the unavailable state with a Go to Home CTA when the deck cannot be installed', async () => {

@@ -33,7 +33,8 @@ public static class ProgressEvents
     int? CardRevision,
     int? StatedDifficulty,
     int? SrsStage,
-    string? SchedulerVersion);
+    string? SchedulerVersion,
+    string? SchedulerState);
 
   // The ladder in mobile/src/review/model.ts has 7 buckets (INTERVALS_DAYS),
   // so a valid stage is 0..6. The client clamps with clampStage() before it
@@ -271,7 +272,9 @@ public static class ProgressEvents
           CardRevision: cardRevision,
           StatedDifficulty: statedDifficulty,
           SrsStage: srsStage,
-          SchedulerVersion: schedulerVersion));
+          SchedulerVersion: schedulerVersion,
+          SchedulerState: ProgressSchedulerState.Normalize(
+            e.TryGetProperty("progressAfter", out var pa) ? pa : null, eventTimeMs)));
       }
 
       // The frozen client (progressSync.ts) only drops acceptedEventIds ∪ duplicateEventIds, so
@@ -414,9 +417,10 @@ public static class ProgressEvents
       foreach (var ev in normalized)
       {
         if (!stageSeen.Add(ev.EventId)) continue;
-        stageRows.Add($"({P(ref idx)}::uuid, {P(ref idx)}::smallint)");
+        stageRows.Add($"({P(ref idx)}::uuid, {P(ref idx)}::smallint, {P(ref idx)}::jsonb)");
         parameters.Add(ev.EventId);
         parameters.Add(ev.SrsStage);
+        parameters.Add(ev.SchedulerState);
       }
 
       var ingestSql = $"""
@@ -468,9 +472,10 @@ public static class ProgressEvents
             i.last_seen_revision,
             i.deck_version,
             s.srs_stage,
+            s.scheduler_state,
             i.scheduler_version
           from ins i
-          join (values {string.Join(", ", stageRows)}) as s(event_id, srs_stage)
+          join (values {string.Join(", ", stageRows)}) as s(event_id, srs_stage, scheduler_state)
             on s.event_id = i.event_id
           -- event_id is the last-resort tiebreak, and it is not decoration.
           -- `distinct on` returns an UNSPECIFIED row among ties, so with
@@ -503,6 +508,7 @@ public static class ProgressEvents
             l.last_seen_revision,
             l.deck_version,
             l.srs_stage,
+            l.scheduler_state,
             l.scheduler_version
           from agg a
           join last_row l using (user_sub, deck_slug, stable_uid)
@@ -513,7 +519,7 @@ public static class ProgressEvents
             status, last_rating, last_reviewed_at,
             review_count, due_at,
             last_seen_revision,
-            srs_stage, last_scheduler_version,
+            srs_stage, last_scheduler_version, scheduler_state,
             updated_at
           )
           select
@@ -526,6 +532,7 @@ public static class ProgressEvents
             last_seen_revision,
             srs_stage,
             scheduler_version as last_scheduler_version,
+            scheduler_state,
             now() as updated_at
           from merged
           on conflict (user_sub, deck_slug, stable_uid)
@@ -576,6 +583,12 @@ public static class ProgressEvents
               when excluded.last_reviewed_at >= coalesce(user_progress.last_reviewed_at, 'epoch'::timestamptz)
                 then excluded.last_scheduler_version
               else user_progress.last_scheduler_version
+            end,
+
+            scheduler_state = case
+              when excluded.last_reviewed_at >= coalesce(user_progress.last_reviewed_at, 'epoch'::timestamptz)
+                then excluded.scheduler_state
+              else user_progress.scheduler_state
             end,
 
             last_seen_revision = greatest(

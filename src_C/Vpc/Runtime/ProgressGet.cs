@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using Amazon.Lambda.APIGatewayEvents;
 using RecallSmith.Lambda.Common;
 using RecallSmith.Lambda.Db;
@@ -55,6 +56,7 @@ public static class ProgressGet
         -- for exactly those rows. Sending 0 instead would be a lie a client
         -- cannot detect (0 is a real rung).
         srs_stage as "srsStage",
+        scheduler_state as "schedulerState",
         (extract(epoch from updated_at) * 1000)::bigint as "updatedAtMs",
         floor(extract(epoch from updated_at) * 1000000)::bigint as "__cursorUs"
       from user_progress
@@ -118,7 +120,13 @@ public static class ProgressGet
         Convert.ToString(last["stableUid"], CultureInfo.InvariantCulture) ?? string.Empty).Encode();
     }
 
-    foreach (var row in rows) row.Remove("__cursorUs");
+    foreach (var row in rows)
+    {
+      row.Remove("__cursorUs");
+      // Npgsql returns jsonb as text; expose a JSON object, never an escaped string.
+      if (row["schedulerState"] is string json)
+        row["schedulerState"] = JsonSerializer.Deserialize<JsonElement>(json);
+    }
 
     return res.Ok(new
     {

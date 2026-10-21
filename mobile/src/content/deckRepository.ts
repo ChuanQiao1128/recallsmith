@@ -579,6 +579,33 @@ export async function listManifestDecks(
     });
 }
 
+/** Reuse downloaded public content on sign-in; learning/account data stays partitioned. */
+export async function adoptAnonymousPublicDecks(userSub: string): Promise<void> {
+  const userKey = sanitizeUserKey(userSub);
+  if (userKey === 'anon' || await getCurrentUserKey() !== userKey) return;
+  const manifest = await loadManifestCached();
+  for (const entry of manifest?.decks ?? []) {
+    if (entry.tier !== 'free' || entry.downloadMode !== 'public' || entry.availability !== 'live') continue;
+    const slug = entry.slug;
+    // Never overwrite an account's own downloaded build, or read another account's directory.
+    if (await getDeckMeta(slug, userKey)) continue;
+    const guest = await getDeckMeta(slug, 'anon');
+    if (!guest) continue;
+    const source = await locateInstalledDeckFile(slug, 'anon', guest);
+    if (!source) continue;
+    const parsed = JSON.parse(await FileSystem.readAsStringAsync(source, { encoding: UTF8_ENCODING }));
+    const valid = (isRawDeckV1(parsed) && parsed.deck?.slug === slug && Array.isArray(parsed.cards))
+      || (isRawDeckFlat(parsed) && parsed.slug === slug && Array.isArray(parsed.cards));
+    if (!valid) continue;
+    if (await getCurrentUserKey() !== userKey) return;
+    const dir = getDeckDirForUser(userKey);
+    await ensureDir(dir);
+    const fileUri = `${dir}${slugToFileName(slug)}.json`;
+    await FileSystem.copyAsync({ from: source, to: fileUri });
+    await AsyncStorage.setItem(deckMetaKey(slug, userKey), JSON.stringify({ ...guest, fileUri }));
+  }
+}
+
 export async function resolveDeckBySlug(slug: string): Promise<DeckContent | null> {
   const safeSlug = String(slug).trim();
   if (!safeSlug) return null;
