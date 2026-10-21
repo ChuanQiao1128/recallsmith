@@ -5,7 +5,7 @@ description = "Turn a PDF, web page or text file into cited, numbered text chunk
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "beautifulsoup4>=4.15.0",
-    "pypdf>=6.19.0",
+    "pypdf>=6.21.1",
 ]
 
 [project.scripts]
