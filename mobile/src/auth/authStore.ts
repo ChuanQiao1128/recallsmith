@@ -174,6 +174,19 @@ async function applySessionToState(set: any) {
   // ✅ 关键：立刻设置 activeUserSub（让 Home 读取正确的 user-scoped progress）
   await setActiveUserSub(userSub);
 
+  // The signed-in scope needs the guest's downloaded public decks before its
+  // first sync/render. No progress, premium content or other account is copied.
+  if (userSub) {
+    try {
+      const { adoptAnonymousPublicDecks } = await import('../content/deckRepository');
+      await adoptAnonymousPublicDecks(userSub);
+      const { invalidateDeckCache } = await import('../content/deckCache');
+      invalidateDeckCache();
+    } catch {
+      // A missing/corrupt file must not turn a successful sign-in into a failure.
+    }
+  }
+
   // Union any anonymous-period collection/pity/wallet/Mistake Book into this account before
   // the first signed-in render (Library/Home read draw state on that render)
   // and before the first cloud push. A no-op when the anon partition is empty,
@@ -487,7 +500,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
       const msg = friendlyAuthError(err);
       set({ lastError: msg });
-      throw new Error(msg);
+      throw new AuthFlowError('FAILED', msg);
     } finally {
       set({ loading: false });
     }

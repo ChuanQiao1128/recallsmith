@@ -14,7 +14,7 @@ const TODAY_PRESSURE_TOKENS = {
   metricBorder: colors.hairline,
 } as const;
 
-export function TodayPressureCard(props: { counts: TodayCounts; selectedDeckTitle: string | null }) {
+export function TodayPressureCard(props: { counts: TodayCounts; selectedDeckTitle: string | null; compact?: boolean }) {
   const { counts, selectedDeckTitle } = props;
   const { width } = useWindowDimensions();
   const useCompactMetrics = width < 390;
@@ -29,6 +29,15 @@ export function TodayPressureCard(props: { counts: TodayCounts; selectedDeckTitl
     counts.selectedNew === 0 &&
     counts.selectedMastered === 0;
 
+  if (props.compact) return (
+    <View testID="home-today-compact" style={styles.compactSummary}>
+      <Text style={styles.title}>Today</Text>
+      <View testID="home-today-count-grid" style={styles.compactRow}>
+        {renderTiles({ due: counts.selectedDue, fresh: counts.selectedNew,
+          learned: counts.selectedMastered, collected: counts.selectedOwned }, styles.compactMetric, true)}
+      </View>
+    </View>
+  );
   return (
     <View style={styles.card}>
       <Text style={styles.title} numberOfLines={2}>
@@ -105,6 +114,9 @@ function renderTiles(values: TileValues, metricSizeStyle: object, withIds: boole
 }
 
 const styles = StyleSheet.create({
+  compactSummary: { marginBottom: 4 },
+  compactRow: { flexDirection: 'row', gap: 6, marginTop: 4 },
+  compactMetric: { flex: 1, minWidth: 0, paddingVertical: 4, paddingHorizontal: 2, borderRadius: 8 },
   // Tightened: less padding, smaller numbers, lighter shadow — fits on screen
   // alongside the bigger pack hero without crowding.
   card: {

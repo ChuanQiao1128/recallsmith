@@ -1,3 +1,4 @@
+vi.mock('../../src/sync/progressSync', () => ({ applyCachedRemoteProgress: vi.fn(async () => 0) }));
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,6 +18,7 @@ vi.mock('react-native', () => {
   return {
     View: ({ children, ...props }: any) => React.createElement('View', props, children),
     Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
+    TextInput: (props: any) => React.createElement('TextInput', props),
     ScrollView: ({ children, ...props }: any) => React.createElement('ScrollView', props, children),
     FlatList: ({ data = [], renderItem, ListHeaderComponent, ...props }: any) =>
       React.createElement(
@@ -86,6 +88,7 @@ vi.mock('../../src/content/deckRepository', () => ({
 }));
 
 vi.mock('../../src/review/storage', () => ({
+  getUserScopedKey: vi.fn(async (baseKey: string) => baseKey),
   loadDeckProgress: vi.fn(async () => [
     { stableUid: '1', stage: 0, nextReviewAt: 0 },
     { stableUid: '2', stage: 2, lastReviewedAt: Date.now() - 1000, nextReviewAt: Date.now() + 86400000 },
@@ -138,6 +141,7 @@ describe('LibraryScreen responsive columns', () => {
     });
     await flush();
 
+    act(() => tree.root.findByProps({ testID: 'library-filter-chip-all' }).props.onPress());
     // Q1 belongs to the "new" card, which renders the placeholder instead.
     const missingCards = tree.root.findAll(
       (node) => (node.type as any) === 'Text' && node.props.children === 'Q1',
@@ -166,6 +170,7 @@ describe('LibraryScreen responsive columns', () => {
     });
     await flush();
 
+    act(() => tree.root.findByProps({ testID: 'library-filter-chip-all' }).props.onPress());
     const statusOne = tree.root.findByProps({ testID: 'library-card-status-1' });
     const statusTwo = tree.root.findByProps({ testID: 'library-card-status-2' });
     const statusThree = tree.root.findByProps({ testID: 'library-card-status-3' });

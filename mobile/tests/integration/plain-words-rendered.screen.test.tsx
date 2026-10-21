@@ -15,6 +15,7 @@ vi.mock('react-native', () => {
   return {
     View: ({ children, ...props }: any) => React.createElement('View', props, children),
     Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
+    TextInput: (props: any) => React.createElement('TextInput', props),
     ScrollView: ({ children, ...props }: any) => React.createElement('ScrollView', props, children),
     Pressable: ({ children, onPress, style, ...props }: any) =>
       React.createElement(
@@ -58,7 +59,8 @@ vi.mock('../../src/content/deckCache', () => ({
   getCachedDeck: vi.fn(async () => DECK),
   invalidateDeckCache: () => {},
 }));
-vi.mock('../../src/review/storage', () => ({ loadDeckProgress: vi.fn(async () => []) }));
+vi.mock('../../src/review/storage', () => ({
+loadDeckProgress: vi.fn(async () => []) }));
 vi.mock('../../src/features/gacha/draw/effectiveOwned', () => ({
   resolveEffectiveOwned: vi.fn(async () => ownedFixture),
 }));

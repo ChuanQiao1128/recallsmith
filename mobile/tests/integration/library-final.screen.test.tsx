@@ -1,3 +1,4 @@
+vi.mock('../../src/sync/progressSync', () => ({ applyCachedRemoteProgress: vi.fn(async () => 0) }));
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -27,6 +28,7 @@ function makeDeck(slug: string, title: string, cards: Array<{ uid: string; order
 }
 
 let mockActiveDeckSlug = 'csharp';
+let mockUserScope = '';
 let mockManifestDecks: Array<{ slug: string; title: string; availability: string }> = [];
 let mockDecksBySlug: Record<string, any> = {};
 
@@ -35,6 +37,7 @@ vi.mock('react-native', () => {
   return {
     View: ({ children, ...props }: any) => React.createElement('View', props, children),
     Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
+    TextInput: (props: any) => React.createElement('TextInput', props),
     ScrollView: ({ children, ...props }: any) => React.createElement('ScrollView', props, children),
     FlatList: ({ data = [], renderItem, ListHeaderComponent, ListEmptyComponent, ...props }: any) =>
       React.createElement(
@@ -122,7 +125,7 @@ vi.mock('../../src/review/storage', () => ({
   // The real scope helper is a one-liner over the signed-in sub, and the draw
   // state store keys through it. Stubbing it as identity keeps every deck in
   // one partition, which is all this file's fixtures need.
-  getUserScopedKey: vi.fn(async (baseKey: string) => baseKey),
+  getUserScopedKey: vi.fn(async (baseKey: string) => `${mockUserScope}${baseKey}`),
   loadDeckProgress: vi.fn(async (deck: any) => {
     if (deck?.Slug === 'aws') {
       return [{ stableUid: 'a1', stage: 2, lastReviewedAt: Date.now() - 1000, nextReviewAt: Date.now() + 86400000 }];
@@ -162,6 +165,7 @@ describe('LibraryScreen v9', () => {
     asyncStorageMap.clear();
     invalidateDrawStateCache();
     mockActiveDeckSlug = 'csharp';
+    mockUserScope = '';
     mockManifestDecks = [{ slug: 'csharp', title: 'C# Interview', availability: 'live' }];
     mockDecksBySlug = {
       csharp: makeDeck('csharp', 'C# Interview', [
@@ -190,12 +194,14 @@ describe('LibraryScreen v9', () => {
     expect(tree.root.findByProps({ testID: 'library-card-grid' })).toBeTruthy();
     expect(tree.root.findByProps({ testID: 'library-collection-bar' })).toBeTruthy();
     expect(collectText(tree)).toContain('2/3');
+    expect(tree.root.findAllByProps({ testID: 'library-card-status-1' })).toHaveLength(0);
+    act(() => tree.root.findByProps({ testID: 'library-filter-chip-all' }).props.onPress());
     const statusOne = tree.root.findByProps({ testID: 'library-card-status-1' });
     const statusOneText = statusOne.find((child: any) => (child.type as any) === 'Text').props.children;
     expect(statusOneText).toBe('Missing');
   });
 
-  it('shows only All/New/Learning/Mastered filters in filter sheet', async () => {
+  it('opens visible additional filters and includes My cards alongside all statuses', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(
@@ -213,7 +219,7 @@ describe('LibraryScreen v9', () => {
     expect(tree.root.findByProps({ testID: 'library-sheet-filter-new' })).toBeTruthy();
     expect(tree.root.findByProps({ testID: 'library-sheet-filter-learning' })).toBeTruthy();
     expect(tree.root.findByProps({ testID: 'library-sheet-filter-mastered' })).toBeTruthy();
-    expect(tree.root.findAllByProps({ testID: 'library-sheet-filter-owned' })).toHaveLength(0);
+    expect(tree.root.findByProps({ testID: 'library-sheet-filter-owned' })).toBeTruthy();
     expect(tree.root.findAllByProps({ testID: 'library-sheet-filter-missing' })).toHaveLength(0);
   });
 
@@ -297,7 +303,7 @@ describe('LibraryScreen v9', () => {
 
     expect(borderWidthOf('2')).toBe(2);
     expect(borderWidthOf('3')).toBe(2);
-    expect(borderWidthOf('1')).not.toBe(2);
+    expect(tree.root.findAllByProps({ testID: 'library-card-1' })).toHaveLength(0);
   });
 
   it('ignores named uids that are not on screen and falls back to nothing', async () => {
@@ -319,7 +325,7 @@ describe('LibraryScreen v9', () => {
     });
     await flush();
 
-    for (const uid of ['1', '2', '3']) {
+    for (const uid of ['2', '3']) {
       const card = tree.root.findByProps({ testID: `library-card-${uid}` });
       const style = Array.isArray(card.props.style)
         ? Object.assign({}, ...card.props.style)
@@ -404,6 +410,71 @@ describe('LibraryScreen v9', () => {
     await flush();
 
     expect(tree.root.findAllByProps({ testID: 'library-sweep-cta' })).toHaveLength(0);
+    expect(tree.root.findAllByProps({ testID: 'library-card-9' })).toHaveLength(0);
+    act(() => tree.root.findByProps({ testID: 'library-filter-chip-all' }).props.onPress());
     expect(tree.root.findByProps({ testID: 'library-card-9' })).toBeTruthy();
   });
+  it('searches owned cards by question, displayed number and ID, then clears the query', async () => {
+    mockDecksBySlug.csharp.Cards[1].Question = 'How does a queue retry?';
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => { tree = renderer.create(
+      <LibraryScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'library', name: 'Library' } as any} />,
+    ); });
+    await flush();
+    const search = () => tree.root.findByProps({ testID: 'library-search' });
+    expect(search().props.style.minHeight).toBeGreaterThanOrEqual(44);
+    for (const query of ['QUEUE RETRY', '#002', '2']) {
+      act(() => search().props.onChangeText(query));
+      expect(tree.root.findByProps({ testID: 'library-card-2' })).toBeTruthy();
+      expect(tree.root.findAllByProps({ testID: 'library-card-3' })).toHaveLength(0);
+    }
+    act(() => search().props.onChangeText(''));
+    expect(tree.root.findByProps({ testID: 'library-card-3' })).toBeTruthy();
+  });
+
+  it('restores the last filter for this account and deck without leaking it to another account', async () => {
+    async function mountLibrary() {
+      let tree!: renderer.ReactTestRenderer;
+      await act(async () => { tree = renderer.create(
+        <LibraryScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'library', name: 'Library' } as any} />,
+      ); });
+      await flush();
+      return tree;
+    }
+    mockUserScope = 'account-a:';
+    let tree = await mountLibrary();
+    expect(tree.root.findByProps({ testID: 'library-filter-chip-owned' }).props.accessibilityState.selected).toBe(true);
+    await act(async () => { tree.root.findByProps({ testID: 'library-filter-chip-all' }).props.onPress(); });
+    act(() => tree.unmount());
+    tree = await mountLibrary();
+    expect(tree.root.findByProps({ testID: 'library-filter-chip-all' }).props.accessibilityState.selected).toBe(true);
+    act(() => tree.unmount());
+    mockUserScope = 'account-b:';
+    tree = await mountLibrary();
+    expect(tree.root.findByProps({ testID: 'library-filter-chip-owned' }).props.accessibilityState.selected).toBe(true);
+    expect(asyncStorageMap.get('account-a:library-filter:v1:csharp')).toBe('all');
+    expect(asyncStorageMap.has('account-b:library-filter:v1:csharp')).toBe(false);
+    act(() => tree.unmount());
+  });
+
+  it('remembers a separate filter for each deck when switching packs', async () => {
+    mockManifestDecks.push({ slug: 'aws', title: 'AWS Core', availability: 'live' });
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => { tree = renderer.create(
+      <LibraryScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'library', name: 'Library' } as any} />,
+    ); });
+    await flush();
+    await act(async () => { tree.root.findByProps({ testID: 'library-filter-chip-learning' }).props.onPress(); });
+    await act(async () => { tree.root.findByProps({ testID: 'library-deck-aws' }).props.onPress(); });
+    await flush();
+    expect(tree.root.findByProps({ testID: 'library-filter-chip-owned' }).props.accessibilityState.selected).toBe(true);
+    await act(async () => { tree.root.findByProps({ testID: 'library-filter-chip-all' }).props.onPress(); });
+    await act(async () => { tree.root.findByProps({ testID: 'library-deck-csharp' }).props.onPress(); });
+    await flush();
+    expect(tree.root.findByProps({ testID: 'library-filter-chip-learning' }).props.accessibilityState.selected).toBe(true);
+    expect(asyncStorageMap.get('library-filter:v1:csharp')).toBe('learning');
+    expect(asyncStorageMap.get('library-filter:v1:aws')).toBe('all');
+    act(() => tree.unmount());
+  });
+
 });

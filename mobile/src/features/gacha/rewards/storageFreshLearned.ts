@@ -61,9 +61,11 @@ export type StorageFreshLearned = {
   remoteCache: Set<string>;
 };
 
-export async function readStorageFreshLearned(slug: string): Promise<StorageFreshLearned> {
+export async function readStorageFreshLearned(slug: string, userSub?: string): Promise<StorageFreshLearned> {
+  const scope = await getUserScopedKey('', userSub);
+  const capturedSub = userSub ?? scope.slice('devcards:u:'.length, -1);
   const storedProgress = new Set<string>();
-  const stored = await readStoredDeckProgress(slug);
+  const stored = await readStoredDeckProgress(slug, capturedSub);
   if (stored != null) {
     for (const p of stored) {
       if (isLearnedProgress(p)) storedProgress.add(p.stableUid);
@@ -71,7 +73,7 @@ export async function readStorageFreshLearned(slug: string): Promise<StorageFres
   }
 
   const remoteCache = new Set<string>();
-  const cacheKey = await getUserScopedKey(`${REMOTE_PROGRESS_CACHE_KEY_PREFIX}${slug}`);
+  const cacheKey = `${scope}${REMOTE_PROGRESS_CACHE_KEY_PREFIX}${slug}`;
   const rawCache = await AsyncStorage.getItem(cacheKey);
   if (rawCache != null) {
     for (const uid of learnedUidsInRemoteCache(rawCache)) remoteCache.add(uid);

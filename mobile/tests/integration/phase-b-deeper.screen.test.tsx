@@ -33,7 +33,8 @@ vi.mock('expo-linear-gradient', () => {
 vi.mock('../../src/content/activeDeck', () => ({ loadActiveDeckSlug: vi.fn(async () => null) }));
 vi.mock('../../src/content/deckCache', () => ({ getCachedDeck: vi.fn(async () => null), invalidateDeckCache: () => {} }));
 vi.mock('../../src/content/deckRepository', () => ({ listManifestDecks: vi.fn(async () => []) }));
-vi.mock('../../src/review/storage', () => ({ loadDeckProgress: vi.fn(async () => []) }));
+vi.mock('../../src/review/storage', () => ({
+loadDeckProgress: vi.fn(async () => []) }));
 vi.mock('../../src/features/gacha/draw/effectiveOwned', () => ({ resolveEffectiveOwned: vi.fn(async () => null) }));
 
 import { CardDetailScreen } from '../../src/screens/CardDetailScreen';

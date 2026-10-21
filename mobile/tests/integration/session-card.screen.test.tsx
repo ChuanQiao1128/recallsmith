@@ -1,3 +1,5 @@
+import { loadDeckProgress } from '../../src/review/storage';
+vi.mock('expo-crypto', () => ({ randomUUID: () => 'review-intent-id' }));
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -131,6 +133,15 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
 }));
 
 vi.mock('../../src/review/storage', () => ({
+  captureProgressUserSub: vi.fn(async () => 'anon'),
+  updateDeckProgress: vi.fn(async (deck: any, update: any, sub?: string) => {
+    const storage = await import('../../src/review/storage');
+    const fresh = await storage.loadDeckProgress(deck, sub);
+    const next = await update(fresh);
+    if (next !== fresh) await storage.saveDeckProgress(deck, next, sub);
+    vi.mocked(storage.loadDeckProgress).mockResolvedValue(next);
+    return next;
+  }),
   loadAllProgress: vi.fn(async () => ({})),
   loadDeckProgress: vi.fn(async () => [{ stableUid: '1', stage: 0, nextReviewAt: 0 }]),
   saveDeckProgress: vi.fn(async () => {}),
@@ -291,6 +302,7 @@ describe('SessionCardScreen', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     asyncStore.clear();
+    vi.mocked(loadDeckProgress).mockResolvedValue([{ stableUid: '1', stage: 0, nextReviewAt: 0 }]);
     resetSessionStore();
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
     vi.mocked(resolveDeckBySlug).mockResolvedValue(buildDeck() as any);

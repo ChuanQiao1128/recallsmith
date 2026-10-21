@@ -34,6 +34,7 @@ vi.mock('react-native', () => {
   return {
     View: ({ children, ...props }: any) => React.createElement('View', props, children),
     Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
+    TextInput: (props: any) => React.createElement('TextInput', props),
     ScrollView: ({ children, ...props }: any) => React.createElement('ScrollView', props, children),
     FlatList: ({ data = [], renderItem, ListHeaderComponent, ListEmptyComponent, ...props }: any) =>
       React.createElement(
@@ -186,6 +187,7 @@ vi.mock('expo-file-system/legacy', () => ({
 }));
 
 vi.mock('expo-crypto', () => ({
+  randomUUID: () => 'offline-review-intent',
   CryptoDigestAlgorithm: { SHA256: 'SHA-256' },
   digestStringAsync: vi.fn(async () => ''),
 }));
@@ -318,6 +320,7 @@ async function flush(rounds = 3) {
   for (let r = 0; r < rounds; r += 1) {
     await act(async () => {
       for (let i = 0; i < 20; i += 1) await Promise.resolve();
+      await new Promise<void>(resolve => setImmediate(resolve));
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
   }

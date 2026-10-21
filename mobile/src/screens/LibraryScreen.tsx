@@ -1,3 +1,4 @@
+import { applyCachedRemoteProgress } from '../sync/progressSync';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -32,6 +33,7 @@ import {
   type LibraryFilter,
   type LibraryViewModel,
 } from '../features/gacha/library/libraryMapper';
+import { libraryPreferenceKey, loadLibraryFilter, saveLibraryFilter } from '../features/gacha/library/libraryPreferences';
 import { LibraryHeader } from '../features/gacha/library/LibraryHeader';
 import { LibraryCardTile } from '../features/gacha/library/LibraryCardTile';
 import { libraryStyles as styles } from '../features/gacha/library/libraryScreenStyles';
@@ -73,7 +75,10 @@ export function LibraryScreen({ navigation, route }: Props) {
   // both and a half-updated pair renders a deck from one account against a
   // collection from another for a frame.
   const [ownedSet, setOwnedSet] = useState<Set<string> | null>(null);
-  const [filter, setFilter] = useState<LibraryFilter>('all');
+  const [filter, setFilter] = useState<LibraryFilter>('owned');
+  const preferenceKeyRef = useRef<string | null>(null);
+  const refreshRequestRef = useRef(0);
+  const [searchQuery, setSearchQuery] = useState('');
   const [filterOpen, setFilterOpen] = useState(false);
   const [topicFilter, setTopicFilter] = useState<string | null>(null);
   // A pull can grant several cards; highlighting one of them was never the ask.
@@ -169,6 +174,7 @@ export function LibraryScreen({ navigation, route }: Props) {
       // shows the full-screen spinner. Later refreshes keep the mounted grid.
       if (deckRef.current === null) setLoading(true);
       setError(null);
+      const requestId = ++refreshRequestRef.current;
       let requestedSlug: string | null = null;
       try {
         const manifest = await listVisibleManifestDecks();
@@ -224,9 +230,21 @@ export function LibraryScreen({ navigation, route }: Props) {
           }
         }
 
+        // Pulls may have arrived before the account had this deck installed.
+        await applyCachedRemoteProgress(currentSlug);
+        const preferenceKey = await libraryPreferenceKey(currentSlug);
         const resolvedProgress = await loadDeckProgress(resolvedDeck);
         const resolvedOwned = await resolveEffectiveOwned(currentSlug, resolvedProgress);
+        const restoredFilter = preferenceKeyRef.current === preferenceKey ? null : await loadLibraryFilter(preferenceKey);
+        if (requestId !== refreshRequestRef.current || preferenceKey !== await libraryPreferenceKey(currentSlug)) return;
         await setActiveDeckSlug(currentSlug);
+        if (requestId !== refreshRequestRef.current || preferenceKey !== await libraryPreferenceKey(currentSlug)) return;
+        if (restoredFilter !== null) {
+          setFilter(restoredFilter);
+          setTopicFilter(null);
+          setSearchQuery('');
+          preferenceKeyRef.current = preferenceKey;
+        }
 
         setSelectedSlug(currentSlug);
         deckRef.current = resolvedDeck;
@@ -234,6 +252,7 @@ export function LibraryScreen({ navigation, route }: Props) {
         setProgress(resolvedProgress);
         setOwnedSet(resolvedOwned);
       } catch (loadErr: any) {
+        if (requestId !== refreshRequestRef.current) return;
         // Never wipe the deck switcher: keep whatever options loaded so an
         // offline user can still reach their other installed decks.
         if (
@@ -251,6 +270,7 @@ export function LibraryScreen({ navigation, route }: Props) {
           setError(loadErr?.isFriendlyMessage ? loadErr.message : errorToMessage(loadErr));
         }
       } finally {
+        if (requestId !== refreshRequestRef.current) return;
         setLoading(false);
         lastRefreshAtRef.current = Date.now();
       }
@@ -283,9 +303,10 @@ export function LibraryScreen({ navigation, route }: Props) {
       selectedDeckSlug: selectedSlug,
       ownedSet,
       topicFilter,
+      searchQuery,
       mcqEnabled: getFeatureFlags().mcq.enabled,
     });
-  }, [deck, progress, filter, deckOptions, selectedSlug, ownedSet, topicFilter]);
+  }, [deck, progress, filter, deckOptions, selectedSlug, ownedSet, topicFilter, searchQuery]);
 
   const visibleCards = vm?.cards ?? [];
 
@@ -364,7 +385,7 @@ export function LibraryScreen({ navigation, route }: Props) {
   // whenever the filter, topic or selected deck changes.
   useEffect(() => {
     listRef.current?.scrollToOffset?.({ offset: 0, animated: false });
-  }, [selectedSlug, filter, topicFilter]);
+  }, [selectedSlug, filter, topicFilter, searchQuery]);
 
   // Both read straight off the VM now. The old arithmetic ("learned + mastered
   // over everything") was a proxy from before the app knew what a collection
@@ -516,12 +537,15 @@ export function LibraryScreen({ navigation, route }: Props) {
                 filters={vm.filters}
                 filter={filter}
                 filterOpen={filterOpen}
+                searchQuery={searchQuery}
+                onSearchQueryChange={setSearchQuery}
                 onSelectDeck={(slug) => {
                   void refresh(slug);
                 }}
                 onToggleFilterOpen={() => setFilterOpen((open) => !open)}
                 onSelectFilter={(nextFilter) => {
                   setFilter(nextFilter);
+                  if (preferenceKeyRef.current) void saveLibraryFilter(preferenceKeyRef.current, nextFilter);
                   setFilterOpen(false);
                 }}
                 topics={vm.topics}
@@ -565,7 +589,10 @@ export function LibraryScreen({ navigation, route }: Props) {
                 </Text>
                 <Pressable
                   style={({ pressed }) => [styles.retryButton, pressed && styles.pressed]}
-                  onPress={() => { setFilter('all'); setTopicFilter(null); }}
+                  onPress={() => {
+                    setFilter('all'); setTopicFilter(null); setSearchQuery('');
+                    if (preferenceKeyRef.current) void saveLibraryFilter(preferenceKeyRef.current, 'all');
+                  }}
                   testID="library-empty-cta"
                 >
                   <Text style={styles.retryText} numberOfLines={1}>

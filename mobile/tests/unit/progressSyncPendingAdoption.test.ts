@@ -255,14 +255,14 @@ describe('crash between copy and clear', () => {
 
     // Crash injection: the copy lands, the clear does not.
     dropPendingClearWrite = true;
-    await signIn();
+    await expect(signIn()).rejects.toThrow('pending clear-write lost');
 
     expect(queueIds()).toEqual([first, second]);
     expect(pendingIds()).toEqual([first, second]);
 
     // Absorber 1, in-queue dedupe: re-running adoption while the copies are
     // still queued adds nothing.
-    await setActiveUserSub(USER);
+    await expect(setActiveUserSub(USER)).rejects.toThrow('pending clear-write lost');
     expect(queueIds()).toEqual([first, second]);
 
     await forceProgressSync('manual');

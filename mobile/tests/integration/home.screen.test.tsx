@@ -1,7 +1,9 @@
+vi.mock('../../src/features/gacha/components/ProgressSyncStatus', () => ({ ProgressSyncStatus: () => null }));
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+let qaUserSub: string | null = null;
 let walletFixture = { availablePulls: 0, reservePulls: 0 };
 let activeSlugFixture: string | null = 'csharp';
 let deckSummariesFixture: any[] = [];
@@ -78,10 +80,10 @@ vi.mock('../../src/features/gacha/home/deckActionResolver', () => ({
 vi.mock('../../src/auth/authStore', () => ({
   useAuthStore: (selector: any) =>
     selector({
-      status: 'signed_out',
+      status: qaUserSub ? 'signed_in' : 'signed_out',
       accessToken: '',
       init: vi.fn(async () => {}),
-      userSub: null,
+      userSub: qaUserSub,
     }),
 }));
 
@@ -124,6 +126,7 @@ vi.mock('../../src/features/goal/studyGoal', async (importActual) => ({
   getStudyGoal: vi.fn(async () => studyGoalFixture),
 }));
 
+import { notifyProgressChanged } from '../../src/sync/progressChanges';
 import { Alert } from 'react-native';
 import { HomeScreen } from '../../src/screens/HomeScreen';
 import TodayPressureCard from '../../src/features/gacha/components/TodayPressureCard';
@@ -225,6 +228,30 @@ describe('HomeScreen v9', () => {
     // loadHomeDeckSummaries never leak into the next test.
     vi.mocked(loadHomeDeckSummaries).mockReset();
     vi.mocked(loadHomeDeckSummaries).mockImplementation(async () => makeHomeSummary() as any);
+  });
+
+  it('refreshes the mounted Home after a progress commit, without a tab change', async () => {
+    qaUserSub = 'qa-synthetic';
+    deckSummariesFixture = deckSummariesFixture.map(d => ({ ...d, dueToday: 0 }));
+    let tree!: renderer.ReactTestRenderer;
+    try {
+      await act(async () => {
+        tree = renderer.create(<HomeScreen navigation={{ navigate: navigateMock } as any}
+          route={{ key: 'home', name: 'Home' } as any} />);
+      });
+      await flush();
+      expect(tree.root.findAllByProps({ testID: 'home-study-due-link' })).toHaveLength(0);
+      deckSummariesFixture = deckSummariesFixture.map((d, i) => ({ ...d, dueToday: i === 0 ? 1 : 0 }));
+      await act(async () => { notifyProgressChanged({ userSub: 'other', deckSlug: 'csharp' }); });
+      await flush();
+      expect(tree.root.findAllByProps({ testID: 'home-study-due-link' })).toHaveLength(0);
+      await act(async () => { notifyProgressChanged({ userSub: 'qa-synthetic', deckSlug: 'csharp' }); });
+      await flush();
+      expect(tree.root.findByProps({ testID: 'home-study-due-link' })).toBeTruthy();
+    } finally {
+      if (tree) await act(async () => tree.unmount());
+      qaUserSub = null;
+    }
   });
 
   it('renders root shell with one primary CTA surface', async () => {

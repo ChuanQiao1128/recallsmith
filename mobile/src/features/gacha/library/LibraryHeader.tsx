@@ -1,5 +1,5 @@
 import React from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import type { LibraryDeckOption, LibraryFilter, LibraryFilterChip, LibraryTopicChip } from './libraryMapper';
 import { libraryStyles as styles } from './libraryScreenStyles';
@@ -115,6 +115,8 @@ type Props = {
   filters: LibraryFilterChip[];
   filter: LibraryFilter;
   filterOpen: boolean;
+  searchQuery?: string;
+  onSearchQueryChange?: (query: string) => void;
   onSelectDeck: (slug: string) => void;
   onToggleFilterOpen: () => void;
   onSelectFilter: (filter: LibraryFilter) => void;
@@ -151,6 +153,9 @@ export function LibraryHeader({
   selectedDeckSlug,
   filters,
   filter,
+  filterOpen,
+  searchQuery = '',
+  onSearchQueryChange,
   onSelectDeck,
   onToggleFilterOpen,
   onSelectFilter,
@@ -165,6 +170,7 @@ export function LibraryHeader({
   onOpenFirstPack,
   openFirstPackHasPulls = false,
 }: Props) {
+  const advancedFilter = filters.find((chip) => chip.key === filter && (chip.key === 'rare' || chip.key === 'legendary'));
   const pct = totalCount > 0 ? Math.round((ownedCount / totalCount) * 100) : 0;
   // Brand-new user banner — appears above the Pokedex header when the
   // user has 0 owned cards and the deck has cards available. Gives
@@ -207,7 +213,7 @@ export function LibraryHeader({
           <Text style={styles.headerEyebrow} numberOfLines={1}>
             {COLLECTION_COPY.libraryEyebrow}
           </Text>
-          <Text style={styles.title} numberOfLines={1}>
+          <Text style={styles.title} numberOfLines={2}>
             {title}
           </Text>
         </View>
@@ -335,70 +341,85 @@ export function LibraryHeader({
         </ScrollView>
       ) : null}
 
-      {/* Filter chips — horizontal scroll. With 6 chips (All / New /
-          Learning / Mastered / Rare / Legendary) + counts, the row
-          would wrap to 2 lines on iPhone SE (320pt). Horizontal scroll
-          keeps it as one tidy strip on every screen size. */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.filterChipsRow}
-      >
-        {filters.map((filterChip) => {
-          const active = filterChip.key === filter;
+      <TextInput
+        testID="library-search"
+        accessibilityLabel="Search cards by question, card number or ID"
+        placeholder="Search question, #number or ID"
+        placeholderTextColor={colors.inkMuted}
+        value={searchQuery}
+        onChangeText={onSearchQueryChange}
+        autoCorrect={false}
+        autoCapitalize="none"
+        returnKeyType="search"
+        clearButtonMode="while-editing"
+        style={headerStyles.search}
+      />
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterChipsRow}>
+        {filters.filter((chip) => chip.key !== 'rare' && chip.key !== 'legendary').map((chip) => {
+          const active = chip.key === filter;
           return (
             <Pressable
-              key={filterChip.key}
-              testID={`library-filter-chip-${filterChip.key}`}
-              style={({ pressed }) => [
-                styles.filterChip,
-                active && styles.filterChipActive,
-                pressed && styles.pressed,
-              ]}
-              onPress={() => onSelectFilter(filterChip.key)}
+              key={chip.key}
+              testID={`library-filter-chip-${chip.key}`}
+              accessibilityRole="button"
+              accessibilityState={{ selected: active }}
+              style={({ pressed }) => [styles.filterChip, active && styles.filterChipActive, pressed && styles.pressed]}
+              onPress={() => onSelectFilter(chip.key)}
             >
-              <Text
-                style={[styles.filterChipText, active && styles.filterChipTextActive]}
-                numberOfLines={1}
-              >
-                {/* Show count next to label only on the active chip —
-                    keeps inactive chips visually compact while giving
-                    the user immediate feedback on the current slice's
-                    size. */}
-                {active ? `${filterChip.label} · ${filterChip.count}` : filterChip.label}
+              <Text style={[styles.filterChipText, active && styles.filterChipTextActive]} numberOfLines={1}>
+                {active ? `${chip.label} · ${chip.count}` : chip.label}
               </Text>
             </Pressable>
           );
         })}
+        <Pressable
+          testID="library-filter-summary"
+          accessibilityRole="button"
+          accessibilityState={{ expanded: filterOpen, selected: !!advancedFilter }}
+          accessibilityLabel="More card filters"
+          style={({ pressed }) => [styles.filterChip, !!advancedFilter && styles.filterChipActive, pressed && styles.pressed]}
+          onPress={onToggleFilterOpen}
+        >
+          <Text style={[styles.filterChipText, !!advancedFilter && styles.filterChipTextActive]}>
+            {advancedFilter ? `${advancedFilter.label} · ${advancedFilter.count}` : 'More filters'}
+          </Text>
+        </Pressable>
       </ScrollView>
-
-      {/* Hidden test-contract elements: search field + filter toggle + sheet
-          remain in tree but render 0×0 so existing tests still find them. */}
-      <View testID="library-search" style={styles.libraryTestProbeHidden}>
-        <Text style={styles.libraryTestProbeHidden}>Search cards</Text>
-      </View>
-      <Pressable testID="library-filter-summary" style={styles.libraryTestProbeHidden} onPress={onToggleFilterOpen}>
-        <Text style={styles.libraryTestProbeHidden}>Filters</Text>
-      </Pressable>
-      <View style={styles.libraryTestProbeHidden} testID="library-filter-sheet">
-        {filters.map((filterChip) => (
-          <Pressable
-            key={`probe-${filterChip.key}`}
-            testID={`library-sheet-filter-${filterChip.key}`}
-            style={styles.libraryTestProbeHidden}
-            onPress={() => onSelectFilter(filterChip.key)}
-          >
-            <Text style={styles.libraryTestProbeHidden}>{filterChip.label}</Text>
-          </Pressable>
-        ))}
-      </View>
+      {filterOpen ? (
+        <View style={headerStyles.moreFilters} testID="library-filter-sheet">
+          <Text style={headerStyles.filterLabel}>Filter cards</Text>
+          <View style={headerStyles.pillRow}>
+            {filters.map((chip) => (
+              <Pressable
+                key={`sheet-${chip.key}`}
+                testID={`library-sheet-filter-${chip.key}`}
+                accessibilityRole="button"
+                accessibilityState={{ selected: chip.key === filter }}
+                style={({ pressed }) => [styles.filterChip, chip.key === filter && styles.filterChipActive, pressed && styles.pressed]}
+                onPress={() => onSelectFilter(chip.key)}
+              >
+                <Text style={[styles.filterChipText, chip.key === filter && styles.filterChipTextActive]}>
+                  {`${chip.label} · ${chip.count}`}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+      ) : null}
     </View>
   );
 }
 
 // Kept here rather than in libraryScreenStyles: only the header's pill row uses them.
 const headerStyles = StyleSheet.create({
-  pillRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: spacing.sm },
+  pillRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.xs },
+  search: {
+    minHeight: a11y.minTouch, borderWidth: 1, borderColor: colors.hairline,
+    borderRadius: 12, backgroundColor: colors.softCream, paddingHorizontal: spacing.sm,
+    color: colors.ink, fontSize: typography.bodySmall, marginTop: spacing.sm,
+  },
+  moreFilters: { paddingVertical: spacing.sm },
+  filterLabel: { color: colors.inkSecondary, fontSize: typography.caption, marginBottom: spacing.xs },
   domainsLink: {
     marginTop: spacing.sm,
     minHeight: a11y.minTouch,

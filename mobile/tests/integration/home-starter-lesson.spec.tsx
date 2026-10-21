@@ -1,3 +1,4 @@
+vi.mock('../../src/features/gacha/components/ProgressSyncStatus', () => ({ ProgressSyncStatus: () => null }));
 // R22 §4: Home sends a learner in the 'starter' onboarding stage into the 5-card starter lesson;
 // existing users (stage 'done') see Home exactly as before.
 import React from 'react';

@@ -10,6 +10,8 @@ import {
   View,
 } from 'react-native';
 import * as RN from 'react-native';
+import * as Crypto from 'expo-crypto';
+import { readPendingRating, writePendingRating, clearPendingRating } from '../review/pendingRating';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
@@ -30,7 +32,8 @@ import type { CardProgress, ReviewRating } from '../review/model';
 import {
   loadDeckProgress,
   loadOrInitDailyStats,
-  saveDeckProgress,
+  updateDeckProgress,
+  captureProgressUserSub,
   type DailyStats,
 } from '../review/storage';
 import { syncDailyReminders } from '../notifications/reminders';
@@ -87,6 +90,7 @@ import { getFeedbackPrefsSync } from '../features/gacha/settings/feedbackPrefs';
 import { getStudyPrefsSync, loadStudyPrefs } from '../features/gacha/study/studyPrefs';
 import { setCardLangPref, useCardLangPref } from '../features/gacha/study/cardLangPrefs';
 import { translationsForCard, useDeckTranslations } from '../features/gacha/study/useDeckTranslations';
+import { TranslationAvailability } from '../features/gacha/study/TranslationAvailability';
 import { CardLangToggle } from '../features/gacha/components/CardLangToggle';
 import { CardTextLangContext } from '../features/gacha/components/CardTextLang';
 import { getStudyGoal } from '../features/goal/studyGoal';
@@ -207,6 +211,12 @@ function useLatestCallback<A extends unknown[], R>(fn: (...args: A) => R): (...a
   return useCallback((...args: A): R => ref.current(...args), []);
 }
 
+type PendingRatingIntent = {
+    uid: string; sub: string; eventId: string; queued: boolean; now: Date; rating: ReviewRating;
+    before: CardProgress[]; state: ReturnType<typeof buildRatedSessionState>;
+    reward?: Awaited<ReturnType<typeof settleRatingReward>>;
+  };
+
 export function SessionCardScreen({ navigation, route }: Props) {
   // 2026-10-14 three decks: a hidden deck in the route is never opened; the active deck read already
   // leaves it out, so the session falls back to the first listed deck.
@@ -245,6 +255,8 @@ export function SessionCardScreen({ navigation, route }: Props) {
   const [dailyStats, setDailyStats] = useState<DailyStats | null>(null);
   const [current, setCurrent] = useState<CurrentCardLike | null>(null);
   const [reviewing, setReviewing] = useState(false);
+  const commitBusyRef = useRef(false);
+  const pendingRatingRef = useRef<PendingRatingIntent | null>(null);
   const [sessionDone, setSessionDone] = useState(0);
   const [showAnswer, setShowAnswer] = useState(false);
   const [mcqState, setMcqState] = useState<McqCardState>(EMPTY_MCQ_CARD_STATE);
@@ -804,21 +816,40 @@ export function SessionCardScreen({ navigation, route }: Props) {
   }
   async function commitRating(rating: ReviewRating, opts: { learningStudy: boolean }) {
     if (!current || !dailyStats || !deck) return;
-    if (reviewing) return;
+    if (reviewing || commitBusyRef.current) return;
     if (!showAnswer) return;
     // Got it only on the study view; the rating buttons never on it.
     const learningStudy = opts.learningStudy;
     if (learningStudy !== (learningPhase === 'study')) return;
     if (sessionLimit > 0 && sessionDone >= sessionLimit) return;
     studyHaptic('rate');
+    commitBusyRef.current = true;
     setReviewing(true);
     try {
-      const nowAtRating = new Date();
-      const nowMs = nowAtRating.getTime();
+      const sub = await captureProgressUserSub();
+      if (pendingRatingRef.current && pendingRatingRef.current.sub !== sub) {
+        pendingRatingRef.current = null;
+        throw new Error('Account changed');
+      }
+      if (!pendingRatingRef.current) {
+        const restored = await readPendingRating<PendingRatingIntent>(sub, deck.Slug, current.card.StableUid);
+        // On a newly opened screen the visible progress already includes any
+        // completed projection. An old journal must not swallow a later review.
+        if (restored && (current.progress.lastReviewedAt ?? 0) >= (restored.state.updatedOne.lastReviewedAt ?? 0)) {
+          await clearPendingRating(sub, deck.Slug, current.card.StableUid);
+        } else {
+          pendingRatingRef.current = restored;
+        }
+      }
       const focusIndex = focusIndexRef.current;
-      const nextState = buildRatedSessionState({
-        current,
-        progress,
+      const saved = await updateDeckProgress(deck, async (fresh) => {
+        let intent = pendingRatingRef.current;
+        if (!intent || intent.uid !== current.card.StableUid) {
+          const nowAtRating = new Date();
+          const currentFresh = { ...current, progress: fresh.find(p => p.stableUid === current.card.StableUid) ?? current.progress };
+          const state = buildRatedSessionState({
+        current: currentFresh,
+        progress: fresh,
         rating,
         mode,
         sessionDone,
@@ -834,23 +865,22 @@ export function SessionCardScreen({ navigation, route }: Props) {
         // planner cannot deal it again in this run.
         learningCheck: learningStudy,
       });
-      // Focus run: serve the next focus card in order instead of the planner's pick.
-      if (focusIndex) focusRatedUidsRef.current.add(current.card.StableUid);
-      const nextCurrent = focusIndex
-        ? pickFocusCard({ index: focusIndex, progress: nextState.updatedProgress, ratedUids: focusRatedUidsRef.current })
-        : nextState.nextCurrent;
-      // Every step of the run counts: studies and ratings each use one planned slot.
-      const nextDone = sessionDone + 1;
-      // Events are facts, progress is a projection; facts must land first. A
-      // queued event can rebuild the progress on the next sync, but a saved
-      // progress with no event means the server never learns this review
-      // happened, so a kill between the two writes must not land on that side.
-      try {
-        const eventId = await recordReviewEvent({
+          intent = { uid: current.card.StableUid, sub, eventId: Crypto.randomUUID(), queued: false,
+            now: nowAtRating, rating, before: fresh, state };
+          pendingRatingRef.current = intent;
+        }
+        await writePendingRating(deck.Slug, intent);
+        const nextState = intent.state;
+        const nowMs = intent.now.getTime();
+        // Retry the original fact, never a second review for the same tap.
+        if (!intent.queued) {
+          const eventId = await recordReviewEvent({
+          eventId: intent.eventId,
+          userSub: intent.sub,
           deckSlug: deck.Slug,
           deckVersion: deck.Version,
           stableUid: nextState.updatedOne.stableUid,
-          rating,
+          rating: intent.rating,
           reviewedAtMs: nowMs,
           sessionId,
           cardRevision: typeof current.card.Revision === 'number' ? current.card.Revision : 1,
@@ -858,7 +888,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
           // A focus-run rating that left the schedule alone is practice, not a review (mobile-18).
           reviewStage: learningStudy
             ? 'learning_study'
-            : focusIndex && isFocusPractice(current.progress, rating, nowAtRating)
+            : focusIndex && isFocusPractice(current.progress, intent.rating, intent.now)
               ? 'focus_practice'
               : isLearned(current.progress)
                 ? 'repeat_review'
@@ -867,12 +897,35 @@ export function SessionCardScreen({ navigation, route }: Props) {
           progressAfter: nextState.updatedOne,
           lastSeenRevision: nextState.updatedOne.lastSeenRevision,
         });
-        if (eventId) {
-          scheduleProgressSync('rating');
+          if (!eventId) throw new Error('Review was not saved');
+          intent.queued = true;
         }
-      } catch (e) {
-        console.warn('[SessionCard] recordReviewEvent failed:', (e as any)?.message ?? e);
-      }
+        // Keep other cards and any newer remote review's whole scheduler group.
+        return fresh.map(p => p.stableUid === intent!.uid &&
+          (p.lastReviewedAt ?? 0) <= (nextState.updatedOne.lastReviewedAt ?? 0)
+            ? nextState.updatedOne : p);
+      }, sub);
+      const intent = pendingRatingRef.current!;
+      rating = intent.rating;
+      const nowAtRating = intent.now;
+      const nowMs = nowAtRating.getTime();
+      const projectionUnchanged = saved.length === intent.state.updatedProgress.length &&
+        saved.every(entry => entry.stableUid === intent.uid
+          ? entry === intent.state.updatedOne
+          : entry === intent.state.updatedProgress.find(p => p.stableUid === entry.stableUid));
+      const nextState = { ...intent.state, updatedProgress: saved,
+        remainingDueCount: projectionUnchanged ? intent.state.remainingDueCount : countDueToday(saved, nowAtRating, ownedSet) };
+      if (await captureProgressUserSub() !== sub) throw new Error('Account changed');
+      scheduleProgressSync('rating');
+      if (focusIndex) focusRatedUidsRef.current.add(current.card.StableUid);
+      const nextCurrent = focusIndex
+        ? pickFocusCard({ index: focusIndex, progress: saved, ratedUids: focusRatedUidsRef.current })
+        : projectionUnchanged ? intent.state.nextCurrent
+          : sessionDone + 1 < sessionLimit
+          ? pickNextCard({ progress: saved, now: nowAtRating, mode, avoidUid: current.card.StableUid,
+              index: cardIndexRef.current, ownedSet, kindHint: buildKindHint(mcqRunRef.current, getFeatureFlags()) })
+          : null;
+      const nextDone = sessionDone + 1;
       // Mistake Book (K01): fire-and-forget, after the review event, never on the rating's critical path.
       try {
         void recordMistakeOutcome({
@@ -884,28 +937,31 @@ export function SessionCardScreen({ navigation, route }: Props) {
           // Mistakes start once a card is learned: Got it on the study view writes nothing.
           ...(learningStudy ? { learningCheck: true } : {}),
           at: nowMs,
-        }).catch(() => undefined);
+        }, sub).catch(() => undefined);
       } catch {
         // recording must never block or break a rating
       }
-      // The whole array, every time. nextState.updatedProgress is the deck's
-      // full progress with one entry replaced -- never an owned-filtered view.
-      // saveDeckProgress is a wholesale overwrite, so handing it a gated slice
-      // would delete the progress of every card the gate happened to exclude,
-      // and the gate's own grandfather rule reads that progress back.
-      await saveDeckProgress(deck, nextState.updatedProgress);
       // Settled before the lesson check so a starter card's rating is stamped while the lesson is
       // still open (no R1 pull for it, R22 §4).
-      const rewardStep = await settleRatingReward({
+      const rewardStep = intent.reward ?? await settleRatingReward({
         slug: deck.Slug,
         stableUid: current.card.StableUid,
         rating,
-        progressBefore: progress,
+        progressBefore: intent.before,
         newCardEligible: mode !== 'sweep',
-        dueBefore: dueTodayCount,
+        dueBefore: countDueToday(intent.before, nowAtRating, ownedSet),
         remainingDueCount: nextState.remainingDueCount,
         now: nowAtRating,
+        userSub: sub,
       });
+      intent.reward = rewardStep;
+      await writePendingRating(deck.Slug, intent);
+      if (await captureProgressUserSub() !== sub) throw new Error('Account changed');
+      const starterLesson = starterLessonRef.current;
+      const completedLesson = starterLesson && isStarterLessonComplete(starterLesson, nextState.updatedProgress);
+      if (completedLesson) await completeStarterLesson(starterLesson.slug);
+      await clearPendingRating(sub, deck.Slug, intent.uid);
+      pendingRatingRef.current = null;
       recordRewardStep(rewardStep, current.card.StableUid);
       const outcome = useSessionStore.getState().rewardOutcome;
       // Held in a local as well as in state: when this rating ends the run the
@@ -938,12 +994,8 @@ export function SessionCardScreen({ navigation, route }: Props) {
         }
       }
       recordSessionRating({ stableUid: current.card.StableUid, rating });
-      const starterLesson = starterLessonRef.current;
-      if (starterLesson && isStarterLessonComplete(starterLesson, nextState.updatedProgress)) {
-        // The lesson's last card: the first pack is the reward. The stage closes, the pack's bootstrap
-        // (DECK_BOOTSTRAP_GRANT pulls) lands and the reminder prompt is armed, then Draw opens instead of the summary.
+      if (completedLesson) {
         starterLessonRef.current = null;
-        await completeStarterLesson(starterLesson.slug);
         navigation.replace('Draw', { slug: starterLesson.slug, rewardPending: true });
         return;
       }
@@ -981,7 +1033,12 @@ export function SessionCardScreen({ navigation, route }: Props) {
           ...(picksRef.current.answered > 0 ? { picks: { ...picksRef.current } } : {}),
         });
       }
+    } catch (error) {
+      console.warn('[SessionCard] local review commit failed');
+      Alert.alert('Could not finish saving',
+        'Keep this card open and try the same action again. Your answer has been kept.');
     } finally {
+      commitBusyRef.current = false;
       setReviewing(false);
     }
   }
@@ -1171,7 +1228,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
                 </Text>
               </Pressable>
               <View style={styles.headerTextWrap}>
-                <Text style={styles.title} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
+                <Text style={styles.title} numberOfLines={2} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   {deck.Title}
                 </Text>
                 <Text style={styles.subtitle} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
@@ -1240,7 +1297,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
               </Text>
             </Pressable>
             <View style={styles.headerTextWrap}>
-              <Text style={styles.title} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
+              <Text style={styles.title} numberOfLines={2} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                 {deckShortTitle(deck.Slug, deck.Title)}
               </Text>
               <Text style={styles.subtitle} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
@@ -1248,9 +1305,10 @@ export function SessionCardScreen({ navigation, route }: Props) {
               </Text>
             </View>
             {canSwitchCardLang ? (
-              <CardLangToggle lang={cardLang} onChange={(next) => void setCardLangPref(next)} />
+              <View style={{ flexShrink: 0 }}><CardLangToggle lang={cardLang} onChange={(next) => void setCardLangPref(next)} /></View>
             ) : null}
           </View>
+          <TranslationAvailability state={deckTranslations} />
           <SessionProgressHeader vm={sessionVm} />
           {loadForecast ? (
             <Text testID="session-card-load-forecast" numberOfLines={2} style={styles.forecastLine}>
@@ -1508,6 +1566,7 @@ const styles = StyleSheet.create({
   },
   headerTextWrap: {
     flex: 1,
+    minWidth: 0,
   },
   title: {
     fontSize: typography.title3,

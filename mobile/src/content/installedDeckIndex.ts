@@ -99,39 +99,44 @@ function buildIndex(text: string): InstalledDeckIndex {
   return { sources, translations };
 }
 
-/** The index of a deck's installed file, or null (not installed, unreadable, corrupt). Never throws. */
-export async function getInstalledDeckIndex(deckSlug: string): Promise<InstalledDeckIndex | null> {
-  try {
-    const slug = String(deckSlug ?? '').trim();
-    if (!slug) return null;
+/** Reads the installed index; callers choose whether to surface failures. */
+async function readInstalledDeckIndex(deckSlug: string): Promise<InstalledDeckIndex | null> {
+  const slug = String(deckSlug ?? '').trim();
+  if (!slug) return null;
 
-    const userKey = await getCurrentUserKey();
-    const rawMeta = await AsyncStorage.getItem(`${DECK_META_PREFIX}${userKey}:${slug}`);
-    if (!rawMeta) return null;
-    const meta: unknown = JSON.parse(rawMeta);
-    if (!isRecord(meta)) return null;
-    const { buildId, fileUri } = meta;
-    if (typeof buildId !== 'string' || !buildId || typeof fileUri !== 'string' || !fileUri) return null;
+  const userKey = await getCurrentUserKey();
+  const rawMeta = await AsyncStorage.getItem(`${DECK_META_PREFIX}${userKey}:${slug}`);
+  if (!rawMeta) return null;
+  const meta: unknown = JSON.parse(rawMeta);
+  if (!isRecord(meta)) throw new Error('Invalid installed deck metadata');
+  const { buildId, fileUri } = meta;
+  if (typeof buildId !== 'string' || !buildId || typeof fileUri !== 'string' || !fileUri) throw new Error('Invalid installed deck metadata');
 
-    const key = JSON.stringify([slug, fileUri, buildId]);
-    let entry = cache.find((c) => c.key === key);
-    if (!entry) {
-      const created: CachedDeck = { key, index: readInstalledDeckText(userKey, slug, fileUri).then(buildIndex) };
-      created.index.catch(() => {
-        const at = cache.indexOf(created);
-        if (at >= 0) cache.splice(at, 1);
-      });
-      entry = created;
-      cache.push(entry);
-      while (cache.length > MAX_CACHED_DECKS) cache.shift();
-    }
-    return await entry.index;
-  } catch {
-    return null;
+  const key = JSON.stringify([slug, fileUri, buildId]);
+  let entry = cache.find((c) => c.key === key);
+  if (!entry) {
+    const created: CachedDeck = { key, index: readInstalledDeckText(userKey, slug, fileUri).then(buildIndex) };
+    created.index.catch(() => {
+      const at = cache.indexOf(created);
+      if (at >= 0) cache.splice(at, 1);
+    });
+    entry = created;
+    cache.push(entry);
+    while (cache.length > MAX_CACHED_DECKS) cache.shift();
   }
+  return await entry.index;
 }
 
-/** The installed deck's translations by stableUid, or null. Never throws. */
-export async function getDeckTranslations(deckSlug: string): Promise<ReadonlyMap<string, CardTranslations> | null> {
-  return (await getInstalledDeckIndex(deckSlug))?.translations ?? null;
+/** Safe lookup for optional card source metadata. */
+export async function getInstalledDeckIndex(deckSlug: string): Promise<InstalledDeckIndex | null> {
+  try { return await readInstalledDeckIndex(deckSlug); } catch { return null; }
+}
+
+/** Optional readers stay safe; study screens request retryable file/storage errors. */
+export async function getDeckTranslations(
+  deckSlug: string,
+  options?: { throwOnError?: boolean },
+): Promise<ReadonlyMap<string, CardTranslations> | null> {
+  const index = options?.throwOnError ? await readInstalledDeckIndex(deckSlug) : await getInstalledDeckIndex(deckSlug);
+  return index?.translations ?? null;
 }

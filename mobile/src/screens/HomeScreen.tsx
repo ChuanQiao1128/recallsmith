@@ -1,3 +1,4 @@
+import { subscribeProgressChanges } from '../sync/progressChanges';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -8,6 +9,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import * as RN from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
@@ -20,6 +22,7 @@ import {
   type HomeDeckVM,
   type HomeViewModel,
 } from '../features/gacha/selectors/homeSelectors';
+import { ProgressSyncStatus } from '../features/gacha/components/ProgressSyncStatus';
 import TodayPressureCard from '../features/gacha/components/TodayPressureCard';
 import {
   autoApplyFreeDeckUpdates,
@@ -152,7 +155,14 @@ const HOME_TOKENS = {
   linkBg: colors.softLavender,
 } as const;
 
+// Older test facades omit this export; native builds always use the real hook.
+const useHomeWindowDimensions: () => { height?: number } = (() => {
+  try { return (RN as any).useWindowDimensions ?? (() => ({ height: 844 })); }
+  catch { return () => ({ height: 844 }); }
+})();
+
 export function HomeScreen({ navigation, route }: Props) {
+  const compactHome = (useHomeWindowDimensions().height ?? 844) <= 700;
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [deckOpen, setDeckOpen] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
@@ -364,6 +374,8 @@ export function HomeScreen({ navigation, route }: Props) {
     [isPremiumUser, isSignedIn],
   );
   const runRefresh = useCallback(async () => {
+    const refreshUser = authUserSub;
+    const scopeCurrent = () => isMountedRef.current && (typeof useAuthStore.getState !== 'function' || useAuthStore.getState().userSub === refreshUser);
     // Phase 1 (cache-first): build the VM from the cached manifest and the
     // decks already on the phone -- no network -- so Home paints immediately.
     try {
@@ -371,7 +383,7 @@ export function HomeScreen({ navigation, route }: Props) {
         loadHomeDeckSummaries({ premium: isPremiumUser, remote: false }),
         loadStreakSnapshot(),
       ]);
-      if (!isMountedRef.current) return;
+      if (!scopeCurrent()) return;
       const currentSelectedSlug = selectedSlugRef.current;
       const activeSlug = currentSelectedSlug ?? summary.deckSummaries[0]?.slug ?? null;
       if (!currentSelectedSlug && activeSlug) {
@@ -390,12 +402,12 @@ export function HomeScreen({ navigation, route }: Props) {
         deckSummaries: summary.deckSummaries,
         now,
       });
-      if (!isMountedRef.current) return;
+      if (!scopeCurrent()) return;
       homeInputsRef.current = { summary, deckWallets, streak };
       startAutoUpdates(summary);
       publishReadyVm(homeInputsRef.current);
     } catch {
-      if (!isMountedRef.current) return;
+      if (!scopeCurrent()) return;
       const currentSelectedSlug = selectedSlugRef.current;
       const fallbackWallet = currentSelectedSlug
         ? await loadDeckWallet(currentSelectedSlug).catch(() => ({
@@ -403,6 +415,7 @@ export function HomeScreen({ navigation, route }: Props) {
             reservePulls: 0,
           }))
         : { availablePulls: 0, reservePulls: 0 };
+      if (!scopeCurrent()) return;
       const vm = buildHomeScreenVM({
         state: 'error',
         hasSignedInUser: isSignedIn,
@@ -422,14 +435,14 @@ export function HomeScreen({ navigation, route }: Props) {
     // Home already rendered is the wallet it keeps.
     try {
       const summary = await loadHomeDeckSummaries({ premium: isPremiumUser, remote: true });
-      if (!isMountedRef.current || !homeInputsRef.current) return;
+      if (!scopeCurrent() || !homeInputsRef.current) return;
       homeInputsRef.current = { ...homeInputsRef.current, summary };
       startAutoUpdates(summary);
       publishReadyVm(homeInputsRef.current);
     } catch {
       // Revalidation is best effort; the cache-first VM stands.
     }
-  }, [isPremiumUser, isSignedIn, publishReadyVm, startAutoUpdates]);
+  }, [authUserSub, isPremiumUser, isSignedIn, publishReadyVm, startAutoUpdates]);
   useEffect(() => {
     runRefreshRef.current = runRefresh;
   }, [runRefresh]);
@@ -443,6 +456,9 @@ export function HomeScreen({ navigation, route }: Props) {
   useEffect(() => {
     refreshHomeRef.current = refreshHome;
   }, [refreshHome]);
+  useEffect(() => subscribeProgressChanges(({ userSub }) => {
+    if (userSub === authUserSub && isMountedRef.current) void refreshHome();
+  }), [authUserSub, refreshHome]);
   // Rebuilds the VM for a newly selected pack from the inputs already in hand --
   // no loadHomeDeckSummaries, no storage read, no network -- so a swipe or a dot
   // tap switches instantly. Falls back to a full refresh only before the first
@@ -730,7 +746,7 @@ export function HomeScreen({ navigation, route }: Props) {
           end={{ x: 1, y: 1 }}
           style={styles.gradient}
         >
-          <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+          <ScrollView contentContainerStyle={[styles.container, compactHome && styles.containerCompact]} showsVerticalScrollIndicator={false}>
             <SessionExpiredBanner onSignIn={() => navigation.navigate('SignIn')} />
             {/* One-shot notice toast — surfaces feedback from the
                 preceding screen (e.g. PermissionPrompt deny). Auto-fades
@@ -749,7 +765,7 @@ export function HomeScreen({ navigation, route }: Props) {
             {/* Header — title + one context line (not marketing, not an
                 instruction): the exam countdown when a date is set,
                 otherwise a status that agrees with the hero. */}
-            <View style={styles.headerRow}>
+            <View style={[styles.headerRow, compactHome && styles.headerRowCompact]}>
               <View style={styles.headerTextWrap}>
                 <Text style={styles.title} numberOfLines={1}>
                   DeveloperCards
@@ -758,7 +774,7 @@ export function HomeScreen({ navigation, route }: Props) {
                   <Text testID="home-exam-countdown" style={styles.headerStatusSubtitle} numberOfLines={1}>
                     {examCountdownLabel}
                   </Text>
-                ) : headerStatus ? (
+                ) : headerStatus && selectedDueToday === 0 ? (
                   <Text testID="home-header-subtitle" style={styles.headerStatusSubtitle} numberOfLines={1}>
                     {headerStatus}
                   </Text>
@@ -791,6 +807,9 @@ export function HomeScreen({ navigation, route }: Props) {
                 <Text style={styles.settingsText}>⚙︎</Text>
               </Pressable>
             </View>
+            {compactHome && homeState.vm ? (
+              <TodayPressureCard counts={homeState.vm.counts} selectedDeckTitle={homeState.vm.selectedDeckTitle} compact />
+            ) : null}
             {/* ─── HERO BAND — the cover carousel ─────────────────────
                 2026-10-18 home carousel: the hero pack is a horizontal
                 swipe carousel, one page per pack in DECK_ORDER, with the
@@ -890,11 +909,12 @@ export function HomeScreen({ navigation, route }: Props) {
 
               return (
                 <>
-                  <View style={styles.heroBand}>
+                  <View style={[styles.heroBand, compactHome && styles.heroBandCompact]}>
                     {/* Short name and page dots sit under the carousel and
                         above the hero title, so nothing comes between the
                         title and the primary button. */}
                     <HomePackCarousel
+                      compact={compactHome}
                       pages={pages}
                       currentIndex={currentIndex}
                       locked={!!starterSlug}
@@ -913,7 +933,7 @@ export function HomeScreen({ navigation, route }: Props) {
                         between packs never moves the button below. */}
                     <View style={styles.heroTitleBox}>
                       <Text
-                        style={[styles.heroTitle, styles.heroTitleSpacer]}
+                        style={[styles.heroTitle, compactHome && styles.heroTitleCompact, styles.heroTitleSpacer]}
                         accessibilityElementsHidden
                         importantForAccessibility="no-hide-descendants"
                       >
@@ -922,7 +942,7 @@ export function HomeScreen({ navigation, route }: Props) {
                       <View style={styles.heroTitleCentre}>
                         <Text
                           testID="home-hero-title"
-                          style={styles.heroTitle}
+                          style={[styles.heroTitle, compactHome && styles.heroTitleCompact]}
                           numberOfLines={2}
                           adjustsFontSizeToFit
                           minimumFontScale={0.75}
@@ -941,6 +961,7 @@ export function HomeScreen({ navigation, route }: Props) {
                       accessibilityRole="button"
                       style={({ pressed }) => [
                         styles.primaryCta,
+                        compactHome && styles.primaryCtaCompact,
                         primaryCtaDisabled && styles.primaryCtaDisabled,
                         pressed && styles.pressed,
                       ]}
@@ -962,12 +983,13 @@ export function HomeScreen({ navigation, route }: Props) {
                     {homeState.vm.draw.label || '\u00A0'}
                   </Text>
 
+                  <ProgressSyncStatus />
+
                   {/* ─── TODAY GROUP — pressure card + update notice + goal ──── */}
                   <View style={styles.actionGroup}>
-                    <TodayPressureCard
-                      counts={homeState.vm.counts}
-                      selectedDeckTitle={homeState.vm.selectedDeckTitle}
-                    />
+                    {!compactHome ? (
+                      <TodayPressureCard counts={homeState.vm.counts} selectedDeckTitle={homeState.vm.selectedDeckTitle} />
+                    ) : null}
                     {/* One fixed line under the Today card, about the selected pack:
                         the update notice while a newer build exists ("Updating …"
                         while the free-deck auto-installer runs, or the manual
@@ -1159,6 +1181,11 @@ const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: colors.parchmentBg },
   gradient: { flex: 1 },
   container: { paddingHorizontal: spacing.screenPadding, paddingTop: spacing.md, paddingBottom: spacing.xl },
+  containerCompact: { paddingTop: spacing.xs },
+  headerRowCompact: { marginBottom: 4 },
+  heroBandCompact: { paddingTop: 0, paddingBottom: 0 },
+  heroTitleCompact: { fontSize: 19, lineHeight: 24 },
+  primaryCtaCompact: { marginTop: spacing.xs },
   loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   loadingText: { marginTop: spacing.sm, color: colors.inkSecondary, fontSize: typography.body },
   pressed: { opacity: 0.9 },
@@ -1202,7 +1229,7 @@ const styles = StyleSheet.create({
   heroBand: {
     alignItems: 'center',
     paddingTop: 4,
-    paddingBottom: spacing.md,
+    paddingBottom: spacing.sm,
   },
   heroTitleBox: {
     alignSelf: 'stretch',
@@ -1218,8 +1245,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   heroTitle: {
-    fontSize: typography.title1,
-    lineHeight: 34,
+    fontSize: typography.title2,
+    lineHeight: 29,
     fontWeight: '900',
     color: colors.ink,
     textAlign: 'center',
@@ -1229,7 +1256,7 @@ const styles = StyleSheet.create({
   // Wider top margin from heroBand → makes hero clearly the visual lead.
   // Today card group, now under the CTA and draw status line.
   actionGroup: {
-    marginTop: spacing.md,
+    marginTop: spacing.sm,
   },
   belowTodaySlot: { alignSelf: 'stretch' },
   belowTodaySpacer: { opacity: 0 },

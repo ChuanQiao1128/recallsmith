@@ -21,6 +21,7 @@ import { getFeatureFlags } from '../config/featureFlags';
 import { mcqRequiredCount, resolveMcq } from '../features/gacha/mcq/normalizeMcq';
 import { MCQ_COPY } from '../features/gacha/mcq/mcqConstants';
 import { CardAnswerSections } from '../features/gacha/components/CardAnswerSections';
+import { TranslationAvailability } from '../features/gacha/study/TranslationAvailability';
 import { CardLangToggle } from '../features/gacha/components/CardLangToggle';
 import { CardTextLangContext, cardSectionLabels, cardTextA11yProps } from '../features/gacha/components/CardTextLang';
 import { setCardLangPref, useCardLangPref } from '../features/gacha/study/cardLangPrefs';
@@ -413,6 +414,7 @@ export function CardDetailScreen({ navigation, route }: Props) {
             )}
           </View>
 
+          {!isLocked ? <TranslationAvailability state={deckTranslations} /> : null}
           {/* HERO CARD — same featured style as DrawResult */}
           <View style={styles.heroCardWrap}>
             <LinearGradient

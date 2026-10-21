@@ -303,9 +303,9 @@ export async function loadMistakeBook(): Promise<MistakeBookState> {
   }
 }
 
-async function recordNow(o: MistakeOutcome): Promise<void> {
+async function recordNow(o: MistakeOutcome, userSub: string): Promise<void> {
   try {
-    const key = await getUserScopedKey(MISTAKE_BOOK_KEY);
+    const key = await getUserScopedKey(MISTAKE_BOOK_KEY, userSub);
     // A storage read error throws out of here on purpose: writing a book rebuilt from an empty
     // read would wipe every stored entry. Corrupt data, by contrast, is replaced.
     const before = parseBook(await AsyncStorage.getItem(key));
@@ -332,8 +332,13 @@ export function withMistakeBookLock<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /** Folds one rating into the stored book. Serialised, and never throws or rejects. */
-export async function recordMistakeOutcome(o: MistakeOutcome): Promise<void> {
-  await withMistakeBookLock(() => recordNow(o)).catch(() => undefined);
+export async function recordMistakeOutcome(o: MistakeOutcome, userSub?: string): Promise<void> {
+  try {
+    const capturedSub = userSub ?? (await getUserScopedKey('')).slice('devcards:u:'.length, -1);
+    await withMistakeBookLock(() => recordNow(o, capturedSub));
+  } catch {
+    // Scope resolution is best-effort too, like the book's read/write path.
+  }
 }
 
 // FNV-1a 32-bit over the string's UTF-16 code units (equal to the byte-wise hash for ASCII), as
