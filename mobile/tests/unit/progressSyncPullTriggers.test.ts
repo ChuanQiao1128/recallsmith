@@ -11,9 +11,8 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
  * had no caller anywhere in the repo while the reason App.tsx actually fires
  * ('app_foreground') was missing from it.
  *
- * These tests pin the two reasons that now have real call sites, and pin the
- * throttle reason that must NOT pull, so the list cannot quietly become
- * "always".
+ * Each flushed rating batch now needs a readback before the UI can confirm
+ * sync. The rating debounce and pull interval still bound request frequency.
  */
 
 const USER = 'user1';
@@ -135,16 +134,13 @@ describe('syncProgressOnce pull whitelist', () => {
     expect(pullPaths).toHaveLength(1);
   });
 
-  it('does not pull on a debounced rating flush that had work to push', async () => {
+  it('confirms a debounced rating batch by pulling after the acknowledgement', async () => {
     await queueLocalWork('u3');
 
     await forceProgressSync('rating');
 
-    // Ratings fire constantly during a session. Pulling on each one buys a
-    // request rate nobody asked the server for, and the next foreground will
-    // reconcile anyway.
     expect(pushedEventIds.length).toBeGreaterThan(0);
-    expect(pullPaths).toHaveLength(0);
+    expect(pullPaths).toHaveLength(1);
   });
 
   it('still pulls on a reason with nothing to push, whitelisted or not', async () => {

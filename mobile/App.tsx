@@ -48,7 +48,7 @@ import ForgotPasswordScreen from './src/screens/ForgotPasswordScreen';
 import { configureAmplifyOnce } from './src/auth/amplify';
 import { useAuthStore } from './src/auth/authStore';
 import { installAccessTokenRefresher, refreshAuthOnForeground } from './src/auth/freshToken';
-import { scheduleProgressSync } from './src/sync/progressSync';
+import { scheduleProgressSync, setProgressSyncAppActive } from './src/sync/progressSync';
 import { createAppStateSyncHandler } from './src/sync/appStateSync';
 import { useForceUpdateGate, type ForceUpdateGate } from './src/config/forceUpdateGate';
 import { DEFAULT_APP_STORE_URL, getCurrentAppVersion } from './src/config/remoteConfig';
@@ -211,8 +211,10 @@ function App() {
   }, []);
 
   useEffect(() => {
+    setProgressSyncAppActive(AppState.currentState === 'active');
     const syncOnAppState = createAppStateSyncHandler({ schedule: scheduleProgressSync });
     const sub = AppState.addEventListener('change', (state) => {
+      setProgressSyncAppActive(state === 'active');
       syncOnAppState(state);
       if (state === 'active') {
         void refreshAuthOnForeground();

@@ -5,6 +5,7 @@ import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
 import { apiJson } from '../api/apiClient';
+import { classifyError } from '../api/errorKind';
 import { resolveDeckBySlug } from '../content/deckRepository';
 import { loadDeckProgress, updateDeckProgress, setActiveUserSubForStorage } from '../review/storage';
 import { syncDrawStateNow } from './drawStateSync';
@@ -211,6 +212,43 @@ let _inFlight = false;
 let _pending = false;
 let _scheduledReason: string = 'unknown';
 let _lastPullAtMs = 0;
+let _unconfirmedPush = false;
+let _appActive = true;
+let _recoveryTimer: ReturnType<typeof setTimeout> | null = null;
+let _recovery: { userSub: string; reason: string; delayMs: number } | null = null;
+let _retryAttempt = 0;
+const RETRY_DELAYS_MS = [3_000, 10_000, 30_000, 60_000] as const;
+
+function clearRecovery(): void {
+  if (_recoveryTimer) clearTimeout(_recoveryTimer);
+  _recoveryTimer = null;
+  _recovery = null;
+}
+
+function scheduleRecovery(userSub: string, reason: string, delayMs: number): void {
+  clearRecovery();
+  if (_userSubMem !== userSub || !_accessTokenMem || isSyncBlocked()) return;
+  _recovery = { userSub, reason, delayMs };
+  if (!_appActive) return;
+  _recoveryTimer = setTimeout(() => {
+    _recoveryTimer = null;
+    const recovery = _recovery;
+    _recovery = null;
+    if (!recovery || !_appActive || _userSubMem !== recovery.userSub || !_accessTokenMem || isSyncBlocked()) return;
+    scheduleProgressSync({ delayMs: 0, reason: recovery.reason });
+  }, delayMs);
+}
+
+/** Background work pauses; returning resumes failed work even within the foreground throttle. */
+export function setProgressSyncAppActive(active: boolean): void {
+  _appActive = active;
+  if (!active) {
+    if (_recoveryTimer) clearTimeout(_recoveryTimer);
+    _recoveryTimer = null;
+  } else if (_recovery && !_recoveryTimer) {
+    scheduleRecovery(_recovery.userSub, _recovery.reason, 0);
+  }
+}
 
 /**
  * 这个不是“每 2s 拉一次”，只是防止短时间内重复 pull
@@ -722,6 +760,8 @@ export async function setSyncAccessToken(token: string | null): Promise<void> {
   } catch {}
 
   if (!t) {
+    clearRecovery();
+    _retryAttempt = 0;
     await setActiveUserSub(null);
     // Sign-out is a session boundary, so nothing from the previous session is
     // answered out of memory afterwards. setActiveUserSub already drops the
@@ -858,6 +898,9 @@ async function wipeLocalStudyStateBestEffort(): Promise<void> {
 async function onUserChanged(prevSub: string | null, nextSub: string | null): Promise<void> {
   // 清掉内存状态
   _lastPullAtMs = 0;
+  _unconfirmedPush = false;
+  clearRecovery();
+  _retryAttempt = 0;
   _healedOnce = false;
 
   // The queue cache is per partition, so a switch cannot mix two accounts'
@@ -1323,13 +1366,14 @@ async function pullProgressAndApply(
   // while(hasMore) 排水环：每页走完整的 fetch -> cache -> merge -> advance-cursor 流程，
   // cursor 只在该页成功应用后才持久化（沿用原“advance only after success”原则）。
   for (let page = 0; page < MAX_PULL_PAGES_PER_SYNC; page++) {
+    if (_userSubMem !== userSub || isSyncBlocked()) return { pulled, applied };
     const r = await pullProgressPageAndApply(userSub, accessToken);
     pulled += r.pulled;
     applied += r.applied;
     if (!r.hasMore) break;
   }
 
-  _lastPullAtMs = Date.now();
+  if (_userSubMem === userSub && !isSyncBlocked()) _lastPullAtMs = Date.now();
   return { pulled, applied };
 }
 
@@ -1487,7 +1531,7 @@ async function syncProgressOnce(
   userSub: string,
   accessToken: string,
   reason: string,
-): Promise<{ pushed: number; pulled: number; applied: number; remaining: number }> {
+): Promise<{ pushed: number; pulled: number; applied: number; remaining: number; confirmationDelayMs?: number }> {
   // Account deletion may start while this run is going (syncGuard.ts). A run
   // that began before the block stops before its next request: no bootstrap,
   // no further push round, no pull. Only a request already on the wire is left,
@@ -1585,7 +1629,12 @@ async function syncProgressOnce(
     if (batch.length < BATCH) break;
   }
 
-  await markSyncStatus(userSub, { lastPushAtMs: Date.now() });
+  // An empty queue is not a new upload. Moving this stamp on every startup
+  // follow-up invalidated the successful pull from a few milliseconds earlier.
+  if (pushed > 0) {
+    await markSyncStatus(userSub, { lastPushAtMs: Date.now() });
+    if (_userSubMem === userSub) _unconfirmedPush = true;
+  }
 
   // 2) pull (throttled)
   let pulled = 0;
@@ -1595,50 +1644,17 @@ async function syncProgressOnce(
   const msSinceLastPull = _lastPullAtMs > 0 ? now - _lastPullAtMs : Number.POSITIVE_INFINITY;
   const pullAllowed = msSinceLastPull >= MIN_PULL_INTERVAL_MS;
 
-  // Every name in this list must have a caller. The previous version
-  // listed 'home_focus', 'review_focus' and 'app_start', none of which is
-  // passed anywhere in the repo, and omitted 'app_foreground', which
-  // App.tsx fires on every AppState 'active' transition. The list was
-  // therefore documentation of an intent, not a description of behaviour.
-  //
-  // The hole it left is narrow but is exactly the multi-device case:
-  // `pushed === 0` below already forces a pull when the outbox is empty,
-  // so the only sync that skipped the pull was a foreground sync that had
-  // local work to send. Study on phone A, open phone B while B still has
-  // queued ratings, and B pushes its own work without ever learning about
-  // A's — self-healing only on some later foreground that finds an empty
-  // queue.
-  //
-  // Of the two fixes the issue offered, this takes "whitelist the trigger
-  // that actually fires" over "wire the documented focus triggers up".
-  // Screen focus fires many times per session (every tab swap through
-  // Home or Review), and MIN_PULL_INTERVAL_MS is only 2s, so per-screen
-  // triggers would buy a pull rate the server has not been asked for.
-  // Foreground is both rarer and better correlated with the thing we are
-  // trying to notice: time has passed during which another device could
-  // have written. It also covers cold start, because AppState settles to
-  // 'active' shortly after mount, which is what 'app_start' was for.
-  //
-  // 'draw_committed' is a gacha commit landing (see DrawScreen). A draw
-  // queues no review events, so it would reach the pull through
-  // `pushed === 0` today; it is named explicitly because a future traffic
-  // policy would key on the reason string, and because a draw is exactly
-  // when the user most wants their other devices reconciled.
-  const wantPull =
-    reason === 'app_foreground' ||
-    reason === 'draw_committed' ||
-    reason === 'manual' ||
-    reason === 'token_set' ||
-    reason === 'user_changed' ||
-    pushed === 0;
+  if (isSyncBlocked() || _userSubMem !== userSub) return stopped(pushed);
 
-  if (isSyncBlocked()) return stopped(pushed);
-
-  if (wantPull && pullAllowed) {
+  // Ratings already debounce for ten seconds. Confirm each flushed batch,
+  // rather than leaving a successful upload unconfirmed until a manual retry.
+  if (pullAllowed) {
     try {
       const r = await pullProgressAndApply(userSub, accessToken);
       pulled = r.pulled;
       applied = r.applied;
+      if (_userSubMem !== userSub || isSyncBlocked()) return stopped(pushed);
+      _unconfirmedPush = false;
       await markSyncStatus(userSub, { lastPullAtMs: Date.now() });
       await writeLastError(userSub, null);
     } catch (e) {
@@ -1651,7 +1667,9 @@ async function syncProgressOnce(
 
   await writeLastSync(userSub, { atMs: Date.now(), reason, pushed, pulled, applied, remaining });
 
-  return { pushed, pulled, applied, remaining };
+  return { pushed, pulled, applied, remaining,
+    ...(!pullAllowed && _unconfirmedPush ? { confirmationDelayMs: Math.max(1, MIN_PULL_INTERVAL_MS - msSinceLastPull) } : {}),
+  };
 }
 
 /**
@@ -1667,6 +1685,7 @@ async function runSyncNow(reason: string): Promise<void> {
 
   _inFlight = true;
   _pending = false;
+  clearRecovery();
 
   let runUserSub: string | null = null;
   try {
@@ -1683,11 +1702,23 @@ async function runSyncNow(reason: string): Promise<void> {
     }
 
     runUserSub = userSub;
-    await syncProgressOnce(userSub, token, reason);
+    const result = await syncProgressOnce(userSub, token, reason);
+    if (_userSubMem === userSub && !isSyncBlocked()) {
+      _retryAttempt = 0;
+      if (result.confirmationDelayMs != null) scheduleRecovery(userSub, 'sync_confirmation', result.confirmationDelayMs);
+      else if (result.remaining > 0 && result.pushed > 0) scheduleRecovery(userSub, 'pending_flush', 300);
+    }
   } catch (e) {
     const msg = (e as any)?.message ?? String(e);
 
     if (runUserSub) await writeLastError(runUserSub, 'Sync could not finish. Your local progress is saved.');
+
+    const kind = classifyError(e);
+    if (runUserSub && _userSubMem === runUserSub && (kind === 'offline' || kind === 'timeout' || kind === 'server')) {
+      const delayMs = RETRY_DELAYS_MS[Math.min(_retryAttempt, RETRY_DELAYS_MS.length - 1)];
+      _retryAttempt += 1;
+      scheduleRecovery(runUserSub, 'automatic_retry', delayMs);
+    }
 
     console.warn('[progressSync] failed:', msg);
   } finally {
@@ -1729,6 +1760,7 @@ export function scheduleProgressSync(arg?: any): void {
   // Account deletion in progress or done (syncGuard.ts): schedule nothing and
   // drop a timer armed earlier, so no sync can reach the server after the DELETE.
   if (isSyncBlocked()) {
+    clearRecovery();
     if (_timer) clearTimeout(_timer);
     _timer = null;
     return;
@@ -1928,12 +1960,16 @@ export async function resetProgressSyncState(): Promise<void> {
   });
 
   _lastPullAtMs = 0;
+  _unconfirmedPush = false;
+  clearRecovery();
+  _retryAttempt = 0;
   _healedOnce = false;
 }
 
 /** Public status contains no account ids, tokens, device ids or transport errors. */
 export async function getProgressSyncStatus(): Promise<{
   signedIn: boolean; pending: number; error: boolean; syncing: boolean;
+  automaticRetry?: boolean;
   lastAttemptAtMs?: number; lastPushAtMs?: number; lastPullAtMs?: number;
 }> {
   const sub = _userSubMem;
@@ -1943,5 +1979,8 @@ export async function getProgressSyncStatus(): Promise<{
     AsyncStorage.getItem(kStatus(sub)), AsyncStorage.getItem(kLastError(sub)),
   ]);
   const status = raw ? JSON.parse(raw) : {};
-  return { ...status, signedIn: true, pending, error: !!error, syncing: _inFlight };
+  return { ...status, signedIn: true, pending, error: !!error,
+    syncing: _inFlight || _recovery?.reason === 'sync_confirmation',
+    automaticRetry: _recovery?.userSub === sub && _recovery.reason === 'automatic_retry',
+  };
 }
