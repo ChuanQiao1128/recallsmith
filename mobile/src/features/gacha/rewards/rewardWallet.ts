@@ -23,8 +23,8 @@ const APPLIED_SESSION_PREFIX = 'recallsmith:reward-session:';
 // then on we never re-grant, even if the user spends down to 0.
 const WALLET_SEEDED_KEY = 'recallsmith:wallet-seeded:v1';
 
-function walletKey(): Promise<string> {
-  return getUserScopedKey(REWARD_WALLET_KEY);
+function walletKey(userSub?: string): Promise<string> {
+  return getUserScopedKey(REWARD_WALLET_KEY, userSub);
 }
 
 function seededKey(): Promise<string> {
@@ -114,8 +114,8 @@ export async function loadRewardWalletState(): Promise<RewardWalletState> {
   }
 }
 
-export async function saveRewardWalletState(state: RewardWalletState): Promise<void> {
-  await AsyncStorage.setItem(await walletKey(), JSON.stringify(state));
+export async function saveRewardWalletState(state: RewardWalletState, userSub?: string): Promise<void> {
+  await AsyncStorage.setItem(await walletKey(userSub), JSON.stringify(state));
 }
 
 /**

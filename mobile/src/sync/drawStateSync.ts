@@ -2,7 +2,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { apiJson } from '../api/apiClient';
-import { getUserScopedKey } from '../review/storage';
+import { captureProgressUserSub, getUserScopedKey } from '../review/storage';
+import { notifyGamificationChanged } from './gamificationChanges';
 import {
   adoptAnonDrawState,
   listDrawStateSlugs,
@@ -208,9 +209,9 @@ export function sameWallet(a: RewardWalletState | null, b: RewardWalletState | n
   return a.availablePulls === b.availablePulls && a.reservePulls === b.reservePulls;
 }
 
-async function readStamps(): Promise<Stamps> {
+async function readStamps(userSub: string): Promise<Stamps> {
   try {
-    const raw = await AsyncStorage.getItem(await getUserScopedKey(STAMPS_KEY));
+    const raw = await AsyncStorage.getItem(await getUserScopedKey(STAMPS_KEY, userSub));
     if (!raw) return emptyStamps();
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return emptyStamps();
@@ -226,9 +227,9 @@ async function readStamps(): Promise<Stamps> {
   }
 }
 
-async function writeStamps(stamps: Stamps): Promise<void> {
+async function writeStamps(stamps: Stamps, userSub: string): Promise<void> {
   try {
-    await AsyncStorage.setItem(await getUserScopedKey(STAMPS_KEY), JSON.stringify(stamps));
+    await AsyncStorage.setItem(await getUserScopedKey(STAMPS_KEY, userSub), JSON.stringify(stamps));
   } catch {
     // A lost stamp file costs one round of LWW precedence, never data: the
     // unknown-stamp rule makes the next run defer to the server.
@@ -280,6 +281,7 @@ let _adopting: Promise<AnonGachaAdoption> | null = null;
 export function adoptAnonGachaState(): Promise<AnonGachaAdoption> {
   if (_adopting) return _adopting;
   _adopting = (async () => {
+    const userSub = await captureProgressUserSub();
     const draw = await adoptAnonDrawState();
     const wallet = await adoptAnonRewardWallet();
     const ledger = await adoptAnonNewCardLedger();
@@ -289,7 +291,11 @@ export function adoptAnonGachaState(): Promise<AnonGachaAdoption> {
     // The Mistake Book is local-only, so it adds nothing to the push; it moves with the rest of
     // the anon partition so a signed-out book is neither lost nor revived later (mobile-17).
     await adoptAnonMistakeBook();
-    return { ...draw, ...wallet, ...ledger, ...deckWallets };
+    const result = { ...draw, ...wallet, ...ledger, ...deckWallets };
+    if (await captureProgressUserSub() === userSub && Object.values(result).some(value => value > 0)) {
+      notifyGamificationChanged({ userSub });
+    }
+    return result;
   })().finally(() => {
     _adopting = null;
   });
@@ -312,15 +318,19 @@ export async function syncDrawStateNow(accessToken: string | null): Promise<Draw
   _inFlight = true;
   setDrawStateSyncInFlight(true);
   try {
+    const userSub = await captureProgressUserSub();
+    const scopeCurrent = async () => !isSyncBlocked() && await captureProgressUserSub() === userSub;
     // Adopt any anonymous-period state into this account BEFORE reading local
     // state, so an adopted deck is new to stamps.decks and is pushed with
     // UNKNOWN_STAMP_MS in this same run -- this is what makes the anon
     // collection reach the server's union on the first sync.
     await adoptAnonGachaState();
+    if (!await scopeCurrent()) return SKIPPED;
     // Drain the legacy global wallet into packs before reading local state, so
     // the pack pulls this run pushes already include a just-migrated balance.
     await migrateLegacyWalletIfNeeded();
-    const stamps = await readStamps();
+    if (!await scopeCurrent()) return SKIPPED;
+    const stamps = await readStamps(userSub);
     const nowMs = Date.now();
 
     // 1) Read the local state and stamp whatever changed since the last look.
@@ -385,7 +395,8 @@ export async function syncDrawStateNow(accessToken: string | null): Promise<Draw
       }
     }
 
-    await writeStamps(stamps);
+    if (!await scopeCurrent()) return SKIPPED;
+    await writeStamps(stamps, userSub);
 
     if (!localChanged && nowMs - stamps.lastSyncedAtMs < MIN_IDLE_SYNC_INTERVAL_MS) {
       return SKIPPED;
@@ -438,7 +449,7 @@ export async function syncDrawStateNow(accessToken: string | null): Promise<Draw
 
     // Deletion may have started while this run read local state; the block
     // wins over a push that has not left the device yet.
-    if (isSyncBlocked()) return SKIPPED;
+    if (!await scopeCurrent()) return SKIPPED;
     const resp = await apiJson<ApiOk<DrawStateSyncResp>>('/api/v1/draw-state/sync', {
       method: 'POST',
       accessToken: token,
@@ -453,6 +464,7 @@ export async function syncDrawStateNow(accessToken: string | null): Promise<Draw
       timeoutMs: 15000,
     });
 
+    if (!await scopeCurrent()) return SKIPPED;
     const data = resp?.data;
     const remoteDecks = Array.isArray(data?.decks) ? data!.decks! : [];
 
@@ -476,7 +488,9 @@ export async function syncDrawStateNow(accessToken: string | null): Promise<Draw
         ? remote.owned!.filter((uid): uid is string => typeof uid === 'string' && uid.length > 0)
         : [];
 
+      if (!await scopeCurrent()) return SKIPPED;
       const current = await loadDrawState(slug);
+      if (!await scopeCurrent()) return SKIPPED;
       const mergedOwned = unionOwned(current.owned, remoteOwned);
       const ownedGrew = mergedOwned.length !== current.owned.length;
 
@@ -510,7 +524,7 @@ export async function syncDrawStateNow(accessToken: string | null): Promise<Draw
       stamps.decks[slug] = nextStamp;
 
       if (ownedGrew || pityChanged) {
-        await saveDrawState(slug, { owned: mergedOwned, pity: nextPity });
+        await saveDrawState(slug, { owned: mergedOwned, pity: nextPity }, userSub);
         if (ownedGrew) appliedOwned += mergedOwned.length - current.owned.length;
         if (pityChanged) appliedPity += 1;
       }
@@ -524,14 +538,16 @@ export async function syncDrawStateNow(accessToken: string | null): Promise<Draw
         // Re-read: the user can spend from this pack while the request is in
         // flight. If the pool moved on, the server answered an older question --
         // skip, and the next run pushes the newer value.
+        if (!await scopeCurrent()) return SKIPPED;
         const currentPulls = await loadDeckWallet(slug);
+        if (!await scopeCurrent()) return SKIPPED;
         if (sameWallet(currentPulls, pushedPulls)) {
           const adoptedPulls: RewardWalletState = {
             availablePulls: toFiniteInt(remotePulls.availablePulls, 0),
             reservePulls: toFiniteInt(remotePulls.reservePulls, 0),
           };
           if (!sameWallet(currentPulls, adoptedPulls)) {
-            await saveDeckWallet(slug, adoptedPulls);
+            await saveDeckWallet(slug, adoptedPulls, userSub);
             appliedDeckPulls += 1;
           }
           stamps.deckPulls[slug] = { value: adoptedPulls, updatedAtMs: toFiniteInt(remotePulls.updatedAtMs, 0) };
@@ -542,14 +558,16 @@ export async function syncDrawStateNow(accessToken: string | null): Promise<Draw
     let appliedWallet = false;
     const remoteWallet = data?.wallet;
     if (remoteWallet) {
+      if (!await scopeCurrent()) return SKIPPED;
       const currentWallet = await loadRewardWalletState();
+      if (!await scopeCurrent()) return SKIPPED;
       if (sameWallet(currentWallet, localWallet)) {
         const adopted: RewardWalletState = {
           availablePulls: toFiniteInt(remoteWallet.availablePulls, 0),
           reservePulls: toFiniteInt(remoteWallet.reservePulls, 0),
         };
         if (!sameWallet(currentWallet, adopted)) {
-          await saveRewardWalletState(adopted);
+          await saveRewardWalletState(adopted, userSub);
           appliedWallet = true;
         }
         stamps.wallet = { value: adopted, updatedAtMs: toFiniteInt(remoteWallet.updatedAtMs, 0) };
@@ -559,10 +577,13 @@ export async function syncDrawStateNow(accessToken: string | null): Promise<Draw
     // Sweep a legacy balance just adopted from the server (for example one earned
     // on a 1.6.1 device) into a pack. The next run pushes the zeroed legacy wallet
     // and the pack change.
+    if (!await scopeCurrent()) return SKIPPED;
     await migrateLegacyWalletIfNeeded();
+    if (!await scopeCurrent()) return SKIPPED;
 
     stamps.lastSyncedAtMs = Date.now();
-    await writeStamps(stamps);
+    await writeStamps(stamps, userSub);
+    if (await scopeCurrent()) notifyGamificationChanged({ userSub });
 
     return {
       ran: true,

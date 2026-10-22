@@ -1,4 +1,5 @@
 import { subscribeProgressChanges } from '../sync/progressChanges';
+import { subscribeGamificationChanges } from '../sync/gamificationChanges';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -242,7 +243,7 @@ export function HomeScreen({ navigation, route }: Props) {
       return () => {
         cancelled = true;
       };
-    }, [openStarterLesson]),
+    }, [authUserSub, openStarterLesson]),
   );
   // R22 §2/§5: the study goal (deck + exam date), read on every focus so a goal set in onboarding
   // or changed in Settings › Study shows up on return. Null (the default for most learners) shows
@@ -384,6 +385,10 @@ export function HomeScreen({ navigation, route }: Props) {
         loadStreakSnapshot(),
       ]);
       if (!scopeCurrent()) return;
+      // Auth/adoption can close onboarding while Home stays mounted.
+      const starterOpen = await isStarterLessonOpen();
+      if (!scopeCurrent()) return;
+      if (!starterOpen) setStarterSlug(null);
       const currentSelectedSlug = selectedSlugRef.current;
       const activeSlug = currentSelectedSlug ?? summary.deckSummaries[0]?.slug ?? null;
       if (!currentSelectedSlug && activeSlug) {
@@ -456,8 +461,16 @@ export function HomeScreen({ navigation, route }: Props) {
   useEffect(() => {
     refreshHomeRef.current = refreshHome;
   }, [refreshHome]);
+  useEffect(() => {
+    homeInputsRef.current = null;
+    setHomeState({ loading: true, error: null, vm: EMPTY_VM });
+    setStarterSlug(null);
+  }, [authUserSub]);
   useEffect(() => subscribeProgressChanges(({ userSub }) => {
-    if (userSub === authUserSub && isMountedRef.current) void refreshHome();
+    if (userSub === (authUserSub ?? 'anon') && isMountedRef.current) void refreshHome();
+  }), [authUserSub, refreshHome]);
+  useEffect(() => subscribeGamificationChanges(({ userSub }) => {
+    if (userSub === (authUserSub ?? 'anon') && isMountedRef.current) void refreshHome();
   }), [authUserSub, refreshHome]);
   // Rebuilds the VM for a newly selected pack from the inputs already in hand --
   // no loadHomeDeckSummaries, no storage read, no network -- so a swipe or a dot

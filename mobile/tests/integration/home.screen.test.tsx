@@ -126,6 +126,7 @@ vi.mock('../../src/features/goal/studyGoal', async (importActual) => ({
   getStudyGoal: vi.fn(async () => studyGoalFixture),
 }));
 
+import { notifyGamificationChanged } from '../../src/sync/gamificationChanges';
 import { notifyProgressChanged } from '../../src/sync/progressChanges';
 import { Alert } from 'react-native';
 import { HomeScreen } from '../../src/screens/HomeScreen';
@@ -248,6 +249,33 @@ describe('HomeScreen v9', () => {
       await act(async () => { notifyProgressChanged({ userSub: 'qa-synthetic', deckSlug: 'csharp' }); });
       await flush();
       expect(tree.root.findByProps({ testID: 'home-study-due-link' })).toBeTruthy();
+    } finally {
+      if (tree) await act(async () => tree.unmount());
+      qaUserSub = null;
+    }
+  });
+
+  it('refreshes wallet and collection after gamification sync without navigation', async () => {
+    qaUserSub = 'qa-synthetic';
+    deckSummariesFixture[0] = { ...deckSummariesFixture[0], ownedCount: 4 };
+    let tree!: renderer.ReactTestRenderer;
+    try {
+      await act(async () => {
+        tree = renderer.create(<HomeScreen navigation={{ navigate: navigateMock } as any}
+          route={{ key: 'home', name: 'Home' } as any} />);
+      });
+      await flush();
+      expect(textBlob(tree)).toContain('2 draws ready');
+      expect(tree.root.findByType(TodayPressureCard).props.counts.selectedOwned).toBe(4);
+      walletFixture = { availablePulls: 7, reservePulls: 0 };
+      deckSummariesFixture[0] = { ...deckSummariesFixture[0], ownedCount: 9 };
+      await act(async () => { notifyGamificationChanged({ userSub: 'other' }); });
+      await flush();
+      expect(textBlob(tree)).toContain('2 draws ready');
+      await act(async () => { notifyGamificationChanged({ userSub: 'qa-synthetic' }); });
+      await flush();
+      expect(textBlob(tree)).toContain('7 draws ready');
+      expect(tree.root.findByType(TodayPressureCard).props.counts.selectedOwned).toBe(9);
     } finally {
       if (tree) await act(async () => tree.unmount());
       qaUserSub = null;

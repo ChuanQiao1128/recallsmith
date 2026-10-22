@@ -31,6 +31,7 @@ import {
   loadDeckWallet,
 } from '../../src/features/gacha/rewards/deckWallet';
 import { loadRewardWalletState, saveRewardWalletState } from '../../src/features/gacha/rewards/rewardWallet';
+import { subscribeGamificationChanges } from '../../src/sync/gamificationChanges';
 import { syncDrawStateNow } from '../../src/sync/drawStateSync';
 
 const TOKEN = 'access-token';
@@ -88,6 +89,41 @@ describe('per-pack pulls cloud sync', () => {
     const result = await syncDrawStateNow(TOKEN);
     expect(result.appliedDeckPulls).toBe(1);
     expect(await loadDeckWallet('aws')).toEqual({ availablePulls: 9, reservePulls: 1 });
+  });
+
+  it('notifies only after collection and wallet are durable', async () => {
+    const observed: unknown[] = [];
+    const off = subscribeGamificationChanges(({ userSub }) => {
+      observed.push({ userSub, raw: store.get('devcards:u:user-a:recallsmith:deck-wallets:v1') });
+    });
+    try {
+      apiJson.mockResolvedValueOnce(okResponse({ decks: [{ deckSlug: 'aws', owned: ['new'],
+        pulls: { availablePulls: 9, reservePulls: 0, updatedAtMs: 500 } }] }));
+      await syncDrawStateNow(TOKEN);
+      expect(observed).toHaveLength(1);
+      expect(observed[0]).toMatchObject({ userSub: 'user-a' });
+      expect(JSON.parse((observed[0] as any).raw).decks.aws.availablePulls).toBe(9);
+      expect(await loadDeckWallet('aws')).toEqual({ availablePulls: 9, reservePulls: 0 });
+    } finally { off(); }
+  });
+
+  it('rejects a late A response after switching to B without touching B or notifying it', async () => {
+    await grantDeckPulls('aws', 5);
+    const changes = vi.fn();
+    const off = subscribeGamificationChanges(changes);
+    apiJson.mockImplementationOnce(async () => {
+      setActiveUserSubForStorage('user-b');
+      return okResponse({ decks: [{ deckSlug: 'aws', owned: ['a-only'],
+        pulls: { availablePulls: 99, reservePulls: 0, updatedAtMs: 500 } }] });
+    });
+    try {
+      expect((await syncDrawStateNow(TOKEN)).ran).toBe(false);
+      expect(await loadDeckWallet('aws')).toEqual({ availablePulls: 0, reservePulls: 0 });
+      expect([...store.keys()].filter(key => key.startsWith('devcards:u:user-b:'))).toEqual([]);
+      expect(changes).not.toHaveBeenCalled();
+      setActiveUserSubForStorage('user-a');
+      expect(await loadDeckWallet('aws')).toEqual({ availablePulls: 5, reservePulls: 0 });
+    } finally { off(); }
   });
 
   it('keeps a pack spend made while the request was in flight', async () => {

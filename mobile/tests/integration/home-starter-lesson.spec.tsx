@@ -180,6 +180,7 @@ vi.mock('../../src/sync/progressSync', () => ({
   forceProgressSync: vi.fn(async () => {}),
 }));
 
+import { notifyGamificationChanged } from '../../src/sync/gamificationChanges';
 import { HomeScreen } from '../../src/screens/HomeScreen';
 import { loadHomeDeckSummaries } from '../../src/features/gacha/home/deckActionResolver';
 import { prepareHomeDeckWallets } from '../../src/features/gacha/rewards/economyFloor';
@@ -281,6 +282,20 @@ describe('HomeScreen starter lesson', () => {
     starterUpgradeListeners.clear();
     vi.mocked(loadHomeDeckSummaries).mockReset();
     vi.mocked(loadHomeDeckSummaries).mockImplementation(async () => makeHomeSummary() as any);
+  });
+
+  it('clears an obsolete starter action after sync while Home remains mounted', async () => {
+    store.set(STAGE_KEY, 'starter');
+    store.set(GOAL_KEY, JSON.stringify({ deckSlug: 'aws-saa-c03', examDate: null }));
+    const tree = await renderHome();
+    expect(tree.root.findByProps({ testID: 'home-starter-cta' })).toBeTruthy();
+    store.set(STAGE_KEY, 'done');
+    walletFixture = { availablePulls: 4, reservePulls: 0 };
+    await act(async () => { notifyGamificationChanged({ userSub: 'anon' }); });
+    await flush();
+    expect(tree.root.findAllByProps({ testID: 'home-starter-cta' })).toHaveLength(0);
+    expect(textBlob(tree)).toContain('4 draws ready');
+    await act(async () => tree.unmount());
   });
 
   it('sends a learner in the starter stage into the lesson on the goal deck, once per visit', async () => {

@@ -187,14 +187,14 @@ export async function loadDeckWallet(slug: string): Promise<RewardWalletState> {
 }
 
 /** Writes one pack's wallet, leaving every other pack and the flags untouched. */
-export async function saveDeckWallet(slug: string, wallet: RewardWalletState): Promise<void> {
+export async function saveDeckWallet(slug: string, wallet: RewardWalletState, userSub?: string): Promise<void> {
   await withRecordWrite((record) => {
     const next: DeckWalletsRecord = {
       ...record,
       decks: { ...record.decks, [slug]: normalizeWallet(wallet) },
     };
     return { next, result: undefined as void };
-  });
+  }, userSub);
 }
 
 /**
