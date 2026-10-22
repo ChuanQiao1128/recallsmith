@@ -102,8 +102,8 @@ export type StoredDrawHistoryEntry = Omit<DrawHistoryEntry, 'ownedBefore'> & {
   ownedBeforeAdded?: string[];
 };
 
-function stateKey(slug: string): Promise<string> {
-  return getUserScopedKey(`${DRAW_STATE_PREFIX}${slug}`);
+function stateKey(slug: string, userSub?: string): Promise<string> {
+  return getUserScopedKey(`${DRAW_STATE_PREFIX}${slug}`, userSub);
 }
 
 function historyKey(slug: string): Promise<string> {
@@ -309,8 +309,8 @@ export async function listDrawStateSlugs(): Promise<string[]> {
  * be true together after a draw belongs in `record`, not in a second
  * setItem next to this call.
  */
-export async function saveDrawState(slug: string, record: DrawStateRecord): Promise<void> {
-  const key = await stateKey(slug);
+export async function saveDrawState(slug: string, record: DrawStateRecord, userSub?: string): Promise<void> {
+  const key = await stateKey(slug, userSub);
   await AsyncStorage.setItem(key, JSON.stringify({ owned: record.owned, pity: record.pity }));
   // After the write, never before. A cache primed ahead of a setItem that
   // then throws would serve a collection that does not exist on disk -- the

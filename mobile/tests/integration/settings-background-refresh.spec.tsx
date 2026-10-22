@@ -26,10 +26,12 @@ const loadStreakSnapshotMock = vi.fn(async () => ({
 // auth reload would after the first successful settings load.
 const authFixture: {
   status: string;
+  userSub: string | null;
   email: string | null;
   loading: boolean;
   signOutNow: () => Promise<void>;
 } = {
+  userSub: 'a',
   status: 'signed_in',
   email: 'test@example.com',
   loading: false,
@@ -240,6 +242,7 @@ describe('SettingsScreen background refresh', () => {
       currentWeekKey: '2026-W17',
     });
 
+    authFixture.userSub = 'a';
     authFixture.status = 'signed_in';
     authFixture.email = 'test@example.com';
     authFixture.loading = false;
@@ -254,6 +257,29 @@ describe('SettingsScreen background refresh', () => {
   afterEach(() => {
     errorSpy.mockRestore();
     warnSpy.mockRestore();
+  });
+
+  it('reloads statistics on an account change and ignores a late previous-account read', async () => {
+    const navigate = vi.fn();
+    const goBack = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => { tree = renderer.create(renderElement(navigate, goBack)); });
+    await flush();
+    expect(textBlob(tree)).toContain('8 sessions that counted');
+    let finishA!: (snapshot: any) => void;
+    loadStreakSnapshotMock.mockReturnValueOnce(new Promise(resolve => { finishA = resolve; }));
+    await act(async () => { focusCallback?.(); });
+    authFixture.userSub = 'b';
+    loadStreakSnapshotMock.mockResolvedValueOnce({ currentDailyStreak: 0, longestDailyStreak: 0,
+      weekCompletedDays: 0, totalQualifiedSessions: 0, lastQualifiedDateKey: null as any, currentWeekKey: null as any });
+    await act(async () => { tree.update(renderElement(navigate, goBack)); });
+    await flush();
+    expect(textBlob(tree)).toContain('0 sessions that counted');
+    await act(async () => { finishA({ totalQualifiedSessions: 99, currentDailyStreak: 9 }); });
+    await flush();
+    expect(textBlob(tree)).toContain('0 sessions that counted');
+    expect(textBlob(tree)).not.toContain('99 sessions that counted');
+    await act(async () => tree.unmount());
   });
 
   it('keeps the settings content mounted when the screen refocuses', async () => {

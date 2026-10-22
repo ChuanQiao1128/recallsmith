@@ -1,7 +1,31 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getUserScopedKey } from '../../../review/storage';
 
 const STREAK_SNAPSHOT_KEY = 'recallsmith:streaks:snapshot:v1';
-const APPLIED_SESSION_PREFIX = 'recallsmith:streaks:session:';
+// Snapshot and receipts commit together. Unscoped historical totals have no
+// reliable owner, so they are retained but never claimed by a new account.
+type StreakRecord = StreakSnapshot & { appliedSessions: Record<string, true> };
+const writes = new Map<string, Promise<unknown>>();
+
+async function withRecord<T>(key: string, update: () => Promise<T>): Promise<T> {
+  const previous = writes.get(key) ?? Promise.resolve();
+  const run = previous.then(update, update);
+  writes.set(key, run);
+  try { return await run; }
+  finally { if (writes.get(key) === run) writes.delete(key); }
+}
+
+async function readRecord(key: string): Promise<StreakRecord> {
+  const raw = await AsyncStorage.getItem(key);
+  const parsed = raw ? JSON.parse(raw) : null;
+  const appliedSessions: Record<string, true> = Object.create(null);
+  if (parsed?.appliedSessions && typeof parsed.appliedSessions === 'object') {
+    for (const [id, applied] of Object.entries(parsed.appliedSessions)) {
+      if (applied === true) appliedSessions[id] = true;
+    }
+  }
+  return { ...normalizeSnapshot(parsed), appliedSessions };
+}
 
 export type StreakSnapshot = {
   currentDailyStreak: number;
@@ -69,58 +93,64 @@ function normalizeSnapshot(raw: unknown): StreakSnapshot {
 
 export async function loadStreakSnapshot(): Promise<StreakSnapshot> {
   try {
-    const raw = await AsyncStorage.getItem(STREAK_SNAPSHOT_KEY);
-    if (!raw) return EMPTY_SNAPSHOT;
-    return normalizeSnapshot(JSON.parse(raw));
+    return normalizeSnapshot(await readRecord(await getUserScopedKey(STREAK_SNAPSHOT_KEY)));
   } catch {
     return EMPTY_SNAPSHOT;
   }
 }
 
 export async function saveStreakSnapshot(snapshot: StreakSnapshot): Promise<StreakSnapshot> {
-  await AsyncStorage.setItem(STREAK_SNAPSHOT_KEY, JSON.stringify(snapshot));
-  return snapshot;
+  const key = await getUserScopedKey(STREAK_SNAPSHOT_KEY);
+  return withRecord(key, async () => {
+    const record = await readRecord(key);
+    const normalized = normalizeSnapshot(snapshot);
+    await AsyncStorage.setItem(key, JSON.stringify({ ...normalized, appliedSessions: record.appliedSessions }));
+    return normalized;
+  });
 }
 
 export async function applySessionStreak(args: { sessionId: string; earned: boolean; now?: Date }): Promise<ApplySessionStreakResult> {
   const now = args.now ?? new Date();
   const dateKey = formatDateKeyLocal(now);
   const weekKey = getWeekKey(now);
-  const sessionKey = `${APPLIED_SESSION_PREFIX}${args.sessionId}`;
-
-  const before = await loadStreakSnapshot();
-  const alreadyApplied = await AsyncStorage.getItem(sessionKey);
-  if (alreadyApplied) {
-    return { applied: false, before, after: before, countedToday: before.lastQualifiedDateKey === dateKey };
-  }
-
-  let after = before;
-
-  if (args.earned) {
-    const countedToday = before.lastQualifiedDateKey === dateKey;
-    const totalQualifiedSessions = before.totalQualifiedSessions + 1;
-
-    if (countedToday) {
-      after = {
-        ...before,
-        totalQualifiedSessions,
-      };
-    } else {
-      const currentDailyStreak = before.lastQualifiedDateKey === getPreviousDateKey(dateKey) ? before.currentDailyStreak + 1 : 1;
-      const weekCompletedDays = before.currentWeekKey === weekKey ? before.weekCompletedDays + 1 : 1;
-      after = {
-        currentDailyStreak,
-        longestDailyStreak: Math.max(before.longestDailyStreak, currentDailyStreak),
-        weekCompletedDays,
-        totalQualifiedSessions,
-        lastQualifiedDateKey: dateKey,
-        currentWeekKey: weekKey,
-      };
+  // Resolve before queueing: a delayed completion still belongs to its caller.
+  const key = await getUserScopedKey(STREAK_SNAPSHOT_KEY);
+  return withRecord(key, async () => {
+    const record = await readRecord(key);
+    const before = normalizeSnapshot(record);
+    if (Object.prototype.hasOwnProperty.call(record.appliedSessions, args.sessionId)) {
+      return { applied: false, before, after: before, countedToday: before.lastQualifiedDateKey === dateKey };
     }
 
-    await saveStreakSnapshot(after);
-  }
+    let after = before;
 
-  await AsyncStorage.setItem(sessionKey, JSON.stringify({ earned: !!args.earned, appliedAt: now.toISOString() }));
-  return { applied: true, before, after, countedToday: after.lastQualifiedDateKey === dateKey };
+    if (args.earned) {
+      const countedToday = before.lastQualifiedDateKey === dateKey;
+      const totalQualifiedSessions = before.totalQualifiedSessions + 1;
+
+      if (countedToday) {
+        after = {
+          ...before,
+          totalQualifiedSessions,
+        };
+      } else {
+        const currentDailyStreak = before.lastQualifiedDateKey === getPreviousDateKey(dateKey) ? before.currentDailyStreak + 1 : 1;
+        const weekCompletedDays = before.currentWeekKey === weekKey ? before.weekCompletedDays + 1 : 1;
+        after = {
+          currentDailyStreak,
+          longestDailyStreak: Math.max(before.longestDailyStreak, currentDailyStreak),
+          weekCompletedDays,
+          totalQualifiedSessions,
+          lastQualifiedDateKey: dateKey,
+          currentWeekKey: weekKey,
+        };
+      }
+    }
+
+    await AsyncStorage.setItem(key, JSON.stringify({
+      ...after,
+      appliedSessions: { ...record.appliedSessions, [args.sessionId]: true },
+    }));
+    return { applied: true, before, after, countedToday: after.lastQualifiedDateKey === dateKey };
+  });
 }

@@ -114,6 +114,9 @@ export function SettingsScreen({ navigation }: Props) {
   const paywallHidden = featureFlags.paywall.hidden === true;
 
   const status = useAuthStore((state) => state.status);
+  const authUserSub = useAuthStore((state) => state.userSub);
+  const currentUserRef = useRef(authUserSub);
+  currentUserRef.current = authUserSub;
   const authLoading = useAuthStore((state) => state.loading);
   const email = useAuthStore((state) => state.email);
   const signOutNow = useAuthStore((state) => state.signOutNow);
@@ -127,6 +130,7 @@ export function SettingsScreen({ navigation }: Props) {
   const [reminderPermission, setReminderPermission] = useState<NotificationPermissionState | 'unknown'>('unknown');
   const [reminderBusy, setReminderBusy] = useState(false);
   const [streak, setStreak] = useState<StreakSnapshot | null>(null);
+  const [streakOwner, setStreakOwner] = useState(authUserSub);
   const [resetting, setResetting] = useState(false);
   // Device-global feedback prefs. Seeded from the synchronous in-memory value (defaults
   // until App.tsx's mount load runs) and refreshed from storage in the focus load below.
@@ -150,6 +154,7 @@ export function SettingsScreen({ navigation }: Props) {
   const reminderPlan = useMemo(() => buildReminderPlanVM(reminderPrefs), [reminderPrefs]);
 
   const refresh = useCallback(async () => {
+    const owner = authUserSub;
     if (!hasLoadedRef.current) {
       setLoadState('loading');
       setLoadError(null);
@@ -169,6 +174,8 @@ export function SettingsScreen({ navigation }: Props) {
         loadCardLangPref(),
       ]);
 
+      if (currentUserRef.current !== owner) return;
+
       setStudyGoalState(nextGoal);
       setActiveDeckSlugState(nextActiveDeck);
 
@@ -178,17 +185,20 @@ export function SettingsScreen({ navigation }: Props) {
       setAudience(nextAudience);
       setReminderPrefsState(nextPrefs ?? DEFAULT_REMINDER_PREFS);
       setStreak(nextStreak ?? null);
+      setStreakOwner(owner);
       setLoadState('ready');
       hasLoadedRef.current = true;
 
       // A permission read must never flip the screen to the error state, so it
       // runs in its own try/catch after the payload load has succeeded.
       try {
-        setReminderPermission(await getNotificationPermissionState());
+        const permission = await getNotificationPermissionState();
+        if (currentUserRef.current === owner) setReminderPermission(permission);
       } catch {
-        setReminderPermission('undetermined');
+        if (currentUserRef.current === owner) setReminderPermission('undetermined');
       }
     } catch {
+      if (currentUserRef.current !== owner) return;
       // Only surface the error screen before the first successful load. Once the
       // screen is up, a failed background refresh keeps the current values.
       if (!hasLoadedRef.current) {
@@ -198,7 +208,7 @@ export function SettingsScreen({ navigation }: Props) {
         console.warn('Settings background refresh failed; keeping current values.');
       }
     }
-  }, []);
+  }, [authUserSub]);
 
   useFocusEffect(
     useCallback(() => {
@@ -333,8 +343,9 @@ export function SettingsScreen({ navigation }: Props) {
     await refresh();
   }, [refresh, signOutNow]);
 
-  const momentumDays = streak?.currentDailyStreak ?? 0;
-  const totalSessions = streak?.totalQualifiedSessions ?? 0;
+  const currentAccount = streakOwner === authUserSub;
+  const momentumDays = currentAccount ? streak?.currentDailyStreak ?? 0 : '—';
+  const totalSessions = currentAccount ? streak?.totalQualifiedSessions ?? 0 : '—';
 
   if (!hasLoadedRef.current && (authLoading || status === 'unknown' || loadState === 'loading')) {
     return (
@@ -417,6 +428,9 @@ export function SettingsScreen({ navigation }: Props) {
             </Text>
             <Text style={styles.sectionBody}>
               {momentumDays} days streak · {totalSessions} sessions that counted
+            </Text>
+            <Text style={styles.sectionBody}>
+              Session totals are saved per account on this device.
             </Text>
             <Text style={styles.metaText}>
               {reminderPlan.statusLine}
