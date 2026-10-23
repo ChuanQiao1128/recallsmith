@@ -11,9 +11,10 @@ import {
   type AppliedRewardWalletState,
   type RewardWalletState,
 } from './rewardWallet';
-import { countPaidEntriesBySlug } from './newCardLedger';
+import { adoptAnonNewCardLedgerUnderWalletLock, countPaidEntriesBySlug, projectRatingReward } from './newCardLedger';
 import { isStarterLessonOpen } from '../starter/starterGate';
 import { isLearnedProgress } from '../selectors/progressSelectors';
+import type { RatingRewardPlan, RatingRewardStep } from './sessionRewards';
 
 // Release 1.7, owner option A: pulls belong to the pack that earned them, and a
 // pull earned in a pack can only open that pack. This module is that per-pack
@@ -41,6 +42,15 @@ export type DeckWalletsRecord = {
   /** Packs re-bootstrapped once after a content replacement left every owned card outside the
    *  deck (ensureDeckBootstrap). Absent on records that never needed it. */
   rebootstrappedAtMs?: Record<string, number>;
+  /** Local rating receipts commit with the balance; pending ledger projections replay before another rating. */
+  ratingRewards?: Record<string, RatingRewardReceipt>;
+};
+
+type RatingRewardReceipt = {
+  slug: string;
+  plan: RatingRewardPlan;
+  step: RatingRewardStep;
+  pendingProjection: boolean;
 };
 
 function emptyRecord(): DeckWalletsRecord {
@@ -102,6 +112,8 @@ function parseRecord(raw: string | null): DeckWalletsRecord {
     decks,
     bootstrappedAtMs,
     ...(Object.keys(rebootstrappedAtMs).length > 0 ? { rebootstrappedAtMs } : {}),
+    ...(rec.ratingRewards != null && typeof rec.ratingRewards === 'object' && !Array.isArray(rec.ratingRewards)
+      ? { ratingRewards: rec.ratingRewards as Record<string, RatingRewardReceipt> } : {}),
   };
 }
 
@@ -235,6 +247,83 @@ export async function grantDeckPulls(
     const next: DeckWalletsRecord = { ...record, decks: { ...record.decks, [slug]: walletAfter } };
     return { next, result: { walletBefore, walletAfter, applied } };
   }, userSub);
+}
+
+async function reconcileRatingRewardProjections(
+  record: DeckWalletsRecord,
+  key: string,
+  project: (slug: string, plan: RatingRewardPlan) => Promise<void>,
+): Promise<DeckWalletsRecord> {
+  const receipts = { ...record.ratingRewards };
+  let reconciled = false;
+  for (const [id, receipt] of Object.entries(receipts)) {
+    if (!receipt.pendingProjection) continue;
+    await project(receipt.slug, receipt.plan);
+    receipts[id] = { ...receipt, pendingProjection: false };
+    reconciled = true;
+  }
+  if (!reconciled) return record;
+  const next = { ...record, ratingRewards: receipts };
+  await AsyncStorage.setItem(key, JSON.stringify(next));
+  return next;
+}
+
+/** Ledger adoption shares the wallet queue so a committed anon reward is stamped before copying. */
+export async function withAnonRatingRewardProjections<T>(adopt: () => Promise<T>): Promise<T> {
+  return withLock(async () => {
+    const key = await walletsKey('anon');
+    await reconcileRatingRewardProjections(await readRecord(key), key,
+      (slug, plan) => projectRatingReward(slug, plan, 'anon'));
+    return adopt();
+  });
+}
+
+/** The receipt and balance share one durable write. A failed projection stays recoverable even
+ * after restart; it must finish before eligibility is checked for another rating in this partition. */
+export async function settleDeckRatingReward(
+  slug: string,
+  eventId: string | undefined,
+  fallbackId: string,
+  prepare: () => Promise<RatingRewardPlan>,
+  project: (slug: string, plan: RatingRewardPlan) => Promise<void>,
+  userSub: string,
+): Promise<RatingRewardStep> {
+  const key = await walletsKey(userSub);
+  return withLock(async () => {
+    const record = await reconcileRatingRewardProjections(await readRecord(key), key, project);
+    const receipts = { ...record.ratingRewards };
+    const receiptId = JSON.stringify([slug, eventId ?? fallbackId]);
+    if (eventId && receipts[receiptId]) return receipts[receiptId].step;
+
+    const plan = await prepare();
+    const pulls = Number(plan.newCardPaid) + Number(plan.dueClearPaid);
+    const walletBefore = record.decks[slug] ?? zeroWallet();
+    const applied = applyRewardToWallet(walletBefore, pulls);
+    const walletAfter = { availablePulls: applied.availablePulls, reservePulls: applied.reservePulls };
+    const step: RatingRewardStep = {
+      newCardPaid: plan.newCardPaid,
+      dueClearPaid: plan.dueClearPaid,
+      pulls,
+      walletBefore: pulls > 0 ? walletBefore : null,
+      walletAfter: pulls > 0 ? walletAfter : null,
+      applied: pulls > 0 ? applied : null,
+      newCardsLearnedToday: plan.newCardsLearnedToday,
+      ...(plan.skipped ? { skipped: plan.skipped } : {}),
+    };
+    if (pulls === 0 && plan.stampAtMs == null) return step;
+
+    const receipt: RatingRewardReceipt = { slug, plan, step, pendingProjection: true };
+    const next: DeckWalletsRecord = {
+      ...record,
+      decks: { ...record.decks, [slug]: walletAfter },
+      ratingRewards: { ...receipts, [receiptId]: receipt },
+    };
+    await AsyncStorage.setItem(key, JSON.stringify(next));
+    await project(slug, plan);
+    next.ratingRewards![receiptId] = { ...receipt, pendingProjection: false };
+    await AsyncStorage.setItem(key, JSON.stringify(next));
+    return step;
+  });
 }
 
 /** Read → consumePullsFromWallet → write, for one pack. Same shape as consumePullsFromStoredWallet. */
@@ -584,22 +673,27 @@ async function runMigrate(): Promise<MigrateOutcome> {
  * Write order: account record first, anon record second. A kill between them
  * replays the add; that bounded over-grant is the same caveat as adoptAnonRewardWallet.
  */
-export async function adoptAnonDeckWallets(): Promise<{
+export async function adoptAnonDeckWallets(userSub?: string): Promise<{
   deckWalletDecks: number;
   deckPullsAdded: number;
   deckPullsDropped: number;
 }> {
   const result = { deckWalletDecks: 0, deckPullsAdded: 0, deckPullsDropped: 0 };
   try {
-    const userKey = await walletsKey();
+    const userKey = await walletsKey(userSub);
     // Signed out: the current partition IS the anon partition, nothing to do.
     if (userKey.startsWith(ANON_USER_SCOPE_PREFIX)) return result;
+    const capturedSub = userKey.slice('devcards:u:'.length, -(DECK_WALLETS_KEY.length + 1));
 
     const anonKey = `${ANON_USER_SCOPE_PREFIX}${DECK_WALLETS_KEY}`;
     await withLock(async () => {
       const anonRaw = await AsyncStorage.getItem(anonKey);
       if (anonRaw == null) return; // nothing to adopt
-      const anonRecord = parseRecord(anonRaw);
+      const anonRecord = await reconcileRatingRewardProjections(parseRecord(anonRaw), anonKey,
+        (slug, plan) => projectRatingReward(slug, plan, 'anon'));
+      // A captured anon rating may have landed since the earlier ledger-adoption call.
+      // Copy its stamp and drain its balance in this same wallet critical section.
+      await adoptAnonNewCardLedgerUnderWalletLock(capturedSub);
       const account = await readRecord(userKey);
 
       const decks = { ...account.decks };
@@ -630,10 +724,8 @@ export async function adoptAnonDeckWallets(): Promise<{
       // migration flag, so a later signed-out period cannot re-bootstrap or
       // re-migrate the same packs.
       const nextAnon: DeckWalletsRecord = {
-        migratedAtMs: anonRecord.migratedAtMs,
+        ...anonRecord,
         decks: {},
-        bootstrappedAtMs: anonRecord.bootstrappedAtMs,
-        ...(anonRecord.rebootstrappedAtMs ? { rebootstrappedAtMs: anonRecord.rebootstrappedAtMs } : {}),
       };
       await AsyncStorage.setItem(anonKey, JSON.stringify(nextAnon));
     });

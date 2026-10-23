@@ -216,6 +216,34 @@ export async function markDueClearedIfFirstToday(now: Date, slug: string, userSu
   }
 }
 
+/** Settlement reads must distinguish an unavailable marker from an unpaid day. */
+export async function readDueClearMarker(slug: string, userSub: string): Promise<string | null> {
+  return AsyncStorage.getItem(await getUserScopedKey(`${DUE_CLEAR_MARKER_KEY}:${slug}`, userSub));
+}
+
+/** Idempotent projections of an already-committed wallet receipt. Storage failures propagate so
+ * the receipt and rating journal stay pending. An old replay cannot move a newer day backwards. */
+export async function projectRatingReward(
+  slug: string,
+  plan: { stableUid: string; stampAtMs?: number; dueClearDay?: string },
+  userSub: string,
+): Promise<void> {
+  if (plan.stampAtMs != null) {
+    const { ledger } = await readNewCardLedger(slug, userSub);
+    if (!hasUid(ledger, plan.stableUid)) {
+      const key = await getUserScopedKey(`${NEW_CARD_LEDGER_PREFIX}${slug}`, userSub);
+      await AsyncStorage.setItem(key, JSON.stringify({ ...ledger, [plan.stableUid]: plan.stampAtMs }));
+    }
+  }
+  if (plan.dueClearDay) {
+    const previous = await readDueClearMarker(slug, userSub);
+    if (!previous || previous < plan.dueClearDay) {
+      const key = await getUserScopedKey(`${DUE_CLEAR_MARKER_KEY}:${slug}`, userSub);
+      await AsyncStorage.setItem(key, plan.dueClearDay);
+    }
+  }
+}
+
 /** A08 mechanism (drawStateStore.ts:332, rewardWallet.ts:208): scans getAllKeys for
  *  `${ANON_USER_SCOPE_PREFIX}${NEW_CARD_LEDGER_PREFIX}` (and the anon seeded markers), unions each
  *  slug's anon ledger into the user ledger (user value wins on a uid present in both), writes the user
@@ -226,58 +254,72 @@ export async function markDueClearedIfFirstToday(now: Date, slug: string, userSu
  *  adopted cards a second time. No-op while signed out. Never throws. The R2 marker is NOT adopted
  *  (C00 §6 #4). */
 export type AnonLedgerAdoption = { ledgerDecks: number; uidsAdded: number };
-export async function adoptAnonNewCardLedger(): Promise<AnonLedgerAdoption> {
+export async function adoptAnonNewCardLedger(userSub?: string): Promise<AnonLedgerAdoption> {
   const result: AnonLedgerAdoption = { ledgerDecks: 0, uidsAdded: 0 };
   try {
     // Signed out: the current partition IS the anon partition, nothing to adopt into.
-    const userScope = await getUserScopedKey('');
+    const userScope = await getUserScopedKey('', userSub);
     if (userScope.startsWith(ANON_USER_SCOPE_PREFIX)) return result;
 
-    const anonPrefix = `${ANON_USER_SCOPE_PREFIX}${NEW_CARD_LEDGER_PREFIX}`;
-    const anonSeededPrefix = `${ANON_USER_SCOPE_PREFIX}${NEW_CARD_LEDGER_SEEDED_PREFIX}`;
-    const keys = await AsyncStorage.getAllKeys();
-    const slugs = new Set<string>();
-    for (const key of keys) {
-      if (key.startsWith(anonPrefix)) slugs.add(key.slice(anonPrefix.length));
-      else if (key.startsWith(anonSeededPrefix)) slugs.add(key.slice(anonSeededPrefix.length));
-    }
-    slugs.delete('');
-
-    for (const slug of slugs) {
-      const anonKey = `${anonPrefix}${slug}`;
-      const anonSeededKey = `${anonSeededPrefix}${slug}`;
-      let anonLedger: NewCardLedger = {};
-      const anonRaw = await AsyncStorage.getItem(anonKey);
-      if (anonRaw != null) anonLedger = parseLedger(anonRaw);
-
-      const { ledger: userLedger } = await readNewCardLedger(slug);
-      const merged: NewCardLedger = { ...userLedger };
-      let added = 0;
-      for (const [uid, paidAtMs] of Object.entries(anonLedger)) {
-        // User value wins where the uid is present in both.
-        if (!hasUid(merged, uid)) {
-          merged[uid] = paidAtMs;
-          added += 1;
-        }
-      }
-
-      // Ledger written first, anon keys removed second (copy-then-clear): a kill between
-      // the writes replays the union on the next run, which is idempotent. The anon marker
-      // goes before the anon ledger so a kill between those two leaves "ledger, no marker",
-      // which the next anon seed unions into rather than "marker, no ledger", which would
-      // let the adopted cards pay again on the anon partition.
-      if (anonRaw != null) {
-        const userKey = await getUserScopedKey(`${NEW_CARD_LEDGER_PREFIX}${slug}`);
-        await AsyncStorage.setItem(userKey, JSON.stringify(merged));
-      }
-      await AsyncStorage.removeItem(anonSeededKey);
-      await AsyncStorage.removeItem(anonKey);
-
-      result.ledgerDecks += 1;
-      result.uidsAdded += added;
-    }
+    const capturedSub = userScope.slice('devcards:u:'.length, -1);
+    // Loaded at call time because deckWallet also imports the strict projection helpers above.
+    const { withAnonRatingRewardProjections } = await import('./deckWallet');
+    await withAnonRatingRewardProjections(() => adoptAnonNewCardLedgerUnderWalletLock(capturedSub, result));
   } catch {
     // Never throw: adoption must not fail sign-in. Return the counts so far.
+  }
+  return result;
+}
+
+/** Caller holds the deck-wallet lock. A failed copy must stop the corresponding wallet drain. */
+export async function adoptAnonNewCardLedgerUnderWalletLock(
+  userSub: string,
+  result: AnonLedgerAdoption = { ledgerDecks: 0, uidsAdded: 0 },
+): Promise<AnonLedgerAdoption> {
+  const userScope = await getUserScopedKey('', userSub);
+  if (userScope.startsWith(ANON_USER_SCOPE_PREFIX)) return result;
+  const anonPrefix = `${ANON_USER_SCOPE_PREFIX}${NEW_CARD_LEDGER_PREFIX}`;
+  const anonSeededPrefix = `${ANON_USER_SCOPE_PREFIX}${NEW_CARD_LEDGER_SEEDED_PREFIX}`;
+  const keys = await AsyncStorage.getAllKeys();
+  const slugs = new Set<string>();
+  for (const key of keys) {
+    if (key.startsWith(anonPrefix)) slugs.add(key.slice(anonPrefix.length));
+    else if (key.startsWith(anonSeededPrefix)) slugs.add(key.slice(anonSeededPrefix.length));
+  }
+  slugs.delete('');
+
+  for (const slug of slugs) {
+    const anonKey = `${anonPrefix}${slug}`;
+    const anonSeededKey = `${anonSeededPrefix}${slug}`;
+    let anonLedger: NewCardLedger = {};
+    const anonRaw = await AsyncStorage.getItem(anonKey);
+    if (anonRaw != null) anonLedger = parseLedger(anonRaw);
+
+    const { ledger: userLedger } = await readNewCardLedger(slug, userSub);
+    const merged: NewCardLedger = { ...userLedger };
+    let added = 0;
+    for (const [uid, paidAtMs] of Object.entries(anonLedger)) {
+      // User value wins where the uid is present in both.
+      if (!hasUid(merged, uid)) {
+        merged[uid] = paidAtMs;
+        added += 1;
+      }
+    }
+
+    // Ledger written first, anon keys removed second (copy-then-clear): a kill between
+    // the writes replays the union on the next run, which is idempotent. The anon marker
+    // goes before the anon ledger so a kill between those two leaves "ledger, no marker",
+    // which the next anon seed unions into rather than "marker, no ledger", which would
+    // let the adopted cards pay again on the anon partition.
+    if (anonRaw != null) {
+      const userKey = `${userScope}${NEW_CARD_LEDGER_PREFIX}${slug}`;
+      await AsyncStorage.setItem(userKey, JSON.stringify(merged));
+    }
+    await AsyncStorage.removeItem(anonSeededKey);
+    await AsyncStorage.removeItem(anonKey);
+
+    result.ledgerDecks += 1;
+    result.uidsAdded += added;
   }
   return result;
 }

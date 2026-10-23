@@ -64,7 +64,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.pokeBlue,
   },
   dismissText: {
-    color: '#FFFFFF',
+    color: colors.ink,
     fontSize: typography.button,
     fontWeight: '900',
     letterSpacing: 0.4,

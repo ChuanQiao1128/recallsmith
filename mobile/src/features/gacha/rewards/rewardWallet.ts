@@ -27,8 +27,8 @@ function walletKey(userSub?: string): Promise<string> {
   return getUserScopedKey(REWARD_WALLET_KEY, userSub);
 }
 
-function seededKey(): Promise<string> {
-  return getUserScopedKey(WALLET_SEEDED_KEY);
+function seededKey(userSub?: string): Promise<string> {
+  return getUserScopedKey(WALLET_SEEDED_KEY, userSub);
 }
 
 // Brand-new users get a small starter wallet so the *first* gacha
@@ -90,9 +90,9 @@ function parseWallet(raw: string): RewardWalletState {
   };
 }
 
-export async function loadRewardWalletState(): Promise<RewardWalletState> {
+export async function loadRewardWalletState(userSub?: string): Promise<RewardWalletState> {
   try {
-    const raw = await AsyncStorage.getItem(await walletKey());
+    const raw = await AsyncStorage.getItem(await walletKey(userSub));
     if (raw) return parseWallet(raw);
 
     // Pre-partition wallet: claim it for whoever is signed in now, then
@@ -103,7 +103,7 @@ export async function loadRewardWalletState(): Promise<RewardWalletState> {
 
     const migrated = parseWallet(globalRaw);
     try {
-      await saveRewardWalletState(migrated);
+      await saveRewardWalletState(migrated, userSub);
       await AsyncStorage.removeItem(REWARD_WALLET_KEY);
     } catch {
       // The value read is still correct for this call; retry next load.
@@ -205,12 +205,13 @@ export type AnonWalletAdoption = { addedPulls: number; dropped: number };
  * the overflow the same way a reward would. The starter-grant flag is carried
  * forward but never removed. Never throws.
  */
-export async function adoptAnonRewardWallet(): Promise<AnonWalletAdoption> {
+export async function adoptAnonRewardWallet(userSub?: string): Promise<AnonWalletAdoption> {
   const result: AnonWalletAdoption = { addedPulls: 0, dropped: 0 };
   try {
-    const userKey = await walletKey();
+    const userKey = await walletKey(userSub);
     // Signed out: the current partition IS the anon partition, nothing to do.
     if (userKey.startsWith(ANON_USER_SCOPE_PREFIX)) return result;
+    const capturedSub = userKey.slice('devcards:u:'.length, -(REWARD_WALLET_KEY.length + 1));
 
     const anonWalletKey = `${ANON_USER_SCOPE_PREFIX}${REWARD_WALLET_KEY}`;
     const raw = await AsyncStorage.getItem(anonWalletKey);
@@ -224,7 +225,7 @@ export async function adoptAnonRewardWallet(): Promise<AnonWalletAdoption> {
       }
       const pulls = anon.availablePulls + anon.reservePulls;
       if (pulls > 0) {
-        const current = await loadRewardWalletState();
+        const current = await loadRewardWalletState(capturedSub);
         const applied = applyRewardToWallet(current, pulls);
         // User wallet written first, anon key removed second. Accepted crash
         // window: a kill between this write and the removeItem below replays
@@ -234,7 +235,7 @@ export async function adoptAnonRewardWallet(): Promise<AnonWalletAdoption> {
         await saveRewardWalletState({
           availablePulls: applied.availablePulls,
           reservePulls: applied.reservePulls,
-        });
+        }, capturedSub);
         result.addedPulls = applied.appliedToAvailable + applied.appliedToReserve;
         result.dropped = applied.dropped;
       }
@@ -249,7 +250,7 @@ export async function adoptAnonRewardWallet(): Promise<AnonWalletAdoption> {
     const anonSeededKey = `${ANON_USER_SCOPE_PREFIX}${WALLET_SEEDED_KEY}`;
     const anonSeeded = await AsyncStorage.getItem(anonSeededKey);
     if (anonSeeded) {
-      const scopedKey = await seededKey();
+      const scopedKey = await seededKey(capturedSub);
       const scopedSeeded = await AsyncStorage.getItem(scopedKey);
       if (!scopedSeeded) await AsyncStorage.setItem(scopedKey, '1');
     }

@@ -1,6 +1,7 @@
 // mobile/src/api/apiClient.ts
 import { resolveApiBase, resolveApiFallback } from '../config/hosts';
 import { classifyError } from './errorKind';
+import { accessTokenSubject, getAuthSessionGeneration } from '../auth/sessionBoundary';
 
 type ApiMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
@@ -89,7 +90,7 @@ function isNetworkError(e: unknown): boolean {
   return e instanceof TypeError || (e as { kind?: unknown } | null)?.kind === 'offline';
 }
 
-async function requestOnce<T>(base: string, path: string, opts: ApiOpts): Promise<T> {
+async function requestOnce<T>(base: string, path: string, opts: ApiOpts, generation: number): Promise<T> {
   const url = joinUrl(base, path);
 
   const controller = new AbortController();
@@ -114,6 +115,13 @@ async function requestOnce<T>(base: string, path: string, opts: ApiOpts): Promis
     }
 
     const token = (opts.accessToken ?? '').trim();
+    const userSub = accessTokenSubject(token);
+    const isCurrent = () => generation === getAuthSessionGeneration();
+    const assertCurrent = () => {
+      if (token && !isCurrent()) {
+        throw Object.assign(new Error('Session changed. Please try again.'), { status: 401, kind: 'auth' });
+      }
+    };
     if (token) {
       headers.Authorization = `Bearer ${token}`;
     }
@@ -123,6 +131,7 @@ async function requestOnce<T>(base: string, path: string, opts: ApiOpts): Promis
     // `TypeError('Network request failed')` or an unlabelled abort. The re-sent
     // 401 request below goes through the same wrapper, so it is classified too.
     const send = async (authToken: string): Promise<Response> => {
+      assertCurrent();
       try {
         return await fetch(url, {
           method: opts.method ?? 'GET',
@@ -148,15 +157,16 @@ async function requestOnce<T>(base: string, path: string, opts: ApiOpts): Promis
     // token expired mid-session. Refresh once (via the injected refresher) and
     // replay the same request with the new token. Never retry more than once,
     // and never a request that was sent without a token.
-    if (resp.status === 401 && token && _accessTokenRefresher) {
+    if (resp.status === 401 && token && userSub && isCurrent() && _accessTokenRefresher) {
       const fresh = await _accessTokenRefresher().catch(() => null);
       const next = (fresh ?? '').trim();
-      if (next && next !== token) {
+      if (next && next !== token && isCurrent() && accessTokenSubject(next) === userSub) {
         resp = await send(next);
       }
     }
 
     const text = await resp.text();
+    assertCurrent();
     const json = safeJsonParse(text);
 
     if (!resp.ok) {
@@ -193,12 +203,13 @@ async function requestOnce<T>(base: string, path: string, opts: ApiOpts): Promis
 }
 
 export async function apiJson<T>(path: string, opts: ApiOpts): Promise<T> {
+  const generation = getAuthSessionGeneration();
   const primary = resolveApiBase();
   const fallback = resolveApiFallback();
   const base = activeBase ?? primary;
 
   try {
-    const out = await requestOnce<T>(base, path, opts);
+    const out = await requestOnce<T>(base, path, opts, generation);
     activeBase = base;
     return out;
   } catch (e) {
@@ -208,7 +219,7 @@ export async function apiJson<T>(path: string, opts: ApiOpts): Promise<T> {
       throw e;
     }
     try {
-      const out = await requestOnce<T>(fallback as string, path, opts);
+      const out = await requestOnce<T>(fallback as string, path, opts, generation);
       activeBase = fallback;
       return out;
     } catch (e2) {

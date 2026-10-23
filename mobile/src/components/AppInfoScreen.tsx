@@ -166,7 +166,7 @@ const styles = StyleSheet.create({
   },
   // Cosmic primary stays gold (premium-feel deep theme)
   primaryButtonCosmic: { backgroundColor: colors.glowGold, shadowColor: 'rgba(232,184,90,0.5)' },
-  primaryButtonText: { color: '#FFFFFF', fontSize: typography.button, fontWeight: '900', letterSpacing: 0.4 },
+  primaryButtonText: { color: colors.ink, fontSize: typography.button, fontWeight: '900', letterSpacing: 0.4 },
   primaryButtonTextCosmic: { color: colors.ink },
   // Secondary = ghost button (transparent + hairline border), matching
   // the Draw screen's "Open 1" demoted style.

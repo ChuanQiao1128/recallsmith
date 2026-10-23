@@ -142,13 +142,15 @@ describe('apiClient x-dc-trace-id', () => {
     vi.stubGlobal('fetch', fetchMock);
     const provider = vi.fn(() => HEADER);
     setTraceHeaderProvider(provider);
-    setAccessTokenRefresher(async () => 'fresh-token');
+    const oldToken = `header.${Buffer.from(JSON.stringify({ sub: 'A', version: 'old' })).toString('base64url')}.sig`;
+    const freshToken = `header.${Buffer.from(JSON.stringify({ sub: 'A', version: 'fresh' })).toString('base64url')}.sig`;
+    setAccessTokenRefresher(async () => freshToken);
 
-    await expect(apiJson('/api/v1/me', { accessToken: 'old-token' })).resolves.toEqual({ ok: true });
+    await expect(apiJson('/api/v1/me', { accessToken: oldToken })).resolves.toEqual({ ok: true });
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(headersOf(fetchMock, 0)['x-dc-trace-id']).toBe(HEADER);
     expect(headersOf(fetchMock, 1)['x-dc-trace-id']).toBe(HEADER);
-    expect(headersOf(fetchMock, 1).Authorization).toBe('Bearer fresh-token');
+    expect(headersOf(fetchMock, 1).Authorization).toBe(`Bearer ${freshToken}`);
     expect(provider).toHaveBeenCalledTimes(1);
     setAccessTokenRefresher(null);
   });

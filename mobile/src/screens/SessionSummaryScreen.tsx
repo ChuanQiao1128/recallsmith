@@ -506,7 +506,7 @@ const styles = StyleSheet.create({
   primaryButtonDisabled: {
     opacity: 0.55,
   },
-  primaryButtonText: { color: '#FFFFFF', fontSize: typography.button, fontWeight: '900', letterSpacing: 0.4 },
+  primaryButtonText: { color: colors.ink, fontSize: typography.button, fontWeight: '900', letterSpacing: 0.4 },
   // Demoted text — pairs with primaryButtonDemoted. Keeps button-sized
   // fontSize (visual hierarchy primary > secondary still holds for the
   // contract test); the demotion comes from the muted color + transparent

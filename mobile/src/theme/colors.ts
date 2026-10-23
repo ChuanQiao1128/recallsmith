@@ -20,7 +20,7 @@ export const colors = {
   // Inks tuned for the light surface (high enough contrast, less harsh than near-black).
   inkSoft: '#3A2C1F',
   inkMuted: '#8A7B6A',
-  // Primary CTA blue (Pokemon TCG Pocket "開封" button).
+  // Primary CTA blue (Pokemon TCG Pocket "開封" button); pair with ink for readable text.
   pokeBlue: '#3FB7DB',
   pokeBlueDeep: '#2C9CC0',
   pokeBlueFaint: '#BFE6F1',

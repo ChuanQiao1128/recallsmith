@@ -3,6 +3,14 @@ import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// Loading a session also looks for unfinished rating journals in local storage.
+vi.mock('@react-native-async-storage/async-storage', () => ({
+  default: {
+    getItem: vi.fn(async () => null),
+    getAllKeys: vi.fn(async () => []),
+  },
+}));
+
 vi.mock('react-native', () => {
   const React = require('react');
   class MockAnimatedValue {

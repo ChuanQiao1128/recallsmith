@@ -1333,7 +1333,7 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   primaryCtaDisabled: { opacity: 0.45 },
-  primaryCtaText: { color: '#FFFFFF', fontSize: typography.button, fontWeight: '900', letterSpacing: 0.4 },
+  primaryCtaText: { color: colors.ink, fontSize: typography.button, fontWeight: '900', letterSpacing: 0.4 },
   // Draw status sits under the CTA as a quiet centered line — no pill, no
   // dot, no extra color. The CTA is loud, this is a label.
   rewardStatusText: {
@@ -1371,7 +1371,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   errorRetryText: {
-    color: '#FFFFFF',
+    color: colors.ink,
     fontSize: typography.bodySmall,
     fontWeight: '900',
     letterSpacing: 0.4,

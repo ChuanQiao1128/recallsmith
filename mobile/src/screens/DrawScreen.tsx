@@ -1281,7 +1281,7 @@ const styles = StyleSheet.create({
     minHeight: 56, borderRadius: 999, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.md,
     backgroundColor: colors.pokeBlue, shadowColor: 'rgba(44,156,192,0.5)', shadowOpacity: 1, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 6,
   },
-  primaryCtaText: { color: colors.softCream, fontSize: typography.button, fontWeight: '900', letterSpacing: 0.4 },
+  primaryCtaText: { color: colors.ink, fontSize: typography.button, fontWeight: '900', letterSpacing: 0.4 },
   // Ghost button — no fill, hairline border. Reads as "alternative", makes
   // the solid pokeBlue batch button the obvious primary action.
   secondaryCta: {

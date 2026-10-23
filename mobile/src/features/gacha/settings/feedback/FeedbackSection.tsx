@@ -137,7 +137,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
   },
   pillTextOn: {
-    color: '#FFFFFF',
+    color: colors.ink,
   },
   pillTextOff: {
     color: colors.inkSecondary,

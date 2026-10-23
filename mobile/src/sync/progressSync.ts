@@ -6,6 +6,7 @@ import { Platform } from 'react-native';
 
 import { apiJson } from '../api/apiClient';
 import { classifyError } from '../api/errorKind';
+import { accessTokenSubject, getAuthSessionGeneration } from '../auth/sessionBoundary';
 import { resolveDeckBySlug } from '../content/deckRepository';
 import { loadDeckProgress, updateDeckProgress, setActiveUserSubForStorage } from '../review/storage';
 import { syncDrawStateNow } from './drawStateSync';
@@ -733,10 +734,13 @@ async function progressQueueSize(userSub: string): Promise<number> {
  * ----------------------------
  */
 async function getSyncAccessToken(): Promise<string | null> {
+  const generation = getAuthSessionGeneration();
   if (_accessTokenMem && _accessTokenMem.trim()) return _accessTokenMem;
 
   try {
     const raw = await AsyncStorage.getItem(ACCESS_TOKEN_KEY);
+    if (generation !== getAuthSessionGeneration()) return null;
+    if (_accessTokenMem && _accessTokenMem.trim()) return _accessTokenMem;
     if (raw && raw.trim()) {
       _accessTokenMem = raw;
       return raw;
@@ -750,7 +754,23 @@ async function getSyncAccessToken(): Promise<string | null> {
  * dev 模式注入 token
  * ✅ 这里同时会尝试解析 userSub，用来做 “按用户分区”
  */
+// Token and scope writes share one lane so a delayed old native write cannot
+// land after the next account's identity has already been persisted.
+let identityWrites: Promise<void> = Promise.resolve();
+function writeIdentity(generation: number, write: () => Promise<void>): Promise<void> {
+  const pending = identityWrites.then(async () => {
+    if (generation === getAuthSessionGeneration()) await write();
+  });
+  identityWrites = pending.catch(() => {});
+  return pending;
+}
+
 export async function setSyncAccessToken(token: string | null): Promise<void> {
+  const generation = getAuthSessionGeneration();
+  return writeIdentity(generation, () => applySyncAccessToken(token, generation));
+}
+
+async function applySyncAccessToken(token: string | null, generation: number): Promise<void> {
   const t = token && token.trim() ? token.trim() : null;
   _accessTokenMem = t;
 
@@ -759,10 +779,12 @@ export async function setSyncAccessToken(token: string | null): Promise<void> {
     else await AsyncStorage.removeItem(ACCESS_TOKEN_KEY);
   } catch {}
 
+  if (generation !== getAuthSessionGeneration()) return;
   if (!t) {
     clearRecovery();
     _retryAttempt = 0;
-    await setActiveUserSub(null);
+    await applyActiveUserSub(null, generation);
+    if (generation !== getAuthSessionGeneration()) return;
     // Sign-out is a session boundary, so nothing from the previous session is
     // answered out of memory afterwards. setActiveUserSub already drops the
     // cache when the sub actually changes, but signing out with no sub resolved
@@ -784,9 +806,15 @@ export async function setSyncAccessToken(token: string | null): Promise<void> {
  * - 如果你不调用，这里也会从 accessToken 尽力解析 sub
  */
 export async function setActiveUserSub(userSub: string | null): Promise<void> {
+  const generation = getAuthSessionGeneration();
+  return writeIdentity(generation, () => applyActiveUserSub(userSub, generation));
+}
+
+async function applyActiveUserSub(userSub: string | null, generation: number): Promise<void> {
   const next = userSub && userSub.trim() ? userSub.trim() : null;
 
   const prev = _userSubMem ?? (await AsyncStorage.getItem(ACTIVE_USER_SUB_KEY).catch(() => null));
+  if (generation !== getAuthSessionGeneration()) return;
   const prevNorm = prev && prev.trim() ? prev.trim() : null;
 
   if (next === prevNorm) {
@@ -811,11 +839,13 @@ export async function setActiveUserSub(userSub: string | null): Promise<void> {
     else await AsyncStorage.removeItem(ACTIVE_USER_SUB_KEY);
   } catch {}
 
+  if (generation !== getAuthSessionGeneration()) return;
   // ✅ 关键：同步刷新 review/storage.ts 的内存缓存（绕过 TTL）
   setActiveUserSubForStorage(next);
 
   // user 发生变化：重置 in-memory sync 状态（不再 wipe 本地进度）
   await onUserChanged(prevNorm, next);
+  if (generation !== getAuthSessionGeneration()) return;
 
   // user 切换后立即做一次同步
   if (next) scheduleProgressSync({ delayMs: 0, reason: 'user_changed' });
@@ -825,20 +855,27 @@ export async function setActiveUserSub(userSub: string | null): Promise<void> {
  * 如果你没有显式调用 setActiveUserSub，这里会在第一次 sync 时自动解析 token 来设置
  */
 async function ensureUserSubReady(accessToken: string): Promise<string | null> {
-  if (_userSubMem && _userSubMem.trim()) return _userSubMem.trim();
+  const generation = getAuthSessionGeneration();
+  const tokenSub = accessTokenSubject(accessToken);
+  const compatible = (sub: string) => !tokenSub || tokenSub === sub;
+  if (_userSubMem && _userSubMem.trim()) return compatible(_userSubMem.trim()) ? _userSubMem.trim() : null;
 
   try {
     const stored = await AsyncStorage.getItem(ACTIVE_USER_SUB_KEY);
-    if (stored && stored.trim()) {
-      _userSubMem = stored.trim();
+    if (generation !== getAuthSessionGeneration()) return null;
+    const current = _userSubMem?.trim() || stored?.trim();
+    if (current) {
+      if (!compatible(current)) return null;
+      _userSubMem = current;
       return _userSubMem;
     }
   } catch {}
 
+  if (generation !== getAuthSessionGeneration()) return null;
   const sub = tryGetUserSubFromAccessToken(accessToken);
   if (sub) {
     await setActiveUserSub(sub);
-    return sub;
+    return generation === getAuthSessionGeneration() && _userSubMem === sub ? sub : null;
   }
 
   return null;
@@ -1357,6 +1394,7 @@ const MAX_PULL_PAGES_PER_SYNC = 20;
 async function pullProgressAndApply(
   userSub: string,
   accessToken: string,
+  generation: number,
 ): Promise<{ pulled: number; applied: number }> {
   await healCursorIfCacheMissing(userSub);
 
@@ -1366,14 +1404,14 @@ async function pullProgressAndApply(
   // while(hasMore) 排水环：每页走完整的 fetch -> cache -> merge -> advance-cursor 流程，
   // cursor 只在该页成功应用后才持久化（沿用原“advance only after success”原则）。
   for (let page = 0; page < MAX_PULL_PAGES_PER_SYNC; page++) {
-    if (_userSubMem !== userSub || isSyncBlocked()) return { pulled, applied };
-    const r = await pullProgressPageAndApply(userSub, accessToken);
+    if (generation !== getAuthSessionGeneration() || _userSubMem !== userSub || isSyncBlocked()) return { pulled, applied };
+    const r = await pullProgressPageAndApply(userSub, accessToken, generation);
     pulled += r.pulled;
     applied += r.applied;
     if (!r.hasMore) break;
   }
 
-  if (_userSubMem === userSub && !isSyncBlocked()) _lastPullAtMs = Date.now();
+  if (generation === getAuthSessionGeneration() && _userSubMem === userSub && !isSyncBlocked()) _lastPullAtMs = Date.now();
   return { pulled, applied };
 }
 
@@ -1385,9 +1423,13 @@ async function pullProgressAndApply(
 async function pullProgressPageAndApply(
   userSub: string,
   accessToken: string,
+  generation: number,
 ): Promise<{ pulled: number; applied: number; hasMore: boolean }> {
   const cursorBefore = await getCursorMs(userSub);
   const cursorToken = await getCursorToken(userSub);
+  const isCurrent = () => generation === getAuthSessionGeneration() && _userSubMem === userSub && !isSyncBlocked();
+  const stopped = { pulled: 0, applied: 0, hasMore: false };
+  if (!isCurrent()) return stopped;
 
   const qs: string[] = ['limit=5000'];
   // 新 keyset cursor（服务端签发的 base64url 元组）。老服务端会忽略未知参数并回退用 sinceMs。
@@ -1404,6 +1446,7 @@ async function pullProgressPageAndApply(
       timeoutMs: 15000,
     });
   } catch (e: any) {
+    if (!isCurrent()) return stopped;
     // 自愈：v2 keyset cursor 被服务端 400 拒绝（畸形/版本不认——AsyncStorage 损坏或
     // 未来 cursor 版本演进）。若不清除，之后每次 sync 都会原样重发同一个坏 cursor，
     // pull 将永久瘫痪。处置：清掉 v2 cursor，本页立即用 legacy sinceMs 重试一次。
@@ -1413,6 +1456,7 @@ async function pullProgressPageAndApply(
         message: e?.message ?? String(e),
       });
       await clearCursorToken(userSub);
+      if (!isCurrent()) return stopped;
       const legacyQs: string[] = ['limit=5000'];
       if (cursorBefore != null) legacyQs.push(`sinceMs=${encodeURIComponent(String(cursorBefore))}`);
       resp = await apiJson<ApiOk<ProgressGetResp>>(`/api/v1/sync/progress?${legacyQs.join('&')}`, {
@@ -1425,6 +1469,7 @@ async function pullProgressPageAndApply(
     }
   }
 
+  if (!isCurrent()) return stopped;
   const data = resp?.data;
   const items: ProgressItem[] = data?.items ?? [];
 
@@ -1531,6 +1576,7 @@ async function syncProgressOnce(
   userSub: string,
   accessToken: string,
   reason: string,
+  generation: number,
 ): Promise<{ pushed: number; pulled: number; applied: number; remaining: number; confirmationDelayMs?: number }> {
   // Account deletion may start while this run is going (syncGuard.ts). A run
   // that began before the block stops before its next request: no bootstrap,
@@ -1542,9 +1588,11 @@ async function syncProgressOnce(
     applied: 0,
     remaining: await progressQueueSize(userSub),
   });
-  if (isSyncBlocked()) return stopped(0);
+  const isCurrent = () => generation === getAuthSessionGeneration();
+  if (!isCurrent() || isSyncBlocked()) return stopped(0);
 
   await markSyncStatus(userSub, { lastAttemptAtMs: Date.now() });
+  if (!isCurrent()) return stopped(0);
 
   // best-effort bootstrap（也可以顺便用它来拿 userSub）
   try {
@@ -1555,7 +1603,7 @@ async function syncProgressOnce(
       timeoutMs: 12000,
     });
 
-    if (_userSubMem !== userSub) return stopped(0);
+    if (!isCurrent() || _userSubMem !== userSub) return stopped(0);
     const serverSub = boot?.data?.userSub ? String(boot.data.userSub).trim() : null;
     if (serverSub && serverSub !== userSub) {
       // token 解析不到 / 解析错时，bootstrap 是最终真相
@@ -1572,8 +1620,9 @@ async function syncProgressOnce(
   const caps = await getClientCapabilities();
 
   for (let round = 0; round < 20; round++) {
-    if (isSyncBlocked()) return stopped(pushed);
+    if (!isCurrent() || isSyncBlocked()) return stopped(pushed);
     const batch = await peekProgressEvents(userSub, BATCH);
+    if (!isCurrent()) return stopped(pushed);
     if (batch.length === 0) break;
 
     const resp = await apiJson<ApiOk<PushResp>>('/api/v1/sync/push', {
@@ -1620,6 +1669,7 @@ async function syncProgressOnce(
       timeoutMs: 15000,
     });
 
+    if (!isCurrent()) return stopped(pushed);
     const ackIds = [...(resp.data.acceptedEventIds || []), ...(resp.data.duplicateEventIds || [])];
     if (ackIds.length === 0) break;
 
@@ -1644,16 +1694,16 @@ async function syncProgressOnce(
   const msSinceLastPull = _lastPullAtMs > 0 ? now - _lastPullAtMs : Number.POSITIVE_INFINITY;
   const pullAllowed = msSinceLastPull >= MIN_PULL_INTERVAL_MS;
 
-  if (isSyncBlocked() || _userSubMem !== userSub) return stopped(pushed);
+  if (!isCurrent() || isSyncBlocked() || _userSubMem !== userSub) return stopped(pushed);
 
   // Ratings already debounce for ten seconds. Confirm each flushed batch,
   // rather than leaving a successful upload unconfirmed until a manual retry.
   if (pullAllowed) {
     try {
-      const r = await pullProgressAndApply(userSub, accessToken);
+      const r = await pullProgressAndApply(userSub, accessToken, generation);
       pulled = r.pulled;
       applied = r.applied;
-      if (_userSubMem !== userSub || isSyncBlocked()) return stopped(pushed);
+      if (!isCurrent() || _userSubMem !== userSub || isSyncBlocked()) return stopped(pushed);
       _unconfirmedPush = false;
       await markSyncStatus(userSub, { lastPullAtMs: Date.now() });
       await writeLastError(userSub, null);
@@ -1678,6 +1728,7 @@ async function syncProgressOnce(
  * ----------------------------
  */
 async function runSyncNow(reason: string): Promise<void> {
+  const generation = getAuthSessionGeneration();
   if (_inFlight) {
     _pending = true;
     return;
@@ -1690,20 +1741,21 @@ async function runSyncNow(reason: string): Promise<void> {
   let runUserSub: string | null = null;
   try {
     const token = await getSyncAccessToken();
-    if (!token) {
+    if (generation !== getAuthSessionGeneration() || !token) {
       // 没 token 就不报 noisy error
       return;
     }
 
     const userSub = await ensureUserSubReady(token);
+    if (generation !== getAuthSessionGeneration()) return;
     if (!userSub) {
       console.warn('[progressSync] NO_USER_SUB (cannot namespace sync keys). Call setActiveUserSub() after login.');
       return;
     }
 
     runUserSub = userSub;
-    const result = await syncProgressOnce(userSub, token, reason);
-    if (_userSubMem === userSub && !isSyncBlocked()) {
+    const result = await syncProgressOnce(userSub, token, reason, generation);
+    if (generation === getAuthSessionGeneration() && _userSubMem === userSub && !isSyncBlocked()) {
       _retryAttempt = 0;
       if (result.confirmationDelayMs != null) scheduleRecovery(userSub, 'sync_confirmation', result.confirmationDelayMs);
       else if (result.remaining > 0 && result.pushed > 0) scheduleRecovery(userSub, 'pending_flush', 300);
@@ -1711,10 +1763,11 @@ async function runSyncNow(reason: string): Promise<void> {
   } catch (e) {
     const msg = (e as any)?.message ?? String(e);
 
+    if (generation !== getAuthSessionGeneration()) return;
     if (runUserSub) await writeLastError(runUserSub, 'Sync could not finish. Your local progress is saved.');
 
     const kind = classifyError(e);
-    if (runUserSub && _userSubMem === runUserSub && (kind === 'offline' || kind === 'timeout' || kind === 'server')) {
+    if (generation === getAuthSessionGeneration() && runUserSub && _userSubMem === runUserSub && (kind === 'offline' || kind === 'timeout' || kind === 'server')) {
       const delayMs = RETRY_DELAYS_MS[Math.min(_retryAttempt, RETRY_DELAYS_MS.length - 1)];
       _retryAttempt += 1;
       scheduleRecovery(runUserSub, 'automatic_retry', delayMs);
@@ -1742,8 +1795,10 @@ async function runSyncNow(reason: string): Promise<void> {
     // own errors, and the review sync's success, error record and in-flight
     // state are all already settled by the time it starts.
     try {
-      const drawToken = await getSyncAccessToken();
-      if (drawToken) await syncDrawStateNow(drawToken);
+      if (generation === getAuthSessionGeneration()) {
+        const drawToken = await getSyncAccessToken();
+        if (generation === getAuthSessionGeneration() && drawToken) await syncDrawStateNow(drawToken);
+      }
     } catch {
       // Unreachable by contract (syncDrawStateNow never throws); belt and
       // braces, because the one thing this call may never do is fail a review.

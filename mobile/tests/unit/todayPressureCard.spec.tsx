@@ -1,14 +1,17 @@
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TodayCounts } from '../../src/features/gacha/contracts';
+
+const viewport = vi.hoisted(() => ({ width: 390 }));
+beforeEach(() => { viewport.width = 390; });
 
 vi.mock('react-native', () => {
   const React = require('react');
   return {
     View: ({ children, ...props }: any) => React.createElement('View', props, children),
     Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
-    useWindowDimensions: () => ({ width: 390, height: 844, scale: 3, fontScale: 1 }),
+    useWindowDimensions: () => ({ width: viewport.width, height: 844, scale: 3, fontScale: 1 }),
     StyleSheet: { create: (styles: any) => styles },
   };
 });
@@ -29,10 +32,10 @@ function counts(overrides: Partial<TodayCounts> = {}): TodayCounts {
   };
 }
 
-async function render(c: TodayCounts) {
+async function render(c: TodayCounts, compact = false) {
   let tree!: renderer.ReactTestRenderer;
   await act(async () => {
-    tree = renderer.create(<TodayPressureCard counts={c} selectedDeckTitle="Claude Developer Foundations (CCDV-F)" />);
+    tree = renderer.create(<TodayPressureCard counts={c} selectedDeckTitle="Claude Developer Foundations (CCDV-F)" compact={compact} />);
   });
   return tree;
 }
@@ -48,6 +51,24 @@ function tileValues(tree: renderer.ReactTestRenderer): Record<string, string> {
 }
 
 describe('TodayPressureCard', () => {
+  it.each([{ width: 375, compact: false }, { width: 390, compact: false }, { width: 375, compact: true }])(
+    'separates available cards from cumulative totals at $width, compact=$compact', async ({ width, compact }) => {
+      viewport.width = width;
+      const tree = await render(counts({ selectedDue: 3, selectedNew: 2, selectedMastered: 17, selectedOwned: 20 }), compact);
+      expect(tileValues(tree)).toEqual({ Due: '3', New: '2', Learned: '17', Collected: '20' });
+      for (const [heading, labels] of [['Ready now', ['Due', 'New']], ['Pack totals', ['Learned', 'Collected']]] as const) {
+        const title = tree.root.find((node) => (node.type as any) === 'Text' && node.props.children === heading);
+        let group = title.parent!;
+        while ((group.type as any) !== 'View') group = group.parent!;
+        const groupText = group.findAll((node) => (node.type as any) === 'Text').map((node) => node.props.children);
+        for (const label of labels) expect(groupText).toContain(label);
+        expect(group.props.style).toMatchObject(!compact && width < 390 ? { width: '100%' } : { flex: 1 });
+      }
+      expect(tree.root.findByProps({ testID: 'home-today-count-boss' }).props.accessibilityLabel).toContain('all time');
+      expect(tree.root.findByProps({ testID: 'home-today-count-total' }).props.accessibilityLabel).toContain('all time');
+    },
+  );
+
   it('reads Due · New · Learned · Collected for the selected deck', async () => {
     // The owner's screen: 441-card deck, 11 fresh cards, 5 due in another deck.
     const tree = await render(counts({ selectedNew: 11, selectedOwned: 11, totalDueAllDecks: 5 }));
@@ -81,7 +102,7 @@ describe('TodayPressureCard', () => {
     expect(spacers).toHaveLength(1);
     expect(spacers[0].props.importantForAccessibility).toBe('no-hide-descendants');
     const texts = spacers[0].findAll((node) => (node.type as any) === 'Text').map((node) => String(node.props.children));
-    expect(texts).toEqual(['0', 'Due', '0', 'New', '0', 'Learned', '0', 'Collected']);
+    expect(texts).toEqual(['Ready now', '0', 'Due', '0', 'New', 'Pack totals', '0', 'Learned', '0', 'Collected']);
     expect(spacers[0].findAll((node) => node.props?.testID != null)).toHaveLength(0);
 
     const full = await render(counts({ selectedNew: 2, selectedOwned: 2 }));

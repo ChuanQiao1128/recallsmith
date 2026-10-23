@@ -144,7 +144,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: colors.pokeBlue,
   },
-  primaryLabel: { color: '#FFFFFF', fontSize: 15, fontWeight: '900', letterSpacing: 0.4 },
+  primaryLabel: { color: colors.ink, fontSize: 15, fontWeight: '900', letterSpacing: 0.4 },
   secondary: {
     minHeight: 56,
     borderRadius: 999,

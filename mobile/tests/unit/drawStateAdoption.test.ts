@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const store = new Map<string, string>();
+let afterWrite: ((key: string, value: string) => void) | null = null;
 
 vi.mock('@react-native-async-storage/async-storage', () => ({
   default: {
     getItem: vi.fn(async (key: string) => store.get(key) ?? null),
     setItem: vi.fn(async (key: string, value: string) => {
       store.set(key, value);
+      afterWrite?.(key, value);
     }),
     removeItem: vi.fn(async (key: string) => {
       store.delete(key);
@@ -42,6 +44,7 @@ import {
 } from '../../src/features/gacha/rewards/rewardWallet';
 import { adoptAnonGachaState, syncDrawStateNow } from '../../src/sync/drawStateSync';
 import { loadMistakeBook, recordMistakeOutcome } from '../../src/features/gacha/mistakes/mistakeBook';
+import { settleRatingReward } from '../../src/features/gacha/rewards/sessionRewards';
 
 const SLUG = 'csharp';
 const ANON_STATE_KEY = `${ANON_USER_SCOPE_PREFIX}devcards:draw-state:${SLUG}`;
@@ -69,6 +72,7 @@ const ZERO = {
 describe('anon gacha state adoption', () => {
   beforeEach(() => {
     store.clear();
+    afterWrite = null;
     invalidateDrawStateCache();
     apiJson.mockReset();
     setActiveUserSubForStorage('user-a');
@@ -213,5 +217,48 @@ describe('anon gacha state adoption', () => {
   it('pins ANON_USER_SCOPE_PREFIX to the anon scope getUserScopedKey builds', async () => {
     setActiveUserSubForStorage(null);
     expect(await getUserScopedKey('x')).toBe(`${ANON_USER_SCOPE_PREFIX}x`);
+  });
+
+  it.each(['draw', 'legacy-wallet', 'ledger', 'deck-wallet', 'mistakes'] as const)(
+    'keeps the complete production adoption on A when active scope switches to B during %s', async (phase) => {
+    const now = new Date(2026, 9, 22, 12);
+    setActiveUserSubForStorage(null);
+    await saveDrawState(SLUG, { owned: ['anon-card'], pity: { draws: 2, threshold: 10 } });
+    await saveRewardWalletState({ availablePulls: 3, reservePulls: 0 });
+    store.set(ANON_SEEDED_KEY, '1');
+    await recordMistakeOutcome({ deckSlug: SLUG, stableUid: 'anon-wrong', topic: null, rating: 'again', mcqVerdict: null, at: now.getTime() });
+    await settleRatingReward({ userSub: 'anon', eventId: 'anon-rating', slug: SLUG, stableUid: 'new-a',
+      rating: 'good', progressBefore: [], newCardEligible: true, dueBefore: 0, remainingDueCount: 0, now });
+    setActiveUserSubForStorage('user-a');
+    store.set('devcards:u:user-a:sync:remoteCache:v1:csharp', '{}');
+    store.set('devcards:u:user-b:sync:remoteCache:v1:csharp', '{}');
+    store.set('devcards:u:user-b:recallsmith:deck-wallets:v1', JSON.stringify({
+      migratedAtMs: null, decks: { csharp: { availablePulls: 7, reservePulls: 0 } }, bootstrappedAtMs: {},
+    }));
+    const beforeB = [...store.entries()].filter(([key]) => key.startsWith('devcards:u:user-b:'));
+    const match = phase === 'draw' ? 'devcards:draw-state:csharp'
+      : phase === 'legacy-wallet' ? 'recallsmith:reward-wallet:v1'
+      : phase === 'ledger' ? 'recallsmith:newCardPullPaidUids:csharp'
+      : phase === 'deck-wallet' ? 'recallsmith:deck-wallets:v1' : 'devcards:mistakes:v1';
+    let switched = false;
+    afterWrite = (key) => {
+      if (!switched && key === `devcards:u:user-a:${match}`) {
+        switched = true;
+        setActiveUserSubForStorage('user-b');
+      }
+    };
+    await adoptAnonGachaState();
+    afterWrite = null;
+    expect(switched).toBe(true);
+    expect([...store.entries()].filter(([key]) => key.startsWith('devcards:u:user-b:'))).toEqual(beforeB);
+    expect(JSON.parse(store.get('devcards:u:user-a:recallsmith:newCardPullPaidUids:csharp')!)).toEqual({ 'new-a': now.getTime() });
+    expect(JSON.parse(store.get('devcards:u:user-a:recallsmith:deck-wallets:v1')!).decks.csharp.availablePulls).toBe(1);
+    expect(JSON.parse(store.get('devcards:u:user-a:recallsmith:reward-wallet:v1')!).availablePulls).toBe(3);
+    expect(JSON.parse(store.get('devcards:u:user-a:devcards:draw-state:csharp')!).owned).toEqual(['anon-card']);
+    expect(JSON.parse(store.get('devcards:u:user-a:devcards:mistakes:v1')!).entries).toHaveProperty('csharp::anon-wrong');
+    expect(store.get(USER_SEEDED_KEY)).toBe('1');
+    expect((await settleRatingReward({ userSub: 'user-a', eventId: 'account-rating', slug: SLUG, stableUid: 'new-a',
+      rating: 'good', progressBefore: [], newCardEligible: true, dueBefore: 0, remainingDueCount: 0, now })).newCardPaid).toBe(false);
+    expect(JSON.parse(store.get('devcards:u:user-a:recallsmith:deck-wallets:v1')!).decks.csharp.availablePulls).toBe(1);
   });
 });

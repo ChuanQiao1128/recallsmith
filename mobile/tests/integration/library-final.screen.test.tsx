@@ -201,7 +201,7 @@ describe('LibraryScreen v9', () => {
     expect(statusOneText).toBe('Missing');
   });
 
-  it('opens visible additional filters and includes My cards alongside all statuses', async () => {
+  it('keeps common filters visible and puts rarity filters in the additional panel', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(
@@ -215,11 +215,13 @@ describe('LibraryScreen v9', () => {
     });
 
     expect(tree.root.findByProps({ testID: 'library-filter-sheet' })).toBeTruthy();
-    expect(tree.root.findByProps({ testID: 'library-sheet-filter-all' })).toBeTruthy();
-    expect(tree.root.findByProps({ testID: 'library-sheet-filter-new' })).toBeTruthy();
-    expect(tree.root.findByProps({ testID: 'library-sheet-filter-learning' })).toBeTruthy();
-    expect(tree.root.findByProps({ testID: 'library-sheet-filter-mastered' })).toBeTruthy();
-    expect(tree.root.findByProps({ testID: 'library-sheet-filter-owned' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'library-sheet-filter-rare' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'library-sheet-filter-legendary' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'library-filter-chip-all' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'library-filter-chip-new' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'library-filter-chip-learning' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'library-filter-chip-mastered' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'library-filter-chip-owned' })).toBeTruthy();
     expect(tree.root.findAllByProps({ testID: 'library-sheet-filter-missing' })).toHaveLength(0);
   });
 
@@ -243,10 +245,7 @@ describe('LibraryScreen v9', () => {
 
     for (const filterKey of ['all', 'new', 'learning', 'mastered'] as const) {
       act(() => {
-        tree.root.findByProps({ testID: 'library-filter-summary' }).props.onPress();
-      });
-      act(() => {
-        tree.root.findByProps({ testID: `library-sheet-filter-${filterKey}` }).props.onPress();
+        tree.root.findByProps({ testID: `library-filter-chip-${filterKey}` }).props.onPress();
       });
       expect(readCollectionBar()).toBe(baseline);
     }
@@ -433,12 +432,15 @@ describe('LibraryScreen v9', () => {
   });
 
   it('restores the last filter for this account and deck without leaking it to another account', async () => {
-    async function mountLibrary() {
+    async function mountLibrary(expectedFilter: 'owned' | 'all' = 'owned') {
       let tree!: renderer.ReactTestRenderer;
       await act(async () => { tree = renderer.create(
         <LibraryScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'library', name: 'Library' } as any} />,
       ); });
-      await flush();
+      await vi.waitFor(async () => {
+        await flush();
+        expect(tree.root.findByProps({ testID: `library-filter-chip-${expectedFilter}` }).props.accessibilityState.selected).toBe(true);
+      }, { timeout: 2000, interval: 10 });
       return tree;
     }
     mockUserScope = 'account-a:';
@@ -446,7 +448,7 @@ describe('LibraryScreen v9', () => {
     expect(tree.root.findByProps({ testID: 'library-filter-chip-owned' }).props.accessibilityState.selected).toBe(true);
     await act(async () => { tree.root.findByProps({ testID: 'library-filter-chip-all' }).props.onPress(); });
     act(() => tree.unmount());
-    tree = await mountLibrary();
+    tree = await mountLibrary('all');
     expect(tree.root.findByProps({ testID: 'library-filter-chip-all' }).props.accessibilityState.selected).toBe(true);
     act(() => tree.unmount());
     mockUserScope = 'account-b:';

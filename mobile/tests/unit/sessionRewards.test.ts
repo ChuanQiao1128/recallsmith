@@ -155,7 +155,7 @@ describe('sessionRewards', () => {
     expect(step.pulls).toBe(1);
   });
 
-  it('writes the ledger before it touches the wallet', async () => {
+  it('commits the wallet receipt before the paid ledger, then completes its projection', async () => {
     await settleRatingReward({
       slug: 'csharp',
       stableUid: 'c1',
@@ -169,12 +169,13 @@ describe('sessionRewards', () => {
 
     expect(setItemCalls).toContain(WALLET_KEY);
     expect(setItemCalls).toContain(LEDGER_KEY);
+    expect(setItemCalls.indexOf(WALLET_KEY)).toBeLessThan(setItemCalls.lastIndexOf(LEDGER_KEY));
     expect(setItemCalls.lastIndexOf(WALLET_KEY)).toBeGreaterThan(setItemCalls.lastIndexOf(LEDGER_KEY));
   });
 
-  it('returns the zero step and leaves the wallet alone when storage fails', async () => {
+  it('rejects and leaves the wallet alone when its storage read fails', async () => {
     throwOnGet = () => true;
-    const step = await settleRatingReward({
+    await expect(settleRatingReward({
       slug: 'csharp',
       stableUid: 'c1',
       rating: 'good',
@@ -183,9 +184,7 @@ describe('sessionRewards', () => {
       dueBefore: 0,
       remainingDueCount: 0,
       now: new Date(2026, 0, 15, 12, 0, 0),
-    });
-
-    expect(step).toEqual({ ...ZERO_REWARD_STEP, skipped: 'storage-error' });
+    })).rejects.toThrow('storage read killed');
     expect(setItemCalls).not.toContain(WALLET_KEY);
   });
 
@@ -357,9 +356,9 @@ describe('sessionRewards', () => {
     });
   });
 
-  it('reports pulls with a null wallet when the wallet write fails after the ledger', async () => {
+  it('rejects before stamping paid when the atomic wallet receipt write fails', async () => {
     failSetItemFor = (key) => key === WALLET_KEY;
-    const step = await settleRatingReward({
+    await expect(settleRatingReward({
       slug: 'csharp',
       stableUid: 'c1',
       rating: 'good',
@@ -368,14 +367,9 @@ describe('sessionRewards', () => {
       dueBefore: 0,
       remainingDueCount: 0,
       now: new Date(2026, 0, 15, 12, 0, 0),
-    });
-
-    expect(step.newCardPaid).toBe(true);
-    expect(step.pulls).toBe(1);
-    expect(step.walletAfter).toBeNull();
-    // The ledger landed first, so the uid is banked; the crash only cost the grant.
+    })).rejects.toThrow('storage write killed');
     const { ledger } = await readNewCardLedger('csharp');
-    expect('c1' in ledger).toBe(true);
+    expect('c1' in ledger).toBe(false);
   });
 
   it('never pays a new-card pull in sweep mode however the cards are rated, and pays the due clear at most once', async () => {

@@ -107,7 +107,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
   },
   choiceTextOn: {
-    color: '#FFFFFF',
+    color: colors.ink,
   },
   choiceTextOff: {
     color: colors.inkSecondary,

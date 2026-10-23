@@ -255,7 +255,7 @@ export function ReportCardSheet({ deckSlug, stableUid, onClose, visible = true }
                 accessibilityState={{ disabled: !canSubmit, busy: submitting }}
                 disabled={!canSubmit}
                 onPress={() => void onSubmit()}
-                style={({ pressed }) => [styles.primary, !canSubmit && styles.disabled, pressed && styles.pressed]}
+                style={({ pressed }) => [styles.primary, !canSubmit && styles.disabled, pressed && (canSubmit ? styles.primaryPressed : styles.pressed)]}
               >
                 <Text style={styles.primaryText} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                   {submitting ? 'Sending…' : 'Submit'}
@@ -382,8 +382,9 @@ const styles = StyleSheet.create({
   primaryText: {
     fontSize: typography.button,
     fontWeight: '800',
-    color: '#FFFFFF',
+    color: colors.ink,
   },
+  primaryPressed: { opacity: 0.96 },
   disabled: {
     opacity: 0.5,
   },

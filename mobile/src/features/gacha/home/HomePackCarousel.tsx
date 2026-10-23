@@ -363,7 +363,7 @@ export default function HomePackCarousel({
                       page.realRow.update.state === 'updating' && styles.updateChipUpdating,
                     ]}
                   >
-                    <Text style={styles.updateChipText} numberOfLines={2}>
+                    <Text style={[styles.updateChipText, page.realRow.update.state === 'updating' && styles.updateChipTextUpdating]} numberOfLines={2}>
                       {page.realRow.update.chipLabel}
                     </Text>
                   </View>
@@ -482,13 +482,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.inkSecondary,
   },
   updateChipText: {
-    color: '#FFFFFF',
+    color: colors.ink,
     fontSize: typography.caption,
     lineHeight: 13,
     fontWeight: '900',
     letterSpacing: 0.2,
     textAlign: 'center',
   },
+  updateChipTextUpdating: { color: '#FFFFFF' },
   caption: {
     fontSize: typography.bodySmall,
     lineHeight: 16,

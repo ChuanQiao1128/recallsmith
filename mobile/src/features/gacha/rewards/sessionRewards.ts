@@ -1,10 +1,10 @@
-import type { ReviewRating, CardProgress } from '../../../review/model';
+import { formatDateKey, type ReviewRating, type CardProgress } from '../../../review/model';
 import type { AppliedRewardWalletState, RewardWalletState } from './rewardWallet';
-import { grantDeckPulls } from './deckWallet';
+import { settleDeckRatingReward } from './deckWallet';
 import {
   countPaidOnDay,
-  markDueClearedIfFirstToday,
-  payNewCardIfUnpaid,
+  readDueClearMarker,
+  projectRatingReward,
   readNewCardLedger,
   seedNewCardLedgerIfAbsent,
   type NewCardLedger,
@@ -17,6 +17,8 @@ import { getUserScopedKey } from '../../../review/storage';
 export type RatingRewardInput = {
   /** Partition captured by the rating intent; never follow a later account switch. */
   userSub?: string;
+  /** Durable review fact identity, retained by the existing pending-rating journal. */
+  eventId?: string;
   slug: string;
   stableUid: string;
   rating: ReviewRating;
@@ -60,137 +62,91 @@ export const ZERO_REWARD_STEP: RatingRewardStep = Object.freeze({
   newCardsLearnedToday: 0,
 });
 
-/** Order: (0) readProgressSettled(slug) -- unsettled → skip (1) and (2), report skipped:'progress-unsettled';
- *  (1) seedNewCardLedgerIfAbsent(slug, progressBefore, now, storage-fresh source); (2) R1: newCardEligible
- *  && rating !== 'again' → payNewCardIfUnpaid; (3) R2: dueBefore > 0 && remainingDueCount === 0 →
- *  markDueClearedIfFirstToday(now, slug); (4) pulls > 0 → grantDeckPulls(slug, pulls). Ledger and marker land
- *  before the wallet. Never throws: a storage failure at (1) returns the zero step (no pay,
- *  skipped:'storage-error'); at (4) the ledger/marker are already written and the step reports pulls with
- *  walletAfter === null (under-grant, never double-grant).
- *
- *  The seed's backfill (SEED path only, i.e. the partition's first settled rating for this slug) is the
- *  UNION of two views of "already learned" (C00 §6, 2026-09-21 addendum, decision 4 -- review finding S8):
- *  - `progressBefore`, the caller's in-memory snapshot (SessionCardScreen.tsx passes its `progress` state,
- *    refreshed only at load and after its own ratings);
- *  - the storage-fresh view (storageFreshLearned.ts): the stored progress key plus the per-user remote
- *    cache the frozen progressSync.ts writes on every pull -- what a remote pull that landed mid-session
- *    merged behind the screen's back, which the snapshot cannot know.
- *  A card learned in EITHER view is backfilled as paid(0). The superset is the safe direction: a stale
- *  snapshot alone would seed too little, the marker would make it permanent, and every later-arriving
- *  learned card would pay. The CURRENT card is exempt from the stored-progress half of that view: the
- *  screen saves its rating to storage before it settles the reward (:451-452), so the progress key always
- *  calls the card being rated "learned", and trusting that would mean the first rating on a freshly
- *  seeded partition never pays. For that one uid the decision stays with `progressBefore`, as before,
- *  plus the remote-cache half, which this rating cannot have reached yet (it gets there only through a
- *  later push and pull): a cache row for it means the account learned it before this rating, and that is
- *  exactly what the backfill is for. The storage-fresh read happens only when the marker is absent; a
- *  marker-present rating never touches those keys. Its storage error is a seed-time storage error: zero
- *  step, skipped:'storage-error', nothing written. */
+/** Prepared under the wallet lock, then committed with the balance before ledger projections.
+ * The original timestamp/day survive restart and a later account or local-day change. */
+export type RatingRewardPlan = {
+  stableUid: string;
+  stampAtMs?: number;
+  dueClearDay?: string;
+  newCardPaid: boolean;
+  dueClearPaid: boolean;
+  newCardsLearnedToday: number;
+  skipped?: RatingRewardSkipReason;
+};
+
+/** The wallet lock serializes eligibility, atomic balance/receipt persistence and ledger projection.
+ * A failed write rejects so the caller keeps its rating journal. Replays finish any pending
+ * projections first and return the original event's committed result without crediting again. */
 export async function settleRatingReward(input: RatingRewardInput): Promise<RatingRewardStep> {
   const { slug, stableUid, rating, progressBefore, newCardEligible, dueBefore, remainingDueCount, now } = input;
   // Capture the canonical storage partition once for compatibility callers too.
   // Storage owns key construction; this extracts the sub from its returned prefix.
   const userSub = input.userSub ?? (await getUserScopedKey('')).slice('devcards:u:'.length, -1);
 
-  // (0) The seed only knows what this device knows. Until the account's remote progress has
-  // landed here, a seed would miss every card learned elsewhere and R1 would pay them all on
-  // their next hard+ (review finding B). Unsettled → no seed, no R1; R2 is unaffected.
-  const settledState = await readProgressSettled(slug, userSub);
-  let skipped: RatingRewardSkipReason | undefined;
-  let ledger: NewCardLedger;
+  const prepare = async (): Promise<RatingRewardPlan> => {
+    // (0) The seed only knows what this device knows. Until the account's remote progress has
+    // landed here, a seed would miss every card learned elsewhere and R1 would pay them all on
+    // their next hard+ (review finding B). Unsettled → no seed, no R1; R2 is unaffected.
+    const settledState = await readProgressSettled(slug, userSub);
+    let skipped: RatingRewardSkipReason | undefined;
+    let ledger: NewCardLedger;
 
-  if (settledState.settled) {
-    // (1) Seed the per-partition ledger the first time this deck is settled. A storage
-    // failure here means we cannot know whether the card was pre-learned, so we pay
-    // nothing rather than risk paying a card that was already learned.
-    try {
-      ledger = await seedNewCardLedgerIfAbsent(slug, progressBefore, now.getTime(), async () => {
-        // Consulted only when the marker is absent. Everything storage says is learned,
-        // except the card being rated in the stored-progress view: the screen already
-        // saved this rating there, so for that one uid that view is not "before" and
-        // progressBefore keeps the decision. The remote cache cannot hold this rating
-        // yet, so its row for the current card (if any) is the account's earlier review.
-        const fresh = await readStorageFreshLearned(slug, userSub);
-        fresh.storedProgress.delete(stableUid);
-        return new Set([...fresh.storedProgress, ...fresh.remoteCache]);
-      }, userSub);
-    } catch {
-      return { ...ZERO_REWARD_STEP, skipped: 'storage-error' };
+    if (settledState.settled) {
+      // (1) Seed the per-partition ledger the first time this deck is settled. A storage
+      // failure here means we cannot know whether the card was pre-learned, so we pay
+      // nothing rather than risk paying a card that was already learned.
+      try {
+        ledger = await seedNewCardLedgerIfAbsent(slug, progressBefore, now.getTime(), async () => {
+          // Consulted only when the marker is absent. Everything storage says is learned,
+          // except the card being rated in the stored-progress view: the screen already
+          // saved this rating there, so for that one uid that view is not "before" and
+          // progressBefore keeps the decision. The remote cache cannot hold this rating
+          // yet, so its row for the current card (if any) is the account's earlier review.
+          const fresh = await readStorageFreshLearned(slug, userSub);
+          fresh.storedProgress.delete(stableUid);
+          return new Set([...fresh.storedProgress, ...fresh.remoteCache]);
+        }, userSub);
+      } catch {
+        return { stableUid, newCardPaid: false, dueClearPaid: false, newCardsLearnedToday: 0, skipped: 'storage-error' };
+      }
+    } else {
+      if (settledState.reason === 'storage-error') {
+        return { stableUid, newCardPaid: false, dueClearPaid: false, newCardsLearnedToday: 0, skipped: 'storage-error' };
+      }
+      skipped = 'progress-unsettled';
+      // The ledger may already hold adopted anon stamps from today; count them for R7 but
+      // never seed or write. A read failure only costs the count.
+      try {
+        ledger = (await readNewCardLedger(slug, userSub)).ledger;
+      } catch {
+        ledger = {};
+      }
     }
-  } else {
-    skipped = 'progress-unsettled';
-    // The ledger may already hold adopted anon stamps from today; count them for R7 but
-    // never seed or write. A read failure only costs the count.
-    try {
-      ledger = (await readNewCardLedger(slug, userSub)).ledger;
-    } catch {
-      ledger = {};
+
+    let newCardPaid = false;
+    let stampAtMs: number | undefined;
+    if (settledState.settled && newCardEligible) {
+      const starterCard = await isStarterLessonCard(slug, stableUid);
+      if ((starterCard || rating !== 'again') && !Object.prototype.hasOwnProperty.call(ledger, stableUid)) {
+        stampAtMs = now.getTime();
+        newCardPaid = !starterCard;
+        ledger = { ...ledger, [stableUid]: stampAtMs };
+      }
     }
-  }
 
-  // (2) R1: the first hard/good/easy on a not-yet-paid card pays one pull. R9 falls
-  // out of this -- `again` only defers; it never decides whether a card ever pays.
-  // A starter-lesson card (R22 §4) pays no R1 pull, whatever the rating: the lesson's reward is the
-  // pack's bootstrap, granted when the lesson completes. It is still stamped in the ledger, so it
-  // counts as learned today (R7) and can never pay R1 later, after the lesson has closed.
-  let newCardPaid = false;
-  if (settledState.settled && newCardEligible) {
-    const starterCard = await isStarterLessonCard(slug, stableUid);
-    if (starterCard || rating !== 'again') {
-      const payResult = await payNewCardIfUnpaid(slug, stableUid, now.getTime(), userSub);
-      newCardPaid = payResult.paid && !starterCard;
-      ledger = payResult.ledger;
-    }
-  }
-
-  const newCardsLearnedToday = countPaidOnDay(ledger, now);
-
-  // (3) R2: clearing today's due cards pays one pull, at most once per local day.
-  let dueClearPaid = false;
-  if (dueBefore > 0 && remainingDueCount === 0) {
-    dueClearPaid = await markDueClearedIfFirstToday(now, slug, userSub);
-  }
-
-  const pulls = Number(newCardPaid) + Number(dueClearPaid);
-  const skippedField = skipped ? { skipped } : {};
-
-  // (4) The single wallet write. The ledger and marker are already on disk, so a throw
-  // here reports the pulls with a null wallet -- under-grant, never double-grant.
-  if (pulls > 0) {
-    try {
-      const grant = await grantDeckPulls(slug, pulls, userSub);
-      return {
-        newCardPaid,
-        dueClearPaid,
-        pulls,
-        walletBefore: grant.walletBefore,
-        walletAfter: grant.walletAfter,
-        applied: grant.applied,
-        newCardsLearnedToday,
-        ...skippedField,
-      };
-    } catch {
-      return {
-        newCardPaid,
-        dueClearPaid,
-        pulls,
-        walletBefore: null,
-        walletAfter: null,
-        applied: null,
-        newCardsLearnedToday,
-        ...skippedField,
-      };
-    }
-  }
-
-  return {
-    newCardPaid,
-    dueClearPaid,
-    pulls,
-    walletBefore: null,
-    walletAfter: null,
-    applied: null,
-    newCardsLearnedToday,
-    ...skippedField,
+    const previousDueClear = dueBefore > 0 && remainingDueCount === 0 ? await readDueClearMarker(slug, userSub) : null;
+    const dueClearDay = dueBefore > 0 && remainingDueCount === 0 &&
+      (previousDueClear == null || previousDueClear < formatDateKey(now)) ? formatDateKey(now) : undefined;
+    return {
+      stableUid,
+      ...(stampAtMs != null ? { stampAtMs } : {}),
+      ...(dueClearDay ? { dueClearDay } : {}),
+      newCardPaid,
+      dueClearPaid: dueClearDay != null,
+      newCardsLearnedToday: countPaidOnDay(ledger, now),
+      ...(skipped ? { skipped } : {}),
+    };
   };
+  return settleDeckRatingReward(slug, input.eventId, JSON.stringify([stableUid, now.getTime(), rating]),
+    prepare, (pendingSlug, plan) => projectRatingReward(pendingSlug, plan, userSub), userSub);
 }

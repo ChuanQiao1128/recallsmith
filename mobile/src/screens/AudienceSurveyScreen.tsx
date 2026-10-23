@@ -303,7 +303,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     elevation: 4,
   },
-  primaryButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: '900', letterSpacing: 0.4 },
+  primaryButtonText: { color: colors.ink, fontSize: 15, fontWeight: '900', letterSpacing: 0.4 },
   // Ghost-style secondary (Back) — transparent + hairline border so it
   // doesn't compete with the primary visually.
   backLink: {

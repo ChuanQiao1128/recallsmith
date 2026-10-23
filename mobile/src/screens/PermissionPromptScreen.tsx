@@ -124,7 +124,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     elevation: 4,
   },
-  primaryButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: '900', letterSpacing: 0.4 },
+  primaryButtonText: { color: colors.ink, fontSize: 15, fontWeight: '900', letterSpacing: 0.4 },
   secondaryButton: {
     marginTop: 12,
     minHeight: 48,

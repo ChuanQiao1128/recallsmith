@@ -387,7 +387,7 @@ export const drawResultStyles = StyleSheet.create({
     elevation: 6,
   },
   primaryCtaText: {
-    color: colors.softCream,
+    color: colors.ink,
     fontSize: typography.button,
     fontWeight: '900',
     letterSpacing: 0.4,

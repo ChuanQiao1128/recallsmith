@@ -3,6 +3,7 @@ vi.mock('expo-crypto', () => ({ randomUUID: () => 'review-intent-id' }));
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Alert } from 'react-native';
 
 import { invalidateDeckCache } from '../../src/content/deckCache';
 
@@ -94,16 +95,31 @@ vi.mock('../../src/config/featureFlags', () => ({
 }));
 
 const store = new Map<string, string>();
+let ratingStorageFault: 'wallet-before' | 'wallet-after' | 'journal-before' | 'journal-after' | 'clear-before' | 'clear-after' | null = null;
+let failJournalScan = false;
 vi.mock('@react-native-async-storage/async-storage', () => ({
   default: {
     getItem: vi.fn(async (key: string) => (store.has(key) ? store.get(key)! : null)),
     setItem: vi.fn(async (key: string, value: string) => {
+      const wallet = key.endsWith('recallsmith:deck-wallets:v1');
+      const rewardJournal = key.includes('review-intent:v1:') && JSON.parse(value).reward != null;
+      if ((ratingStorageFault === 'wallet-before' && wallet) || (ratingStorageFault === 'journal-before' && rewardJournal)) {
+        throw new Error('injected before persistence');
+      }
       store.set(key, value);
+      if ((ratingStorageFault === 'wallet-after' && wallet) || (ratingStorageFault === 'journal-after' && rewardJournal)) {
+        throw new Error('injected after persistence');
+      }
     }),
     removeItem: vi.fn(async (key: string) => {
+      if (ratingStorageFault === 'clear-before' && key.includes('review-intent:v1:')) throw new Error('injected before clear');
       store.delete(key);
+      if (ratingStorageFault === 'clear-after' && key.includes('review-intent:v1:')) throw new Error('injected after clear');
     }),
-    getAllKeys: vi.fn(async () => [...store.keys()]),
+    getAllKeys: vi.fn(async () => {
+      if (failJournalScan) throw new Error('journal temporarily unavailable');
+      return [...store.keys()];
+    }),
     multiRemove: vi.fn(async (keys: string[]) => {
       keys.forEach((key) => store.delete(key));
     }),
@@ -140,6 +156,7 @@ vi.mock('../../src/review/storage', () => ({
     return next;
   }),
   loadDeckProgress: vi.fn(async () => []),
+  readStoredDeckProgress: vi.fn(async () => []),
   saveDeckProgress: vi.fn(async () => {}),
   loadOrInitDailyStats: vi.fn(async () => ({ dateKey: '2026-09-22', plannedCount: 0, doneCount: 0 })),
   // The real Mistake Book and study prefs read through these.
@@ -209,7 +226,7 @@ vi.mock('../../src/content/cardSource', () => ({
 
 import { SessionCardScreen } from '../../src/screens/SessionCardScreen';
 import { resolveDeckBySlug } from '../../src/content/deckRepository';
-import { loadDeckProgress, saveDeckProgress } from '../../src/review/storage';
+import { getUserScopedKey, loadDeckProgress, saveDeckProgress } from '../../src/review/storage';
 import { recordReviewEvent } from '../../src/sync/progressSync';
 import { pickNextCard, planChallengeRoute } from '../../src/features/gacha/planner/sessionPlanner';
 import { settleRatingReward } from '../../src/features/gacha/rewards/sessionRewards';
@@ -379,6 +396,8 @@ describe('SessionCardScreen learning step (R22 §6: teach before testing; 2026-1
   beforeEach(() => {
     vi.clearAllMocks();
     store.clear();
+    ratingStorageFault = null;
+    failJournalScan = false;
     // A new learner on the two-button default, stored so the first read does not probe.
     store.set(STUDY_PREFS_KEY, JSON.stringify({ fourButtons: false }));
     resetSessionStore();
@@ -447,6 +466,8 @@ describe('SessionCardScreen learning step (R22 §6: teach before testing; 2026-1
     const previous = learnedDue('old-c');
     await writePendingRating('csharp', { sub: 'anon', uid: 'old-c', eventId: 'completed-old-event',
       queued: true, now: new Date(previous.lastReviewedAt), rating: 'hard', before: [],
+      reward: { newCardPaid: false, dueClearPaid: false, pulls: 0, walletBefore: null,
+        walletAfter: null, applied: null, newCardsLearnedToday: 0 },
       state: { updatedOne: previous, updatedProgress: [previous] } });
     serve([LEARNED], [previous], 1);
     const { tree } = await mount();
@@ -454,6 +475,59 @@ describe('SessionCardScreen learning step (R22 §6: teach before testing; 2026-1
     const event = vi.mocked(recordReviewEvent).mock.calls[0][0] as any;
     expect(event.eventId).not.toBe('completed-old-event');
     expect(event.reviewedAtMs).toBe(FIXED_NOW_MS);
+  });
+
+  it.each(['wallet-before', 'wallet-after', 'journal-before', 'journal-after', 'clear-before', 'clear-after'] as const)(
+    'recovers %s with real reward persistence when the projected card is absent from the reopened queue', async (failure) => {
+    const actual = await vi.importActual<typeof import('../../src/features/gacha/rewards/sessionRewards')>(
+      '../../src/features/gacha/rewards/sessionRewards');
+    const mockScope = vi.mocked(getUserScopedKey).getMockImplementation()!;
+    const mockSettle = vi.mocked(settleRatingReward).getMockImplementation()!;
+    vi.mocked(getUserScopedKey).mockImplementation(async (base: string, sub?: string) =>
+      sub ? `devcards:u:${sub}:${base}` : `test:${base}`);
+    vi.mocked(settleRatingReward).mockImplementation(actual.settleRatingReward);
+    const walletKey = 'devcards:u:anon:recallsmith:deck-wallets:v1';
+    try {
+      serve([NEW_A], [fresh('new-a')], 1);
+      ratingStorageFault = failure;
+      const first = await mount();
+      await study(first.tree);
+      expect(first.navigation.replace).not.toHaveBeenCalled();
+      expect([...store.keys()].some(key => key.includes('review-intent:v1:csharp:new-a'))).toBe(failure !== 'clear-after');
+      const firstInput = vi.mocked(settleRatingReward).mock.calls.at(-1)![0];
+      await act(async () => first.tree.unmount());
+      resetSessionStore();
+      ratingStorageFault = null;
+      const second = await mount();
+      expect(questionShown(second.tree)).toBeNull(); // projected card is now due tomorrow
+      const recoveredInput = vi.mocked(settleRatingReward).mock.calls.at(-1)![0];
+      expect(recoveredInput.eventId).toBe(firstInput.eventId);
+      expect(recoveredInput.now).toEqual(firstInput.now);
+      expect(JSON.parse(store.get(walletKey)!).decks.csharp).toEqual({ availablePulls: 1, reservePulls: 0 });
+      expect([...store.keys()].some(key => key.includes('review-intent:v1:csharp:new-a'))).toBe(false);
+      expect(recordReviewEvent).toHaveBeenCalledTimes(1);
+      await act(async () => second.tree.unmount());
+      resetSessionStore();
+      const third = await mount();
+      expect(JSON.parse(store.get(walletKey)!).decks.csharp.availablePulls).toBe(1);
+      expect(recordReviewEvent).toHaveBeenCalledTimes(1);
+      await act(async () => third.tree.unmount());
+    } finally {
+      ratingStorageFault = null;
+      vi.mocked(getUserScopedKey).mockImplementation(mockScope);
+      vi.mocked(settleRatingReward).mockImplementation(mockSettle);
+    }
+  });
+
+  it('keeps local cards usable and surfaces a retry notice when the recovery scan fails', async () => {
+    serve([NEW_A], [fresh('new-a')], 1);
+    failJournalScan = true;
+    const first = await mount();
+    expect(questionShown(first.tree)).not.toBeNull();
+    expect(byTestID(first.tree, 'session-card-error-title')).toHaveLength(0);
+    expect(Alert.alert).toHaveBeenCalledWith('Saved rewards are pending', expect.stringContaining('Reopen this deck'));
+    expect(settleRatingReward).not.toHaveBeenCalled();
+    await act(async () => first.tree.unmount());
   });
 
   it('rates from fresh durable progress without overwriting a remote update to another card', async () => {

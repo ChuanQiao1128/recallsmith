@@ -15,6 +15,7 @@ export default defineConfig({
       'tests/integration/**/*.test.tsx',
       'tests/integration/**/*.spec.ts',
       'tests/integration/**/*.spec.tsx',
+      'tests/smoke/**/*.test.ts',
     ],
     // iCloud renames a sync-conflict loser to "name 2.test.ts", which the
     // include globs above happily collect -- a stale duplicate suite running

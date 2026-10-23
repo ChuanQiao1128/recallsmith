@@ -1,6 +1,9 @@
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { composite, contrastRatio, flattenStyle } from '../helpers/contrast';
+
+const pressState = vi.hoisted(() => ({ pressed: false }));
 
 vi.mock('react-native', () => {
   const React = require('react');
@@ -13,8 +16,8 @@ vi.mock('react-native', () => {
     Pressable: ({ children, onPress, style, ...props }: any) =>
       React.createElement(
         'Pressable',
-        { ...props, onPress, style: typeof style === 'function' ? style({ pressed: false }) : style },
-        typeof children === 'function' ? children({ pressed: false }) : children,
+        { ...props, onPress, style: typeof style === 'function' ? style(pressState) : style },
+        typeof children === 'function' ? children(pressState) : children,
       ),
     StyleSheet: { create: (styles: any) => styles, flatten: (s: any) => s },
   };
@@ -38,6 +41,7 @@ import { installFakeXhr } from '../setup/fakeXhr';
 import appJson from '../../app.json';
 
 beforeEach(() => {
+  pressState.pressed = false;
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   vi.mocked(apiJson).mockReset();
   vi.mocked(getFreshAccessToken).mockReset();
@@ -103,6 +107,23 @@ describe('ReportCardSheet', () => {
     }
     const submit = one(tree, 'report-card-submit');
     expect(submit.props.disabled).toBe(true);
+    expect(flattenStyle(submit.props.style).opacity).toBe(0.5);
+  });
+
+  it.each([false, true])('keeps the enabled submit label readable when pressed=%s', async (pressed) => {
+    pressState.pressed = pressed;
+    const tree = await renderSheet();
+    await press(one(tree, 'report-reason-outdated'));
+    const submit = one(tree, 'report-card-submit');
+    expect(submit.props.disabled).toBe(false);
+    const buttonStyle = flattenStyle(submit.props.style);
+    const label = submit.find((node) => (node.type as any) === 'Text');
+    const labelStyle = flattenStyle(label.props.style);
+    const sheetBackground = flattenStyle(one(tree, 'report-card-sheet').props.style).backgroundColor;
+    const opacity = buttonStyle.opacity ?? 1;
+    const foreground = composite(labelStyle.color, sheetBackground, opacity);
+    const background = composite(buttonStyle.backgroundColor, sheetBackground, opacity);
+    expect(contrastRatio(foreground, background)).toBeGreaterThanOrEqual(4.5);
   });
 
   it('caps the note at 500 characters and shows a counter', async () => {

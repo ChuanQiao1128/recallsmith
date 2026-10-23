@@ -10,6 +10,7 @@ import { fetchAuthSession } from 'aws-amplify/auth';
 import { setSyncAccessToken } from '../sync/progressSync';
 import { setAccessTokenRefresher } from '../api/apiClient';
 import { useAuthStore } from './authStore';
+import { accessTokenSubject, getAuthSessionGeneration } from './sessionBoundary';
 
 function tokenToString(t: any): string | null {
   if (!t) return null;
@@ -20,9 +21,11 @@ function tokenToString(t: any): string | null {
 
 // Concurrent callers (foreground + a 401 retry, say) share one in-flight
 // fetchAuthSession so we never fan out into several refreshes at once.
-let _inFlight: Promise<string | null> | null = null;
+let _inFlight: { generation: number; promise: Promise<string | null> } | null = null;
 
-async function doRefresh(forceRefresh: boolean): Promise<string | null> {
+async function doRefresh(forceRefresh: boolean, generation: number, userSub: string): Promise<string | null> {
+  const isCurrent = () => generation === getAuthSessionGeneration()
+    && useAuthStore.getState().status === 'signed_in';
   let session: any;
   try {
     session = await fetchAuthSession({ forceRefresh });
@@ -31,6 +34,8 @@ async function doRefresh(forceRefresh: boolean): Promise<string | null> {
     return null;
   }
 
+  // Amplify can finish an old account's session read after sign-out or a new login.
+  if (!isCurrent()) return null;
   const accessToken = tokenToString(session?.tokens?.accessToken) ?? null;
   const idToken = tokenToString(session?.tokens?.idToken) ?? null;
 
@@ -40,25 +45,34 @@ async function doRefresh(forceRefresh: boolean): Promise<string | null> {
     return null;
   }
 
+  const refreshedSub = session?.tokens?.accessToken?.payload?.sub ?? accessTokenSubject(accessToken);
+  if (refreshedSub !== userSub) return null;
+
   if (accessToken !== useAuthStore.getState().accessToken) {
     useAuthStore.setState({ accessToken, idToken });
+    if (!isCurrent()) return null;
     await setSyncAccessToken(accessToken);
   }
 
-  return accessToken;
+  return isCurrent() ? accessToken : null;
 }
 
 export function getFreshAccessToken(options?: { forceRefresh?: boolean }): Promise<string | null> {
-  if (useAuthStore.getState().status !== 'signed_in') {
+  const state = useAuthStore.getState();
+  if (state.status !== 'signed_in' || state.loading) {
     return Promise.resolve(null);
   }
-  if (_inFlight) return _inFlight;
+  const generation = getAuthSessionGeneration();
+  const userSub = state.userSub ?? state.userId ?? accessTokenSubject(state.accessToken ?? '');
+  if (!userSub) return Promise.resolve(null);
+  if (_inFlight?.generation === generation) return _inFlight.promise;
 
   const forceRefresh = options?.forceRefresh === true;
-  _inFlight = doRefresh(forceRefresh).finally(() => {
-    _inFlight = null;
+  const promise = doRefresh(forceRefresh, generation, userSub).finally(() => {
+    if (_inFlight?.promise === promise) _inFlight = null;
   });
-  return _inFlight;
+  _inFlight = { generation, promise };
+  return promise;
 }
 
 export async function refreshAuthOnForeground(): Promise<void> {

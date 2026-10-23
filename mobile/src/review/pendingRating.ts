@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import type { RatingRewardStep } from '../features/gacha/rewards/sessionRewards';
 
 function key(sub: string, slug: string, uid: string) {
   return `devcards:u:${sub}:review-intent:v1:${slug}:${uid}`;
@@ -20,4 +21,22 @@ export async function writePendingRating<T extends { sub: string; uid: string }>
 }
 export async function clearPendingRating(sub: string, slug: string, uid: string): Promise<void> {
   await AsyncStorage.removeItem(key(sub, slug, uid));
+}
+
+export function hasCommittedRatingReward(reward: RatingRewardStep | undefined): reward is RatingRewardStep {
+  return reward != null && reward.skipped !== 'storage-error' && (reward.pulls === 0 || reward.walletAfter != null);
+}
+
+/** A projected card may already be due tomorrow and absent from the next session's queue. */
+export async function readPendingRatings<T extends { sub: string; uid: string; eventId: string; now: Date }>(
+  sub: string, slug: string,
+): Promise<T[]> {
+  const prefix = key(sub, slug, '');
+  const intents: T[] = [];
+  for (const storedKey of await AsyncStorage.getAllKeys()) {
+    if (!storedKey.startsWith(prefix)) continue;
+    const intent = await readPendingRating<T>(sub, slug, storedKey.slice(prefix.length));
+    if (intent) intents.push(intent);
+  }
+  return intents;
 }

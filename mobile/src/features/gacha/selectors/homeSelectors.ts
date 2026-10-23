@@ -79,7 +79,7 @@ export type HomeCalendarCompact = {
   maxCount: number;
 };
 
-/** One plain line under the Today card (R22 §5: "Today: N cards", no streak or "full clear" words). */
+/** One plain line under the Today card (R22 §5: "Session target: N cards", no streak or "full clear" words). */
 export type HomeGoalVM = {
   text: string;
 };
@@ -491,12 +491,12 @@ function mapStatusToCta(params: { kind: HomeCtaKind; draw: HomeDrawVM }): HomeCt
   }
 }
 
-// "Today: N cards" is the run the session will actually build, so the number
+// "Session target: N cards" is the run the session will actually build, so the number
 // has to be the planner's route length and not due + new: the summary already
 // says "5 / 5 · full clear" for a deck Home used to call "6 cards". An
 // installed deck with no cards in it gets its own line (a card count would
 // promise a run that cannot start); with cards but nothing due and nothing new
-// there is no run to describe, and "Today: 0 cards" is noise, so it goes away.
+// there is no run to describe, and "Session target: 0 cards" is noise, so it goes away.
 function buildGoalVM(selectedDeck: DeckSummary | null): HomeGoalVM | null {
   if (!selectedDeck || !selectedDeck.canStudy) return null;
   if (isEmptyDeck(selectedDeck)) {
@@ -512,7 +512,7 @@ function buildGoalVM(selectedDeck: DeckSummary | null): HomeGoalVM | null {
     newCount,
     ownedCount: ownedCountOf(selectedDeck),
   });
-  return { text: `Today: ${limit} card${limit === 1 ? '' : 's'}` };
+  return { text: `Session target: ${limit} card${limit === 1 ? '' : 's'}` };
 }
 
 function dueTodayHeadline(dueCount: number): string {

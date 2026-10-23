@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { DeckExport } from '../types/deckExport';
 import type { CardProgress } from './model';
 import { formatDateKey, clampStage, inferStageFromIntervalMs } from './model';
+import { notifyProgressChanged } from '../sync/progressChanges';
 
 export type DailyStats = {
   dateKey: string;
@@ -25,6 +26,7 @@ const USER_SCOPE_PREFIX = 'devcards:u:'; // devcards:u:{sub}:
 
 let _cachedUserSub: string | null = null;
 let _cachedUserSubAt = 0;
+let _userSubCacheRevision = 0;
 const USER_SUB_CACHE_TTL_MS = 1500;
 
 function normalizeSub(v: any): string | null {
@@ -37,26 +39,36 @@ function normalizeSub(v: any): string | null {
  * 解决 TTL 期间 Home 还在用旧 scope（sign out / switch account 后仍显示旧进度）。
  */
 export function setActiveUserSubForStorage(userSub: string | null): void {
+  _userSubCacheRevision += 1;
   _cachedUserSub = normalizeSub(userSub);
   _cachedUserSubAt = Date.now();
 }
 
 export function invalidateActiveUserSubCache(): void {
+  _userSubCacheRevision += 1;
   _cachedUserSubAt = 0;
 }
 
-async function getActiveUserSub(): Promise<string | null> {
+async function getActiveUserSub(strict = false): Promise<string | null> {
   const now = Date.now();
   if (now - _cachedUserSubAt < USER_SUB_CACHE_TTL_MS) return _cachedUserSub;
 
+  const revision = _userSubCacheRevision;
+
   try {
     const raw = await AsyncStorage.getItem(ACTIVE_USER_SUB_KEY);
-    _cachedUserSub = normalizeSub(raw);
-    _cachedUserSubAt = now;
-    return _cachedUserSub;
-  } catch {
-    _cachedUserSub = null;
-    _cachedUserSubAt = now;
+    const sub = normalizeSub(raw);
+    if (revision === _userSubCacheRevision) {
+      _cachedUserSub = sub;
+      _cachedUserSubAt = now;
+    }
+    return sub;
+  } catch (error) {
+    if (revision === _userSubCacheRevision) {
+      _cachedUserSub = null;
+      _cachedUserSubAt = 0;
+    }
+    if (strict) throw error;
     return null;
   }
 }
@@ -795,8 +807,9 @@ export async function loadAllProgress(): Promise<Record<string, CardProgress[]>>
 }
 
 export async function resetAllReviewSchedules(now: Date = new Date()): Promise<void> {
+  const sub = (await getActiveUserSub(true)) ?? 'anon';
+  const scope = await getUserScopePrefix(sub);
   const allKeys = await AsyncStorage.getAllKeys();
-  const scope = await getUserScopePrefix();
   const progressKeys = allKeys.filter(
     (k) =>
       k.startsWith(`${scope}${PROGRESS_PREFIX}`) &&
@@ -804,28 +817,29 @@ export async function resetAllReviewSchedules(now: Date = new Date()): Promise<v
   );
 
   const nowMs = now.getTime();
-  const progressPairs = await AsyncStorage.multiGet(progressKeys);
-  const progressWrites: [string, string][] = [];
-
-  for (const [key, raw] of progressPairs) {
-    if (!raw) continue;
-    try {
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) continue;
+  for (const key of progressKeys) {
+    const slug = key.slice(`${scope}${PROGRESS_PREFIX}`.length);
+    // Share the rating/remote-merge lock and read only after its earlier write.
+    const changed = await withProgressLock(slug, sub, async () => {
+      const raw = await AsyncStorage.getItem(key);
+      if (!raw) return false;
+      let parsed: unknown;
+      try { parsed = JSON.parse(raw); } catch { return false; }
+      if (!Array.isArray(parsed)) return false;
+      let changed = false;
       const reset = parsed.map((item: any) => {
         const learned = typeof item?.lastReviewedAt === 'number' && item.lastReviewedAt > 0;
-        if (!learned) return item;
+        if (!learned || item.nextReviewAt === nowMs) return item;
+        changed = true;
         return {
           ...item,
           nextReviewAt: nowMs,
         };
       });
-      progressWrites.push([key, JSON.stringify(reset)]);
-    } catch {}
-  }
-
-  if (progressWrites.length) {
-    await AsyncStorage.multiSet(progressWrites);
+      if (changed) await AsyncStorage.setItem(key, JSON.stringify(reset));
+      return changed;
+    });
+    if (changed) notifyProgressChanged({ userSub: sub, deckSlug: slug });
   }
 
   const dailyKeys = allKeys.filter((k) => k.startsWith(`${scope}${DAILY_PREFIX}`));
