@@ -8,6 +8,8 @@ import renderer, { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 let windowHeightFixture = 844;
+let windowWidthFixture = 390;
+let fontScaleFixture = 1;
 let walletFixture = { availablePulls: 0, reservePulls: 0 };
 let activeSlugFixture: string | null = 'aws-saa-fundamentals';
 let deckSummariesFixture: any[] = [];
@@ -46,7 +48,7 @@ vi.mock('react-native', () => {
         { ...props, onPress },
         typeof children === 'function' ? children({ pressed: false }) : children,
       ),
-    useWindowDimensions: () => ({ width: 390, height: windowHeightFixture, scale: 3, fontScale: 1 }),
+    useWindowDimensions: () => ({ width: windowWidthFixture, height: windowHeightFixture, scale: 3, fontScale: fontScaleFixture }),
     AccessibilityInfo: {
       isReduceMotionEnabled: vi.fn(async () => reduceMotionFixture),
       addEventListener: vi.fn(() => ({ remove: vi.fn() })),
@@ -293,6 +295,8 @@ async function press(node: renderer.ReactTestInstance) {
 describe('HomeScreen cover carousel', () => {
   beforeEach(() => {
     windowHeightFixture = 844;
+    windowWidthFixture = 390;
+    fontScaleFixture = 1;
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
     walletFixture = { availablePulls: 0, reservePulls: 0 };
     activeSlugFixture = 'aws-saa-fundamentals';
@@ -644,6 +648,7 @@ describe('HomeScreen cover carousel', () => {
 
   it('uses a single compact Today summary and smaller artwork on a 375x667 screen', async () => {
     windowHeightFixture = 667;
+    windowWidthFixture = 375;
     const tree = await renderHome();
     expect(hostNodes(tree, (node) => node.props?.testID === 'home-today-compact')).toHaveLength(1);
     expect(hostNodes(tree, (node) => node.props?.testID === 'home-today-count-grid')).toHaveLength(1);
@@ -654,6 +659,62 @@ describe('HomeScreen cover carousel', () => {
     expect(frames.length).toBeGreaterThan(0);
     expect(primaryCtaLabel(tree)).toBeTruthy();
     expect(textOf(tree, 'home-today-count-normal')).toBeDefined();
+  });
+
+  it('lets accessibility text grow naturally on a short screen while the primary action still works', async () => {
+    windowHeightFixture = 667;
+    windowWidthFixture = 375;
+    fontScaleFixture = 3.2;
+    const tree = await renderHome();
+    const flatten = (style: any): any => Array.isArray(style)
+      ? Object.assign({}, ...style.map(flatten)) : style || {};
+    const hero = hostNodes(tree, (node) => node.props?.testID === 'home-hero-title')[0];
+    const caption = hostNodes(tree, (node) => node.props?.testID === 'home-pack-caption')[0];
+    const cta = hostNodes(tree, (node) => node.props?.testID === 'home-primary-cta')[0];
+    const ctaText = cta.find((node) => (node.type as any) === 'Text');
+
+    for (const text of [hero, caption, ctaText,
+      hostNodes(tree, (node) => node.props?.testID === 'home-draw-status-badge')[0]]) {
+      expect(text.props.numberOfLines).toBeUndefined();
+      expect(text.props.allowFontScaling).not.toBe(false);
+      expect(text.props.maxFontSizeMultiplier).toBeUndefined();
+    }
+    expect(hero.props.adjustsFontSizeToFit).toBe(false);
+    expect(flatten(hero.props.style).lineHeight).toBeUndefined();
+    expect(flatten(caption.props.style).lineHeight).toBeUndefined();
+    let titleContainer = hero.parent!;
+    while ((titleContainer.type as any) !== 'View') titleContainer = titleContainer.parent!;
+    expect(flatten(titleContainer.props.style).position).toBeUndefined();
+    expect(hostNodes(tree, (node) => (node.type as any) === 'Text'
+      && node.props.children === '\u00A0\n\u00A0')).toHaveLength(0);
+    const goal = hostNodes(tree, (node) => node.props?.testID === 'home-goal-line')[0];
+    expect(goal.props.numberOfLines).toBeUndefined();
+    let goalContainer = goal.parent!;
+    while ((goalContainer.type as any) !== 'View') goalContainer = goalContainer.parent!;
+    expect(flatten(goalContainer.props.style).position).toBeUndefined();
+
+    await press(cta);
+    expect(navigateMock).toHaveBeenCalledWith('SessionCard', expect.objectContaining({ slug: 'aws-saa-fundamentals' }));
+  });
+
+  it.each([1, 3.2])('keeps the guest cloud-backup link readable and working at font scale %s', async (fontScale) => {
+    windowHeightFixture = 667;
+    windowWidthFixture = 375;
+    fontScaleFixture = fontScale;
+    const tree = await renderHome();
+    const footer = hostNodes(tree, (node) => (node.type as any) === 'Pressable'
+      && node.props.accessibilityLabel === 'Sign in for cloud backup')[0];
+    const label = footer.find((node) => (node.type as any) === 'Text'
+      && node.props.children === 'Sign in for cloud backup');
+    const flatten = (style: any): any => Array.isArray(style)
+      ? Object.assign({}, ...style.map(flatten)) : style || {};
+    expect(label.props.numberOfLines).toBe(fontScale > 1.3 ? undefined : 1);
+    expect(flatten(label.props.style).flexShrink).toBe(fontScale > 1.3 ? 1 : undefined);
+    expect(label.props.allowFontScaling).not.toBe(false);
+    expect(label.props.maxFontSizeMultiplier).toBeUndefined();
+    expect(flatten(footer.props.style).height).toBeUndefined();
+    await press(footer);
+    expect(navigateMock).toHaveBeenCalledWith('SignIn');
   });
 
   it('counts the selected pack once in the hero and avoids a repeated due-count header', async () => {

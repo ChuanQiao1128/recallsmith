@@ -31,6 +31,9 @@ let mockActiveDeckSlug = 'csharp';
 let mockUserScope = '';
 let mockManifestDecks: Array<{ slug: string; title: string; availability: string }> = [];
 let mockDecksBySlug: Record<string, any> = {};
+let fontScaleFixture = 1;
+let windowWidthFixture = 390;
+let windowHeightFixture = 844;
 
 vi.mock('react-native', () => {
   const React = require('react');
@@ -58,7 +61,7 @@ vi.mock('react-native', () => {
         { ...props, onPress },
         typeof children === 'function' ? children({ pressed: false }) : children,
       ),
-    useWindowDimensions: () => ({ width: 390, height: 844 }),
+    useWindowDimensions: () => ({ width: windowWidthFixture, height: windowHeightFixture, fontScale: fontScaleFixture }),
     StyleSheet: { create: (styles: any) => styles },
   };
 });
@@ -163,6 +166,9 @@ describe('LibraryScreen v9', () => {
   beforeEach(() => {
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
     asyncStorageMap.clear();
+    fontScaleFixture = 1;
+    windowWidthFixture = 390;
+    windowHeightFixture = 844;
     invalidateDrawStateCache();
     mockActiveDeckSlug = 'csharp';
     mockUserScope = '';
@@ -199,6 +205,43 @@ describe('LibraryScreen v9', () => {
     const statusOne = tree.root.findByProps({ testID: 'library-card-status-1' });
     const statusOneText = statusOne.find((child: any) => (child.type as any) === 'Text').props.children;
     expect(statusOneText).toBe('Missing');
+  });
+
+  it.each([1, 3.2])('keeps the no-match instruction and reset action readable at font scale %s', async (fontScale) => {
+    fontScaleFixture = fontScale;
+    windowWidthFixture = 375;
+    windowHeightFixture = 667;
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(
+        <LibraryScreen navigation={{ navigate: vi.fn() } as any} route={{ key: 'library', name: 'Library' } as any} />,
+      );
+    });
+    await flush();
+    act(() => tree.root.findByProps({ testID: 'library-search' }).props.onChangeText('no matching question'));
+    const empty = tree.root.findByProps({ testID: 'library-empty-state' });
+    const texts = empty.findAll((node) => (node.type as any) === 'Text');
+    expect(texts.map((text) => text.props.children)).toEqual([
+      'Nothing matches', 'Try clearing the filter or pick another deck.', 'Reset filters',
+    ]);
+    const large = fontScale > 1.3;
+    expect(texts.map((text) => text.props.numberOfLines)).toEqual(large ? [undefined, undefined, undefined] : [2, 2, 1]);
+    const flatten = (style: any): any => Array.isArray(style)
+      ? Object.assign({}, ...style.map(flatten)) : style || {};
+    const reset = empty.findByProps({ testID: 'library-empty-cta' });
+    const resetStyle = typeof reset.props.style === 'function' ? reset.props.style({ pressed: false }) : reset.props.style;
+    expect(flatten(resetStyle).alignSelf).toBe(large ? 'stretch' : undefined);
+    expect(flatten(resetStyle).height).toBeUndefined();
+    for (const text of texts) {
+      expect(text.props.allowFontScaling).not.toBe(false);
+      expect(text.props.maxFontSizeMultiplier).toBeUndefined();
+    }
+    act(() => reset.props.onPress());
+    await flush();
+    expect(tree.root.findByProps({ testID: 'library-search' }).props.value).toBe('');
+    expect(tree.root.findByProps({ testID: 'library-filter-chip-all' }).props.accessibilityState.selected).toBe(true);
+    expect(tree.root.findByProps({ testID: 'library-card-grid' }).props.data).toHaveLength(3);
+    expect(tree.root.findAllByProps({ testID: 'library-empty-state' })).toHaveLength(0);
   });
 
   it('keeps common filters visible and puts rarity filters in the additional panel', async () => {
