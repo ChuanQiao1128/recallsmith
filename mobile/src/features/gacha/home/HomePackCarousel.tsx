@@ -7,6 +7,7 @@ import type { HomeDeckVM } from '../selectors/homeSelectors';
 import type { PackPalette } from '../../../theme/packArt';
 import { colors } from '../../../theme/colors';
 import { typography } from '../../../theme/typography';
+import { isLargeFontScale, useFontScale } from '../../../theme/dynamicType';
 
 // 2026-10-18 home carousel: Home's cover is a horizontal swipe carousel, one page per visible pack
 // in DECK_ORDER, no wrap. The current page is the tappable cover (testID home-featured-pack, the
@@ -173,6 +174,7 @@ export default function HomePackCarousel({
   onFeaturedPress,
   onSelectPage,
 }: Props) {
+  const largeText = isLargeFontScale(useFontScale());
   const { width: rawWidth } = useWindowDimensionsSafe() ?? {};
   const windowWidth =
     typeof rawWidth === 'number' && Number.isFinite(rawWidth) && rawWidth > 0 ? rawWidth : FALLBACK_WINDOW_WIDTH;
@@ -360,10 +362,11 @@ export default function HomePackCarousel({
                     pointerEvents="none"
                     style={[
                       styles.updateChip,
+                      largeText && styles.updateChipLargeText,
                       page.realRow.update.state === 'updating' && styles.updateChipUpdating,
                     ]}
                   >
-                    <Text style={[styles.updateChipText, page.realRow.update.state === 'updating' && styles.updateChipTextUpdating]} numberOfLines={2}>
+                    <Text style={[styles.updateChipText, largeText && styles.naturalLineHeight, page.realRow.update.state === 'updating' && styles.updateChipTextUpdating]} numberOfLines={largeText ? undefined : 2}>
                       {page.realRow.update.chipLabel}
                     </Text>
                   </View>
@@ -374,7 +377,7 @@ export default function HomePackCarousel({
         })}
       </ScrollView>
       {current?.realRow ? (
-        <Text testID="home-pack-caption" style={styles.caption} numberOfLines={1}>
+        <Text testID="home-pack-caption" style={[styles.caption, largeText && styles.captionLargeText]} numberOfLines={largeText ? undefined : 1}>
           {current.shortTitle}
         </Text>
       ) : null}
@@ -481,6 +484,8 @@ const styles = StyleSheet.create({
   updateChipUpdating: {
     backgroundColor: colors.inkSecondary,
   },
+  updateChipLargeText: { position: 'relative', bottom: undefined, maxWidth: HOME_PACK_PAGE_WIDTH, marginTop: 8 },
+  naturalLineHeight: { lineHeight: undefined },
   updateChipText: {
     color: colors.ink,
     fontSize: typography.caption,
@@ -498,6 +503,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
     textAlign: 'center',
   },
+  captionLargeText: { alignSelf: 'stretch', lineHeight: undefined },
   dots: {
     flexDirection: 'row',
     justifyContent: 'center',

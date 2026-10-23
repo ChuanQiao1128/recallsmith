@@ -33,6 +33,7 @@ import {
 } from '../features/gacha/home/deckActionResolver';
 import HomeDeckRow from '../features/gacha/home/HomeDeckRow';
 import HomePackCarousel, { type HomePackPage } from '../features/gacha/home/HomePackCarousel';
+import { isLargeFontScale, useFontScale } from '../theme/dynamicType';
 import {
   buildReadyHomeVm,
   createCoalescedRunner,
@@ -164,6 +165,7 @@ const useHomeWindowDimensions: () => { height?: number } = (() => {
 
 export function HomeScreen({ navigation, route }: Props) {
   const compactHome = (useHomeWindowDimensions().height ?? 844) <= 700;
+  const largeText = isLargeFontScale(useFontScale());
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [deckOpen, setDeckOpen] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
@@ -767,7 +769,7 @@ export function HomeScreen({ navigation, route }: Props) {
                 soft pill, not a blocking modal. */}
             {notice ? (
               <View style={styles.homeNoticeToast}>
-                <Text style={styles.homeNoticeText} numberOfLines={2}>
+                <Text style={[styles.homeNoticeText, largeText && styles.naturalLineHeight]} numberOfLines={largeText ? undefined : 2}>
                   {notice === 'notifications-denied'
                     ? "Notifications off. You can turn them on later in Settings."
                     : "We won't send reminders for now. Change anytime in Settings."}
@@ -780,15 +782,15 @@ export function HomeScreen({ navigation, route }: Props) {
                 otherwise a status that agrees with the hero. */}
             <View style={[styles.headerRow, compactHome && styles.headerRowCompact]}>
               <View style={styles.headerTextWrap}>
-                <Text style={styles.title} numberOfLines={1}>
+                <Text style={styles.title} numberOfLines={largeText ? undefined : 1}>
                   DeveloperCards
                 </Text>
                 {examCountdownLabel ? (
-                  <Text testID="home-exam-countdown" style={styles.headerStatusSubtitle} numberOfLines={1}>
+                  <Text testID="home-exam-countdown" style={styles.headerStatusSubtitle} numberOfLines={largeText ? undefined : 1}>
                     {examCountdownLabel}
                   </Text>
                 ) : headerStatus && selectedDueToday === 0 ? (
-                  <Text testID="home-header-subtitle" style={styles.headerStatusSubtitle} numberOfLines={1}>
+                  <Text testID="home-header-subtitle" style={styles.headerStatusSubtitle} numberOfLines={largeText ? undefined : 1}>
                     {headerStatus}
                   </Text>
                 ) : (
@@ -806,7 +808,7 @@ export function HomeScreen({ navigation, route }: Props) {
                 )}
                 {/* U5: the goal deck's daily target under the countdown (one line, only with a date). */}
                 {examCountdownLabel && examPaceLine ? (
-                  <Text testID="home-exam-pace" style={styles.headerStatusSubtitle} numberOfLines={1}>
+                  <Text testID="home-exam-pace" style={styles.headerStatusSubtitle} numberOfLines={largeText ? undefined : 1}>
                     {examPaceLine}
                   </Text>
                 ) : null}
@@ -814,7 +816,7 @@ export function HomeScreen({ navigation, route }: Props) {
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Settings"
-                style={({ pressed }) => [styles.settingsIcon, pressed && styles.pressed]}
+                style={({ pressed }) => [styles.settingsIcon, largeText && styles.settingsIconLargeText, pressed && styles.pressed]}
                 onPress={() => navigation.navigate('Settings')}
               >
                 <Text style={styles.settingsText}>⚙︎</Text>
@@ -940,24 +942,25 @@ export function HomeScreen({ navigation, route }: Props) {
                         name. "12 cards waiting" beats "C#" every time; the
                         count is the selected pack's.
                         R22 §5: two lines, shrinking rather than cutting off.
-                        The box is always two lines tall (an invisible two-line
+                        At standard sizes the box is two lines tall (an invisible two-line
                         spacer in the same style, so it follows Dynamic Type)
                         and a one-line title sits centred in it: swiping
-                        between packs never moves the button below. */}
+                        between packs never moves the button below. Accessibility
+                        sizes use natural height so the full title can wrap. */}
                     <View style={styles.heroTitleBox}>
-                      <Text
+                      {!largeText ? <Text
                         style={[styles.heroTitle, compactHome && styles.heroTitleCompact, styles.heroTitleSpacer]}
                         accessibilityElementsHidden
                         importantForAccessibility="no-hide-descendants"
                       >
                         {'\u00A0\n\u00A0'}
-                      </Text>
-                      <View style={styles.heroTitleCentre}>
+                      </Text> : null}
+                      <View style={!largeText && styles.heroTitleCentre}>
                         <Text
                           testID="home-hero-title"
-                          style={[styles.heroTitle, compactHome && styles.heroTitleCompact]}
-                          numberOfLines={2}
-                          adjustsFontSizeToFit
+                          style={[styles.heroTitle, compactHome && styles.heroTitleCompact, largeText && styles.naturalLineHeight]}
+                          numberOfLines={largeText ? undefined : 2}
+                          adjustsFontSizeToFit={!largeText}
                           minimumFontScale={0.75}
                         >
                           {heroTitle}
@@ -974,6 +977,7 @@ export function HomeScreen({ navigation, route }: Props) {
                       accessibilityRole="button"
                       style={({ pressed }) => [
                         styles.primaryCta,
+                        largeText && styles.primaryCtaLargeText,
                         compactHome && styles.primaryCtaCompact,
                         primaryCtaDisabled && styles.primaryCtaDisabled,
                         pressed && styles.pressed,
@@ -983,7 +987,7 @@ export function HomeScreen({ navigation, route }: Props) {
                         void handlePrimaryCta();
                       }}
                     >
-                      <Text style={styles.primaryCtaText} numberOfLines={1}>
+                      <Text style={styles.primaryCtaText} numberOfLines={largeText ? undefined : 1}>
                         {primaryCtaLabel}
                       </Text>
                     </Pressable>
@@ -991,7 +995,7 @@ export function HomeScreen({ navigation, route }: Props) {
                   <Text
                     testID="home-draw-status-badge"
                     style={styles.rewardStatusText}
-                    numberOfLines={1}
+                    numberOfLines={largeText ? undefined : 1}
                   >
                     {homeState.vm.draw.label || '\u00A0'}
                   </Text>
@@ -1003,7 +1007,7 @@ export function HomeScreen({ navigation, route }: Props) {
                     {!compactHome ? (
                       <TodayPressureCard counts={homeState.vm.counts} selectedDeckTitle={homeState.vm.selectedDeckTitle} />
                     ) : null}
-                    {/* One fixed line under the Today card, about the selected pack:
+                    {/* A stable line at standard sizes, natural height at accessibility sizes:
                         the update notice while a newer build exists ("Updating …"
                         while the free-deck auto-installer runs, or the manual
                         fallback, "tap the pack to install"), otherwise the goal
@@ -1018,15 +1022,15 @@ export function HomeScreen({ navigation, route }: Props) {
                         the update is installed, from the cover or on the next
                         launch. */}
                     <View testID="home-below-today-slot" style={styles.belowTodaySlot}>
-                      <Text
+                      {!largeText ? <Text
                         style={[styles.updateNotice, styles.belowTodaySpacer]}
                         numberOfLines={1}
                         accessibilityElementsHidden
                         importantForAccessibility="no-hide-descendants"
                       >
                         {'\u00A0'}
-                      </Text>
-                      <View style={styles.belowTodayLine}>
+                      </Text> : null}
+                      <View style={!largeText && styles.belowTodayLine}>
                         {homeState.vm.updateNotice ? (
                           <Text
                             testID="home-update-notice"
@@ -1035,7 +1039,7 @@ export function HomeScreen({ navigation, route }: Props) {
                               styles.belowTodayContent,
                               homeState.vm.updateNotice.state === 'updating' && styles.updateNoticeUpdating,
                             ]}
-                            numberOfLines={1}
+                            numberOfLines={largeText ? undefined : 1}
                           >
                             {homeState.vm.updateNotice.text}
                           </Text>
@@ -1043,7 +1047,7 @@ export function HomeScreen({ navigation, route }: Props) {
                           <Text
                             testID="home-goal-line"
                             style={[styles.goalLine, styles.belowTodayContent]}
-                            numberOfLines={1}
+                            numberOfLines={largeText ? undefined : 1}
                           >
                             {homeState.vm.goal.text}
                           </Text>
@@ -1052,7 +1056,7 @@ export function HomeScreen({ navigation, route }: Props) {
                     </View>
                     {homeState.error ? (
                       <View style={styles.errorBlock}>
-                        <Text style={styles.errorText} numberOfLines={3}>
+                        <Text style={[styles.errorText, largeText && styles.naturalLineHeight]} numberOfLines={largeText ? undefined : 3}>
                           {homeState.error}
                         </Text>
                         <Pressable
@@ -1061,7 +1065,7 @@ export function HomeScreen({ navigation, route }: Props) {
                           style={({ pressed }) => [styles.errorRetryPill, pressed && styles.pressed]}
                           onPress={() => void refreshHome()}
                         >
-                          <Text style={styles.errorRetryText} numberOfLines={1}>
+                          <Text style={styles.errorRetryText} numberOfLines={largeText ? undefined : 1}>
                             Try again
                           </Text>
                         </Pressable>
@@ -1176,7 +1180,7 @@ export function HomeScreen({ navigation, route }: Props) {
                 accessibilityLabel="Sign in for cloud backup"
                 onPress={() => navigation.navigate('SignIn')}
               >
-                <Text style={styles.footerLinkText} numberOfLines={1}>
+                <Text style={[styles.footerLinkText, largeText && styles.footerLinkTextLargeText]} numberOfLines={largeText ? undefined : 1}>
                   Sign in for cloud backup
                 </Text>
                 <Text style={styles.footerLinkArrow} numberOfLines={1}>
@@ -1198,7 +1202,9 @@ const styles = StyleSheet.create({
   headerRowCompact: { marginBottom: 4 },
   heroBandCompact: { paddingTop: 0, paddingBottom: 0 },
   heroTitleCompact: { fontSize: 19, lineHeight: 24 },
+  naturalLineHeight: { lineHeight: undefined },
   primaryCtaCompact: { marginTop: spacing.xs },
+  primaryCtaLargeText: { paddingVertical: spacing.sm },
   loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   loadingText: { marginTop: spacing.sm, color: colors.inkSecondary, fontSize: typography.body },
   pressed: { opacity: 0.9 },
@@ -1228,6 +1234,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   settingsIcon: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: HOME_TOKENS.border, backgroundColor: HOME_TOKENS.iconBg },
+  settingsIconLargeText: { width: undefined, height: undefined, minWidth: 44, minHeight: 44, padding: 8 },
   settingsText: { color: colors.ink, fontSize: 18 },
   // Legacy alias kept for any code paths still referencing primaryCard
   // styling; the new hero uses heroBand.
@@ -1333,7 +1340,7 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   primaryCtaDisabled: { opacity: 0.45 },
-  primaryCtaText: { color: colors.ink, fontSize: typography.button, fontWeight: '900', letterSpacing: 0.4 },
+  primaryCtaText: { color: colors.ink, fontSize: typography.button, fontWeight: '900', letterSpacing: 0.4, textAlign: 'center' },
   // Draw status sits under the CTA as a quiet centered line — no pill, no
   // dot, no extra color. The CTA is loud, this is a label.
   rewardStatusText: {
@@ -1407,6 +1414,7 @@ const styles = StyleSheet.create({
     color: colors.inkMuted,
     letterSpacing: 0.3,
   },
+  footerLinkTextLargeText: { flexShrink: 1, textAlign: 'center' },
   footerLinkArrow: {
     fontSize: 16,
     color: colors.inkMuted,

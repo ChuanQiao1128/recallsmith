@@ -46,13 +46,15 @@ import { resolveEffectiveOwned } from '../features/gacha/draw/effectiveOwned';
 import type { DeckExport } from '../types/deckExport';
 import type { CardProgress } from '../review/model';
 import { colors } from '../theme/colors';
+import { isLargeFontScale } from '../theme/dynamicType';
 import { ensureDeckBootstrap, loadDeckWallet } from '../features/gacha/rewards/deckWallet';
 import { loadMistakeBook, resolveActiveMistakeRows } from '../features/gacha/mistakes/mistakeBook';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Library'>;
 
 export function LibraryScreen({ navigation, route }: Props) {
-  const { width } = useWindowDimensions();
+  const { width, fontScale } = useWindowDimensions();
+  const largeText = isLargeFontScale(fontScale);
   const listRef = useRef<any>(null);
   // Debounce — when the user rapidly tab-swaps to Library and back,
   // skip refetching if the last successful refresh was within 1.5s.
@@ -579,23 +581,23 @@ export function LibraryScreen({ navigation, route }: Props) {
             }
             ListEmptyComponent={
               <View style={styles.emptyState} testID="library-empty-state">
-                <Text style={styles.errorTitle} numberOfLines={2}>
+                <Text style={styles.errorTitle} numberOfLines={largeText ? undefined : 2}>
                   {isCollectionComplete ? 'Collection complete' : 'Nothing matches'}
                 </Text>
-                <Text style={styles.errorBody} numberOfLines={2}>
+                <Text style={styles.errorBody} numberOfLines={largeText ? undefined : 2}>
                   {isCollectionComplete
                     ? "You've got every card in this pack."
                     : 'Try clearing the filter or pick another deck.'}
                 </Text>
                 <Pressable
-                  style={({ pressed }) => [styles.retryButton, pressed && styles.pressed]}
+                  style={({ pressed }) => [styles.retryButton, largeText && styles.emptyActionLargeText, pressed && styles.pressed]}
                   onPress={() => {
                     setFilter('all'); setTopicFilter(null); setSearchQuery('');
                     if (preferenceKeyRef.current) void saveLibraryFilter(preferenceKeyRef.current, 'all');
                   }}
                   testID="library-empty-cta"
                 >
-                  <Text style={styles.retryText} numberOfLines={1}>
+                  <Text style={[styles.retryText, largeText && styles.emptyActionTextLargeText]} numberOfLines={largeText ? undefined : 1}>
                     {isCollectionComplete ? 'Back to all' : 'Reset filters'}
                   </Text>
                 </Pressable>

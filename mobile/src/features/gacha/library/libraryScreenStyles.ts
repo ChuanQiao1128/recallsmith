@@ -52,6 +52,8 @@ export const libraryStyles = StyleSheet.create({
     justifyContent: 'center',
   },
   retryText: { color: colors.parchmentBg, fontSize: typography.button, fontWeight: '800' },
+  emptyActionLargeText: { alignSelf: 'stretch', paddingVertical: spacing.xs },
+  emptyActionTextLargeText: { textAlign: 'center' },
   mistakesPill: {
     marginTop: spacing.sm,
     alignSelf: 'flex-start',

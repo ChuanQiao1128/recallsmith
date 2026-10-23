@@ -3,15 +3,15 @@ import renderer, { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TodayCounts } from '../../src/features/gacha/contracts';
 
-const viewport = vi.hoisted(() => ({ width: 390 }));
-beforeEach(() => { viewport.width = 390; });
+const viewport = vi.hoisted(() => ({ width: 390, fontScale: 1 }));
+beforeEach(() => { viewport.width = 390; viewport.fontScale = 1; });
 
 vi.mock('react-native', () => {
   const React = require('react');
   return {
     View: ({ children, ...props }: any) => React.createElement('View', props, children),
     Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
-    useWindowDimensions: () => ({ width: viewport.width, height: 844, scale: 3, fontScale: 1 }),
+    useWindowDimensions: () => ({ width: viewport.width, height: 844, scale: 3, fontScale: viewport.fontScale }),
     StyleSheet: { create: (styles: any) => styles },
   };
 });
@@ -51,6 +51,27 @@ function tileValues(tree: renderer.ReactTestRenderer): Record<string, string> {
 }
 
 describe('TodayPressureCard', () => {
+  it.each([true, false])('stacks the values and leaves full labels readable at accessibility sizes, compact=%s', async (compact) => {
+    viewport.width = 375;
+    viewport.fontScale = 3.2;
+    const tree = await render(counts({ selectedDue: 123, selectedNew: 42, selectedMastered: 334, selectedOwned: 441 }), compact);
+    const flatten = (style: any): any => Array.isArray(style)
+      ? Object.assign({}, ...style.map(flatten)) : style || {};
+    expect(tileValues(tree)).toEqual({ Due: '123', New: '42', Learned: '334', Collected: '441' });
+    for (const id of ['normal', 'elite', 'boss', 'total']) {
+      const tile = tree.root.findByProps({ testID: `home-today-count-${id}` });
+      expect(flatten(tile.props.style).flex).toBeUndefined();
+      let row = tile.parent!;
+      while ((row.type as any) !== 'View') row = row.parent!;
+      expect(flatten(row.props.style).flexDirection).toBe('column');
+      for (const text of tile.findAll((node) => (node.type as any) === 'Text')) {
+        expect(text.props.numberOfLines).toBeUndefined();
+        expect(text.props.allowFontScaling).not.toBe(false);
+        expect(text.props.maxFontSizeMultiplier).toBeUndefined();
+      }
+    }
+  });
+
   it.each([{ width: 375, compact: false }, { width: 390, compact: false }, { width: 375, compact: true }])(
     'separates available cards from cumulative totals at $width, compact=$compact', async ({ width, compact }) => {
       viewport.width = width;

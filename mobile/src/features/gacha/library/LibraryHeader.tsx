@@ -1,5 +1,6 @@
 import React from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import type { StyleProp, ViewStyle } from 'react-native';
 
 import type { LibraryDeckOption, LibraryFilter, LibraryFilterChip, LibraryTopicChip } from './libraryMapper';
 import { libraryStyles as styles } from './libraryScreenStyles';
@@ -8,13 +9,14 @@ import { colors } from '../../../theme/colors';
 import { spacing } from '../../../theme/spacing';
 import { typography } from '../../../theme/typography';
 import { COLLECTION_COPY } from '../copy/collectionCopy';
+import { isLargeFontScale, useFontScale } from '../../../theme/dynamicType';
 
 // Progress ring using the classic two-half rotation trick (no SVG dep).
 // Renders the unfilled portion as a hairline track and the filled
 // portion as a gold arc proportional to pct (0–100). Centered child is
 // the percentage label (passed via children).
-function ProgressRing({ pct, children }: { pct: number; children: React.ReactNode }) {
-  const SIZE = 54;
+function ProgressRing({ pct, fontScale, children }: { pct: number; fontScale: number; children: React.ReactNode }) {
+  const SIZE = 54 * Math.max(1, fontScale);
   const STROKE = 3;
   const clamp = Math.max(0, Math.min(100, pct));
   const angle1 = clamp <= 50 ? (clamp / 50) * 180 : 180;
@@ -50,6 +52,7 @@ function ProgressRing({ pct, children }: { pct: number; children: React.ReactNod
 
   return (
     <View
+      testID="library-progress-ring"
       style={[
         ringStyle,
         { alignItems: 'center', justifyContent: 'center', backgroundColor: colors.softCream },
@@ -103,6 +106,22 @@ function ProgressRing({ pct, children }: { pct: number; children: React.ReactNod
         {children}
       </View>
     </View>
+  );
+}
+
+// Accessibility sizes need bounded chips that wrap; normal sizes keep the horizontal rails.
+function ChipRow({ largeText, children, contentStyle, testID }: {
+  largeText: boolean;
+  children: React.ReactNode;
+  contentStyle: StyleProp<ViewStyle>;
+  testID?: string;
+}) {
+  return largeText ? (
+    <View testID={testID} style={[contentStyle, headerStyles.wrappedChips]}>{children}</View>
+  ) : (
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={contentStyle} testID={testID}>
+      {children}
+    </ScrollView>
   );
 }
 
@@ -170,6 +189,8 @@ export function LibraryHeader({
   onOpenFirstPack,
   openFirstPackHasPulls = false,
 }: Props) {
+  const fontScale = useFontScale();
+  const largeText = isLargeFontScale(fontScale);
   const advancedFilter = filters.find((chip) => chip.key === filter && (chip.key === 'rare' || chip.key === 'legendary'));
   const activeTopic = topics.find((chip) => chip.key === topicFilter && chip.key !== 'all');
   const additionalFilterCount = Number(!!advancedFilter) + Number(!!activeTopic);
@@ -196,10 +217,10 @@ export function LibraryHeader({
           onPress={() => onOpenFirstPack?.()}
         >
           <View style={styles.emptyCollectionBannerTextWrap}>
-            <Text style={styles.emptyCollectionBannerEyebrow} numberOfLines={1}>
+            <Text style={styles.emptyCollectionBannerEyebrow} numberOfLines={largeText ? undefined : 1}>
               {COLLECTION_COPY.libraryEmptyEyebrow}
             </Text>
-            <Text style={styles.emptyCollectionBannerTitle} numberOfLines={2}>
+            <Text style={[styles.emptyCollectionBannerTitle, largeText && headerStyles.naturalLineHeight]} numberOfLines={largeText ? undefined : 2}>
               {bannerTitle}
             </Text>
           </View>
@@ -210,19 +231,19 @@ export function LibraryHeader({
       ) : null}
 
       {/* TOP — Pokedex-style title bar with collection counter "ring" */}
-      <View style={styles.headerTopBar}>
-        <View style={styles.headerTitleColumn}>
-          <Text style={styles.headerEyebrow} numberOfLines={1}>
+      <View testID="library-header-top-bar" style={[styles.headerTopBar, largeText && headerStyles.stackedHeader]}>
+        <View style={[styles.headerTitleColumn, largeText && headerStyles.fullWidthTitle]}>
+          <Text style={styles.headerEyebrow} numberOfLines={largeText ? undefined : 1}>
             {COLLECTION_COPY.libraryEyebrow}
           </Text>
-          <Text style={styles.title} numberOfLines={2}>
+          <Text testID="library-title" style={styles.title} numberOfLines={largeText ? undefined : 2}>
             {title}
           </Text>
         </View>
         {/* Collection counter — Pokeball-style ring with the ratio inside.
             testID is on the ratio Text so existing tests can read children. */}
-        <View style={styles.headerCounter}>
-          <ProgressRing pct={pct}>
+        <View style={[styles.headerCounter, largeText && headerStyles.counterLargeText]}>
+          <ProgressRing pct={pct} fontScale={fontScale}>
             <Text style={styles.headerCounterPct} numberOfLines={1}>
               {pct}%
             </Text>
@@ -230,7 +251,7 @@ export function LibraryHeader({
           <Text
             testID="library-collection-bar"
             style={styles.headerCounterRatio}
-            numberOfLines={1}
+            numberOfLines={largeText ? undefined : 1}
           >
             {`${ownedCount}/${totalCount}`}
           </Text>
@@ -242,10 +263,10 @@ export function LibraryHeader({
           testID="library-sweep-cta"
           accessibilityRole="button"
           accessibilityLabel="Review all learned cards"
-          style={({ pressed }) => [styles.retryButton, pressed && styles.pressed]}
+          style={({ pressed }) => [styles.retryButton, largeText && headerStyles.roomyButton, pressed && styles.pressed]}
           onPress={onStartSweep}
         >
-          <Text style={styles.retryText} numberOfLines={1}>
+          <Text style={[styles.retryText, headerStyles.centredText]} numberOfLines={largeText ? undefined : 1}>
             {`Review all · ${sweepCount}`}
           </Text>
         </Pressable>
@@ -258,10 +279,10 @@ export function LibraryHeader({
               testID="library-mistakes-pill"
               accessibilityRole="button"
               accessibilityLabel={`Open Mistake Book, ${mistakeCount} mistake${mistakeCount === 1 ? '' : 's'}`}
-              style={({ pressed }) => [styles.mistakesPill, pressed && styles.pressed]}
+              style={({ pressed }) => [styles.mistakesPill, largeText && headerStyles.boundedChip, pressed && styles.pressed]}
               onPress={onOpenMistakes}
             >
-              <Text style={styles.mistakesPillText} numberOfLines={1}>
+              <Text style={styles.mistakesPillText} numberOfLines={largeText ? undefined : 1}>
                 {`Mistakes · ${mistakeCount}`}
               </Text>
             </Pressable>
@@ -271,10 +292,10 @@ export function LibraryHeader({
               testID="library-domains-link"
               accessibilityRole="button"
               accessibilityLabel="Open Progress by domain"
-              style={({ pressed }) => [headerStyles.domainsLink, pressed && styles.pressed]}
+              style={({ pressed }) => [headerStyles.domainsLink, largeText && headerStyles.boundedChip, pressed && styles.pressed]}
               onPress={onOpenDomains}
             >
-              <Text style={headerStyles.domainsLinkText} numberOfLines={1}>
+              <Text style={headerStyles.domainsLinkText} numberOfLines={largeText ? undefined : 1}>
                 By domain
               </Text>
             </Pressable>
@@ -282,12 +303,11 @@ export function LibraryHeader({
         </View>
       ) : null}
 
-      {/* Deck switcher — horizontal scroll instead of wrap-grid */}
+      {/* Keep the compact horizontal switcher; accessibility sizes wrap below the title. */}
       {deckOptions.length > 1 ? (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.deckSwitcherScroll}
+        <ChipRow
+          largeText={largeText}
+          contentStyle={styles.deckSwitcherScroll}
           testID="library-deck-switcher"
         >
           {deckOptions.map((option) => {
@@ -300,18 +320,19 @@ export function LibraryHeader({
                 accessibilityState={{ selected: active }}
                 style={({ pressed }) => [
                   styles.deckChip,
+                  largeText && headerStyles.boundedChip,
                   active && styles.deckChipActive,
                   pressed && styles.pressed,
                 ]}
                 onPress={() => onSelectDeck(option.slug)}
               >
-                <Text style={[styles.deckChipText, active && styles.deckChipTextActive]} numberOfLines={1}>
+                <Text style={[styles.deckChipText, active && styles.deckChipTextActive]} numberOfLines={largeText ? undefined : 1}>
                   {option.title}
                 </Text>
               </Pressable>
             );
           })}
-        </ScrollView>
+        </ChipRow>
       ) : null}
 
 
@@ -328,7 +349,7 @@ export function LibraryHeader({
         clearButtonMode="while-editing"
         style={headerStyles.search}
       />
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterChipsRow}>
+      <ChipRow largeText={largeText} contentStyle={styles.filterChipsRow} testID="library-filter-chips">
         {filters.filter((chip) => chip.key !== 'rare' && chip.key !== 'legendary').map((chip) => {
           const active = chip.key === filter;
           return (
@@ -337,10 +358,10 @@ export function LibraryHeader({
               testID={`library-filter-chip-${chip.key}`}
               accessibilityRole="button"
               accessibilityState={{ selected: active }}
-              style={({ pressed }) => [styles.filterChip, active && styles.filterChipActive, pressed && styles.pressed]}
+              style={({ pressed }) => [styles.filterChip, largeText && headerStyles.boundedChip, active && styles.filterChipActive, pressed && styles.pressed]}
               onPress={() => onSelectFilter(chip.key)}
             >
-              <Text style={[styles.filterChipText, active && styles.filterChipTextActive]} numberOfLines={1}>
+              <Text style={[styles.filterChipText, active && styles.filterChipTextActive]} numberOfLines={largeText ? undefined : 1}>
                 {active ? `${chip.label} · ${chip.count}` : chip.label}
               </Text>
             </Pressable>
@@ -351,14 +372,14 @@ export function LibraryHeader({
           accessibilityRole="button"
           accessibilityState={{ expanded: filterOpen, selected: additionalFilterCount > 0 }}
           accessibilityLabel={filterOpen ? 'Hide topics and advanced filters' : 'Show topics and advanced filters'}
-          style={({ pressed }) => [styles.filterChip, additionalFilterCount > 0 && styles.filterChipActive, pressed && styles.pressed]}
+          style={({ pressed }) => [styles.filterChip, largeText && headerStyles.boundedChip, additionalFilterCount > 0 && styles.filterChipActive, pressed && styles.pressed]}
           onPress={onToggleFilterOpen}
         >
           <Text style={[styles.filterChipText, additionalFilterCount > 0 && styles.filterChipTextActive]}>
             {filterOpen ? 'Hide filters' : `More filters${additionalFilterCount ? ` · ${additionalFilterCount} active` : ''}`}
           </Text>
         </Pressable>
-      </ScrollView>
+      </ChipRow>
       {!filterOpen && additionalFilterCount > 0 ? (
         <View testID="library-active-filters" style={headerStyles.pillRow}>
           {activeTopic ? (
@@ -389,10 +410,9 @@ export function LibraryHeader({
         <View style={headerStyles.moreFilters} testID="library-filter-sheet">
           {topics.length > 0 ? <Text style={headerStyles.filterLabel}>Topic</Text> : null}
           {topics.length > 0 ? (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.filterChipsRow}
+            <ChipRow
+              largeText={largeText}
+              contentStyle={styles.filterChipsRow}
               testID="library-topic-chips"
             >
               {topics.map((chip) => {
@@ -405,18 +425,19 @@ export function LibraryHeader({
                     accessibilityState={{ selected: active }}
                     style={({ pressed }) => [
                       styles.filterChip,
+                      largeText && headerStyles.boundedChip,
                       active && styles.filterChipActive,
                       pressed && styles.pressed,
                     ]}
                     onPress={() => onSelectTopic(chip.key)}
                   >
-                    <Text style={[styles.filterChipText, active && styles.filterChipTextActive]} numberOfLines={1}>
+                    <Text style={[styles.filterChipText, active && styles.filterChipTextActive]} numberOfLines={largeText ? undefined : 1}>
                       {active ? `${chip.label} · ${chip.count}` : chip.label}
                     </Text>
                   </Pressable>
                 );
               })}
-            </ScrollView>
+            </ChipRow>
           ) : null}
 
           <Text style={headerStyles.filterLabel}>Rarity</Text>
@@ -427,7 +448,7 @@ export function LibraryHeader({
                 testID={`library-sheet-filter-${chip.key}`}
                 accessibilityRole="button"
                 accessibilityState={{ selected: chip.key === filter }}
-                style={({ pressed }) => [styles.filterChip, chip.key === filter && styles.filterChipActive, pressed && styles.pressed]}
+                style={({ pressed }) => [styles.filterChip, largeText && headerStyles.boundedChip, chip.key === filter && styles.filterChipActive, pressed && styles.pressed]}
                 onPress={() => onSelectFilter(chip.key)}
               >
                 <Text style={[styles.filterChipText, chip.key === filter && styles.filterChipTextActive]}>
@@ -444,6 +465,14 @@ export function LibraryHeader({
 
 // Kept here rather than in libraryScreenStyles: only the header's pill row uses them.
 const headerStyles = StyleSheet.create({
+  stackedHeader: { flexDirection: 'column', alignItems: 'stretch', gap: spacing.sm },
+  fullWidthTitle: { flex: undefined, paddingRight: 0 },
+  counterLargeText: { alignSelf: 'flex-start', maxWidth: '100%' },
+  wrappedChips: { flexWrap: 'wrap', paddingRight: 0 },
+  boundedChip: { maxWidth: '100%', paddingVertical: spacing.xs },
+  roomyButton: { paddingVertical: spacing.xs },
+  naturalLineHeight: { lineHeight: undefined },
+  centredText: { textAlign: 'center' },
   pillRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.xs },
   search: {
     minHeight: a11y.minTouch, borderWidth: 1, borderColor: colors.hairline,
