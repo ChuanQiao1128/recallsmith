@@ -44,7 +44,7 @@ const challenge = buildChallengeRoute({
 assert.equal(challenge.minimumGoal, 1);
 assert.equal(challenge.limit, 5);
 assert.equal(challenge.nodes[challenge.nodes.length - 1]?.role, 'boss');
-assert.match(challenge.summary, /keep momentum/i);
+assert.match(challenge.summary, /clear 1 card to keep your streak/i);
 
 const maintenanceChallenge = buildChallengeRoute({
   slug: 'csharp',
@@ -55,7 +55,7 @@ const maintenanceChallenge = buildChallengeRoute({
 });
 assert.equal(maintenanceChallenge.limit, 1);
 assert.equal(maintenanceChallenge.nodes[0]?.role, 'warmup');
-assert.match(maintenanceChallenge.summary, /maintenance run/i);
+assert.match(maintenanceChallenge.summary, /maintenance session/i);
 
 const emptyChallenge = buildChallengeRoute({
   slug: 'csharp',
@@ -155,7 +155,7 @@ const reward = resolveSessionReward({
 assert.equal(reward.completedFullRun, true);
 // economy-v2: the pull is paid per rating; a full run only decides the title.
 assert.equal(reward.rewardPulls, 1);
-assert.match(reward.rewardMessage, /\+1 pull/i);
+assert.match(reward.rewardMessage, /\+1 draw/i);
 
 const minimumReward = resolveSessionReward({
   sessionDone: 1,
@@ -176,7 +176,7 @@ const minimumReward = resolveSessionReward({
 assert.equal(minimumReward.completedMinimumGoal, true);
 assert.equal(minimumReward.completedFullRun, false);
 assert.equal(minimumReward.rewardPulls, 1);
-assert.match(minimumReward.rewardMessage, /pending in reserve/i);
+assert.match(minimumReward.rewardMessage, /5 extra waiting/i);
 
 const summary = buildSessionSummaryVM({
   deckTitle: 'C# Interview',
@@ -185,9 +185,21 @@ const summary = buildSessionSummaryVM({
   minimumGoal: 1,
   dueCount: 3,
   wallet: { availablePulls: 0, reservePulls: 0 },
+  // Summaries consume committed per-rating rewards; completing a route does not grant pulls.
+  reward: {
+    newCardPulls: 2,
+    newCardUids: ['u1', 'u2'],
+    dueClearPulls: 0,
+    rewardPulls: 2,
+    applied: 2,
+    dropped: 0,
+    walletBefore: { availablePulls: 0, reservePulls: 0 },
+    walletAfter: { availablePulls: 2, reservePulls: 0 },
+  },
 });
-assert.equal(summary.vm.completionLabel, 'Full run cleared');
-assert.match(summary.vm.rewardBadge, /\+2 pull/i);
+assert.equal(summary.vm.completionLabel, 'All due cards done');
+assert.equal(summary.resolvedReward.rewardPulls, 2);
+assert.match(summary.vm.rewardBadge, /\+2 draws/i);
 assert.match(summary.vm.rewardBody, /ready to use/i);
 
 const summaryWithoutWallet = buildSessionSummaryVM({
@@ -197,16 +209,18 @@ const summaryWithoutWallet = buildSessionSummaryVM({
   minimumGoal: 1,
   dueCount: 3,
 });
-assert.match(summaryWithoutWallet.vm.rewardBody, /earned for this run/i);
-assert.equal(summaryWithoutWallet.vm.nextActionLabel, 'Keep momentum');
+assert.match(summaryWithoutWallet.vm.rewardBody, /progress saved for this session/i);
+assert.equal(summaryWithoutWallet.resolvedReward.rewardPulls, 0);
+assert.equal(summaryWithoutWallet.vm.nextActionLabel, 'Keep going');
 
 const homeNoDeck = buildHomeVM({
   selectedSlug: null,
   hasSignedInUser: false,
   deckSummaries: [],
 });
-assert.equal(homeNoDeck.hero.ctaAction, 'none');
-assert.equal(homeNoDeck.hero.ctaDisabled, true);
+assert.equal(homeNoDeck.hero.ctaLabel, 'Open library');
+assert.equal(homeNoDeck.hero.ctaAction, 'deck');
+assert.equal(homeNoDeck.hero.ctaDisabled, false);
 
 const homeNotReady = buildHomeVM({
   selectedSlug: 'premium-deck',
@@ -282,6 +296,7 @@ const homeWithWork = buildHomeVM({
 });
 assert.equal(homeWithWork.hero.ctaLabel, 'Start today’s session');
 assert.equal(homeWithWork.hero.ctaAction, 'challenge');
+assert.equal(homeWithWork.goal?.text, 'Session target: 4 cards');
 assert.match(homeWithWork.drawStatusLabel, /unlock after you clear today’s work/i);
 
 const library = buildLibraryVM({

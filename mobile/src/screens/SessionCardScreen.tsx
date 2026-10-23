@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import * as RN from 'react-native';
 import * as Crypto from 'expo-crypto';
-import { readPendingRating, writePendingRating, clearPendingRating } from '../review/pendingRating';
+import { readPendingRating, readPendingRatings, writePendingRating, clearPendingRating, hasCommittedRatingReward } from '../review/pendingRating';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
@@ -214,6 +214,7 @@ function useLatestCallback<A extends unknown[], R>(fn: (...args: A) => R): (...a
 type PendingRatingIntent = {
     uid: string; sub: string; eventId: string; queued: boolean; now: Date; rating: ReviewRating;
     before: CardProgress[]; state: ReturnType<typeof buildRatedSessionState>;
+    rewardContext?: { newCardEligible: boolean; dueBefore: number; remainingDueCount: number };
     reward?: Awaited<ReturnType<typeof settleRatingReward>>;
   };
 
@@ -648,7 +649,32 @@ export function SessionCardScreen({ navigation, route }: Props) {
           } catch {
             // Keep local-only data if sync cache fails.
           }
-          const nextProgress = await loadDeckProgress(deckForStudy);
+          const subAtLoad = await captureProgressUserSub();
+          const nextProgress = await loadDeckProgress(deckForStudy, subAtLoad);
+          try {
+            for (const intent of await readPendingRatings<PendingRatingIntent>(subAtLoad, resolved.Slug)) {
+              const projected = nextProgress.find(p => p.stableUid === intent.uid);
+              if (!projected || (projected.lastReviewedAt ?? 0) < (intent.state.updatedOne.lastReviewedAt ?? 0)) continue;
+              if (!hasCommittedRatingReward(intent.reward)) {
+                if (!intent.rewardContext) continue;
+                const reward = await settleRatingReward({
+                  slug: resolved.Slug, stableUid: intent.uid, rating: intent.rating,
+                  progressBefore: intent.before, ...intent.rewardContext,
+                  now: intent.now, userSub: intent.sub, eventId: intent.eventId,
+                });
+                if (!hasCommittedRatingReward(reward)) throw new Error('Reward settlement pending');
+                intent.reward = reward;
+                await writePendingRating(resolved.Slug, intent);
+              }
+              if (await captureProgressUserSub() !== subAtLoad) throw new Error('Account changed');
+              await clearPendingRating(subAtLoad, resolved.Slug, intent.uid);
+            }
+          } catch {
+            if (await captureProgressUserSub() !== subAtLoad) throw new Error('Account changed');
+            if (!cancelled) Alert.alert('Saved rewards are pending',
+              'Your progress is saved. Reopen this deck to retry your saved draw rewards.');
+          }
+          if (await captureProgressUserSub() !== subAtLoad) throw new Error('Account changed');
           if (cancelled) return;
           // Recorded before the gate is resolved: the gate unions the lesson's cards from this record.
           const starterLesson = isTrial ? null : await ensureStarterLesson(resolved);
@@ -835,7 +861,8 @@ export function SessionCardScreen({ navigation, route }: Props) {
         const restored = await readPendingRating<PendingRatingIntent>(sub, deck.Slug, current.card.StableUid);
         // On a newly opened screen the visible progress already includes any
         // completed projection. An old journal must not swallow a later review.
-        if (restored && (current.progress.lastReviewedAt ?? 0) >= (restored.state.updatedOne.lastReviewedAt ?? 0)) {
+        if (restored && hasCommittedRatingReward(restored.reward) &&
+            (current.progress.lastReviewedAt ?? 0) >= (restored.state.updatedOne.lastReviewedAt ?? 0)) {
           await clearPendingRating(sub, deck.Slug, current.card.StableUid);
         } else {
           pendingRatingRef.current = restored;
@@ -866,7 +893,9 @@ export function SessionCardScreen({ navigation, route }: Props) {
         learningCheck: learningStudy,
       });
           intent = { uid: current.card.StableUid, sub, eventId: Crypto.randomUUID(), queued: false,
-            now: nowAtRating, rating, before: fresh, state };
+            now: nowAtRating, rating, before: fresh, state,
+            rewardContext: { newCardEligible: mode !== 'sweep',
+              dueBefore: countDueToday(fresh, nowAtRating, ownedSet), remainingDueCount: state.remainingDueCount } };
           pendingRatingRef.current = intent;
         }
         await writePendingRating(deck.Slug, intent);
@@ -943,17 +972,21 @@ export function SessionCardScreen({ navigation, route }: Props) {
       }
       // Settled before the lesson check so a starter card's rating is stamped while the lesson is
       // still open (no R1 pull for it, R22 §4).
-      const rewardStep = intent.reward ?? await settleRatingReward({
+      intent.rewardContext = { newCardEligible: intent.rewardContext?.newCardEligible ?? mode !== 'sweep',
+        dueBefore: intent.rewardContext?.dueBefore ?? countDueToday(intent.before, nowAtRating, ownedSet),
+        remainingDueCount: nextState.remainingDueCount };
+      await writePendingRating(deck.Slug, intent);
+      const rewardStep = hasCommittedRatingReward(intent.reward) ? intent.reward : await settleRatingReward({
         slug: deck.Slug,
         stableUid: current.card.StableUid,
         rating,
         progressBefore: intent.before,
-        newCardEligible: mode !== 'sweep',
-        dueBefore: countDueToday(intent.before, nowAtRating, ownedSet),
-        remainingDueCount: nextState.remainingDueCount,
+        ...intent.rewardContext,
         now: nowAtRating,
         userSub: sub,
+        eventId: intent.eventId,
       });
+      if (!hasCommittedRatingReward(rewardStep)) throw new Error('Reward settlement pending');
       intent.reward = rewardStep;
       await writePendingRating(deck.Slug, intent);
       if (await captureProgressUserSub() !== sub) throw new Error('Account changed');
@@ -1651,7 +1684,7 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   doneButtonText: {
-    color: '#FFFFFF',
+    color: colors.ink,
     fontSize: typography.button,
     fontWeight: '900',
     letterSpacing: 0.4,

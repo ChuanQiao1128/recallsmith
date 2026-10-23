@@ -267,7 +267,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   gotItText: {
-    color: '#FFFFFF',
+    color: colors.ink,
     fontSize: typography.button,
     fontWeight: '900',
     letterSpacing: 0.4,

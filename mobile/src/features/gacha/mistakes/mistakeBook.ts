@@ -354,10 +354,10 @@ function fnv1a32(raw: string): string {
 
 export type AnonMistakeBookAdoption = { mistakesAdopted: number };
 
-async function adoptNow(): Promise<AnonMistakeBookAdoption> {
+async function adoptNow(userSub: string): Promise<AnonMistakeBookAdoption> {
   const result: AnonMistakeBookAdoption = { mistakesAdopted: 0 };
   try {
-    const userKey = await getUserScopedKey(MISTAKE_BOOK_KEY);
+    const userKey = await getUserScopedKey(MISTAKE_BOOK_KEY, userSub);
     // Signed out: the current partition IS the anon partition, nothing to adopt into.
     if (userKey.startsWith(ANON_USER_SCOPE_PREFIX)) return result;
     const anonKey = `${ANON_USER_SCOPE_PREFIX}${MISTAKE_BOOK_KEY}`;
@@ -390,6 +390,11 @@ async function adoptNow(): Promise<AnonMistakeBookAdoption> {
  * anon key, so it neither vanishes at sign-in nor comes back after a later sign-out. Runs on the
  * same chain as recordMistakeOutcome. Replay-safe (see adoptNow), and never throws.
  */
-export function adoptAnonMistakeBook(): Promise<AnonMistakeBookAdoption> {
-  return withMistakeBookLock(adoptNow);
+export async function adoptAnonMistakeBook(userSub?: string): Promise<AnonMistakeBookAdoption> {
+  try {
+    const capturedSub = userSub ?? (await getUserScopedKey('')).slice('devcards:u:'.length, -1);
+    return await withMistakeBookLock(() => adoptNow(capturedSub));
+  } catch {
+    return { mistakesAdopted: 0 };
+  }
 }

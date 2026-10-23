@@ -302,7 +302,7 @@ describe('HomeScreen v9', () => {
     expect(tree.root.findByProps({ testID: 'home-pack-visual' })).toBeTruthy();
     expect(tree.root.findByProps({ testID: 'home-draw-status-badge' })).toBeTruthy();
     const goal = tree.root.findByProps({ testID: 'home-goal-line' });
-    expect(String(goal.props.children)).toBe('Today: 2 cards');
+    expect(String(goal.props.children)).toBe('Session target: 2 cards');
   });
 
   it('shows due-card study link and routes it directly to SessionCard', async () => {
@@ -798,7 +798,7 @@ describe('HomeScreen v9', () => {
     await flush();
 
     expect(tree.root.findAllByProps({ testID: 'home-goal-line' })).toHaveLength(0);
-    expect(textBlob(tree)).not.toContain('Today: 0 cards');
+    expect(textBlob(tree)).not.toContain('Session target: 0 cards');
   });
 
   it('caps the goal line at the route length the session will build', async () => {
@@ -817,7 +817,7 @@ describe('HomeScreen v9', () => {
     await flush();
 
     const goal = tree.root.findByProps({ testID: 'home-goal-line' });
-    expect(String(goal.props.children)).toBe('Today: 5 cards');
+    expect(String(goal.props.children)).toBe('Session target: 5 cards');
   });
 
   it('labels the dots and the caption under the carousel with the short deck title', async () => {

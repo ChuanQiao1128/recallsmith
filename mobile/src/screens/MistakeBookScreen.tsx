@@ -420,5 +420,5 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: spacing.sm,
   },
-  primaryActionText: { color: colors.inkSoft, fontSize: typography.button, fontWeight: '900', letterSpacing: 0.4 },
+  primaryActionText: { color: colors.ink, fontSize: typography.button, fontWeight: '900', letterSpacing: 0.4 },
 });

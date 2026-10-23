@@ -2,6 +2,8 @@ vi.mock('../../src/features/gacha/components/ProgressSyncStatus', () => ({ Progr
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { colors } from '../../src/theme/colors';
+import { composite, contrastRatio, flattenStyle } from '../helpers/contrast';
 
 let progressFixture: any[] = [];
 let viewportWidth = 390;
@@ -249,6 +251,13 @@ describe('home primary CTA uniqueness', () => {
         (node) => (node.type as any) === 'Text' && typeof node.props?.numberOfLines === 'number',
       );
       expect(primaryCtaText.props.numberOfLines).toBe(1);
+      for (const pressed of [false, true]) {
+        const buttonStyle = flattenStyle(matches[0].props.style({ pressed }));
+        const textStyle = flattenStyle(primaryCtaText.props.style);
+        const foreground = composite(textStyle.color, colors.softCream, buttonStyle.opacity ?? 1);
+        const background = composite(buttonStyle.backgroundColor, colors.softCream, buttonStyle.opacity ?? 1);
+        expect(contrastRatio(foreground, background)).toBeGreaterThanOrEqual(4.5);
+      }
 
       const rootMatches = tree.root.findAll(
         (node) => node.props?.testID === 'screen-home-root' && (node.type as any) === 'SafeAreaView',
@@ -282,9 +291,13 @@ describe('home primary CTA uniqueness', () => {
       const metricStyle = tree.root.findByProps({ testID: 'home-today-count-total' }).props.style;
       expect(metricStyle).toEqual(
         expect.arrayContaining([
-          width < 390 ? expect.objectContaining({ width: '48%' }) : expect.objectContaining({ flex: 1 }),
+          expect.objectContaining({ flex: 1, minWidth: 0 }),
         ]),
       );
+      const totalsHeading = tree.root.find((node) => (node.type as any) === 'Text' && node.props.children === 'Pack totals');
+      let metricGroup = totalsHeading.parent!;
+      while ((metricGroup.type as any) !== 'View') metricGroup = metricGroup.parent!;
+      expect(metricGroup.props.style).toMatchObject(width < 390 ? { width: '100%' } : { flex: 1 });
     },
   );
 

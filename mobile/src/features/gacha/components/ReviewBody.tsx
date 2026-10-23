@@ -256,7 +256,7 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   flipText: {
-    color: '#FFFFFF',
+    color: colors.ink,
     fontSize: typography.button,
     fontWeight: '900',
     letterSpacing: 0.4,

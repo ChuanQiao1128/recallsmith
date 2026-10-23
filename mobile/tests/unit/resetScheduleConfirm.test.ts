@@ -65,4 +65,25 @@ describe('confirmResetReviewSchedule', () => {
     const message = alertMock.mock.calls[0][1];
     expect(message).toMatch(/^Every learned card/);
   });
+
+  it('shows success only after the confirmed reset finishes', async () => {
+    loadAllProgressMock.mockResolvedValueOnce({ a: [{ lastReviewedAt: 5 }] });
+    const onConfirm = vi.fn(async () => {});
+    await confirmResetReviewSchedule({ onConfirm });
+
+    await alertMock.mock.calls[0][2][1].onPress();
+
+    expect(onConfirm).toHaveBeenCalledOnce();
+    expect(alertMock).toHaveBeenLastCalledWith('Cards are due now', 'Your library and owned cards are unchanged.');
+  });
+
+  it('handles a failed write without showing a success message or rejecting the alert callback', async () => {
+    loadAllProgressMock.mockResolvedValueOnce({ a: [{ lastReviewedAt: 5 }] });
+    await confirmResetReviewSchedule({ onConfirm: async () => { throw new Error('storage full'); } });
+
+    await expect(alertMock.mock.calls[0][2][1].onPress()).resolves.toBeUndefined();
+
+    expect(alertMock).toHaveBeenLastCalledWith('Could not reset reviews', 'Some review dates could not be saved. Please try again.');
+    expect(alertMock.mock.calls.some(([title]) => title === 'Cards are due now')).toBe(false);
+  });
 });

@@ -18,7 +18,7 @@ export function TodayPressureCard(props: { counts: TodayCounts; selectedDeckTitl
   const { counts, selectedDeckTitle } = props;
   const { width } = useWindowDimensions();
   const useCompactMetrics = width < 390;
-  const metricSizeStyle = useCompactMetrics ? styles.metricCompact : styles.metricWide;
+  const metricSizeStyle = styles.metricWide;
   // Every tile describes the selected deck, so the collapse does too. Collected
   // is the superset (a due, new or learned card is a collected card), and the
   // cross-deck due total that used to sit here belongs to reminders, not to
@@ -31,9 +31,8 @@ export function TodayPressureCard(props: { counts: TodayCounts; selectedDeckTitl
 
   if (props.compact) return (
     <View testID="home-today-compact" style={styles.compactSummary}>
-      <Text style={styles.title}>Today</Text>
       <View testID="home-today-count-grid" style={styles.compactRow}>
-        {renderTiles({ due: counts.selectedDue, fresh: counts.selectedNew,
+        {renderGroups({ due: counts.selectedDue, fresh: counts.selectedNew,
           learned: counts.selectedMastered, collected: counts.selectedOwned }, styles.compactMetric, true)}
       </View>
     </View>
@@ -41,7 +40,7 @@ export function TodayPressureCard(props: { counts: TodayCounts; selectedDeckTitl
   return (
     <View style={styles.card}>
       <Text style={styles.title} numberOfLines={2}>
-        Today
+        This pack
       </Text>
       <Text style={styles.subtitle} numberOfLines={1}>
         {selectedDeckTitle ?? 'No active deck selected'}
@@ -57,7 +56,7 @@ export function TodayPressureCard(props: { counts: TodayCounts; selectedDeckTitl
             accessibilityElementsHidden
             importantForAccessibility="no-hide-descendants"
           >
-            {renderTiles({ due: 0, fresh: 0, learned: 0, collected: 0 }, metricSizeStyle, false)}
+            {renderGroups({ due: 0, fresh: 0, learned: 0, collected: 0 }, metricSizeStyle, false, useCompactMetrics)}
           </View>
           <View style={styles.emptyOverlay}>
             <Text testID="home-today-empty" style={styles.subtitle} numberOfLines={2}>
@@ -67,7 +66,7 @@ export function TodayPressureCard(props: { counts: TodayCounts; selectedDeckTitl
         </View>
       ) : (
         <View testID="home-today-count-grid" style={styles.row}>
-          {renderTiles(
+          {renderGroups(
             {
               due: counts.selectedDue,
               fresh: counts.selectedNew,
@@ -76,6 +75,7 @@ export function TodayPressureCard(props: { counts: TodayCounts; selectedDeckTitl
             },
             metricSizeStyle,
             true,
+            useCompactMetrics,
           )}
         </View>
       )}
@@ -85,21 +85,33 @@ export function TodayPressureCard(props: { counts: TodayCounts; selectedDeckTitl
 
 type TileValues = { due: number; fresh: number; learned: number; collected: number };
 
+function renderGroups(values: TileValues, metricSizeStyle: object, withIds: boolean, stacked = false) {
+  const tiles = renderTiles(values, metricSizeStyle, withIds);
+  return ['Ready now', 'Pack totals'].map((label, index) => (
+    <View key={label} style={stacked ? styles.metricGroupStacked : styles.metricGroup}>
+      <Text style={styles.metricGroupLabel}>{label}</Text>
+      <View style={styles.metricGroupRow}>{tiles.slice(index * 2, index * 2 + 2)}</View>
+    </View>
+  ));
+}
+
 // The four tiles, in order. `withIds` is false for the invisible copy that holds the empty card's
 // height, so tests and probes only ever find the real grid.
 function renderTiles(values: TileValues, metricSizeStyle: object, withIds: boolean) {
   const tiles = [
-    { id: 'normal', value: values.due, label: 'Due', tone: styles.metricNormal },
-    { id: 'elite', value: values.fresh, label: 'New', tone: styles.metricElite },
-    { id: 'boss', value: values.learned, label: 'Learned', tone: styles.metricBoss },
+    { id: 'normal', value: values.due, label: 'Due', scope: 'cards due now', tone: styles.metricNormal },
+    { id: 'elite', value: values.fresh, label: 'New', scope: 'new cards available to learn', tone: styles.metricElite },
+    { id: 'boss', value: values.learned, label: 'Learned', scope: 'cards learned in this pack, all time', tone: styles.metricBoss },
     // testID kept from the "Total" era (docs/delivery/r16-issues pin it); the tile now reads the
     // selected deck's owned cards, labelled Collected (R22 §5). The all-deck due sum it used to
     // show was taken for the deck size ("0 Total" on a 441-card deck).
-    { id: 'total', value: values.collected, label: 'Collected', tone: styles.metricTotal },
+    { id: 'total', value: values.collected, label: 'Collected', scope: 'cards collected in this pack, all time', tone: styles.metricTotal },
   ];
   return tiles.map((tile) => (
     <View
       key={tile.id}
+      accessible={withIds}
+      accessibilityLabel={withIds ? `${tile.value} ${tile.scope}` : undefined}
       testID={withIds ? `home-today-count-${tile.id}` : undefined}
       style={[styles.metric, metricSizeStyle, tile.tone]}
     >
@@ -117,6 +129,10 @@ const styles = StyleSheet.create({
   compactSummary: { marginBottom: 4 },
   compactRow: { flexDirection: 'row', gap: 6, marginTop: 4 },
   compactMetric: { flex: 1, minWidth: 0, paddingVertical: 4, paddingHorizontal: 2, borderRadius: 8 },
+  metricGroup: { flex: 1, minWidth: 0 },
+  metricGroupStacked: { width: '100%' },
+  metricGroupRow: { flexDirection: 'row', gap: 6 },
+  metricGroupLabel: { fontSize: typography.caption, fontWeight: '800', color: colors.inkSecondary, marginBottom: 4 },
   // Tightened: less padding, smaller numbers, lighter shadow — fits on screen
   // alongside the bigger pack hero without crowding.
   card: {
@@ -147,7 +163,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   metricWide: { flex: 1, minWidth: 0 },
-  metricCompact: { width: '48%' },
   metricNormal: { backgroundColor: TODAY_PRESSURE_TOKENS.metricNormal },
   metricElite: { backgroundColor: TODAY_PRESSURE_TOKENS.metricElite },
   metricBoss: { backgroundColor: TODAY_PRESSURE_TOKENS.metricBoss },

@@ -160,6 +160,8 @@ export const libraryStyles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
   filterChip: {
+    minHeight: a11y.minTouch,
+    justifyContent: 'center',
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 999,
@@ -332,21 +334,21 @@ export const libraryStyles = StyleSheet.create({
     flex: 1,
   },
   emptyCollectionBannerEyebrow: {
-    color: 'rgba(255,255,255,0.85)',
+    color: colors.ink,
     fontSize: 10,
     fontWeight: '900',
     letterSpacing: 1.4,
   },
   emptyCollectionBannerTitle: {
     marginTop: 3,
-    color: '#FFFFFF',
+    color: colors.ink,
     fontSize: 14,
     lineHeight: 18,
     fontWeight: '900',
     letterSpacing: 0.2,
   },
   emptyCollectionBannerArrow: {
-    color: '#FFFFFF',
+    color: colors.ink,
     fontSize: 22,
     fontWeight: '900',
     paddingLeft: 4,

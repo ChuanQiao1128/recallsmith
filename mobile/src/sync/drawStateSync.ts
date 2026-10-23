@@ -282,15 +282,15 @@ export function adoptAnonGachaState(): Promise<AnonGachaAdoption> {
   if (_adopting) return _adopting;
   _adopting = (async () => {
     const userSub = await captureProgressUserSub();
-    const draw = await adoptAnonDrawState();
-    const wallet = await adoptAnonRewardWallet();
-    const ledger = await adoptAnonNewCardLedger();
+    const draw = await adoptAnonDrawState(userSub);
+    const wallet = await adoptAnonRewardWallet(userSub);
+    const ledger = await adoptAnonNewCardLedger(userSub);
     // Per-pack pull pools adopt after the ledger, so a card drawn before sign-in
     // and the pack pulls it earned reach the account in the same run.
-    const deckWallets = await adoptAnonDeckWallets();
+    const deckWallets = await adoptAnonDeckWallets(userSub);
     // The Mistake Book is local-only, so it adds nothing to the push; it moves with the rest of
     // the anon partition so a signed-out book is neither lost nor revived later (mobile-17).
-    await adoptAnonMistakeBook();
+    await adoptAnonMistakeBook(userSub);
     const result = { ...draw, ...wallet, ...ledger, ...deckWallets };
     if (await captureProgressUserSub() === userSub && Object.values(result).some(value => value > 0)) {
       notifyGamificationChanged({ userSub });

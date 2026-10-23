@@ -35,11 +35,15 @@ export function PrimaryButton({ label, onPress, disabled, tone = 'primary', eyeb
       ? { bg: colors.glowGold, bgPressed: colors.gold, text: colors.ink }
       : tone === 'danger'
         ? { bg: colors.danger, bgPressed: '#8B2929', text: '#fff' }
-        : { bg: colors.pokeBlue, bgPressed: colors.pokeBlueDeep, text: '#fff' };
+        : { bg: colors.pokeBlue, bgPressed: colors.pokeBlueDeep, text: colors.ink };
+
+  const secondaryTextStyle = { color: palette.text, opacity: tone === 'danger' ? 0.85 : 1 };
 
   return (
     <Pressable
       testID={testID}
+      accessibilityRole="button"
+      accessibilityState={{ disabled: !!disabled }}
       onPress={disabled ? undefined : onPress}
       disabled={disabled}
       style={({ pressed }) => [
@@ -50,11 +54,11 @@ export function PrimaryButton({ label, onPress, disabled, tone = 'primary', eyeb
       ]}
     >
       <View style={styles.inner}>
-        {eyebrow ? <Text style={[styles.eyebrow, { color: palette.text }]}>{eyebrow}</Text> : null}
+        {eyebrow ? <Text style={[styles.eyebrow, secondaryTextStyle]}>{eyebrow}</Text> : null}
         <Text style={[styles.label, { color: palette.text }, labelStyle]} numberOfLines={1}>
           {label}
         </Text>
-        {hint ? <Text style={[styles.hint, { color: palette.text }]}>{hint}</Text> : null}
+        {hint ? <Text style={[styles.hint, secondaryTextStyle]}>{hint}</Text> : null}
       </View>
     </Pressable>
   );
@@ -75,10 +79,9 @@ const styles = StyleSheet.create({
     fontSize: typography.caption,
     fontWeight: '800',
     letterSpacing: 1.4,
-    opacity: 0.85,
     textTransform: 'uppercase',
     marginBottom: 2,
   },
   label: { fontSize: typography.button + 1, fontWeight: '900', letterSpacing: 0.4 },
-  hint: { fontSize: typography.caption, fontWeight: '600', opacity: 0.85, marginTop: 2 },
+  hint: { fontSize: typography.caption, fontWeight: '600', marginTop: 2 },
 });

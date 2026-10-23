@@ -309,7 +309,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   practiceDisabled: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: colors.hairline },
-  practiceText: { color: colors.inkSoft, fontSize: typography.button, fontWeight: '900', letterSpacing: 0.4 },
+  practiceText: { color: colors.ink, fontSize: typography.button, fontWeight: '900', letterSpacing: 0.4 },
   practiceNote: { color: colors.inkSecondary, fontSize: typography.caption, fontWeight: '700', marginTop: 6 },
   footer: {
     color: colors.inkSecondary,

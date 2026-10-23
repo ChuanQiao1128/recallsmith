@@ -198,7 +198,7 @@ async function readGlobalDrawState(
  * Returns null when there was nothing left over, so the caller can tell
  * "migrated an empty collection" from "no legacy data at all".
  */
-async function claimGlobalDrawState(slug: string): Promise<DrawStateRecord | null> {
+async function claimGlobalDrawState(slug: string, userSub?: string): Promise<DrawStateRecord | null> {
   const { record, found } = await readGlobalDrawState(slug);
   if (!found) return null;
 
@@ -206,7 +206,7 @@ async function claimGlobalDrawState(slug: string): Promise<DrawStateRecord | nul
     // Copy before delete. A kill in between leaves the legacy keys in
     // place for the next load to claim again, which is a repeat of work
     // already done; deleting first would lose the collection outright.
-    await saveDrawState(slug, record);
+    await saveDrawState(slug, record, userSub);
     await AsyncStorage.removeItem(globalStateKey(slug));
     await AsyncStorage.removeItem(`${LEGACY_OWNED_PREFIX}${slug}`);
     await AsyncStorage.removeItem(`${LEGACY_PITY_PREFIX}${slug}`);
@@ -236,11 +236,15 @@ async function claimGlobalDrawState(slug: string): Promise<DrawStateRecord | nul
  * `devcards:draw-state:` key has to do the same, or its deletion will be
  * undone by the next read-modify-write.
  */
-export async function loadDrawState(slug: string): Promise<DrawStateRecord> {
+export function loadDrawState(slug: string): Promise<DrawStateRecord> {
+  return loadDrawStateForUser(slug);
+}
+
+async function loadDrawStateForUser(slug: string, userSub?: string): Promise<DrawStateRecord> {
   let key: string;
   let raw: string | null = null;
   try {
-    key = await stateKey(slug);
+    key = await stateKey(slug, userSub);
     const cached = getCachedDrawState(key);
     if (cached) return cached;
     raw = await AsyncStorage.getItem(key);
@@ -263,7 +267,7 @@ export async function loadDrawState(slug: string): Promise<DrawStateRecord> {
   }
 
   try {
-    const claimed = await claimGlobalDrawState(slug);
+    const claimed = await claimGlobalDrawState(slug, userSub);
     // A successful claim is cached by the saveDrawState inside it, and a
     // failed one is deliberately left uncached so the next load retries the
     // migration -- the write-through *is* the signal that the copy is
@@ -341,13 +345,14 @@ export type AnonDrawStateAdoption = { decks: number; ownedAdded: number; pityRai
  * sign-in. Copy-then-clear, never the reverse. Never throws: a storage failure
  * during adoption must not fail sign-in, so it returns the counts so far.
  */
-export async function adoptAnonDrawState(): Promise<AnonDrawStateAdoption> {
+export async function adoptAnonDrawState(userSub?: string): Promise<AnonDrawStateAdoption> {
   const result: AnonDrawStateAdoption = { decks: 0, ownedAdded: 0, pityRaised: 0 };
   try {
-    const userPrefix = await stateKey('');
+    const userPrefix = await stateKey('', userSub);
     // Signed out: the current partition IS the anon partition, so there is
     // nothing to adopt into. (init() reaches here too, before a sub is known.)
     if (userPrefix.startsWith(ANON_USER_SCOPE_PREFIX)) return result;
+    const capturedSub = userPrefix.slice('devcards:u:'.length, -(DRAW_STATE_PREFIX.length + 1));
 
     const anonPrefix = `${ANON_USER_SCOPE_PREFIX}${DRAW_STATE_PREFIX}`;
     const keys = await AsyncStorage.getAllKeys();
@@ -372,7 +377,7 @@ export async function adoptAnonDrawState(): Promise<AnonDrawStateAdoption> {
         }
       }
 
-      const current = await loadDrawState(slug);
+      const current = await loadDrawStateForUser(slug, capturedSub);
 
       // Union: user order first, anon uids appended in anon order, no dupes,
       // empty strings skipped. Same semantics as unionOwned in
@@ -399,7 +404,7 @@ export async function adoptAnonDrawState(): Promise<AnonDrawStateAdoption> {
       const drawsRose = (mergedPity?.draws ?? 0) > (current.pity?.draws ?? 0);
 
       if (grew > 0 || !samePityState(current.pity, mergedPity)) {
-        await saveDrawState(slug, { owned: mergedOwned, pity: mergedPity });
+        await saveDrawState(slug, { owned: mergedOwned, pity: mergedPity }, capturedSub);
         result.ownedAdded += grew;
         if (drawsRose) result.pityRaised += 1;
       }

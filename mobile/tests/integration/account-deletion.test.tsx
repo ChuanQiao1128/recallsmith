@@ -31,7 +31,10 @@ vi.mock('aws-amplify/auth', () => ({
   // server delete; return a token so it resolves to a fresh access token
   // instead of tripping the session-expired path.
   fetchAuthSession: vi.fn(async () => ({
-    tokens: { accessToken: 'fresh-access', idToken: 'fresh-id' },
+    tokens: {
+      accessToken: { payload: { sub: 'sub-1' }, toString: () => 'fresh-access' },
+      idToken: 'fresh-id',
+    },
   })),
   getCurrentUser: vi.fn(),
   deleteUser: vi.fn(async () => {}),

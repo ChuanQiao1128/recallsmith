@@ -171,6 +171,8 @@ export function LibraryHeader({
   openFirstPackHasPulls = false,
 }: Props) {
   const advancedFilter = filters.find((chip) => chip.key === filter && (chip.key === 'rare' || chip.key === 'legendary'));
+  const activeTopic = topics.find((chip) => chip.key === topicFilter && chip.key !== 'all');
+  const additionalFilterCount = Number(!!advancedFilter) + Number(!!activeTopic);
   const pct = totalCount > 0 ? Math.round((ownedCount / totalCount) * 100) : 0;
   // Brand-new user banner — appears above the Pokedex header when the
   // user has 0 owned cards and the deck has cards available. Gives
@@ -294,6 +296,8 @@ export function LibraryHeader({
               <Pressable
                 key={option.slug}
                 testID={`library-deck-${option.slug}`}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
                 style={({ pressed }) => [
                   styles.deckChip,
                   active && styles.deckChipActive,
@@ -310,36 +314,6 @@ export function LibraryHeader({
         </ScrollView>
       ) : null}
 
-      {topics.length > 0 ? (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.filterChipsRow}
-          testID="library-topic-chips"
-        >
-          {topics.map((chip) => {
-            const active = chip.key === (topicFilter ?? 'all');
-            return (
-              <Pressable
-                key={`topic-${chip.key}`}
-                testID={`library-topic-chip-${chip.key}`}
-                accessibilityRole="button"
-                accessibilityState={{ selected: active }}
-                style={({ pressed }) => [
-                  styles.filterChip,
-                  active && styles.filterChipActive,
-                  pressed && styles.pressed,
-                ]}
-                onPress={() => onSelectTopic(chip.key)}
-              >
-                <Text style={[styles.filterChipText, active && styles.filterChipTextActive]} numberOfLines={1}>
-                  {active ? `${chip.label} · ${chip.count}` : chip.label}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </ScrollView>
-      ) : null}
 
       <TextInput
         testID="library-search"
@@ -375,21 +349,79 @@ export function LibraryHeader({
         <Pressable
           testID="library-filter-summary"
           accessibilityRole="button"
-          accessibilityState={{ expanded: filterOpen, selected: !!advancedFilter }}
-          accessibilityLabel="More card filters"
-          style={({ pressed }) => [styles.filterChip, !!advancedFilter && styles.filterChipActive, pressed && styles.pressed]}
+          accessibilityState={{ expanded: filterOpen, selected: additionalFilterCount > 0 }}
+          accessibilityLabel={filterOpen ? 'Hide topics and advanced filters' : 'Show topics and advanced filters'}
+          style={({ pressed }) => [styles.filterChip, additionalFilterCount > 0 && styles.filterChipActive, pressed && styles.pressed]}
           onPress={onToggleFilterOpen}
         >
-          <Text style={[styles.filterChipText, !!advancedFilter && styles.filterChipTextActive]}>
-            {advancedFilter ? `${advancedFilter.label} · ${advancedFilter.count}` : 'More filters'}
+          <Text style={[styles.filterChipText, additionalFilterCount > 0 && styles.filterChipTextActive]}>
+            {filterOpen ? 'Hide filters' : `More filters${additionalFilterCount ? ` · ${additionalFilterCount} active` : ''}`}
           </Text>
         </Pressable>
       </ScrollView>
+      {!filterOpen && additionalFilterCount > 0 ? (
+        <View testID="library-active-filters" style={headerStyles.pillRow}>
+          {activeTopic ? (
+            <Pressable
+              testID="library-clear-topic"
+              accessibilityRole="button"
+              accessibilityLabel={`Clear topic filter: ${activeTopic.label}`}
+              style={({ pressed }) => [styles.filterChip, headerStyles.activeCriterion, pressed && styles.pressed]}
+              onPress={() => onSelectTopic('all')}
+            >
+              <Text style={styles.filterChipText}>{`Topic: ${activeTopic.label} · Clear`}</Text>
+            </Pressable>
+          ) : null}
+          {advancedFilter ? (
+            <Pressable
+              testID="library-clear-rarity"
+              accessibilityRole="button"
+              accessibilityLabel={`Clear rarity filter: ${advancedFilter.label}`}
+              style={({ pressed }) => [styles.filterChip, headerStyles.activeCriterion, pressed && styles.pressed]}
+              onPress={() => onSelectFilter('all')}
+            >
+              <Text style={styles.filterChipText}>{`${advancedFilter.label} · Clear`}</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
       {filterOpen ? (
         <View style={headerStyles.moreFilters} testID="library-filter-sheet">
-          <Text style={headerStyles.filterLabel}>Filter cards</Text>
+          {topics.length > 0 ? <Text style={headerStyles.filterLabel}>Topic</Text> : null}
+          {topics.length > 0 ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.filterChipsRow}
+              testID="library-topic-chips"
+            >
+              {topics.map((chip) => {
+                const active = chip.key === (topicFilter ?? 'all');
+                return (
+                  <Pressable
+                    key={`topic-${chip.key}`}
+                    testID={`library-topic-chip-${chip.key}`}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                    style={({ pressed }) => [
+                      styles.filterChip,
+                      active && styles.filterChipActive,
+                      pressed && styles.pressed,
+                    ]}
+                    onPress={() => onSelectTopic(chip.key)}
+                  >
+                    <Text style={[styles.filterChipText, active && styles.filterChipTextActive]} numberOfLines={1}>
+                      {active ? `${chip.label} · ${chip.count}` : chip.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          ) : null}
+
+          <Text style={headerStyles.filterLabel}>Rarity</Text>
           <View style={headerStyles.pillRow}>
-            {filters.map((chip) => (
+            {filters.filter((chip) => chip.key === 'rare' || chip.key === 'legendary').map((chip) => (
               <Pressable
                 key={`sheet-${chip.key}`}
                 testID={`library-sheet-filter-${chip.key}`}
@@ -419,6 +451,7 @@ const headerStyles = StyleSheet.create({
     color: colors.ink, fontSize: typography.bodySmall, marginTop: spacing.sm,
   },
   moreFilters: { paddingVertical: spacing.sm },
+  activeCriterion: { flexShrink: 1 },
   filterLabel: { color: colors.inkSecondary, fontSize: typography.caption, marginBottom: spacing.xs },
   domainsLink: {
     marginTop: spacing.sm,

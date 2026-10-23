@@ -46,8 +46,12 @@ export async function confirmResetReviewSchedule(params: {
       text: 'Make due now',
       style: 'destructive',
       onPress: async () => {
-        await onConfirm();
-        Alert.alert('Cards are due now', 'Your library and owned cards are unchanged.');
+        try {
+          await onConfirm();
+          Alert.alert('Cards are due now', 'Your library and owned cards are unchanged.');
+        } catch {
+          Alert.alert('Could not reset reviews', 'Some review dates could not be saved. Please try again.');
+        }
       },
     },
   ]);

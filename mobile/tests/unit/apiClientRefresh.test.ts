@@ -8,6 +8,9 @@ vi.hoisted(() => {
 
 import { apiJson, setAccessTokenRefresher } from '../../src/api/apiClient';
 
+const oldToken = `header.${Buffer.from(JSON.stringify({ sub: 'A', version: 'old' })).toString('base64url')}.sig`;
+const freshToken = `header.${Buffer.from(JSON.stringify({ sub: 'A', version: 'fresh' })).toString('base64url')}.sig`;
+
 type FakeResponse = {
   ok: boolean;
   status: number;
@@ -45,14 +48,14 @@ describe('apiClient 401 refresh', () => {
       .mockResolvedValueOnce(res(401, { error: 'unauthorized' }))
       .mockResolvedValueOnce(res(200, { ok: true }));
     vi.stubGlobal('fetch', fetchMock);
-    setAccessTokenRefresher(async () => 'fresh-token');
+    setAccessTokenRefresher(async () => freshToken);
 
-    const result = await apiJson<{ ok: boolean }>('/me', { accessToken: 'old-token' });
+    const result = await apiJson<{ ok: boolean }>('/me', { accessToken: oldToken });
 
     expect(result).toEqual({ ok: true });
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(authHeaderOf(fetchMock.mock.calls[0])).toBe('Bearer old-token');
-    expect(authHeaderOf(fetchMock.mock.calls[1])).toBe('Bearer fresh-token');
+    expect(authHeaderOf(fetchMock.mock.calls[0])).toBe(`Bearer ${oldToken}`);
+    expect(authHeaderOf(fetchMock.mock.calls[1])).toBe(`Bearer ${freshToken}`);
   });
 
   it('does not retry when no refresher is installed or the token did not change', async () => {
@@ -60,16 +63,16 @@ describe('apiClient 401 refresh', () => {
     const fetchMock = vi.fn().mockResolvedValue(res(401, { error: 'unauthorized' }));
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(apiJson('/me', { accessToken: 'old-token' })).rejects.toMatchObject({
+    await expect(apiJson('/me', { accessToken: oldToken })).rejects.toMatchObject({
       status: 401,
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     // Refresher installed but returns the same token — nothing changed.
     fetchMock.mockClear();
-    setAccessTokenRefresher(async () => 'old-token');
+    setAccessTokenRefresher(async () => oldToken);
 
-    await expect(apiJson('/me', { accessToken: 'old-token' })).rejects.toMatchObject({
+    await expect(apiJson('/me', { accessToken: oldToken })).rejects.toMatchObject({
       status: 401,
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);

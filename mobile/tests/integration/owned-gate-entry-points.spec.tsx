@@ -176,10 +176,6 @@ vi.mock('../../src/premium/revenuecat', () => ({
   isPremiumActive: vi.fn(() => false),
 }));
 
-vi.mock('../../src/features/gacha/rewards/rewardWallet', () => ({
-  loadRewardWalletState: vi.fn(async () => ({ availablePulls: 0, reservePulls: 0 })),
-}));
-
 // The one card on screen, by its question text: the cheapest honest answer to
 // "which card did the planner hand this session?". The reveal control is kept
 // because the rating bar refuses to rate a face-down card.
@@ -204,6 +200,7 @@ import { saveDeckProgress, setActiveUserSubForStorage } from '../../src/review/s
 import { saveDrawState } from '../../src/features/gacha/draw/drawStateStore';
 import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStateCache';
 import { resetSessionStore } from '../../src/features/gacha/session/sessionStore';
+import { loadDeckWallet } from '../../src/features/gacha/rewards/deckWallet';
 import type { CardProgress } from '../../src/review/model';
 
 const DAY_MS = 86_400_000;
@@ -368,6 +365,7 @@ describe('ownership gate — every entry point', () => {
 
       expect(textBlob(tree)).not.toContain('Stranger question');
       expect(navigation.replace).toHaveBeenCalledWith('SessionSummary', expect.anything());
+      expect(await loadDeckWallet('csharp')).toEqual({ availablePulls: 1, reservePulls: 0 });
     });
 
     it('still teaches a card that was studied before it could be drawn', async () => {

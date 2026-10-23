@@ -20,6 +20,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AuthFlowError, AUTH_ERROR_COPY, friendlyAuthError } from './authErrors';
 import { isPasswordValid } from './passwordPolicy';
 import { deleteServerAccountData } from './deleteServerAccount';
+import { getAuthSessionGeneration, invalidateAuthSession } from './sessionBoundary';
 
 import { setSyncAccessToken, forceProgressSync, setActiveUserSub } from '../sync/progressSync';
 import { adoptAnonGachaState } from '../sync/drawStateSync';
@@ -87,6 +88,7 @@ type AuthState = {
 
 const DEVICE_STREAK_PREFIX = 'recallsmith:streaks:';
 export async function purgeUserScopedStorage(userSub: string | null): Promise<string[]> {
+  const generation = getAuthSessionGeneration();
   const scoped = userSub ? `devcards:u:${userSub}:` : null;
   let keys: readonly string[] = [];
   try {
@@ -94,6 +96,7 @@ export async function purgeUserScopedStorage(userSub: string | null): Promise<st
   } catch {
     return [];
   }
+  if (generation !== getAuthSessionGeneration()) return [];
   const doomed = keys.filter(
     (k) => (scoped !== null && k.startsWith(scoped)) || k.startsWith(DEVICE_STREAK_PREFIX),
   );
@@ -102,6 +105,7 @@ export async function purgeUserScopedStorage(userSub: string | null): Promise<st
       await AsyncStorage.multiRemove(doomed);
     } catch {}
   }
+  if (generation !== getAuthSessionGeneration()) return [];
   invalidateProgressQueueCache(userSub ?? undefined);
   invalidateDrawStateCache();
   return doomed;
@@ -129,16 +133,20 @@ function safeStr(v: any): string | null {
 // Loaded lazily so importing the store never pulls react-native-purchases /
 // expo-updates into the test bundle. Never throws.
 async function logoutRevenueCat(): Promise<void> {
+  const generation = getAuthSessionGeneration();
   try {
     const { rcLogout } = await import('../premium/revenuecat');
+    if (generation !== getAuthSessionGeneration()) return;
     await rcLogout();
   } catch {
     // Best-effort: a RevenueCat logout failure must not block sign-out/delete.
   }
 }
 
-async function applySessionToState(set: any) {
+async function applySessionToState(set: any, generation: number): Promise<boolean> {
+  const isCurrent = () => generation === getAuthSessionGeneration();
   const session: any = await fetchAuthSession();
+  if (!isCurrent()) return false;
 
   const accessTokObj = session.tokens?.accessToken;
   const idTokObj = session.tokens?.idToken;
@@ -170,17 +178,22 @@ async function applySessionToState(set: any) {
   } catch {
     // ignore
   }
+  if (!isCurrent()) return false;
 
   // ✅ 关键：立刻设置 activeUserSub（让 Home 读取正确的 user-scoped progress）
   await setActiveUserSub(userSub);
+  if (!isCurrent()) return false;
 
   // The signed-in scope needs the guest's downloaded public decks before its
   // first sync/render. No progress, premium content or other account is copied.
   if (userSub) {
     try {
       const { adoptAnonymousPublicDecks } = await import('../content/deckRepository');
+      if (!isCurrent()) return false;
       await adoptAnonymousPublicDecks(userSub);
+      if (!isCurrent()) return false;
       const { invalidateDeckCache } = await import('../content/deckCache');
+      if (!isCurrent()) return false;
       invalidateDeckCache();
     } catch {
       // A missing/corrupt file must not turn a successful sign-in into a failure.
@@ -192,6 +205,7 @@ async function applySessionToState(set: any) {
   // and before the first cloud push. A no-op when the anon partition is empty,
   // including the init() path.
   if (userSub) await adoptAnonGachaState();
+  if (!isCurrent()) return false;
 
   // Remember that this device has held a real session (best-effort), and derive
   // the session-expired flag: a token means the session is valid; no token means
@@ -209,6 +223,7 @@ async function applySessionToState(set: any) {
     }
   }
 
+  if (!isCurrent()) return false;
   set({
     status: at ? 'signed_in' : 'anonymous',
     userId: userSub,
@@ -219,13 +234,18 @@ async function applySessionToState(set: any) {
     lastError: null,
     sessionExpired,
     initRetryPending: false,
+    loading: false,
   });
 
+  // Publishing the session changes its identity generation through the store subscriber.
+  const publishedGeneration = getAuthSessionGeneration();
   // ✅ Inject token into progress sync layer
   await setSyncAccessToken(at);
+  if (publishedGeneration !== getAuthSessionGeneration()) return false;
 
   // ✅ Best-effort sync, never block UI
   if (at) void forceProgressSync('token_set');
+  return true;
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
@@ -245,10 +265,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   initRetryPending: false,
 
   init: async () => {
+    invalidateAuthSession();
+    const generation = getAuthSessionGeneration();
     set({ loading: true, lastError: null });
     try {
-      await applySessionToState(set);
+      await applySessionToState(set, generation);
     } catch (err) {
+      if (generation !== getAuthSessionGeneration()) return;
       if (isTransientAuthError(err)) {
         // Transient/offline failure: Amplify still holds the session. Keep the
         // sync token and the user's storage scope (do NOT clear them) so the
@@ -262,10 +285,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           idToken: null,
           lastError: null,
           initRetryPending: true,
+          loading: false,
         });
       } else {
         // ✅ critical: ensure unsigned-in => no sync token (also clears activeUserSub)
         await setSyncAccessToken(null);
+        if (generation !== getAuthSessionGeneration()) return;
 
         let sessionExpired = false;
         try {
@@ -274,6 +299,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           sessionExpired = false;
         }
 
+        if (generation !== getAuthSessionGeneration()) return;
         set({
           status: 'anonymous',
           userId: null,
@@ -284,15 +310,19 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           lastError: null,
           sessionExpired,
           initRetryPending: false,
+          loading: false,
         });
       }
     } finally {
-      set({ loading: false });
+      if (generation === getAuthSessionGeneration()) set({ loading: false });
     }
   },
 
   markSessionExpired: async () => {
+    invalidateAuthSession();
+    const generation = getAuthSessionGeneration();
     await setSyncAccessToken(null);
+    if (generation !== getAuthSessionGeneration()) return;
     set({
       status: 'anonymous',
       userId: null,
@@ -349,9 +379,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (!e) throw new Error('Email required');
     if (!c) throw new Error('Code required');
 
+    invalidateAuthSession();
+    const generation = getAuthSessionGeneration();
     set({ loading: true, lastError: null });
     try {
       const result: any = await confirmSignUp({ username: e, confirmationCode: c });
+      if (generation !== getAuthSessionGeneration()) return 'needs_sign_in';
 
       if (result?.nextStep?.signUpStep === 'COMPLETE_AUTO_SIGN_IN') {
         // Auto sign-in is in-memory and expires after ~3 minutes / an app
@@ -359,9 +392,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         // signs in manually, which is a fine fallback, not an error.
         try {
           const signInOutput: any = await autoSignIn();
+          if (generation !== getAuthSessionGeneration()) return 'needs_sign_in';
           if (signInOutput?.isSignedIn) {
-            await applySessionToState(set);
-            return 'signed_in';
+            return await applySessionToState(set, generation) ? 'signed_in' : 'needs_sign_in';
           }
         } catch {
           // fall through to manual sign-in
@@ -369,11 +402,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       }
       return 'needs_sign_in';
     } catch (err: any) {
+      if (generation !== getAuthSessionGeneration()) return 'needs_sign_in';
       const msg = friendlyAuthError(err);
       set({ lastError: msg });
       throw new Error(msg);
     } finally {
-      set({ loading: false });
+      if (generation === getAuthSessionGeneration()) set({ loading: false });
     }
   },
 
@@ -438,6 +472,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (!e) throw new Error('Email required');
     if (!password) throw new Error('Password required');
 
+    invalidateAuthSession();
+    const generation = getAuthSessionGeneration();
     set({ loading: true, lastError: null });
     try {
       const r: any = await signIn({
@@ -445,9 +481,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         password,
         options: { authFlowType: 'USER_PASSWORD_AUTH' },
       });
+      if (generation !== getAuthSessionGeneration()) return;
 
       if (r?.isSignedIn) {
-        await applySessionToState(set);
+        await applySessionToState(set, generation);
         return;
       }
 
@@ -471,6 +508,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
       throw new Error(friendlyAuthError(undefined));
     } catch (err: any) {
+      if (generation !== getAuthSessionGeneration()) return;
       if (__DEV__) console.log('[auth] signIn error:', err?.name);
 
       // Step-routing errors we raised above already carry friendly copy.
@@ -502,17 +540,21 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({ lastError: msg });
       throw new AuthFlowError('FAILED', msg);
     } finally {
-      set({ loading: false });
+      if (generation === getAuthSessionGeneration()) set({ loading: false });
     }
   },
 
   signOutNow: async () => {
+    invalidateAuthSession();
+    const generation = getAuthSessionGeneration();
     set({ loading: true, lastError: null });
     try {
       await signOut();
     } finally {
       // ✅ 关键：先清 sync token / activeUserSub，再更新 UI（避免 Home reload 还读旧 scope）
+      if (generation !== getAuthSessionGeneration()) return;
       await setSyncAccessToken(null);
+      if (generation !== getAuthSessionGeneration()) return;
 
       // Explicit sign-out clears the was-signed-in flag so the session-expired
       // banner never shows after a deliberate sign-out.
@@ -520,6 +562,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         await AsyncStorage.removeItem(AUTH_WAS_SIGNED_IN_KEY);
       } catch {}
 
+      if (generation !== getAuthSessionGeneration()) return;
       set({
         status: 'anonymous',
         userId: null,
@@ -541,6 +584,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   deleteAccountNow: async () => {
     const sub = get().userSub;
+    let generation = getAuthSessionGeneration();
+    const assertCurrent = () => {
+      if (generation !== getAuthSessionGeneration()) throw new Error('Session changed. Please try again.');
+    };
     set({ lastError: null });
 
     // (0) Stop and block every sync path (progress, draw state, outbox flush,
@@ -553,9 +600,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       await stopSyncForDeletion();
     } catch (err: any) {
+      assertCurrent();
       set({ lastError: err?.message ?? 'Delete account failed' });
       throw err;
     }
+    assertCurrent();
 
     // (a) Get a fresh access token for the authenticated server delete. Prefer
     // getFreshAccessToken (G05) — loaded lazily to avoid a static import cycle —
@@ -563,10 +612,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     let token: string | null = null;
     try {
       const { getFreshAccessToken } = await import('./freshToken');
+      assertCurrent();
       token = await getFreshAccessToken({ forceRefresh: true });
     } catch {
       token = null;
     }
+    assertCurrent();
     if (!token) token = get().accessToken;
 
     // (b) Delete the user's server-side data BEFORE Cognito deleteUser. A 404/405/501
@@ -575,37 +626,55 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       await deleteServerAccountData(token);
     } catch (err: any) {
+      assertCurrent();
       resumeSyncAfterFailedDeletion();
       set({ lastError: err?.message ?? 'Delete account failed' });
       throw err;
     }
+    assertCurrent();
 
     // (c) Delete the Cognito user.
     try {
       await deleteUser();
     } catch (err: any) {
+      assertCurrent();
       // Account still exists: keep the session, surface the error, purge nothing.
       resumeSyncAfterFailedDeletion();
       const msg = err?.message ?? 'Delete account failed';
       set({ lastError: msg });
       throw new Error(msg);
     }
+    assertCurrent();
+    // The account is gone: invalidate outstanding reads before local sign-out cleanup.
+    invalidateAuthSession();
+    generation = getAuthSessionGeneration();
+    set({ loading: true });
     // (d) Sign out, clear the sync token, purge this account's device storage.
     try {
       await signOut();
     } catch {}
-    await setSyncAccessToken(null); // clears activeUserSub + cancels pending sync (frozen helper, unchanged)
+    assertCurrent();
+    await setSyncAccessToken(null);
+    assertCurrent();
     await purgeUserScopedStorage(sub);
+    assertCurrent();
     // Deleting the account is an explicit sign-out too: never show the banner.
     try {
       await AsyncStorage.removeItem(AUTH_WAS_SIGNED_IN_KEY);
     } catch {}
-    set({ status: 'anonymous', userId: null, email: null, userSub: null, accessToken: null, idToken: null, lastError: null, sessionExpired: false, initRetryPending: false });
+    assertCurrent();
+    set({ status: 'anonymous', userId: null, email: null, userSub: null, accessToken: null, idToken: null, loading: false, lastError: null, sessionExpired: false, initRetryPending: false });
 
     // (e) Drop the deleted user's RevenueCat identity.
     await logoutRevenueCat();
   },
 }));
+
+useAuthStore.subscribe((state, previous) => {
+  if (state.status !== previous.status || state.userSub !== previous.userSub || state.userId !== previous.userId) {
+    invalidateAuthSession();
+  }
+});
 
 // ✅ helper: no object selector (avoid infinite loop in React 18 + zustand)
 export function useAuthUser() {

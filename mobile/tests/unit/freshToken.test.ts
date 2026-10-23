@@ -61,7 +61,12 @@ function resetStore(overrides: Record<string, unknown> = {}) {
     sessionExpired: false,
     initRetryPending: false,
     ...overrides,
+    ...(overrides.status === 'signed_in' ? { userSub: typeof overrides.userSub === 'string' ? overrides.userSub : 'sub-1' } : {}),
   });
+}
+
+function accessToken(value: string) {
+  return { payload: { sub: 'sub-1' }, toString: () => value };
 }
 
 describe('getFreshAccessToken', () => {
@@ -74,7 +79,7 @@ describe('getFreshAccessToken', () => {
   it('returns the refreshed access token and hands it to the sync layer', async () => {
     resetStore({ status: 'signed_in', accessToken: 'old-token', idToken: 'old-id' });
     (fetchAuthSession as any).mockResolvedValue({
-      tokens: { accessToken: 'fresh-token', idToken: 'fresh-id' },
+      tokens: { accessToken: accessToken('fresh-token'), idToken: 'fresh-id' },
     });
 
     const token = await getFreshAccessToken();
@@ -97,7 +102,7 @@ describe('getFreshAccessToken', () => {
 
     const p1 = getFreshAccessToken();
     const p2 = getFreshAccessToken();
-    resolveSession({ tokens: { accessToken: 'fresh-token', idToken: 'fresh-id' } });
+    resolveSession({ tokens: { accessToken: accessToken('fresh-token'), idToken: 'fresh-id' } });
     const [a, b] = await Promise.all([p1, p2]);
 
     expect(a).toBe('fresh-token');

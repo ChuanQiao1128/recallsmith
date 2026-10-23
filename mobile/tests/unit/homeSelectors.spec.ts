@@ -545,7 +545,7 @@ describe('goal line', () => {
     // due 4 + new 3 = 7, but sessionBuilder caps a run at 5 and the summary
     // will say "5 / 5 · full clear"; Home used to say "Full clear: 7 cards".
     // R22 §5: one plain line, no streak and no "full clear" wording.
-    expect(vm.goal).toEqual({ text: 'Today: 5 cards' });
+    expect(vm.goal).toEqual({ text: 'Session target: 5 cards' });
   });
 
   it('uses the singular for a one-card route', () => {
@@ -556,7 +556,7 @@ describe('goal line', () => {
       wallet: { availablePulls: 0, reservePulls: 0 },
     });
 
-    expect(vm.goal?.text).toBe('Today: 1 card');
+    expect(vm.goal?.text).toBe('Session target: 1 card');
   });
 
   it('is absent when the selected deck has nothing due and nothing new', () => {
