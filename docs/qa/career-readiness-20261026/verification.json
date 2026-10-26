@@ -1,0 +1,219 @@
+{
+  "code_snapshot": "df2875c3befcc4341e878ad1b067ca1f77df0048",
+  "recorded_at_utc": "2026-10-26T11:37:03.232060+00:00",
+  "checks": [
+    {
+      "name": "backend-full",
+      "tested_sha": "809e8c1ce60369587edcc8243585dc88aa877d07",
+      "command": [
+        "/Users/qc/.dotnet/dotnet",
+        "test",
+        "src_C/Tests/RecallSmith.Lambda.IntegrationTests/RecallSmith.Lambda.IntegrationTests.csproj",
+        "--logger",
+        "trx",
+        "--results-directory",
+        "/Users/qc/.local/share/codex-workflows/recallsmith/career-readiness-20261026/evidence/I1/backend-results"
+      ],
+      "scope_paths": [
+        "src_C"
+      ],
+      "scope_unchanged_at_code_snapshot": true,
+      "exit_code": 0,
+      "started_at": "2026-10-26T11:19:12.736092+00:00",
+      "finished_at": "2026-10-26T11:20:27.446862+00:00",
+      "raw_log_sha256": "aec517e653775191cfaabfc2eb4a77a40078600bcc26d5045da3ccbc00eecce5"
+    },
+    {
+      "name": "mobile-full",
+      "tested_sha": "46ce495b1bab47fac2b24b5cc657d72381f37214",
+      "command": [
+        "npm",
+        "exec",
+        "--",
+        "vitest",
+        "run"
+      ],
+      "scope_paths": [
+        "mobile"
+      ],
+      "scope_unchanged_at_code_snapshot": true,
+      "exit_code": 0,
+      "started_at": "2026-10-26T11:25:03.062587+00:00",
+      "finished_at": "2026-10-26T11:25:24.491578+00:00",
+      "raw_log_sha256": "f569dd549e22da3f8c9a026f50c60cd792b175509459fbcea005ed5559fbb26c"
+    },
+    {
+      "name": "mobile-typecheck",
+      "tested_sha": "46ce495b1bab47fac2b24b5cc657d72381f37214",
+      "command": [
+        "npm",
+        "run",
+        "test:typecheck"
+      ],
+      "scope_paths": [
+        "mobile"
+      ],
+      "scope_unchanged_at_code_snapshot": true,
+      "exit_code": 0,
+      "started_at": "2026-10-26T11:25:03.063426+00:00",
+      "finished_at": "2026-10-26T11:25:09.841888+00:00",
+      "raw_log_sha256": "2aa2275e846b658cb0664fae2c0cb81f02fb8374a7e004856e083beed141f977"
+    },
+    {
+      "name": "publish-linked",
+      "tested_sha": "46ce495b1bab47fac2b24b5cc657d72381f37214",
+      "command": [
+        "env",
+        "DOTNET_BIN=/Users/qc/.dotnet/dotnet",
+        "bash",
+        "scripts/test-publish-journey.sh"
+      ],
+      "scope_paths": [
+        "src_C",
+        "mobile/src",
+        "mobile/tests/integration/publishJourneyArtifact.test.ts",
+        "scripts/test-publish-journey.sh"
+      ],
+      "scope_unchanged_at_code_snapshot": true,
+      "exit_code": 0,
+      "started_at": "2026-10-26T11:26:36.493172+00:00",
+      "finished_at": "2026-10-26T11:26:47.168421+00:00",
+      "raw_log_sha256": "02c728380e20d03d6a3d4f866aaba1bafd49d36489a80280f8a97b642484eaed"
+    },
+    {
+      "name": "native-guard",
+      "tested_sha": "46ce495b1bab47fac2b24b5cc657d72381f37214",
+      "command": [
+        "node",
+        "mobile/tests/native/offline-entry.test.cjs"
+      ],
+      "scope_paths": [
+        "mobile/tests/native/offline-entry.js",
+        "mobile/tests/native/offline-entry.test.cjs"
+      ],
+      "scope_unchanged_at_code_snapshot": true,
+      "exit_code": 0,
+      "started_at": "2026-10-26T11:26:36.493214+00:00",
+      "finished_at": "2026-10-26T11:26:36.534136+00:00",
+      "raw_log_sha256": "109643fa90a0e22397fbab1e62139b68d52fae469f0f0418ec562cbd52ff265e"
+    },
+    {
+      "name": "frontend-build",
+      "tested_sha": "df2875c3befcc4341e878ad1b067ca1f77df0048",
+      "command": [
+        "npm",
+        "run",
+        "build"
+      ],
+      "scope_paths": [
+        "frontend"
+      ],
+      "scope_unchanged_at_code_snapshot": true,
+      "exit_code": 0,
+      "started_at": "2026-10-26T11:31:28.532976+00:00",
+      "finished_at": "2026-10-26T11:31:37.070080+00:00",
+      "raw_log_sha256": "ace50c2e6ef4588ba9541d28cd0c61e1e62d47522b117c53f6648c7e14d70a0e"
+    },
+    {
+      "name": "frontend-lint",
+      "tested_sha": "df2875c3befcc4341e878ad1b067ca1f77df0048",
+      "command": [
+        "npm",
+        "run",
+        "lint"
+      ],
+      "scope_paths": [
+        "frontend"
+      ],
+      "scope_unchanged_at_code_snapshot": true,
+      "exit_code": 0,
+      "started_at": "2026-10-26T11:31:28.532982+00:00",
+      "finished_at": "2026-10-26T11:31:35.263502+00:00",
+      "raw_log_sha256": "5ed0e88da1ac300b6ae6569a17dbe8c212194bcc40c4241e30cd032b47dd415c"
+    },
+    {
+      "name": "frontend-full",
+      "tested_sha": "df2875c3befcc4341e878ad1b067ca1f77df0048",
+      "command": [
+        "npm",
+        "exec",
+        "--",
+        "vitest",
+        "run"
+      ],
+      "scope_paths": [
+        "frontend",
+        "README.md"
+      ],
+      "scope_unchanged_at_code_snapshot": true,
+      "exit_code": 0,
+      "started_at": "2026-10-26T11:32:45.124784+00:00",
+      "finished_at": "2026-10-26T11:32:58.373994+00:00",
+      "raw_log_sha256": "579f0384277dcd018c6f85951c19c1c8e74226e48548b61d68215bdbba82ebf7"
+    },
+    {
+      "name": "browser-full",
+      "tested_sha": "df2875c3befcc4341e878ad1b067ca1f77df0048",
+      "command": [
+        "npm",
+        "exec",
+        "--",
+        "playwright",
+        "test"
+      ],
+      "scope_paths": [
+        "frontend",
+        "infra/modules/edge/security_headers.json"
+      ],
+      "scope_unchanged_at_code_snapshot": true,
+      "exit_code": 0,
+      "started_at": "2026-10-26T11:34:08.117214+00:00",
+      "finished_at": "2026-10-26T11:34:21.630663+00:00",
+      "raw_log_sha256": "9d5006ab4f69c1ec6d456695860dd5740a92ff2327cd068e2cef03b91e9035ba"
+    }
+  ],
+  "results": {
+    "backend_passed": 3083,
+    "frontend_passed": 1684,
+    "mobile_passed": 2914,
+    "mobile_artifact_tests_skipped_in_default_suite": 3,
+    "linked_journey_backend_passed": 1,
+    "linked_journey_mobile_passed": 3,
+    "browser_passed": 17,
+    "frontend_lint_errors": 0,
+    "frontend_lint_existing_warnings": 1
+  },
+  "native": {
+    "business_source_sha": "430b8c2cf4ce15b96e573ae5024599d0ef45296c",
+    "qa_source_sha": "6710f06598a21579c16a258cb16a57166d14a42d",
+    "business_source_scope": [
+      "mobile/src",
+      "mobile/App.tsx",
+      "mobile/assets",
+      "mobile/package.json",
+      "mobile/package-lock.json",
+      "mobile/index.ts",
+      "mobile/app.json",
+      "mobile/plugins",
+      "mobile/metro.config.js"
+    ],
+    "qa_source_scope": [
+      "mobile/tests/native",
+      "mobile/.maestro",
+      "mobile/scripts/build-native-journey-qa.py",
+      "mobile/scripts/run-native-journey-qa.py"
+    ],
+    "unchanged_at_code_snapshot": true,
+    "js_sha256": "11c27143517fe1a3b45532c4debd032524bb19c1a98e64688d09c8fb893012e9",
+    "main_path_seconds": 51.618,
+    "additional_restart_seconds": 4.165,
+    "meaning": "QA flow durations, not app/network performance measures"
+  },
+  "limits": [
+    "No merge or production deployment/migration.",
+    "Native evidence is isolated guest iOS Simulator QA with reused/adapted shell. Physical device, VoiceOver, FPS, production auth and paid entitlements untested.",
+    "Operations window spans releases; current-source attribution, business success rate and actual billing remain open.",
+    "Linked importer cases require same-run producer artifact; they run via the dedicated runner, not default mobile suite or a deployed backend."
+  ],
+  "note": "This code snapshot predates this report-only commit. Final review must bind its own artifact SHA and confirm the subsequent diff is restricted to evidence documents."
+}
