@@ -2,6 +2,15 @@
 
 RecallSmith is a spaced-repetition product for developers. It includes an Expo and React Native learner app, a React admin console for authoring and publishing decks, and a .NET 10 backend on AWS with PostgreSQL. This is a personal project written and maintained by one person; AI tools have assisted with implementation and documentation.
 
+The learner app is branded DeveloperCards; RecallSmith is the repository and project name. These screenshots show the guest learning and local persistence journey:
+
+<p align="center">
+  <img src="docs/showcase/images/b2-ios-simulator-qa-offline-starter.png" alt="Offline starter lesson card" width="170" />
+  <img src="docs/showcase/images/b2-ios-simulator-qa-draw-result.png" alt="Single-card draw result" width="170" />
+  <img src="docs/showcase/images/b2-ios-simulator-qa-persisted-home.png" alt="Home after app relaunch" width="170" />
+</p>
+<p align="center"><em>All three are isolated iOS 18.5 Simulator QA captures, using the current JavaScript bundle in a reused QA native shell. They are not production captures or real-device evidence.</em></p>
+
 ## Run locally
 
 Requirements: Node.js 20, the .NET 10 SDK selected by `src_C/global.json`, and Docker for the backend integration tests.

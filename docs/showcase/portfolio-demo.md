@@ -1,30 +1,32 @@
-# RecallSmith portfolio demo script (2 min 50 s)
+# RecallSmith portfolio demo plan (2 min 55 s)
 
-**Audience:** hiring reviewers for .NET/AWS full-stack roles. **Purpose:** show the learner-facing offline sync path, then connect it to backend conflict handling and production recovery. This is a recording plan, not a recorded video. Use genuine app and repository screens; do not add mock metrics or synthetic product results.
+**Audience:** hiring reviewers for .NET/AWS full-stack roles. **Purpose:** show the actual guest/offline learning flow in the isolated Simulator, then connect it to isolated publish acceptance and separately documented operations. This is a script, not a recorded video. The app is branded DeveloperCards; RecallSmith is the repository and project name.
 
 | Time | Screen and action | Narration |
 | --- | --- | --- |
-| 0:00–0:16 | Title card with the RecallSmith repository name. Then show the mobile app's Home screen. | “RecallSmith is a spaced-repetition app for developers. I build and maintain it as a personal project, with AI tools assisting parts of the work. I’ll follow one concern from the learner app through the backend and into operations.” |
-| 0:16–0:48 | In the mobile app, tap the home screen's **Review** action and answer a card. Return Home and show `ProgressSyncStatus`. If using an offline recording setup, show the real queued or retry message that the app displays. | “A review is saved locally before sync is scheduled. If the request fails, the queue remains on the device and the home screen reports whether work is waiting or needs a retry. That keeps the learner's local review usable while the connection is unavailable.” |
-| 0:48–1:23 | Show `mobile/src/sync/progressSync.ts`, then `src_C/Vpc/Runtime/ProgressEvents.cs` and `src_C/Vpc/Runtime/ProgressMerge.cs`. Use editor search to point to event ids, account-scoped keys and merge behavior. | “The client sends identified review events and can safely replay an event after a lost response. Queue and cursor keys are scoped by the signed-in account. On the server, progress counts add, monotonic facts keep their greatest value, and the fields for the latest review move together. The merge code also documents an exact-millisecond tie that remains arrival-order dependent.” |
-| 1:23–1:58 | Show `mobile/src/sync/drawStateSync.ts` at the merge-policy comments, then the engineering case's known-loss paragraph. | “Other state needs a different conflict rule. The collection of owned cards merges by union, while pity and wallet snapshots use last-writer-wins timestamps. Two offline devices spending from the same wallet can lose one device's spends. I kept that limitation explicit; a wallet event ledger would be a larger follow-up.” |
-| 1:58–2:25 | Show the CI/CD overview in `.github/workflows/cd.yml`, then `scripts/cd/restore-point.sh` and the automatic rollback section in `infra/RUNBOOK.md`. | “Production delivery builds without AWS credentials, then waits for the production environment approval before using OIDC. The deploy records the aliases and web assets it will change, runs smoke checks, and restores changed targets when a new check fails. Database migrations are separate, so this rollback does not claim to undo database changes.” |
-| 2:25–2:42 | Show `docs/ops/dr-restore-drill-2026-10-04.md`, then `docs/qa/career-readiness-20261026/operations.md`. | “One restore drill took 26 minutes 10 seconds to reach an available database; the app check finished 26 minutes 25 seconds after the request. Its restore-point lag was 8 minutes 3 seconds. A separate read-only observation sampled sync handler latency, but spans releases and cannot prove business success or end-to-end speed.” |
-| 2:42–2:50 | End card with links to the engineering cases and career assessment. | “The repository includes the implementation references, trade-offs and remaining evidence gaps.” |
+| 0:00–0:14 | Start on the actual DeveloperCards Home screen. Briefly show the RecallSmith repository name in an end card or editor tab. | “RecallSmith is my personal spaced-repetition project. The learner app is branded DeveloperCards. I build it alone, with AI tools assisting parts of the work. This clip follows a guest lesson through a local reward, then shows separate backend acceptance evidence.” |
+| 0:14–0:30 | In the dedicated isolated iOS 18.5 Simulator QA app, start the bundled SAA-C03 lesson. Show the lesson counter and offline notice on the first card. | “This run starts as a guest from the bundled starter pack. The app can open the lesson offline, without fetching content from a server.” |
+| 0:30–0:55 | Tap **Show answer**, pause on the answer, then tap **Got it**. Repeat the actual controls through the five-card lesson. If trimming or speeding up repeated cards, show a visible time-compressed label. | “The lesson asks me to recall first, then reveal the answer and mark the card learned. Completing five cards follows the normal local lesson flow.” |
+| 0:55–1:18 | Show lesson completion, open **Draw**, spend one draw, perform the visible native swipe and stop on the real draw result with four draws left. | “Completing the lesson grants its five bootstrap draws. I spend one through the local draw flow. The result changes the collection, and four draws remain.” |
+| 1:18–1:38 | Return Home, terminate and relaunch the same isolated app, then show Home with the reward pack ready, four draws and the saved-on-device status. | “After relaunch, the local lesson and draw state are still there. The status says it is saved on this device and asks the guest to sign in to sync. This recording does not demonstrate sign-in or production sync.” |
+| 1:38–2:00 | Show the isolated publish journey summary, then the corresponding authoring handler, worker, database assertion and mobile importer source. | “A separate acceptance journey edits a card, publishes through the real handlers against disposable PostgreSQL, redelivers the captured job, rebuilds a manifest and installs downloaded bytes with the actual mobile importer.” |
+| 2:00–2:20 | Show the publish journey's explicit boundaries: synthetic identity, queue/S3/network/storage adapters and the injected manifest rebuild delegate. | “The journey uses synthetic identity and local adapters. Its worker calls manifest rebuild unconditionally, so it does not verify the default freshness and debounce decision. It is business-path evidence, not a deployed end-to-end test.” |
+| 2:20–2:39 | Show the publish metric contract and 27 October SLO review. Point to replay limitations and retained targets. | “Publish metrics are best-effort handler events, not a complete job ledger. The SLO review kept the 95 percent within two seconds sync target and existing guards. This observation cannot prove one source version, end-to-end speed, sync success or actual cost.” |
+| 2:39–2:55 | Show the approved CD restore-point summary and the dated database restore drill. End on links to the three engineering cases. | “CD restores changed code and web assets after a new smoke failure; database recovery is separate. The recorded restore is one drill, not a recovery guarantee. The repository links each case to its evidence and limits.” |
 
 ## Recording notes
 
-- The script describes an under-three-minute screen recording. No video or new screenshots have been created for this work.
-- Use a local or otherwise authorized demo session with an existing deck. Do not create or publish demo content in production just for recording.
-- Show the status message the app actually displays. Do not stage a false sync failure or replace the UI with a mock.
-- The operations observation is a bounded sample. Keep its date and limitations visible if any number is included.
-- If any page or screen is unavailable in the recording environment, show its source file and label the footage accordingly. Do not present source code or a mock screen as a live product result.
+- The three real screenshots in the root README are unedited captures from an isolated iOS 18.5 iPhone 16 Simulator run, using the current JavaScript bundle in a reused QA native shell. They are not production or physical-device evidence.
+- Use the dedicated isolated QA app and its existing local journey evidence. Do not create or publish demo data in production.
+- Keep the offline/guest state visible. Do not present an authenticated session, paid purchase, cross-device sync or production publish as part of this demo.
+- If repeated card actions are sped up, label the cut as time-compressed. Keep screenshots genuine and leave the actual controls visible at least once.
+- No video has been recorded for this document. The root README links to the current QA screenshots; this plan does not claim that recording exists.
 
 ## Sources
 
-- Mobile review and sync status: `mobile/src/screens/HomeScreen.tsx`, `mobile/src/screens/SessionCardScreen.tsx`, `mobile/src/features/gacha/components/ProgressSyncStatus.tsx`.
-- Client sync: `mobile/src/sync/progressSync.ts`, `mobile/src/sync/drawStateSync.ts`.
-- Backend merge: `src_C/Vpc/Runtime/ProgressEvents.cs`, `src_C/Vpc/Runtime/ProgressMerge.cs`, `src_C/Vpc/Runtime/DrawStateSync.cs`.
-- Publish processing: `src_C/Vpc/Authoring/Publish.cs`, `src_C/Worker/Services/PublishJobProcessor.cs`.
-- Delivery and recovery: `.github/workflows/cd.yml`, `scripts/cd/restore-point.sh`, `scripts/rollback.sh`, `infra/RUNBOOK.md`.
-- Dated operations records: `docs/qa/career-readiness-20261026/operations.md`, `docs/ops/dr-restore-drill-2026-10-04.md`.
+- Native path and limits: [native journey](../qa/career-readiness-20261026/native-journey.md).
+- Isolated publish acceptance and adapter boundaries: [publish journey](../qa/career-readiness-20261026/publish-journey.md).
+- Replay metrics and SLO decisions: [publish metric contract](../qa/career-readiness-20261026/publish-metrics.md), [SLO review](../qa/career-readiness-20261026/slo-review-20261027.md), and [operations observation](../qa/career-readiness-20261026/operations.md).
+- Integrated test status: [verification tracker](../qa/career-readiness-20261026/verification.md).
+- UI actions and local session behavior: `mobile/src/screens/SessionCardScreen.tsx`, `mobile/src/screens/DrawScreen.tsx`, `mobile/src/screens/DrawResultScreen.tsx`, `mobile/src/screens/HomeScreen.tsx`.
+- Backend publish and recovery: `src_C/Vpc/Authoring/Publish.cs`, `src_C/Worker/Services/PublishJobProcessor.cs`, `.github/workflows/cd.yml`, `scripts/cd/restore-point.sh`, `infra/RUNBOOK.md`.
