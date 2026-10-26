@@ -9,21 +9,19 @@ API Gateway. See the [root README](../README.md) for the rest of the system.
 | Script | What it does |
 | --- | --- |
 | `npm run dev` | Vite dev server on port 5173 |
-| `npm run build` | `tsc -b && vite build` — this is also the type-check step |
+| `npm run build` | `tsc -b && vite build` — type-checks the app and test projects before bundling |
 | `npm test` | `vitest run` |
 | `npm run lint` | `eslint .` — 0 errors, 1 known warning |
 | `npm run preview` | Serves an already-built `dist/` |
 
-Two things about type-checking that are easy to get wrong here:
+The root `tsconfig.json` contains project references and an empty `files` list. Consequently,
+`npx tsc --noEmit` in this project checks zero files and can exit successfully despite a type
+error. Use `npx tsc -b --force` to force a build of every referenced project. Plain `tsc -b`
+may skip projects whose incremental build information is current.
 
-- `npx tsc --noEmit` is **not** a check. `tsconfig.json` is references-only with
-  no `include`, so it checks zero files and exits 0 even with a real type error
-  in `src/`. Use `npx tsc -b --force`.
-- Plain `tsc -b` skips work when an incremental buildinfo is present. `--force`
-  reproduces what CI does.
-
-`tests/` is outside the `include` of every tsconfig, so the test files are not
-type-checked at all — only ESLint and Vitest's transform read them.
+`tsconfig.test.json` includes `tests/` and is referenced from the root project. CI's
+`npm run build` therefore type-checks the frontend tests as well as the app. Vitest still
+executes the tests; type-checking does not replace runtime assertions.
 
 ## Environment
 
