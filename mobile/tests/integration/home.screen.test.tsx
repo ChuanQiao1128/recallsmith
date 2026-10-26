@@ -233,7 +233,7 @@ describe('HomeScreen v9', () => {
 
   it('refreshes the mounted Home after a progress commit, without a tab change', async () => {
     qaUserSub = 'qa-synthetic';
-    deckSummariesFixture = deckSummariesFixture.map(d => ({ ...d, dueToday: 0 }));
+    deckSummariesFixture = deckSummariesFixture.map(d => ({ ...d, dueToday: 0, plannedToday: 0, newToday: 0 }));
     let tree!: renderer.ReactTestRenderer;
     try {
       await act(async () => {
@@ -241,14 +241,18 @@ describe('HomeScreen v9', () => {
           route={{ key: 'home', name: 'Home' } as any} />);
       });
       await flush();
-      expect(tree.root.findAllByProps({ testID: 'home-study-due-link' })).toHaveLength(0);
-      deckSummariesFixture = deckSummariesFixture.map((d, i) => ({ ...d, dueToday: i === 0 ? 1 : 0 }));
+      expect(tree.root.findByProps({ testID: 'home-hero-title' }).props.children).toBe('A reward pack is ready');
+      deckSummariesFixture = deckSummariesFixture.map((d, i) => ({ ...d, dueToday: i === 0 ? 1 : 0, plannedToday: i === 0 ? 1 : 0 }));
       await act(async () => { notifyProgressChanged({ userSub: 'other', deckSlug: 'csharp' }); });
       await flush();
-      expect(tree.root.findAllByProps({ testID: 'home-study-due-link' })).toHaveLength(0);
+      expect(tree.root.findByProps({ testID: 'home-hero-title' }).props.children).toBe('A reward pack is ready');
       await act(async () => { notifyProgressChanged({ userSub: 'qa-synthetic', deckSlug: 'csharp' }); });
       await flush();
-      expect(tree.root.findByProps({ testID: 'home-study-due-link' })).toBeTruthy();
+      expect(tree.root.findByProps({ testID: 'home-hero-title' }).props.children).toBe('1 card waiting');
+      const cover = tree.root.find((node) =>
+        (node.type as any) === 'Pressable' && node.props.accessibilityLabel === 'Clear due reviews');
+      await act(async () => { cover.props.onPress(); });
+      expect(navigateMock).toHaveBeenCalledWith('SessionCard', { slug: 'csharp' });
     } finally {
       if (tree) await act(async () => tree.unmount());
       qaUserSub = null;
@@ -291,6 +295,10 @@ describe('HomeScreen v9', () => {
     });
     await flush();
 
+    expect(tree.root.findAll((node) =>
+      typeof node.props.testID === 'string' &&
+      /^(home-study-due-link|home-first-draw-link|home-collapse-|home-deck-row-)/.test(node.props.testID),
+    )).toHaveLength(0);
     expect(tree.root.findByProps({ testID: 'screen-home-root' })).toBeTruthy();
     expect(tree.root.findByProps({ testID: 'screen-home-primary-cta' })).toBeTruthy();
     expect(
@@ -305,7 +313,7 @@ describe('HomeScreen v9', () => {
     expect(String(goal.props.children)).toBe('Session target: 2 cards');
   });
 
-  it('shows due-card study link and routes it directly to SessionCard', async () => {
+  it('offers the visible study CTA and routes it directly to SessionCard', async () => {
     // The Home daily-study path bypasses the Challenge route-preview
     // interstitial and drops users straight into the first review card.
     // Saves a tap on the highest-volume daily action.
@@ -317,19 +325,19 @@ describe('HomeScreen v9', () => {
     });
     await flush();
 
-    const studyLink = tree.root.findByProps({ testID: 'home-study-due-link' });
-    expect(studyLink).toBeTruthy();
+    const studyCta = tree.root.find((node) =>
+      (node.type as any) === 'Pressable' && node.props.testID === 'home-primary-cta');
+    expect(studyCta.props.accessibilityRole).toBe('button');
+    expect(studyCta.props.disabled).toBe(false);
+    expect(studyCta.findByType('Text' as any).props.children).toBe('Start today’s session');
 
-    act(() => {
-      studyLink.props.onPress();
-    });
+    await act(async () => { studyCta.props.onPress(); });
 
-    expect(navigateMock).toHaveBeenCalledWith('SessionCard', expect.objectContaining({}));
-    const lastCall = navigateMock.mock.calls.find((c) => c[0] === 'SessionCard');
-    expect(lastCall?.[0]).toBe('SessionCard');
+    expect(setActiveDeckSlugMock).toHaveBeenCalledWith('csharp');
+    expect(navigateMock).toHaveBeenCalledWith('SessionCard', { slug: 'csharp' });
   });
 
-  it('hides due-card study link when no deck has due work', async () => {
+  it('offers the visible reward action when no deck has due work', async () => {
     deckSummariesFixture = deckSummariesFixture.map((deck) => ({
       ...deck,
       dueToday: 0,
@@ -345,10 +353,16 @@ describe('HomeScreen v9', () => {
     });
     await flush();
 
-    expect(tree.root.findAllByProps({ testID: 'home-study-due-link' })).toHaveLength(0);
+    const rewardCta = tree.root.find((node) =>
+      (node.type as any) === 'Pressable' && node.props.testID === 'home-primary-cta');
+    expect(rewardCta.props.disabled).toBe(false);
+    expect(rewardCta.findByType('Text' as any).props.children).toBe('Open reward pack');
+    await act(async () => { rewardCta.props.onPress(); });
+    expect(navigateMock).toHaveBeenCalledWith('Draw', { slug: 'csharp', rewardPending: true });
+    expect(navigateMock).not.toHaveBeenCalledWith('SessionCard', expect.anything());
   });
 
-  it('keeps settings button accessible and opens first draw coach link when enabled', async () => {
+  it('opens Settings and the visible first-draw coach cover', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(
@@ -365,10 +379,14 @@ describe('HomeScreen v9', () => {
     );
     expect(settings).toBeTruthy();
 
-    const firstDrawLink = tree.root.findByProps({ testID: 'home-first-draw-link' });
-    act(() => {
-      firstDrawLink.props.onPress();
-    });
+    act(() => { settings.props.onPress(); });
+    expect(navigateMock).toHaveBeenCalledWith('Settings');
+
+    const cover = tree.root.find((node) =>
+      (node.type as any) === 'Pressable' && node.props.accessibilityLabel === 'Open reward pack');
+    act(() => { cover.props.onPress(); });
+    expect(tree.root.findAll((node) =>
+      typeof node.props.testID === 'string' && node.props.testID === 'home-first-draw-link')).toHaveLength(0);
 
     expect(navigateMock).toHaveBeenCalledWith('Draw', {
       slug: 'csharp',

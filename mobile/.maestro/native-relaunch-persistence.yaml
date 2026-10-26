@@ -1,0 +1,10 @@
+# run-native-journey-qa.py captures durable state before and after this second restart.
+appId: com.timeawake.recallsmith.career.b2
+---
+- stopApp
+- launchApp:
+    clearState: false
+- assertVisible:
+    id: "home-draw-status-badge"
+- assertNotVisible: "WELCOME TO DEVELOPERCARDS"
+- takeScreenshot: "05-second-relaunch-ios-simulator"

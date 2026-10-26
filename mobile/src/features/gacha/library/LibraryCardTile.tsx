@@ -165,22 +165,6 @@ export const LibraryCardTile = React.memo(function LibraryCardTile({
         </View>
       )}
 
-      {/* Hidden test contract — library-card-status-{uid} must remain in
-          tree with the legacy status label. Rendered as 0×0. */}
-      <View
-        testID={`library-card-status-${item.stableUid}`}
-        style={styles.cardTestProbeHidden}
-        accessible={false}
-        accessibilityElementsHidden
-        importantForAccessibility="no-hide-descendants"
-      >
-        <Text
-          style={styles.cardTestProbeHidden}
-          maxFontSizeMultiplier={LIBRARY_TILE_MAX_FONT_SCALE}
-        >
-          {item.statusLabel}
-        </Text>
-      </View>
     </Pressable>
   );
 });

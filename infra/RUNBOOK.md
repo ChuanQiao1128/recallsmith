@@ -483,7 +483,16 @@ multi-window (SRE workbook): fast = 1 h AND 5 min, slow = 6 h AND 30 min, so an 
 |---|---|---|---|
 | api-availability | app API requests (API Gateway `Count`) without a `5xx`. The slow burn and the budget leave out the synthetic check's own requests (`GET /health`, and the `4xx` of `GET /api/v1/me` and of `ANY /api/v1/sync/{proxy+}`, which are the token-less probes' 401s) through the detailed route metrics; the fast burn counts every request. Scheduled `/api/internal/*` callbacks that pass the gateway are counted. | 99.5 % | 28 days |
 | sync-latency | requests to `POST /api/v1/sync/push`, `GET /api/v1/sync/progress`, `POST /api/v1/draw-state/sync` served in ≤ 2000 ms (EMF `Latency` `PR(:2000)` weighted by `SampleCount`). This is **handler latency**: RouteMetrics times the core-vpc dispatch, so Lambda init / cold start is not in it. | 95 % | 28 days |
-| publish-success | publish jobs that end in success (`PublishJobsSucceeded` vs `PublishJobsFailed`) | 95 % | 28 days |
+| publish-success | best-effort worker-observed publish outcomes, including manifest health (`PublishJobsSucceeded` vs `PublishJobsFailed`); see the replay/metric contract below | 95 % | 28 days |
+
+Publish metrics are not exactly-once counts of database terminal jobs. Healthy terminal/absent replay
+emits neither metric; FAILED/absent replay also emits neither when manifest rebuilding fails. A SUCCESS
+commit or SUCCESS replay whose manifest still fails on the final receive remains a bad event, even
+though the persisted job stays SUCCESS. SUCCESS commit → manifest failure → healthy replay can emit
+zero good/bad events. Crashes/timeouts may emit nothing, and final system failure counts bad even if
+failure persistence fails. Keep worker Errors and DLQ alarms alongside the burn alarms. The transition
+table, tests and retained biases are in
+[`publish-metrics.md`](../docs/qa/career-readiness-20261026/publish-metrics.md).
 
 The synthetic check sends 12 API requests an hour (4 × `GET /health`, 4 × `GET /api/v1/me` → 401, and since R28
 MONITOR 4 × `GET /api/v1/sync/progress` → 401). Counted as traffic, they would be most of the availability
