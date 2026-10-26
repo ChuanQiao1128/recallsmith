@@ -24,12 +24,23 @@ npm ci
 npx expo start
 ```
 
-Run focused suites:
+`npx expo start` starts Metro. Run the app in a compatible native development build because it includes native dependencies. Sign-in also needs the public Cognito build settings `EXPO_PUBLIC_AWS_REGION`, `EXPO_PUBLIC_COGNITO_USER_POOL_ID`, and `EXPO_PUBLIC_COGNITO_USER_POOL_CLIENT_ID`.
+
+Run the test suites from the repository root:
 
 ```bash
-cd frontend && npx vitest run
-cd mobile && npx vitest run
-cd src_C && dotnet test Tests/RecallSmith.Lambda.IntegrationTests
+(
+  cd frontend
+  npm test
+)
+(
+  cd mobile
+  npm test
+)
+(
+  cd src_C
+  dotnet test Tests/RecallSmith.Lambda.IntegrationTests
+)
 ```
 
 The frontend build runs `tsc -b` before Vite, and this is the frontend type-check gate. `frontend/tsconfig.json` is references-only, so `npx tsc --noEmit` there checks no files. Test files are included through `frontend/tsconfig.test.json`.
@@ -52,11 +63,11 @@ An admin request passes through `frontend/src/api/http.ts` to API Gateway and th
 
 ## Delivery and operations
 
-CI validates the mobile and frontend projects, runs a Playwright browser smoke against the built console with stubbed API and Cognito routes, tests the .NET backend, and checks the Python packages, infrastructure, MCP server, n8n recipes and author runner. The frontend build includes TypeScript checks for app and test files. CI does not deploy.
+CI validates the mobile and frontend projects, runs a Playwright browser smoke against the built console with stubbed API and Cognito routes, tests the .NET backend, and checks the Python packages, infrastructure, MCP server, n8n recipes and author runner. The frontend build includes TypeScript checks for app and test files. After successful CI on `main`, CD plans and builds selected production targets, then waits for the configured environment approval before using OIDC credentials to deploy and run smokes.
 
-Production CD starts after successful CI on `main`. A credential-free build stages hash-verified artifacts; the production deploy waits for the configured GitHub environment approval and uses OIDC credentials. It records a restore point, deploys selected targets and runs smokes. A newly failing smoke triggers automatic rollback of changed Lambda aliases and web assets. CD does not run database migrations. See [CD operations](infra/RUNBOOK.md#flow) and [restore procedures](infra/RUNBOOK.md#automatic-rollback).
+The deploy records a restore point, runs baseline-aware smokes, and automatically restores changed Lambda aliases and web assets if a new smoke fails. CD does not run database migrations. See [CD operations](infra/RUNBOOK.md#flow) and [restore procedures](infra/RUNBOOK.md#automatic-rollback).
 
-The console has a Sentry integration when its deployment is configured with a DSN; without one, Sentry is disabled in that build. The frontend also has a separate `sendBeacon` error funnel, which sends nothing unless `VITE_ERROR_REPORT_URL` is set. These are distinct paths. See [frontend deployment and reporting](frontend/README.md#deployment).
+The console funnels uncaught window errors, unhandled rejections and render errors to Sentry when a DSN is configured in the build. Without a DSN, the reporting funnel sends nothing. See [frontend deployment and reporting](frontend/README.md#deployment).
 
 ## Engineering cases and career evidence
 
@@ -69,13 +80,13 @@ The console has a Sentry integration when its deployment is configured with a DS
 
 ## Historical analytics retirement
 
-Snowflake was retired on 2026-10-02. The trial had ended, the pipeline had been run by hand once and was never scheduled, and PostgreSQL `analytics_daily` rollups already provided usage and per-card counts. The retired analytics outbox also carried an unsalted user hash and device id with no consumer reading them. R26 stopped sync writes to the outbox and removed its publisher and the console's Content Intelligence page. The outbox table and its existing rows remain in production until the owner runs migration 045, which drops them permanently; this repository does not claim that migration has run.
+Snowflake was retired on 2026-10-02. The trial had ended, the pipeline had been run by hand once and was never scheduled, and PostgreSQL `analytics_daily` rollups already provided usage and per-card counts. The retired analytics outbox also carried an unsalted user hash and device id with no consumer reading them. R26 stopped sync writes to the outbox and removed its publisher and the console's Content Intelligence page. The owner ran migration 045 on 2026-10-02, dropping the outbox table and its existing rows; the 2026-10-04 restore drill reported migration 45 applied to both production and the restored copy.
 
 ## Current operational evidence
 
 The [26 October operations observation](docs/qa/career-readiness-20261026/operations.md) records a read-only, bounded CloudWatch sample. It found 228 sync handler samples and 16 publish-success events in the requested 28-day window. The sample spans releases, does not identify the source version for every observation, and does not establish capacity, end-to-end latency, sync business success or a per-job publish success rate. The source queries and responses are in [operations-source.json](docs/qa/career-readiness-20261026/operations-source.json).
 
-The database restore drill recorded a 26-minute restore and an 8-minute restore-point lag in its 4 October 2026 evidence ([drill record](docs/ops/dr-restore-drill-2026-10-04.md)). It is one drill on the recorded database size, not a service-wide recovery guarantee.
+The 4 October 2026 database restore drill took 26 minutes 10 seconds from restore request to instance availability; the app check completed 26 minutes 25 seconds after the request. Its measured restore-point lag was 8 minutes 3 seconds ([drill record](docs/ops/dr-restore-drill-2026-10-04.md)). This is one drill on the recorded database size, not a service-wide recovery guarantee.
 
 ## CI and release details
 

@@ -55,7 +55,7 @@ describe('the root README', () => {
     expect(markdown).toMatch(/Snowflake[^\n]*retired[^\n]*2026-10-02|2026-10-02[^\n]*retired[^\n]*Snowflake/);
   });
 
-  it('explains the retirement in §1, and leaves the outbox table to migration 045', () => {
+  it('explains the retirement in §1 and records migration 045', () => {
     // The intro sentence carries the date as well, so the date alone does not
     // prove the explanation is still there. This finds the §1 paragraph and
     // asks for its reasons.
@@ -66,8 +66,8 @@ describe('the root README', () => {
       expect(paragraph, reason).toContain(reason);
     }
 
-    // The table and its rows stay in production until the owner runs 045, so
-    // the sentence about the outbox table has to say that, not that it is gone.
+    // The outbox table and its rows were dropped by owner-run migration 045.
+    // Keep that historical boundary explicit in the README's retirement paragraph.
     const outboxSentences = paragraph.replace(/\s+/g, ' ').split(/(?<=\.) /).filter(s => s.includes('outbox table'));
     expect(outboxSentences.length).toBeGreaterThanOrEqual(1);
     for (const sentence of outboxSentences) {
