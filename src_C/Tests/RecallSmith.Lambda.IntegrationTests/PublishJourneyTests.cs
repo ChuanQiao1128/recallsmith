@@ -21,7 +21,8 @@ using RecallSmith.Lambda.Worker.Services;
 
 namespace RecallSmith.Lambda.IntegrationTests;
 
-/// Real handlers, PostgreSQL, worker, artifacts and manifest; only external transports are replaced.
+/// Real handlers, PostgreSQL, worker processing, artifacts and manifest with external transport adapters.
+/// The injected unconditional rebuild bypasses the default worker manifest freshness/skip decision.
 [Collection(PostgresCollection.Name)]
 public class PublishJourneyTests
 {
@@ -152,6 +153,8 @@ public class PublishJourneyTests
       using var store = new ObjectStore();
       var processor = new PublishJobProcessor(new JobRepository(), store);
       var rebuilds = 0;
+      // This calls the real builder unconditionally, bypassing RebuildManifestAfterAsync/ManifestCoversJob
+      // and its LastModified/generated-at freshness decision. The default bootstrap/env selection is also outside this journey.
       var worker = new WorkerFunction(processor, async _ =>
       {
         await using var conn = await _db.OpenAsync();
