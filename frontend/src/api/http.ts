@@ -1,6 +1,6 @@
 // src/api/http.ts
 import axios from 'axios';
-import { refreshTokens } from '../auth/cognito';
+import { refreshTokens, TokenRefreshError } from '../auth/cognito';
 import {
   clearStoredTokens,
   readStoredTokens,
@@ -77,7 +77,11 @@ function refreshOnce(refreshToken: string): Promise<StoredTokens | null> {
         expiresIn: resp.expires_in,
       }),
     )
-    .catch(() => null)
+    .catch(err => {
+      if (err instanceof TokenRefreshError && err.kind === 'permanent') return null;
+      // Reject before dispatch, retaining the session and the caller's form.
+      throw err instanceof TokenRefreshError ? err : new TokenRefreshError('temporary');
+    })
     .finally(() => {
       refreshInFlight = null;
     });
@@ -128,7 +132,7 @@ http.interceptors.request.use(async cfg => {
     usable = stored.refreshToken ? await refreshOnce(stored.refreshToken) : null;
 
     if (!usable) {
-      // Either there was nothing to refresh with, or Cognito refused. Now the
+      // Either there was nothing to refresh with, or the grant was revoked. The
       // session really is over, so clearing is right — which it was not before
       // the refresh had been tried.
       clearStoredTokens();

@@ -105,6 +105,22 @@ export async function exchangeCodeForTokens(code: string, returnedState: string)
   return json as OAuthTokenResponse;
 }
 
+export class TokenRefreshError extends Error {
+  readonly kind: 'temporary' | 'permanent';
+  readonly status?: number;
+  readonly oauthError?: string;
+
+  constructor(kind: 'temporary' | 'permanent', status?: number, oauthError?: string) {
+    super(kind === 'permanent'
+      ? 'Your session expired. Please sign in again.'
+      : 'Unable to refresh your session right now. Please try again.');
+    this.name = 'TokenRefreshError';
+    this.kind = kind;
+    this.status = status;
+    this.oauthError = oauthError;
+  }
+}
+
 /**
  * Trade a refresh token for a fresh access + id token pair.
  *
@@ -126,21 +142,41 @@ export async function refreshTokens(refreshToken: string): Promise<OAuthTokenRes
   body.set('client_id', AUTH_CONFIG.clientId);
   body.set('refresh_token', refreshToken);
 
-  const resp = await fetch(`${AUTH_CONFIG.domain}/oauth2/token`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body,
-  });
+  const controller = new AbortController();
+  // Axios's request deadline does not cover this preflight fetch or its body.
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const resp = await fetch(`${AUTH_CONFIG.domain}/oauth2/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+      signal: controller.signal,
+    });
 
-  const text = await resp.text();
-  if (!resp.ok) throw new Error(`Token refresh failed: HTTP ${resp.status} ${text}`);
+    const text = await resp.text();
+    if (!resp.ok) {
+      let oauthError: string | undefined;
+      try {
+        const payload = JSON.parse(text) as { error?: unknown } | null;
+        if (typeof payload?.error === 'string') oauthError = payload.error;
+      } catch { /* An outage may return HTML rather than OAuth JSON. */ }
+      // Only an explicit grant rejection proves the stored session is dead.
+      // Provider outages/rate limits take precedence over a contradictory body.
+      const permanent = resp.status >= 400 && resp.status < 500 && resp.status !== 429 && oauthError === 'invalid_grant';
+      throw new TokenRefreshError(permanent ? 'permanent' : 'temporary', resp.status, oauthError);
+    }
 
-  const json = JSON.parse(text) as Partial<OAuthTokenResponse>;
-  // id_token is required here as well as on the code grant: the console reads
-  // its claims for the group gating, so a response without one would leave the
-  // session authenticated and permissionless.
-  if (!json.access_token || !json.id_token || !json.expires_in || !json.token_type) {
-    throw new Error('Refresh response missing required fields.');
+    const json = JSON.parse(text) as Partial<OAuthTokenResponse> | null;
+    // The console needs id_token claims for group gating, too.
+    if (!json?.access_token || !json.id_token || !json.expires_in || !json.token_type) {
+      throw new TokenRefreshError('temporary');
+    }
+    return json as OAuthTokenResponse;
+  } catch (err) {
+    if (err instanceof TokenRefreshError) throw err;
+    // Network, timeout and malformed responses do not revoke a refresh token.
+    throw new TokenRefreshError('temporary');
+  } finally {
+    clearTimeout(timeout);
   }
-  return json as OAuthTokenResponse;
 }
