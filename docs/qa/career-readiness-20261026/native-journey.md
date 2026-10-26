@@ -6,7 +6,7 @@ The current guest main path ran visibly in Maestro: onboarding → install bundl
 
 | Item | Recorded identity |
 | --- | --- |
-| Business source | `430b8c2cf4ce15b96e573ae5024599d0ef45296c` |
+| Business source | `63f55b945a64149d514961936b7d84bea191a8e9` |
 | App ID | `com.timeawake.recallsmith.career.b2` |
 | Simulator | Fresh `RecallSmith B2 Isolated QA 20261027`, iPhone 16 |
 | UDID | `DC862F4C-7531-4EF2-8264-E9291ADF1156` |
@@ -14,11 +14,11 @@ The current guest main path ran visibly in Maestro: onboarding → install bundl
 | Tools | Maestro 2.11.0; Xcode 27.0 / 27A266a |
 | Reused native shell | DeveloperCardsQA 2.1.0 (25), originally `com.timeawake.recallsmith.qa` |
 | Original shell executable SHA-256 | `732fc5a9f162f3bbac71e99af6ad586808564c43569316c228823d1e20505a75` |
-| Fresh current JS bundle SHA-256 | `11c27143517fe1a3b45532c4debd032524bb19c1a98e64688d09c8fb893012e9` |
+| Fresh current JS bundle SHA-256 | `bd1c8192fb911c4ee84df4610867bd48da86bd312a50618a717388c156483b9d` |
 
 The original shell is the brief's installed `DeveloperCardsQA.app` under Simulator `B16EDA9F-91FE-449E-8774-873C44D26D07`, bundle-container `C5D34488-4513-4A08-B574-882536EE86D6`. The build script reads it, compares all declared native dependencies with its original `workspaces/recallsmith-v210/mobile/package.json`, copies it, and verifies every original file hash remains unchanged. The original workspace and installed app were not edited or launched. The reused shell retains the prior local RevenueCat Xcode 27 initializer backport. It is not a newly compiled production shell or TestFlight binary.
 
-`evidence/B2/attempt-3/artifact.json` records every original and copied artifact file hash, the native adaptations, QA source hashes, bundle hash and build commands. The frozen implementation commit and final file hashes are recorded in `evidence/B2/handoff.json` and `source-manifest.json`; the business source above is unchanged by the QA harness.
+`evidence/B2-security-refresh/build/artifact.json` records every original and copied artifact file hash, native adaptations, QA source hashes, bundle hash and build commands. This refresh rebuilt and reran the unchanged harness after the targeted undici lock update. The shipping business code is unchanged; the captured source includes the updated lockfiles. Original harness-authoring evidence is retained under `evidence/B2`.
 
 ## Isolation and exercised logic
 
@@ -32,20 +32,20 @@ The test selects SAA-C03 because this source bundles its starter pack. The norma
 
 Evidence root on this machine:
 
-`/Users/qc/.local/share/codex-workflows/recallsmith/career-readiness-20261026/evidence/B2`
+`/Users/qc/.local/share/codex-workflows/recallsmith/career-readiness-20261026/evidence/B2-security-refresh`
 
 | Check | Evidence |
 | --- | --- |
-| Main path PASS | `maestro-run-3.xml`, raw driver logs and `commands.json` under `maestro-run-3/`; 51 seconds |
-| Additional terminate/relaunch and exact durable state comparison PASS | `persistence-check/result.json`, `before-restart.json`, `after-restart.json`, native guard logs and JUnit |
-| End-to-end runner repeat | `final-run/`, `final-run.log`; main path plus second restart and state assertions |
-| JS guard self-check PASS | `guard-self-check.log`; guards precede App, remote transports rejected, local file copy retained |
-| Artifact integrity | `attempt-3/artifact.json`, bundle/build/codesign logs |
-| Device identity | `device.json` |
+| Main path PASS | `run/native-guest-main-path.xml` and raw commands/screenshots under `run/native-guest-main-path/`; 51.798 seconds |
+| Additional terminate/relaunch and exact durable state comparison PASS | `run/result.json`, before/after restart JSON, native guard logs and `run/native-relaunch-persistence.xml`; 4.157 seconds |
+| Complete refresh sequence | `sequence.json`; boot, install, runner and shutdown all exited 0 |
+| JS guard and native isolation | Unchanged guard source; fresh run verifies protected new processes and exact business state |
+| Artifact integrity | `build/artifact.json`, bundle/compiler/codesign logs; original shell remains unchanged |
+| Device identity | Same dedicated iPhone 16 / iOS 18.5 Simulator, shut down after this run |
 
 The persisted assertions require 30 installed progress entries with five reviewed cards, a 4 available / 0 reserve wallet, one drawn UID and matching single draw-history entry, and onboarding `done`. All nine selected business storage entries must remain deeply equal after restart. The native canary log must show a new protected process. The drawn card varies because the real draw engine is used; no fixed rarity or UID is injected.
 
-Failures are retained: native build attempt 1 exported current JS but intentionally aborted on a misplaced socket canary in the interposer's own image; attempt 2 had a local linker filename error; attempt 3 built and launched successfully. Maestro discovery run 1 used an obsolete rating selector, and run 2 omitted the visible pack swipe. Run 3 uses the current study actions and real gesture. These are harness authoring failures, not asserted product defects. No SDK/dependency upgrade was attempted.
+Initial harness-authoring failures are retained under `evidence/B2`: native build attempt 1 exported current JS but intentionally aborted on a misplaced socket canary in the interposer's own image; attempt 2 had a local linker filename error; attempt 3 built and launched successfully. Maestro discovery run 1 used an obsolete rating selector, and run 2 omitted the visible pack swipe. Run 3 uses the current study actions and real gesture. These are harness authoring failures, not asserted product defects. No SDK/dependency upgrade was attempted.
 
 ## Re-run locally
 
@@ -74,7 +74,7 @@ The runner requires the dedicated Simulator name prefix and fixed QA app ID. Its
 
 ## Actual captures
 
-All three images below are unedited Maestro screenshots from the isolated iOS 18.5 iPhone 16 Simulator, app `com.timeawake.recallsmith.career.b2`, using the reused QA native shell and freshly exported current-source JS described above.
+All three images below are unedited Maestro screenshots from the post-lock-update refresh on the isolated iOS 18.5 iPhone 16 Simulator, app `com.timeawake.recallsmith.career.b2`, using the reused QA native shell and freshly exported current-source JS described above.
 
 ![Isolated iOS Simulator QA: current offline starter, first of five lesson cards](../../showcase/images/b2-ios-simulator-qa-offline-starter.png)
 
