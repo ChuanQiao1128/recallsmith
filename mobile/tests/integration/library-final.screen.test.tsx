@@ -144,6 +144,7 @@ vi.mock('../../src/review/storage', () => ({
 import { LibraryScreen } from '../../src/screens/LibraryScreen';
 import { saveDrawState } from '../../src/features/gacha/draw/drawStateStore';
 import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStateCache';
+import { DECK_WALLETS_KEY, loadDeckWallet } from '../../src/features/gacha/rewards/deckWallet';
 
 async function flush() {
   await act(async () => {
@@ -207,6 +208,87 @@ describe('LibraryScreen v9', () => {
     expect(missingCard.props.accessibilityRole).toBe('button');
     expect(missingCard.findAll((node) => (node.type as any) === 'Text' && node.props.children === '?')).toHaveLength(1);
     expect(missingCard.findAll((node) => (node.type as any) === 'Text' && node.props.children === 'Q1')).toHaveLength(0);
+  });
+
+  it('opens CardDetail with the stable UID when a visible owned tile is pressed', async () => {
+    const stableUid = 'visible-owned-card';
+    mockDecksBySlug.csharp = makeDeck('csharp', 'C# Interview', [
+      { uid: stableUid, order: 780, difficulty: 1, question: 'How does a queue retry?' },
+    ]);
+    await saveDrawState('csharp', { owned: [stableUid], pity: null });
+    const navigate = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    try {
+      await act(async () => {
+        tree = renderer.create(
+          <LibraryScreen navigation={{ navigate } as any} route={{ key: 'library', name: 'Library' } as any} />,
+        );
+      });
+      await flush();
+
+      const card = tree.root.find((node) =>
+        (node.type as any) === 'Pressable' &&
+        node.props.accessibilityLabel === 'Card 1, new. How does a queue retry?');
+      expect(card.props.accessibilityRole).toBe('button');
+      expect(card.findAll((node) =>
+        (node.type as any) === 'Text' && node.props.children === 'How does a queue retry?')).toHaveLength(1);
+      expect(card.props.disabled).not.toBe(true);
+      act(() => { card.props.onPress(); });
+      expect(navigate).toHaveBeenCalledExactlyOnceWith('CardDetail', { cardId: stableUid });
+    } finally {
+      if (tree) act(() => tree.unmount());
+    }
+  });
+
+  it.each([
+    { label: 'no pulls', wallet: { availablePulls: 0, reservePulls: 0 }, destination: 'SessionCard' },
+    { label: 'available pulls', wallet: { availablePulls: 2, reservePulls: 0 }, destination: 'Draw' },
+    { label: 'reserve pulls only', wallet: { availablePulls: 0, reservePulls: 2 }, destination: 'Draw' },
+  ])('routes the visible first-pack banner for the selected deck with $label', async ({ wallet, destination }) => {
+    const selectedSlug = 'aws';
+    mockManifestDecks.push({ slug: selectedSlug, title: 'AWS Core', availability: 'live' });
+    mockDecksBySlug.aws = makeDeck(selectedSlug, 'AWS Core', [
+      { uid: 'not-collected', order: 1, difficulty: 1, question: 'An uncollected card' },
+    ]);
+    // The selected pack has already received its one-time grants. Keep another
+    // pack funded so reading the wrong pack's wallet would fail the zero case.
+    asyncStorageMap.set(DECK_WALLETS_KEY, JSON.stringify({
+      migratedAtMs: 1,
+      decks: { csharp: { availablePulls: 9, reservePulls: 0 }, aws: wallet },
+      bootstrappedAtMs: { csharp: 1, aws: 1 },
+      rebootstrappedAtMs: { csharp: 1, aws: 1 },
+    }));
+    const navigate = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    try {
+      await act(async () => {
+        tree = renderer.create(
+          <LibraryScreen navigation={{ navigate } as any}
+            route={{ key: 'library', name: 'Library', params: { focusSlug: selectedSlug } } as any} />,
+        );
+      });
+      const hasPulls = wallet.availablePulls + wallet.reservePulls > 0;
+      const bannerLabel = hasPulls
+        ? 'Open your first pack to start collecting'
+        : 'Earn draws in a session to open your first pack';
+      await vi.waitFor(async () => {
+        await flush();
+        expect(tree.root.find((node) =>
+          (node.type as any) === 'Pressable' && node.props.testID === 'library-open-first-pack-cta')
+          .props.accessibilityLabel).toBe(bannerLabel);
+      }, { timeout: 2000, interval: 10 });
+      expect(mockActiveDeckSlug).toBe(selectedSlug);
+      expect(collectText(tree)).toContain('0/1');
+      expect(await loadDeckWallet(selectedSlug)).toEqual(wallet);
+      const banner = tree.root.find((node) =>
+        (node.type as any) === 'Pressable' && node.props.accessibilityLabel === bannerLabel);
+      expect(banner.props.accessibilityRole).toBe('button');
+      expect(banner.props.disabled).not.toBe(true);
+      act(() => { banner.props.onPress(); });
+      expect(navigate).toHaveBeenCalledExactlyOnceWith(destination, { slug: selectedSlug });
+    } finally {
+      if (tree) act(() => tree.unmount());
+    }
   });
 
   it.each([1, 3.2])('keeps the no-match instruction and reset action readable at font scale %s', async (fontScale) => {
