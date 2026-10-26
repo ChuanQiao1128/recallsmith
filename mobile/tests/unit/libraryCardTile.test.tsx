@@ -70,6 +70,30 @@ function renderTile(row: LibraryCardRow) {
 }
 
 describe('LibraryCardTile — silhouette vs revealed', () => {
+  it.each([
+    { status: 'new' as const, isMissing: false, label: 'Card 7, new. What does the volatile keyword guarantee?' },
+    { status: 'learning' as const, isMissing: false, label: 'Card 7, learning. What does the volatile keyword guarantee?' },
+    { status: 'mastered' as const, isMissing: false, label: 'Card 7, mastered. What does the volatile keyword guarantee?' },
+    { status: 'missing' as const, isMissing: true, label: 'Card 7, not collected yet' },
+  ])('announces $status and opens the card by its stable UID', ({ status, isMissing, label }) => {
+    const onPress = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    act(() => {
+      tree = renderer.create(
+        <LibraryCardTile item={{ ...baseRow, status, isMissing }} numColumns={2} highlighted={false} deckSlug="csharp" onPress={onPress} />,
+      );
+    });
+    const card = tree.root.find((node) =>
+      (node.type as any) === 'Pressable' && node.props.accessibilityLabel === label);
+    expect(card.props.accessibilityRole).toBe('button');
+    expect(card.props.accessibilityHint).toBe('Opens the card');
+    act(() => { card.props.onPress(); });
+    expect(onPress).toHaveBeenCalledExactlyOnceWith('card-1');
+    expect(tree.root.findAll((node) =>
+      typeof node.props.testID === 'string' && node.props.testID.startsWith('library-card-status-'))).toHaveLength(0);
+    act(() => tree.unmount());
+  });
+
   it('reveals the question of an owned card that has not been studied yet', () => {
     const json = renderTile(baseRow);
 

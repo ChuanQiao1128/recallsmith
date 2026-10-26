@@ -14,6 +14,7 @@ let authFixture = {
   userSub: null as string | null,
 };
 let cachedPremiumFixture = false;
+let updatesFixture: Record<string, any> = {};
 let streakFixture = {
   currentDailyStreak: 2,
   longestDailyStreak: 2,
@@ -121,7 +122,7 @@ vi.mock('../../src/features/gacha/home/deckActionResolver', () => ({
           percent: 0.4,
         },
       ],
-      updates: {},
+      updates: updatesFixture,
       allUpcoming30: Array.from({ length: 30 }, (_, i) => ({
         dateKey: new Date(now + i * 86_400_000).toISOString(),
         count: i === 0 ? dueToday : 0,
@@ -210,6 +211,7 @@ describe('home primary CTA uniqueness', () => {
     };
     walletFixture = { availablePulls: 0, reservePulls: 0 };
     cachedPremiumFixture = false;
+    updatesFixture = {};
     streakFixture = {
       currentDailyStreak: 2,
       longestDailyStreak: 2,
@@ -467,42 +469,33 @@ describe('home primary CTA uniqueness', () => {
     },
   );
 
-  it('adds explicit accessibility semantics on Home collapsible triggers', async () => {
+  it('exposes the current pack selector and study cover as accessible buttons', async () => {
+    const navigate = vi.fn();
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(
         <HomeScreen
-          navigation={{ navigate: vi.fn() } as any}
+          navigation={{ navigate } as any}
           route={{ key: 'home', name: 'Home' } as any}
         />,
       );
     });
     await flush();
 
-    const decksToggle = tree.root.find((node) => node.props?.testID === 'home-collapse-decks-toggle');
-    const weekToggle = tree.root.find(
-      (node) => node.props?.testID === 'home-collapse-week-support-toggle',
-    );
+    const pack = tree.root.find((node) =>
+      (node.type as any) === 'Pressable' && node.props.accessibilityLabel === 'C# Interview pack — 1 due');
+    expect(pack.props.accessibilityRole).toBe('button');
+    expect(pack.props.accessibilityState).toEqual({ selected: true });
+    act(() => { pack.props.onPress(); });
+    expect(navigate).not.toHaveBeenCalled();
 
-    expect(decksToggle.props.accessibilityRole).toBe('button');
-    expect(weekToggle.props.accessibilityRole).toBe('button');
-    expect(decksToggle.props.accessibilityState).toEqual({ expanded: false });
-    expect(weekToggle.props.accessibilityState).toEqual({ expanded: false });
-    expect(tree.root.findAll((node) => node.props?.testID === 'home-collapse-draw-support-toggle')).toHaveLength(0);
-
-    act(() => {
-      decksToggle.props.onPress();
-      weekToggle.props.onPress();
-    });
-
-    expect(
-      tree.root.find((node) => node.props?.testID === 'home-collapse-decks-toggle').props
-        .accessibilityState,
-    ).toEqual({ expanded: true });
-    expect(
-      tree.root.find((node) => node.props?.testID === 'home-collapse-week-support-toggle').props
-        .accessibilityState,
-    ).toEqual({ expanded: true });
+    const cover = tree.root.find((node) =>
+      (node.type as any) === 'Pressable' && node.props.accessibilityLabel === 'Start today’s session');
+    expect(cover.props.accessibilityRole).toBe('button');
+    await act(async () => { cover.props.onPress(); });
+    expect(navigate).toHaveBeenCalledWith('SessionCard', { slug: 'csharp' });
+    expect(tree.root.findAll((node) =>
+      typeof node.props.testID === 'string' && /^home-(collapse-|deck-row-)/.test(node.props.testID))).toHaveLength(0);
   });
 
   it('keeps cached premium active when the server premium check fails', async () => {
@@ -513,24 +506,30 @@ describe('home primary CTA uniqueness', () => {
       userSub: 'premium-user',
     };
     fetchServerPremiumMock.mockRejectedValueOnce(new Error('network'));
+    updatesFixture = {
+      csharp: {
+        slug: 'csharp', installedVersion: '1', remoteVersion: '2', hasUpdate: true,
+        remoteUrl: 'https://example.test/csharp.json', remoteSha256: null,
+      },
+    };
+    resolveDeckActionMock.mockResolvedValueOnce({ kind: 'update', slug: 'csharp' });
+    const navigate = vi.fn();
 
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
       tree = renderer.create(
         <HomeScreen
-          navigation={{ navigate: vi.fn() } as any}
+          navigation={{ navigate } as any}
           route={{ key: 'home', name: 'Home' } as any}
         />,
       );
     });
     await flush();
 
-    act(() => {
-      tree.root.find((node) => node.props?.testID === 'home-collapse-decks-toggle').props.onPress();
-    });
-
+    const updateCover = tree.root.find((node) =>
+      (node.type as any) === 'Pressable' && node.props.accessibilityLabel === 'Update C# Interview');
     await act(async () => {
-      tree.root.find((node) => node.props?.testID === 'home-deck-row-csharp').props.onPress();
+      updateCover.props.onPress();
       await Promise.resolve();
     });
 
@@ -539,7 +538,10 @@ describe('home primary CTA uniqueness', () => {
       expect.objectContaining({
         premium: true,
         signedIn: true,
+        updates: updatesFixture,
       }),
     );
+    expect(executeDeckActionMock).toHaveBeenCalledWith({ kind: 'update', slug: 'csharp' });
+    expect(navigate).not.toHaveBeenCalled();
   });
 });

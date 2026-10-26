@@ -31,7 +31,6 @@ import {
   loadHomeDeckSummaries,
   resolveDeckAction,
 } from '../features/gacha/home/deckActionResolver';
-import HomeDeckRow from '../features/gacha/home/HomeDeckRow';
 import HomePackCarousel, { type HomePackPage } from '../features/gacha/home/HomePackCarousel';
 import { isLargeFontScale, useFontScale } from '../theme/dynamicType';
 import {
@@ -167,9 +166,6 @@ export function HomeScreen({ navigation, route }: Props) {
   const compactHome = (useHomeWindowDimensions().height ?? 844) <= 700;
   const largeText = isLargeFontScale(useFontScale());
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
-  const [deckOpen, setDeckOpen] = useState(false);
-  const [calendarOpen, setCalendarOpen] = useState(false);
-  const [deckBusySlug, setDeckBusySlug] = useState<string | null>(null);
   const [homeState, setHomeState] = useState<HomeState>({
     loading: true,
     error: null,
@@ -618,7 +614,6 @@ export function HomeScreen({ navigation, route }: Props) {
   }, [homeState.vm, navigation, openStarterLesson, refreshHome, selectedDeckRow, starterSlug]);
   const handleDeckPress = useCallback(
     async (row: HomeDeckVM) => {
-      setDeckBusySlug(row.deck.slug);
       try {
         const updates = row.updateInfo ? { [row.deck.slug]: row.updateInfo } : {};
         const action = await resolveDeckAction({
@@ -649,10 +644,6 @@ export function HomeScreen({ navigation, route }: Props) {
         await refreshHome();
       } catch {
         Alert.alert('Deck action failed', 'Please try again in a moment.');
-      } finally {
-        if (isMountedRef.current) {
-          setDeckBusySlug(null);
-        }
       }
     },
     [isPremiumUser, isSignedIn, navigation, paywallHidden, refreshHome],
@@ -699,7 +690,6 @@ export function HomeScreen({ navigation, route }: Props) {
       : STARTER_COPY.ctaLabel
     : homeState.vm.cta.label;
   const primaryCtaTestID = starterSlug ? 'home-starter-cta' : homeState.vm.cta.testID;
-  const totalDueAcrossDecks = homeState.vm.counts.totalDueAllDecks;
   // 2026-10-18 home carousel: the hero headline counts the selected pack's due
   // cards only, so swiping to a pack with nothing due never leaves "N cards
   // waiting" over its "Open library". The header repeats the same number.
@@ -1077,98 +1067,6 @@ export function HomeScreen({ navigation, route }: Props) {
               );
             })()}
 
-            {/* ─── Hidden test-contract probes ──────────────────────────
-                The "Review N due cards" + "Open first draw" links and the
-                deck/week toggles must remain in tree for the legacy test
-                contract, but they should NOT visually compete with the
-                single primary CTA. They render as 0×0 invisible probes. */}
-            {totalDueAcrossDecks > 0 ? (
-              <Pressable
-                accessibilityRole="button"
-                testID="home-study-due-link"
-                style={styles.homeTestProbeHidden}
-                accessible={false}
-                accessibilityElementsHidden
-                importantForAccessibility="no-hide-descendants"
-                onPress={() =>
-                  navigation.navigate('SessionCard', {
-                    slug: homeState.vm.selectedDeckSlug ?? undefined,
-                  })
-                }
-              >
-                <Text style={styles.homeTestProbeHidden}>
-                  {`Review ${totalDueAcrossDecks} due cards`}
-                </Text>
-              </Pressable>
-            ) : null}
-            {firstDrawCoach ? (
-              <Pressable
-                accessibilityRole="button"
-                testID="home-first-draw-link"
-                style={styles.homeTestProbeHidden}
-                accessible={false}
-                accessibilityElementsHidden
-                importantForAccessibility="no-hide-descendants"
-                onPress={() =>
-                  navigation.navigate('Draw', {
-                    slug: homeState.vm.selectedDeckSlug ?? undefined,
-                    rewardPending: true,
-                  })
-                }
-              >
-                <Text style={styles.homeTestProbeHidden}>Open first draw</Text>
-              </Pressable>
-            ) : null}
-            {/* ─── Hidden test-contract probes ────────────────────────────
-                The "Your decks" + "Week support" toggle sections have been
-                removed from the visual home (replaced by the 3-pack
-                carousel above). Pressables are kept in tree as 0×0 so the
-                home-collapse-* and home-deck-row-* tests still find them. */}
-            <Pressable
-              testID="home-collapse-decks-toggle"
-              accessibilityRole="button"
-              accessibilityState={{ expanded: deckOpen }}
-              style={styles.homeTestProbeHidden}
-              onPress={() => setDeckOpen((prev) => !prev)}
-              accessible={false}
-              accessibilityElementsHidden
-              importantForAccessibility="no-hide-descendants"
-            >
-              <Text style={styles.homeTestProbeHidden}>Your decks</Text>
-            </Pressable>
-            <View
-              style={styles.homeTestProbeHidden}
-              accessible={false}
-              accessibilityElementsHidden
-              importantForAccessibility="no-hide-descendants"
-            >
-              {homeState.vm.decks.rows.map((row) => (
-                <HomeDeckRow
-                  key={row.deck.slug}
-                  deck={row.deck}
-                  action={row.actionHint}
-                  statusLabel={row.statusLabel}
-                  progressLabel={row.progressLabel}
-                  selected={row.isSelected}
-                  busy={deckBusySlug === row.deck.slug}
-                  onPress={() => {
-                    void handleDeckPress(row);
-                  }}
-                />
-              ))}
-            </View>
-            <Pressable
-              testID="home-collapse-week-support-toggle"
-              accessibilityRole="button"
-              accessibilityState={{ expanded: calendarOpen }}
-              style={styles.homeTestProbeHidden}
-              onPress={() => setCalendarOpen((prev) => !prev)}
-              accessible={false}
-              accessibilityElementsHidden
-              importantForAccessibility="no-hide-descendants"
-            >
-              <Text style={styles.homeTestProbeHidden}>Week support</Text>
-            </Pressable>
             {/* ─── FOOTER LINK ────────────────────────────────────────
                 Demoted from a card (avoided cream-on-cream-on-cream
                 stacking). Now just a quiet inline link with chevron at
@@ -1317,12 +1215,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
     color: colors.inkSecondary,
   },
-
-  // Hidden test probe — 0×0 view kept in tree so home-collapse-decks-toggle
-  // / home-collapse-week-support-toggle / home-deck-row-{slug} /
-  // home-study-due-link / home-first-draw-link testIDs remain findable for
-  // the legacy test contract without competing for visual attention.
-  homeTestProbeHidden: { width: 0, height: 0, opacity: 0, overflow: 'hidden', fontSize: 0, lineHeight: 0 },
 
   // ─── Primary CTA + draw status (single action only) ─────────────────
   primaryCta: {

@@ -200,11 +200,13 @@ describe('LibraryScreen v9', () => {
     expect(tree.root.findByProps({ testID: 'library-card-grid' })).toBeTruthy();
     expect(tree.root.findByProps({ testID: 'library-collection-bar' })).toBeTruthy();
     expect(collectText(tree)).toContain('2/3');
-    expect(tree.root.findAllByProps({ testID: 'library-card-status-1' })).toHaveLength(0);
+    expect(tree.root.findAllByProps({ accessibilityLabel: 'Card 1, not collected yet' })).toHaveLength(0);
     act(() => tree.root.findByProps({ testID: 'library-filter-chip-all' }).props.onPress());
-    const statusOne = tree.root.findByProps({ testID: 'library-card-status-1' });
-    const statusOneText = statusOne.find((child: any) => (child.type as any) === 'Text').props.children;
-    expect(statusOneText).toBe('Missing');
+    const missingCard = tree.root.find((node) =>
+      (node.type as any) === 'Pressable' && node.props.accessibilityLabel === 'Card 1, not collected yet');
+    expect(missingCard.props.accessibilityRole).toBe('button');
+    expect(missingCard.findAll((node) => (node.type as any) === 'Text' && node.props.children === '?')).toHaveLength(1);
+    expect(missingCard.findAll((node) => (node.type as any) === 'Text' && node.props.children === 'Q1')).toHaveLength(0);
   });
 
   it.each([1, 3.2])('keeps the no-match instruction and reset action readable at font scale %s', async (fontScale) => {
