@@ -463,9 +463,6 @@ export const libraryStyles = StyleSheet.create({
     // "this slot is empty" feel beyond just the dimmed art header.
     backgroundColor: 'rgba(255,255,255,0.4)',
   },
-  // 0×0 hidden test probe — keeps library-card-status-{uid} testID + legacy
-  // statusLabel text in the tree without rendering anything visible
-  cardTestProbeHidden: { width: 0, height: 0, opacity: 0, overflow: 'hidden', fontSize: 0, lineHeight: 0 },
   cardTwoColumns: { maxWidth: '48%' },
   cardThreeColumns: { maxWidth: '31%' },
   // Legacy alias (older code may still reference cardNew)
