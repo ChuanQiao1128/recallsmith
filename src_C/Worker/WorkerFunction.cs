@@ -62,11 +62,12 @@ public class WorkerFunction
   /// <summary>Upper bound on the exception text copied into deck_publishes.error_message.</summary>
   public const int MaxErrorDetailChars = 400;
 
-  /// <summary>EMF gauge counted once per job that reaches SUCCESS in this handler (H00 §4.3 publish-success SLO, good events);
-  /// never for a replayed message of an already terminal or absent job (<see cref="IReplayOutcome"/>, R18I Q4).</summary>
+  /// <summary>Best-effort good event after processing and manifest rebuild succeed;
+  /// never for a replayed message of an already terminal or absent job (<see cref="IReplayOutcome"/>).</summary>
   public const string PublishSucceededMetric = "PublishJobsSucceeded";
 
-  /// <summary>EMF gauge counted once per terminal job failure in this handler (H00 §4.3 publish-success SLO, bad events).</summary>
+  /// <summary>Best-effort bad event for persisted business failure or final system/manifest failure;
+  /// excludes FAILED/absent replay. This is not an exactly-once count of database terminal states.</summary>
   public const string PublishFailedMetric = "PublishJobsFailed";
 
   /// <summary>"system error on attempt {n}/{MaxReceiveCount}: {ExceptionType}: {message ≤ MaxErrorDetailChars}".</summary>
@@ -108,10 +109,12 @@ public class WorkerFunction
       LogWithJobId(jobId, $"Processing message {record.MessageId} (receiveCount={receiveCount})");
       Log.Event("info", new { tag = "worker-record", messageId = record.MessageId, jobId, receiveCount, upstreamTraceId = TraceContext.RootFromHeader(record.Attributes?.GetValueOrDefault("AWSTraceHeader")) });
 
+      var replayOutcome = PublishReplayOutcome.None;
       try
       {
         // 执行 5-Step 流水线
         await _processor.ProcessAsync(jobId, receiveCount);
+        replayOutcome = (_processor as IReplayOutcome)?.LastCallReplayOutcome ?? PublishReplayOutcome.None;
 
         // Step 6: 发布成功后在进程内重建 Manifest（completedAtMs 用于 metadata 证据判定）
         var completedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -120,7 +123,7 @@ public class WorkerFunction
 
         LogWithJobId(jobId, "Processing completed successfully");
         // A replay of a job that was already terminal (or absent) is acknowledged, not counted (R18I Q4).
-        if (!(_processor is IReplayOutcome replay && replay.LastCallWasTerminalReplay))
+        if (replayOutcome == PublishReplayOutcome.None)
         {
           RouteMetrics.EmitGauge(PublishSucceededMetric, 1);
         }
@@ -155,7 +158,10 @@ public class WorkerFunction
         LogWithJobId(jobId, reason);
         if (receiveCount >= MaxReceiveCount)
         {
-          RouteMetrics.EmitGauge(PublishFailedMetric, 1);
+          // A manifest error is not a new failed publish for FAILED/absent replays (I01).
+          // SUCCESS replays retain H02's conservative stale-manifest bad event.
+          if (replayOutcome != PublishReplayOutcome.FailedOrAbsent)
+            RouteMetrics.EmitGauge(PublishFailedMetric, 1);
           try
           {
             await _processor.FailAsync(jobId, reason);

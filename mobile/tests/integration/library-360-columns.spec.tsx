@@ -159,7 +159,7 @@ describe('LibraryScreen responsive columns', () => {
     expect(question.props.numberOfLines).toBe(2);
   });
 
-  it('renders per-card Missing/Learning/Mastered status badges', async () => {
+  it('announces missing, learning and mastered status on the visible card buttons', async () => {
     mockWidth = 360;
 
     let tree!: renderer.ReactTestRenderer;
@@ -171,16 +171,12 @@ describe('LibraryScreen responsive columns', () => {
     await flush();
 
     act(() => tree.root.findByProps({ testID: 'library-filter-chip-all' }).props.onPress());
-    const statusOne = tree.root.findByProps({ testID: 'library-card-status-1' });
-    const statusTwo = tree.root.findByProps({ testID: 'library-card-status-2' });
-    const statusThree = tree.root.findByProps({ testID: 'library-card-status-3' });
-
-    const readBadgeText = (node: any) =>
-      node.find((child: any) => (child.type as any) === 'Text').props.children;
-
-    expect(readBadgeText(statusOne)).toBe('Missing');
-    expect(readBadgeText(statusTwo)).toBe('Learning');
-    expect(readBadgeText(statusThree)).toBe('Mastered');
+    const cards = ['Card 1, not collected yet', 'Card 2, learning. Q2', 'Card 3, mastered. Q3']
+      .map((label) => tree.root.find((node) =>
+        (node.type as any) === 'Pressable' && node.props.accessibilityLabel === label));
+    expect(cards.map((card) => card.props.accessibilityRole)).toEqual(['button', 'button', 'button']);
+    expect(tree.root.findAll((node) =>
+      typeof node.props.testID === 'string' && node.props.testID.startsWith('library-card-status-'))).toHaveLength(0);
   });
 
   it('uses 3 columns at 390pt', async () => {

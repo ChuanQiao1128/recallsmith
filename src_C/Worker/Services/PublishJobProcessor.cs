@@ -30,11 +30,11 @@ public class PublishJobProcessor : IPublishJobProcessor, IReplayOutcome
   }
 
   /// <inheritdoc />
-  public bool LastCallWasTerminalReplay { get; private set; }
+  public PublishReplayOutcome LastCallReplayOutcome { get; private set; }
 
   public async Task ProcessAsync(string jobId, int receiveCount = 1)
   {
-    LastCallWasTerminalReplay = false;
+    LastCallReplayOutcome = PublishReplayOutcome.None;
 
     // Step 2: 乐观锁抢占任务（receiveCount = SQS ApproximateReceiveCount）
     var acquired = await _jobRepository.TryAcquireJobAsync(jobId, receiveCount);
@@ -51,8 +51,9 @@ public class PublishJobProcessor : IPublishJobProcessor, IReplayOutcome
         // replay is its only second chance (automation-1): both side effects are idempotent (the outbox
         // rows staged with the SUCCESS commit are sent once, the ledger row is keyed on the job).
         if (row is { Status: "SUCCESS" }) await AfterPublishSucceededAsync(row);
-        // Not a publish outcome (R18I Q4): the job's gauge, if any, was emitted when it became terminal.
-        LastCallWasTerminalReplay = true;
+        // No replay emits good; only SUCCESS retains the conservative final manifest-failure bad event.
+        LastCallReplayOutcome = row is { Status: "SUCCESS" }
+          ? PublishReplayOutcome.Succeeded : PublishReplayOutcome.FailedOrAbsent;
         return;
       }
       throw new JobNotAcquiredException(jobId);

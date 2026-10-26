@@ -690,3 +690,73 @@ test('the review queue and AI QA with a deck open pass a WCAG 2 A/AA scan', asyn
   expect(api.unexpected).toEqual([]);
   expect(consoleErrors).toEqual([]);
 });
+
+
+test('an unsaved deck edit survives refresh 503 and saves once after manual retry', async ({ page }) => {
+  // Production CSP names the production IdP. Allow this test's routed IdP too;
+  // every other production directive remains enforced by cspGuard.
+  await page.route('http://localhost:5173/**', async route => {
+    if (route.request().resourceType() !== 'document') return route.fallback();
+    const response = await route.fetch();
+    const headers = { ...response.headers() };
+    headers['content-security-policy'] = headers['content-security-policy'].replace(
+      "connect-src 'self'", `connect-src 'self' ${COGNITO_DOMAIN}`,
+    );
+    return route.fulfill({ response, headers });
+  });
+  await stubApi(page);
+  const session = JSON.parse(editorSession());
+  session.refreshToken = 'e2e-refresh';
+  await page.addInitScript(([key, value]) => sessionStorage.setItem(key, value), [TOKEN_KEY, JSON.stringify(session)]);
+  let available = false;
+  let refreshes = 0;
+  const writes: { body: Record<string, unknown>; authorization: string | undefined }[] = [];
+  let savedDeck = { ...DECK };
+  await page.route('**/api/v1/authoring/decks*', route => {
+    if (route.request().method() === 'PUT') {
+      const body = route.request().postDataJSON();
+      writes.push({ body, authorization: route.request().headers().authorization });
+      savedDeck = { ...savedDeck, ...body };
+      return route.fulfill({ status: 200, contentType: 'application/json', body: ok(savedDeck) });
+    }
+    return route.fulfill({ status: 200, contentType: 'application/json', body: ok([savedDeck]) });
+  });
+  await page.route(`${COGNITO_DOMAIN}/oauth2/token`, route => {
+    refreshes++;
+    expect(new URLSearchParams(route.request().postData() ?? '').get('grant_type')).toBe('refresh_token');
+    return route.fulfill({
+      status: available ? 200 : 503,
+      contentType: 'application/json',
+      body: JSON.stringify(available ? {
+        access_token: 'e2e-recovered-access', id_token: session.idToken, expires_in: 3600, token_type: 'Bearer',
+      } : { error: 'temporarily_unavailable' }),
+    });
+  });
+  await page.goto(`/decks/edit?deckId=${DECK.id}`);
+  const title = page.getByText('Title *', { exact: true }).locator('..').getByRole('textbox');
+  await expect(title).toHaveValue(DECK.title);
+  await title.fill('Unsaved edit through a Cognito outage');
+  await page.evaluate(key => {
+    const tokens = JSON.parse(sessionStorage.getItem(key)!);
+    tokens.expiresAt = Date.now() - 1000;
+    sessionStorage.setItem(key, JSON.stringify(tokens));
+  }, TOKEN_KEY);
+  // Accept any beforeunload dialog so an accidental full-page redirect cannot hide the bug.
+  page.on('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByText('Unable to refresh your session right now. Please try again.')).toBeVisible();
+  await expect(page).toHaveURL(`http://localhost:5173/decks/edit?deckId=${DECK.id}`);
+  await expect(title).toHaveValue('Unsaved edit through a Cognito outage');
+  expect(writes).toEqual([]);
+  expect(refreshes).toBe(1);
+  expect(await page.evaluate(key => JSON.parse(sessionStorage.getItem(key)!).refreshToken, TOKEN_KEY)).toBe('e2e-refresh');
+  available = true;
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByText('Saved.', { exact: true })).toBeVisible();
+  expect(refreshes).toBe(2);
+  expect(writes).toHaveLength(1);
+  expect(writes[0]).toMatchObject({
+    body: { title: 'Unsaved edit through a Cognito outage' }, authorization: 'Bearer e2e-recovered-access',
+  });
+  await expect(title).toHaveValue('Unsaved edit through a Cognito outage');
+});

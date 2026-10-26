@@ -262,8 +262,9 @@ describe('several requests that all notice the expiry at once', () => {
 describe('a refresh the provider refuses', () => {
   it('drops the session and sends the browser to login once', async () => {
     storeSession(-60, 'refresh-original');
-    cognito.refreshTokens.mockRejectedValue(new Error('Token refresh failed: HTTP 400'));
     const http = await loadHttp();
+    const { TokenRefreshError } = await import('../src/auth/cognito');
+    cognito.refreshTokens.mockRejectedValue(new TokenRefreshError('permanent', 400, 'invalid_grant'));
 
     // The caller is rejected rather than served a doomed round trip, with a
     // message the api layer turns into a failed ApiResult.
@@ -308,7 +309,8 @@ describe('a refresh the provider refuses', () => {
     await Promise.resolve();
     expect(cognito.refreshTokens).toHaveBeenCalledTimes(1);
 
-    refuse(new Error('Token refresh failed: HTTP 400'));
+    const { TokenRefreshError } = await import('../src/auth/cognito');
+    refuse(new TokenRefreshError('permanent', 400, 'invalid_grant'));
     const outcomes = await settled;
 
     // Every caller hears about it — none is left hanging on a promise the
@@ -383,8 +385,9 @@ describe('a 401 that refreshing cannot explain', () => {
     // case in this file and still stack two navigations here, which is the
     // history-entry pile-up the latch exists to stop.
     storeSession(-60, 'refresh-original');
-    cognito.refreshTokens.mockRejectedValue(new Error('Token refresh failed: HTTP 400'));
     const http = await loadHttp(401);
+    const { TokenRefreshError } = await import('../src/auth/cognito');
+    cognito.refreshTokens.mockRejectedValue(new TokenRefreshError('permanent', 400, 'invalid_grant'));
 
     await expect(http.get('/api/v1/authoring/decks')).rejects.toThrow(
       'Your session expired. Please sign in again.',
@@ -402,5 +405,49 @@ describe('a 401 that refreshing cannot explain', () => {
     expect(sentAuth).toEqual([null]);
 
     expect(assigned).toHaveLength(1);
+  });
+});
+
+
+describe('a temporary refresh failure', () => {
+  it.each([429, 500, 503])('keeps the session and stops a write on HTTP %i', async status => {
+    storeSession(-60, 'refresh-original');
+    const original = sessionStorage.getItem(TOKEN_KEY);
+    const http = await loadHttp();
+    const { TokenRefreshError } = await import('../src/auth/cognito');
+    cognito.refreshTokens.mockRejectedValue(new TokenRefreshError('temporary', status, 'temporarily_unavailable'));
+    await expect(http.post('/api/v1/authoring/cards', { question: 'unsaved edit' })).rejects.toMatchObject({ kind: 'temporary', status });
+    expect(sessionStorage.getItem(TOKEN_KEY)).toBe(original);
+    expect(assigned).toEqual([]);
+    expect(sentAuth).toEqual([]);
+    expect(cognito.refreshTokens).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains credentials, blocks concurrent writes, and allows a manual retry after recovery', async () => {
+    storeSession(-60, 'refresh-original');
+    const original = sessionStorage.getItem(TOKEN_KEY);
+    let refuse: (reason: unknown) => void = () => {};
+    cognito.refreshTokens.mockReturnValueOnce(new Promise((_resolve, reject) => { refuse = reject; }));
+    const http = await loadHttp();
+    const failed = Promise.allSettled([
+      http.post('/api/v1/authoring/cards', { question: 'unsaved edit' }),
+      http.put('/api/v1/authoring/decks', { title: 'unsaved title' }),
+    ]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(cognito.refreshTokens).toHaveBeenCalledTimes(1);
+    refuse(new TypeError('Failed to fetch'));
+    const outcomes = await failed;
+    expect(outcomes.map(o => o.status)).toEqual(['rejected', 'rejected']);
+    expect(sessionStorage.getItem(TOKEN_KEY)).toBe(original);
+    expect(assigned).toEqual([]);
+    expect(sentAuth).toEqual([]);
+    for (const outcome of outcomes) {
+      expect((outcome as PromiseRejectedResult).reason.message).toContain('try again');
+    }
+    cognito.refreshTokens.mockResolvedValueOnce(cognitoRefreshResponse('recovered'));
+    await http.post('/api/v1/authoring/cards', { question: 'unsaved edit' });
+    expect(cognito.refreshTokens).toHaveBeenCalledTimes(2);
+    expect(sentAuth).toEqual(['Bearer access-recovered']);
   });
 });

@@ -1,0 +1,65 @@
+# Install the isolated B2 artifact first; clearState applies only to its dedicated app ID.
+appId: com.timeawake.recallsmith.career.b2
+---
+- launchApp:
+    clearState: true
+- assertVisible: "WELCOME TO DEVELOPERCARDS"
+- tapOn:
+    text: "Continue"
+    index: 0
+- tapOn:
+    id: "goal-choice-aws-saa-c03"
+- tapOn: "Continue"
+- tapOn: "Finish setup"
+- extendedWaitUntil:
+    visible:
+      id: "session-card-offline-starter"
+    timeout: 30000
+- takeScreenshot: "01-offline-starter-ios-simulator"
+- repeat:
+    times: 5
+    commands:
+      - tapOn:
+          id: "learning-study-show-answer"
+      - tapOn:
+          id: "learning-study-got-it"
+- extendedWaitUntil:
+    visible:
+      id: "draw-pack-pulls-badge"
+    timeout: 30000
+- takeScreenshot: "02-earned-draws-ios-simulator"
+- tapOn:
+    id: "screen-draw-secondary-cta"
+- extendedWaitUntil:
+    visible:
+      id: "draw-ceremony-swipe-pack"
+    timeout: 30000
+- swipe:
+    start: "30%,50%"
+    end: "75%,50%"
+    duration: 600
+- extendedWaitUntil:
+    visible:
+      id: "screen-draw-ceremony-primary-cta"
+    timeout: 30000
+- tapOn:
+    id: "screen-draw-ceremony-primary-cta"
+- assertVisible:
+    id: "screen-draw-result-root"
+- takeScreenshot: "03-draw-result-ios-simulator"
+- tapOn:
+    id: "draw-result-done-link"
+- runFlow:
+    when:
+      visible: "Not now"
+    commands:
+      - tapOn: "Not now"
+- assertVisible:
+    id: "screen-home-root"
+- stopApp
+- launchApp:
+    clearState: false
+- assertVisible:
+    id: "screen-home-root"
+- assertNotVisible: "WELCOME TO DEVELOPERCARDS"
+- takeScreenshot: "04-persisted-home-ios-simulator"

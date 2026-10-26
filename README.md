@@ -1,71 +1,21 @@
 # RecallSmith
 
-A spaced-repetition flashcard product for developers: an Expo/React Native app
-where people review cards, a React admin console for authoring and publishing
-decks, and a .NET Lambda backend on AWS behind API Gateway and PostgreSQL. Card
-usage numbers come from daily rollups kept in PostgreSQL (`analytics_daily`). An
-earlier Snowflake analytics pipeline was retired on 2026-10-02 (see §1).
+RecallSmith is a spaced-repetition product for developers. It includes an Expo and React Native learner app, a React admin console for authoring and publishing decks, and a .NET 10 backend on AWS with PostgreSQL. This is a personal project written and maintained by one person; AI tools have assisted with implementation and documentation.
 
-This is a personal project, written and maintained by one person.
+The learner app is branded DeveloperCards; RecallSmith is the repository and project name. These screenshots show the guest learning and local persistence journey:
 
-## Showcase
+<p align="center">
+  <img src="docs/showcase/images/b2-ios-simulator-qa-offline-starter.png" alt="Offline starter lesson card" width="170" />
+  <img src="docs/showcase/images/b2-ios-simulator-qa-draw-result.png" alt="Single-card draw result" width="170" />
+  <img src="docs/showcase/images/b2-ios-simulator-qa-persisted-home.png" alt="Home after app relaunch" width="170" />
+</p>
+<p align="center"><em>All three are isolated iOS 18.5 Simulator QA captures, using the current JavaScript bundle in a reused QA native shell. They are not production captures or real-device evidence.</em></p>
 
-Release 1.8.0 moved card authoring to a local AI agent with a human review queue, an evaluated
-AI QA check before publish, signed webhooks into n8n, and an automation ledger. Three plain-English
-documents explain it; every number in them cites a committed file:
+## Run locally
 
-- [Reviewer guide](docs/showcase/reviewer-guide.md) (`docs/showcase/reviewer-guide.md`): how a
-  non-technical reviewer approves AI drafts and acts on AI QA findings in the console.
-- [Process redesign case study](docs/showcase/process-redesign-case-study.md)
-  (`docs/showcase/process-redesign-case-study.md`): before and after, the evaluation story, design
-  trade-offs, and what is still owner-gated.
-- [Demo video script](docs/showcase/demo-video-script.md) (`docs/showcase/demo-video-script.md`):
-  a shot list under three minutes.
+Requirements: Node.js 20, the .NET 10 SDK selected by `src_C/global.json`, and Docker for the backend integration tests.
 
-## 1. What is in this repository
-
-| Directory | Stack | Responsibility |
-| --- | --- | --- |
-| `frontend/` | React 19, TypeScript, Vite, Tailwind | Admin console: authoring decks and cards, publishing, user administration |
-| `mobile/` | React Native, Expo, TypeScript | The app people actually review cards in |
-| `src_C/` | C# / .NET 10 | Backend. `src_C` is short for "source, C#" — it is the API, not a frontend `src/` |
-| `pg-layer/` | Node.js | AWS Lambda layer packaging the `pg` PostgreSQL driver |
-| `docs/` | Markdown | Design notes and refactor plans |
-| `.github/` | YAML | CI workflow |
-
-Snowflake was retired on 2026-10-02, and the warehouse folder that held its
-setup SQL, marts and sample exports was deleted with it. The trial ended and
-continuing meant paying for a pipeline that had run by hand once and never on a
-schedule; the PostgreSQL `analytics_daily` rollups already give usage and
-per-card numbers; and the analytics outbox that fed it carried an unsalted user
-hash and a device id with no consumer reading them. In the same round (R26) the
-sync ingest stopped writing to the outbox, and its publisher and the console's
-Content Intelligence page were removed. The outbox table itself, with the rows
-already in it, is dropped by migration 045, which deletes data permanently and
-which the owner runs by hand; until then it is still in the production database.
-
-File counts are `git ls-files <dir> | wc -l` as of this commit, and
-`frontend/tests/rootReadmePaths.test.ts` fails if they drift.
-
-Test counts are deliberately not quoted anywhere here. They change with almost
-every commit, and the only honest way to keep such a number true is a check that
-runs the suite — which cannot live inside the suite it measures. A number nothing
-keeps true is worse than no number: it reads as verified and falsifies in one
-command. Run the commands below and read the real output.
-
-`src_C/` is the one directory name that misleads. It is the entire backend:
-`Vpc/` holds the Lambda that sits inside the VPC and talks to PostgreSQL,
-`Worker/` an SQS consumer, `Shared/` the common auth and database helpers, and
-`Tests/` the integration test project. (`Public/`, a never-deployed rewrite of
-the retired `edge-public` Lambda, was deleted on 2026-10-04.)
-
-## 2. Running it
-
-Prerequisites come from `.github/workflows/ci.yml`: Node 20 and the .NET 10 SDK
-(pinned by `src_C/global.json`; an SDK 8-only `dotnet` refuses to run there). The backend tests
-also need Docker, for Testcontainers.
-
-### Admin console
+Start the admin console:
 
 ```bash
 cd frontend
@@ -73,13 +23,9 @@ npm ci
 npm run dev
 ```
 
-No configuration step: `frontend/.env.development` is committed, so this starts
-against the deployed dev API and its Cognito app client. The dev server must stay
-on port 5173 — the Cognito callback is registered as
-`http://localhost:5173/auth/callback`, and logging in from any other port fails
-the callback.
+The committed `frontend/.env.development` configures the console for the development API. Keep Vite on port 5173 because that is the registered Cognito callback. See [frontend setup](frontend/README.md) for the variables and the test type-check details.
 
-### Mobile app
+Start the mobile app:
 
 ```bash
 cd mobile
@@ -87,284 +33,74 @@ npm ci
 npx expo start
 ```
 
-### Tests
+`npx expo start` starts Metro. Run the app in a compatible native development build because it includes native dependencies. Sign-in also needs the public Cognito build settings `EXPO_PUBLIC_AWS_REGION`, `EXPO_PUBLIC_COGNITO_USER_POOL_ID`, and `EXPO_PUBLIC_COGNITO_USER_POOL_CLIENT_ID`.
+
+Run the test suites from the repository root:
 
 ```bash
-cd frontend && npm ci && npx vitest run
-cd mobile   && npm ci && npx vitest run
-cd src_C    && dotnet test Tests/RecallSmith.Lambda.IntegrationTests
+(
+  cd frontend
+  npm test
+)
+(
+  cd mobile
+  npm test
+)
+(
+  cd src_C
+  dotnet test Tests/RecallSmith.Lambda.IntegrationTests
+)
 ```
 
-## Deployment
+The frontend build runs `tsc -b` before Vite, and this is the frontend type-check gate. `frontend/tsconfig.json` is references-only, so `npx tsc --noEmit` there checks no files. Test files are included through `frontend/tsconfig.test.json`.
 
-The console is deployed at https://d12pfy1rhi3ekm.cloudfront.net — a private S3
-bucket behind CloudFront, reachable only through the distribution (Origin
-Access Control; the bucket blocks all public access and its policy names one
-distribution ARN). Three things about the setup carry the reasoning:
+## Architecture
 
-- **SPA fallback.** S3 answers 403 for keys that do not exist, so CloudFront
-  maps 403/404 to `/index.html` with a 200 — that is what makes
-  `/decks/cards?deckId=7` a working deep link instead of an error page.
-- **Cache split.** Hashed assets ship with `max-age=31536000, immutable`;
-  `index.html` ships with `no-cache`. A new build changes the hashes, the
-  fresh `index.html` points at them, and the old chunks stop being referenced
-  — which is exactly the failure window `ChunkErrorBoundary` exists for.
-- **Build-time config.** `frontend/.env.production` is committed and carries
-  the deployed callback URLs; Vite's mode-specific files outrank `.env.local`,
-  so a developer's local overrides cannot leak into a deploy artifact.
-
-Deploying is two commands from `frontend/`:
-
-```bash
-npm run build
-aws s3 sync dist s3://recallsmith-console-622994489535 --delete \
-  --exclude index.html --cache-control "public,max-age=31536000,immutable"
-```
-
-then upload `index.html` with `no-cache` and invalidate the distribution.
-CI does not deploy: shipping on green is a decision, not a default, and this
-project has exactly one person to make it.
-
-## 3. How one request flows
-
-Opening a deck in the console calls `fetchDeckById` in
-`frontend/src/api/authoring.ts`, which issues
-`GET /api/v1/authoring/decks?id=` through the shared axios instance in
-`frontend/src/api/http.ts`. That instance attaches the Cognito access token from
-`frontend/src/auth/tokenStore.ts` as a bearer header on every request. If that token is
-within a minute of expiring it is refreshed first, and the request waits: every
-request that arrives during a refresh awaits the same one, so a page that fires
-four calls on mount spends the refresh token once rather than four times. Only
-when the refresh itself is refused, or when a request that did carry a fresh
-token still comes back 401, does the client clear the session and navigate to
-`/login` — once per page, however many requests failed together. API Gateway routes the call
-to the VPC Lambda, where `HandleAuthoringDecks` in
-`src_C/Vpc/Authoring/Decks.cs` checks the caller with `Auth.RequireAdmin`, opens
-a connection via `Pg.OpenConnectionOrNullAsync()` and queries PostgreSQL through
-`DbUtil.QueryAsync`.
-
-Publishing is the one asynchronous path. `src_C/Vpc/Authoring/Publish.cs` inserts
-a row into `deck_publishes` and puts a message on SQS rather than doing the work
-inline; `FunctionHandler` in `src_C/Worker/WorkerFunction.cs` consumes that queue
-and builds the published content. The console polls the job row for status, which
-is why `DeckListPage` has a poller in it.
-
-## 4. Tests and CI
-
-`.github/workflows/ci.yml` runs four jobs on every push, in parallel: `mobile`,
-`frontend`, `e2e` and `backend`.
-
-| Command | Result |
+| Area | Role |
 | --- | --- |
-| `cd frontend && npx vitest run` | All green |
-| `cd frontend && npx playwright test` | 2 passed |
-| `cd frontend && npx eslint src tests vitest.config.ts` | 0 errors, 1 warning |
-| `cd frontend && npm audit --omit=dev --audit-level=high` | found 0 vulnerabilities |
-| `cd frontend && npm run build` | `dist/assets/index-*.js` is 282,510 bytes |
-| `cd src_C && dotnet test Tests/RecallSmith.Lambda.IntegrationTests` | All green |
+| `mobile/` | Learner app, local review storage and offline sync |
+| `frontend/` | Admin console for decks, cards, review and publishing |
+| `src_C/` | .NET API and SQS worker on AWS Lambda |
+| `pg-layer/` | Node.js Lambda layer for the PostgreSQL driver |
+| `infra/` | Terraform and infrastructure runbooks |
+| `services/` | Supporting Python Lambda services |
+| `docs/` | Design, operations and release evidence |
+| `.github/workflows/ci.yml` | Continuous integration |
+| `.github/workflows/cd.yml` | Approved production delivery |
 
-Every number above was produced by running that exact command while writing this
-file.
+An admin request passes through `frontend/src/api/http.ts` to API Gateway and the VPC Lambda, where `src_C/Vpc/Authoring/Publish.cs` creates the job and `src_C/Worker/WorkerFunction.cs` consumes queued work. The mobile app stores review events in `mobile/src/sync/progressSync.ts`, sends them when it can, and pulls account-scoped progress. See [the operations runbook](infra/RUNBOOK.md), [mobile sync design](docs/console-system-design-2026-10-05.md), and [backend architecture review](docs/backend-architecture-review-2026-09-22.md). Other useful entry points are `frontend/src/auth/tokenStore.ts`, `src_C/Vpc/Runtime/ProgressEvents.cs`, `mobile/src/sync/drawStateSync.ts`, `frontend/package.json`, and `mobile/package.json`.
 
-Several of the frontend tests exist to check wiring rather than behaviour:
-`frontend/tests/hookWiring.test.ts` fails if `src/hooks/index.ts` publishes a hook nothing
-calls, and `frontend/tests/consolePlanDoc.test.ts` fails if `docs/console-refactor-plan.md`
-cites a test file that does not exist. They were written because this codebase's
-recurring failure was code that was present but not wired to anything, which no
-compiler reports.
+## Delivery and operations
 
-**The console is written in English only, and that is checked rather than
-agreed.** It used to be mixed: the route error boundary, the card form's
-advisory hints, the new-deck form and three rendered rarity labels were Chinese
-while every button, heading and placeholder around them was English. No i18n
-framework is installed and none is planned — one language can be stated as a
-decision, a mixture cannot be stated as anything —
-so `frontend/tests/uiLanguage.test.ts` scans every file under `frontend/src/`
-for CJK and fails on the first one, and fires the same detector at sample text
-it must catch so a scan that quietly stops working cannot pass. `frontend/tests/`
-is deliberately outside that scan: `frontend/tests/deckImport.test.ts` carries
-Chinese *card content*, because the product ships zh-CN decks and the importer
-has to survive them.
+CI validates the mobile and frontend projects, runs a Playwright browser smoke against the built console with stubbed API and Cognito routes, tests the .NET backend, and checks the Python packages, infrastructure, MCP server, n8n recipes and author runner. The frontend build includes TypeScript checks for app and test files. After successful CI on `main`, CD plans and builds selected production targets, then waits for the configured environment approval before using OIDC credentials to deploy and run smokes.
 
-**Every write goes through the data layer, and the layer's defaults are
-conservative on purpose.** The six mutations in `frontend/src/hooks/` invalidate
-the query keys they change, so the deck list is told when a deck is created,
-edited, deleted or published, and a card list is told when a card is written.
-The shared client in `frontend/src/api/queryClient.ts` nevertheless defaults to
-`staleTime: 0` and no ambient refetching: a global default describes what is
-safe for the system as it stands, and a page that can prove caching is safe
-there raises it deliberately. The previous defaults were the opposite — a
-five-minute window that every hook overrode line by line, so it governed no
-behaviour at all while sitting ready for the next hook to inherit.
-`frontend/tests/queryClientDefaults.test.tsx` holds the hooks out of restating
-those settings, because a hook that repeats them makes the tests that guard the
-default pass whatever the default becomes.
+The deploy records a restore point, runs baseline-aware smokes, and automatically restores changed Lambda aliases and web assets if a new smoke fails. CD does not run database migrations. See [CD operations](infra/RUNBOOK.md#flow) and [restore procedures](infra/RUNBOOK.md#automatic-rollback).
 
-**Everything under `frontend/src/pages/` is a route entry, and that is
-checked.** Four modules that were not pages — a pagination reducer, a manifest
-parser, a row projection and a hook — had accumulated there because each was
-"about `DeckListPage`", and a directory name is prose that never fails. They now
-live with the five presentational components of the same screen under
-`frontend/src/features/deckList/`, and
-`frontend/tests/consoleDirectoryLayout.test.ts` fails if `src/pages/` and the
-routes in `frontend/src/App.tsx` ever stop naming the same set. The rest of the
-convention — `features/` aggregates one domain, `components/ui/` is what two
-domains share, `lib/` is pure functions — is written down in
-`docs/console-refactor-plan.md` and deliberately not asserted: those are
-judgements about what a file is for, and a test that scored them would be
-scoring its own guess.
+The console funnels uncaught window errors, unhandled rejections and render errors to Sentry when a DSN is configured in the build. Without a DSN, the reporting funnel sends nothing. See [frontend deployment and reporting](frontend/README.md#deployment).
 
-**Uncaught failures have one funnel, and it is silent until someone points it
-at a collector.** `frontend/src/lib/reportError.ts` takes the three ways a
-failure escapes the application — a throw outside React, a rejected promise
-nobody awaited, and a component throwing during render — and sends one
-`navigator.sendBeacon` carrying the build id, the route and the stack. There is
-no server collecting these today, so with `VITE_ERROR_REPORT_URL` unset it makes
-zero network calls; `frontend/tests/errorReporting.test.tsx` asserts the silence
-by counting `sendBeacon` calls, and asserts the same three entry points do send
-when the variable is set. The route is `location.pathname` and never the query
-string, because `/auth/callback` carries the Cognito authorization code and a
-failure there is exactly when a report would fire.
+## Engineering cases and career evidence
 
-**The console is single-theme, and the two files that disagreed have been
-corrected.** `ConfirmDialog` and the `Button` it renders were the only files in
-`src/` carrying Tailwind `dark:` variants. `frontend/tailwind.config.js` sets no
-`darkMode`, so the default `media` strategy applied and those variants fired on
-the OS setting: on a Mac in dark mode the confirmation dialog went dark while
-every page behind it stayed white. `frontend/tests/singleTheme.test.ts` fails on
-the next `dark:` that appears anywhere under `src/`.
+- [Engineering cases](docs/showcase/engineering-cases.md): offline sync, publish failure and recovery, and deploy/database restore.
+- [Career readiness assessment](docs/showcase/career-readiness.md): evidence for .NET/AWS full-stack roles and the remaining gaps.
+- [Portfolio demo plan](docs/showcase/portfolio-demo.md): a script and shot plan under three minutes. It is not a recorded video.
+- [Reviewer guide](docs/showcase/reviewer-guide.md): the AI-assisted authoring review flow.
+- [Process redesign case study](docs/showcase/process-redesign-case-study.md): evidence and limits for the authoring workflow.
+- [Existing demo script](docs/showcase/demo-video-script.md): an earlier short script for the authoring workflow.
 
-**The console's one hand-rolled cache is scoped to the account that filled it.**
-`frontend/src/lib/sessionCache.ts` keys `DeckListPage`'s five-minute deck and
-manifest lists by the signed-in user's Cognito `sub`, drops them when
-`clearTokens()` ends a session, and drops them again when a deck is deleted or
-published. Before that there was one pair of keys per browser and no clearing at
-all, so closing the tab and signing in as somebody else painted the previous
-account's decks — including ones the new account cannot read — with no request
-for any server check to refuse.
+## Historical analytics retirement
 
-**The sign-in chain is tested, which it was not.** Cognito authentication was
-the largest untested surface here: the PKCE pair, the callback that turns an
-authorization code into a session, and the interceptor that refreshes an
-expiring token were all reachable only by signing in by hand.
-`frontend/tests/pkceShape.test.ts` pins the challenge against the vector
-published in RFC 7636 rather than against a digest it computes for itself — a
-locally-derived expectation reproduces the interesting mistakes (standard
-base64 instead of base64url, kept padding) instead of catching them.
-`frontend/tests/authCallbackPage.test.tsx` drives the callback page with only
-`fetch` faked, so its assertions are about the same sessionStorage record the
-console reads on the next page load: a `state` this browser did not issue never
-reaches the network, a refused exchange leaves no half-written session, and the
-destination remembered across the OAuth round trip is re-sanitised on the way
-out rather than only on the way in. `frontend/tests/authTokenRefresh.test.ts`
-covers the interceptor, including the case a console page produces on every
-cold mount — several requests noticing one expired token at the same moment.
+Snowflake was retired on 2026-10-02. The trial had ended, the pipeline had been run by hand once and was never scheduled, and PostgreSQL `analytics_daily` rollups already provided usage and per-card counts. The retired analytics outbox also carried an unsalted user hash and device id with no consumer reading them. R26 stopped sync writes to the outbox and removed its publisher and the console's Content Intelligence page. The owner ran migration 045 on 2026-10-02, dropping the outbox table and its existing rows; the 2026-10-04 restore drill reported migration 45 applied to both production and the restored copy.
 
-**There is a browser smoke suite, and it stubs the API on purpose.**
-`frontend/tests/e2e/authoringConsole.spec.ts` runs two Playwright tests against
-the real production bundle, served by `vite preview` on port 5173 — the port the
-Cognito redirect URI is registered against. One: an unauthenticated visit is
-redirected to the login page, and the sign-in button really leaves for the
-Cognito authorize URL carrying a `code_challenge` that is the SHA-256 of the
-verifier that browser has just stored. Two: a seeded session renders the deck
-list and navigates into the cards route, and the `CardListPage` chunk is
-fetched for the first time and returns 200 — the failure jsdom is structurally
-unable to see, because it has no bundler output to 404 on. The API and Cognito
-are stubbed at the network layer with `page.route()`: a full-stack run would
-need a real Cognito username and password on a CI runner, and this repository
-stores no credentials at all — `frontend/.env.development` is committed
-precisely because every value in it is public. `frontend/.env.e2e` builds the
-bundle against a `.invalid` Cognito domain, so a mis-stubbed redirect cannot
-reach a live service even by accident. The two runners are kept apart by a
-single character — `.spec.ts` against `.test.ts` — so
-`frontend/tests/runnerSeparation.test.ts` asks each collector what it would
-actually collect and fails if the two sets ever meet.
+## Current operational evidence
 
-The test files are type-checked, at the same strictness as `src/`.
-`frontend/tsconfig.test.json` covers `tests/` and is referenced from
-`frontend/tsconfig.json`, so `tsc -b` — and therefore `npm run build` and CI —
-compiles every file under `tests/` alongside the app. This was not always
-true: `tests/` used to sit outside the `include` of every tsconfig, so a type
-error in a test was visible to nothing but ESLint. `frontend/tests/tsconfigTestProject.test.ts`
-fails if that reference is removed again, and
-`frontend/tests/typeGateFileSet2.test.ts` fails if the set of files the project
-resolves to stops matching the files actually on disk — which is how "every
-file" stopped being true once before, silently, when an `exclude` glob meant to
-skip iCloud conflict copies also swallowed ordinary filenames.
+The [26 October operations observation](docs/qa/career-readiness-20261026/operations.md) records a read-only, bounded CloudWatch sample. It found 228 sync handler samples and 16 publish-success events in the requested 28-day window. The sample spans releases, does not identify the source version for every observation, and does not establish capacity, end-to-end latency, sync business success or a per-job publish success rate. The source queries and responses are in [operations-source.json](docs/qa/career-readiness-20261026/operations-source.json).
 
-(That sentence used to give a file count. It was wrong by the time anyone read
-it, because nothing kept it true. Counts belong in assertions, which recheck
-themselves; prose gets the claim that does not expire.)
+The 4 October 2026 database restore drill took 26 minutes 10 seconds from restore request to instance availability; the app check completed 26 minutes 25 seconds after the request. Its measured restore-point lag was 8 minutes 3 seconds ([drill record](docs/ops/dr-restore-drill-2026-10-04.md)). This is one drill on the recorded database size, not a service-wide recovery guarantee.
 
-## 5. Known limitations
+## CI and release details
 
-- **`tsc --noEmit` is not a check in this repo.** `frontend/tsconfig.json` is
-  references-only with no `include`, so it checks zero files and exits 0 with a
-  real type error sitting in `src/`. Use `tsc -b`, which is what `npm run build`
-  runs and therefore what CI enforces.
-- **One known lint warning**, at `frontend/src/pages/DeckListPage.tsx:498`
-  (`react-hooks/exhaustive-deps` on the publish-jobs poller). CI does not use
-  `--max-warnings 0`, so the bar is 0 errors rather than 0 problems. Fixing it
-  means changing polling code that `frontend/tests/deckListPagePolling.test.tsx` pins
-  character-for-character.
-- **`DeckListPage.tsx` is 723 lines.** Its JSX now lives in five presentational
-  components under `frontend/src/features/deckList/components/`, but the page
-  still owns deck fetching, the search debounce, the publish-jobs poller and
-  both row actions, so it remains the largest file in `src/`. (The five-minute
-  localStorage cache moved out to `frontend/src/lib/sessionCache.ts`, which is
-  why the count went down rather than up.) An earlier, unused set of five components in a sibling `decks/`
-  directory (deleted, no longer in the tree) was not adopted during that split:
-  it rendered different markup, and its `DeckTable` called `useNavigate()`
-  internally, which `frontend/tests/deckListHookOrder.test.ts` now forbids for
-  the components the page does use.
-- **One deliberate `window.confirm` remains**, in
-  `frontend/src/components/ui/ConfirmDialogContext.ts`. The four confirmations
-  that used to call it directly (`CardListPage`, `AdminUsersPage`,
-  `DeckListPage` twice) now go through `ConfirmDialogProvider`, mounted in
-  `frontend/src/App.tsx` inside the chunk boundary and outside `Suspense`;
-  `frontend/tests/confirmWiring.test.tsx` mounts the real `<App/>` and presses a
-  real row's Delete button, with `window.confirm` stubbed to throw so the
-  fallback cannot pass for the real thing. The fallback itself is what lets page
-  tests mount a page with no application shell above it, and it is asserted in
-  `frontend/tests/confirmDialogA11y.test.tsx` rather than left implicit.
-- **The end-to-end suite does not reach the API.** `npx playwright test` drives
-  a real browser against the real built bundle, but the RecallSmith API and the
-  Cognito hosted UI are stubbed with `page.route()`, so nothing checks that the
-  console and the backend still agree on a payload. The gap is deliberate and
-  its reasoning is in §4; it is why those two tests are called smoke tests
-  rather than end-to-end coverage. The server side is exercised against a real
-  database by `src_C/Tests/RecallSmith.Lambda.IntegrationTests`.
-- **An untracked `.env.local` under frontend/ changes what the unit suite sees.**
-  It is a copy of the committed `frontend/.env.development`, and vitest loads it
-  in mode `test`, so on a developer machine `AUTH_CONFIG` is populated while on
-  a CI runner it is empty. No test depends on that today — the ones that need a
-  Cognito configuration stub it explicitly — but a new one written against
-  whatever happens to be there would pass locally and behave differently in CI.
-
-## 6. Repository map
-
-- `docs/console-refactor-plan.md` — read from disk by
-  `frontend/tests/consolePlanDoc.test.ts`, which asserts every test file the plan
-  cites exists. Renaming or moving it turns the `frontend` CI job red.
-- `frontend/.env.development` — committed on purpose. Every value in it is public
-  by construction: the dev API Gateway URL, a Cognito app client id and localhost
-  redirect URIs, all of which ship inside any browser bundle anyway. No secret
-  lives in this repository.
-- `frontend/.env.e2e` — committed for the same reason, and two of its values are
-  deliberately not real. `vite build --mode e2e` reads it, and it exists because
-  the default production mode loads no env file at all: that bundle has no
-  Cognito configuration, so `RequireAuth` waves every route through and the
-  smoke tests would be driving an application with its authentication removed.
-- `frontend/playwright.config.ts` — one browser, `testDir` pointed at
-  `frontend/tests/e2e`, and a `webServer` that builds and previews on port 5173
-  with `--strictPort`. The port is not a preference: the Cognito app client
-  registers `http://localhost:5173/auth/callback`, so a server that silently
-  moved to vite's default 4173 would be serving a different application.
-- `pg-layer/` — the `pg` driver packaged as a Lambda layer, so the VPC functions
-  do not each bundle their own copy.
-- `mobile/scripts/` — a screenshot-quality pipeline that drives the simulator and
-  scores screens against `mobile/docs/qa/screen-quality-rubric.md`.
+See the [CI workflow](.github/workflows/ci.yml), [CD workflow](.github/workflows/cd.yml), [backend source](src_C/Vpc/), [worker source](src_C/Worker/), [sync implementation](mobile/src/sync/progressSync.ts), and [offline sync tests](mobile/tests/). The repository also retains detailed design notes and operational history under `docs/`.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
