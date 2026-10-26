@@ -23,11 +23,11 @@ public class PublishReplayGaugeTests
   private sealed class ReplayingProcessor : IPublishJobProcessor, IReplayOutcome
   {
     public bool Replay;
-    public bool LastCallWasTerminalReplay { get; private set; }
+    public PublishReplayOutcome LastCallReplayOutcome { get; private set; }
 
     public Task ProcessAsync(string jobId, int receiveCount = 1)
     {
-      LastCallWasTerminalReplay = Replay;
+      LastCallReplayOutcome = Replay ? PublishReplayOutcome.FailedOrAbsent : PublishReplayOutcome.None;
       return Task.CompletedTask;
     }
 
@@ -138,22 +138,22 @@ public class PublishReplayGaugeTests
 
     Assert.Empty(resp.BatchItemFailures);
     Assert.False(uploader.Touched);
-    Assert.True(processor.LastCallWasTerminalReplay);
+    Assert.Equal(PublishReplayOutcome.FailedOrAbsent, processor.LastCallReplayOutcome);
     Assert.Contains("acknowledging replay", stdout, StringComparison.Ordinal);
     AssertCounts(stdout, succeeded: 0, failed: 0);
   }
 
   [Fact]
-  public async Task ReplayFlag_IsResetOnEveryCall()
+  public async Task ReplayOutcome_IsResetOnEveryCall()
   {
     var repo = new RowRepository { Status = "FAILED" };
     var processor = new PublishJobProcessor(repo, new CountingUploader(), new NoopArtifacts());
 
     await EmfCapture.StdoutAsync(() => processor.ProcessAsync("j1"));
-    Assert.True(processor.LastCallWasTerminalReplay);
+    Assert.Equal(PublishReplayOutcome.FailedOrAbsent, processor.LastCallReplayOutcome);
 
     repo.Status = "PROCESSING";
     await EmfCapture.StdoutAsync(() => Assert.ThrowsAsync<JobNotAcquiredException>(() => processor.ProcessAsync("j1")));
-    Assert.False(processor.LastCallWasTerminalReplay);
+    Assert.Equal(PublishReplayOutcome.None, processor.LastCallReplayOutcome);
   }
 }
