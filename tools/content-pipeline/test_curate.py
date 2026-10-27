@@ -1,9 +1,15 @@
+import copy
 import json
+from types import SimpleNamespace
+from unittest.mock import patch
 from pathlib import Path
 import tempfile
 import unittest
 
-from curate import require_reconciled_revisions
+from curate import (GOAL_SCHEMA, REVIEW_SCHEMA, build_review_prompt, completed_attempt, execute,
+                    prepare_repair, require_reconciled_revisions, validate_goals,
+                    validate_repair_authorization, validate_repaired_goals, verified_goals, run)
+from pipeline import canonical
 from pipeline import digest, save
 
 
@@ -56,6 +62,220 @@ class RevisionTests(unittest.TestCase):
                 (batch / name).mkdir()
             with self.assertRaisesRegex(ValueError, 'budget'):
                 require_reconciled_revisions(batch, 'generate', 3, batch / 'generate-r3-attempt-1')
+
+
+
+class RepairTests(unittest.TestCase):
+    def fixture(self, batch):
+        packet = {'cards': [{'stableUid': 'a'}, {'stableUid': 'b'}],
+                  'publicReferences': {'serviceConceptIds': ['ec2'], 'tasks': [{'id': '1.1'}]}}
+        goals = {'cards': [{'stableUid': uid, 'goalEn': 'Understand EC2', 'goalZh': '理解 EC2',
+                           'retrievalQueryEn': 'EC2 scope', 'layer': 1, 'serviceConceptIds': ['ec2'],
+                           'publicTaskId': None, 'examRelation': 'prerequisite', 'difficultyConcern': None}
+                          for uid in ['a', 'b']]}
+        review = {'verdict': 'FAIL', 'cards': [{'stableUid': uid, 'verdict': verdict, 'findings': []}
+                                              for uid, verdict in [('a', 'PASS'), ('b', 'FAIL')]]}
+        save(batch / 'input.json', packet)
+        (batch / 'generate.prompt.txt').write_text('initial goal prompt')
+        save(batch / 'generate.schema.json', GOAL_SCHEMA)
+        save(batch / 'review.schema.json', REVIEW_SCHEMA)
+        (batch / 'review.prompt.txt').write_text(build_review_prompt(packet, goals))
+        self.complete(batch, 'generate-r2-attempt-1', goals, batch / 'generate.prompt.txt')
+        self.complete(batch, 'review-r2-attempt-1', review, batch / 'review.prompt.txt')
+        return packet, goals, review
+
+    def complete(self, batch, name, result, prompt):
+        output = batch / name
+        output.mkdir(exist_ok=True)
+        stage = name.split('-')[0]
+        schema = (batch / f'{stage}.schema.json').read_text()
+        (output / 'schema.json').write_text(schema)
+        save(output / 'result.json', result)
+        raw = canonical({'type': 'item.completed', 'item': {'type': 'agent_message', 'text': canonical(result)}})
+        raw += '\n' + canonical({'type': 'turn.completed'}) + '\n'
+        (output / 'events.jsonl').write_text(raw)
+        (output / 'stderr.log').write_text('')
+        hashes = {'inputHash': digest(prompt.read_text()), 'schemaHash': digest(schema.strip())}
+        save(output / 'invocation.json', hashes)
+        save(output / 'execution.json', {**hashes, 'success': True, 'exitCode': 0,
+              'outputHash': digest((output / 'result.json').read_bytes()),
+              'eventsHash': digest(raw), 'stderrHash': digest('')})
+
+    def test_completed_failure_authorizes_one_repair_and_transitive_400(self):
+        with tempfile.TemporaryDirectory() as td:
+            batch = Path(td)
+            _, goals, _ = self.fixture(batch)
+            RevisionTests().rejected(batch)
+            prepare_repair(batch)
+            original = (batch / 'repair-authorization.json').read_bytes()
+            prepare_repair(batch)
+            self.assertEqual(original, (batch / 'repair-authorization.json').read_bytes())
+            for stage in ['generate', 'review']:
+                require_reconciled_revisions(batch, stage, 3, batch / f'{stage}-r3-attempt-1')
+            goals['cards'][1]['goalEn'] = 'Understand one narrowed EC2 boundary'
+            validate_repaired_goals(batch, goals)
+            goals['cards'][0]['goalZh'] = '修改'
+            with self.assertRaisesRegex(ValueError, 'previously passing'):
+                validate_repaired_goals(batch, goals)
+
+    def test_every_original_uid_exactly_once(self):
+        with tempfile.TemporaryDirectory() as td:
+            batch = Path(td)
+            packet, goals, _ = self.fixture(batch)
+            for cards in [goals['cards'][:1], goals['cards'] + [goals['cards'][0]],
+                          [goals['cards'][0], {**goals['cards'][1], 'stableUid': 'replacement'}]]:
+                with self.subTest(cards=cards), self.assertRaises(ValueError):
+                    validate_goals(packet, {'cards': cards})
+
+    def test_authorization_detects_each_frozen_artifact_tamper(self):
+        with tempfile.TemporaryDirectory() as td:
+            batch = Path(td)
+            self.fixture(batch)
+            prepare_repair(batch)
+            authorization = validate_repair_authorization(batch)
+            for relative in list(authorization['files']) + ['generate-r3.prompt.txt', 'repair-authorization.json']:
+                path = batch / relative
+                original = path.read_bytes()
+                path.write_bytes(original + b' ')
+                # JSON whitespace is semantic no-op but frozen evidence must still fail.
+                if relative == 'repair-authorization.json':
+                    changed = json.loads(original)
+                    changed['passingUids'] = []
+                    save(path, changed)
+                with self.subTest(relative=relative), self.assertRaises((ValueError, OSError)):
+                    validate_repair_authorization(batch)
+                path.write_bytes(original)
+
+    def test_review_must_bind_actual_candidate_and_actual_failure(self):
+        for variant in ['wrong_candidate', 'pass', 'inconsistent', 'unknown']:
+            with self.subTest(variant=variant), tempfile.TemporaryDirectory() as td:
+                batch = Path(td)
+                packet, goals, review = self.fixture(batch)
+                if variant == 'wrong_candidate':
+                    altered = copy.deepcopy(goals)
+                    altered['cards'][0]['goalEn'] = 'different candidate'
+                    (batch / 'review.prompt.txt').write_text(build_review_prompt(packet, altered))
+                elif variant in {'pass', 'inconsistent'}:
+                    review['verdict'] = 'PASS'
+                    if variant == 'pass':
+                        review['cards'][1]['verdict'] = 'PASS'
+                else:
+                    (batch / 'review-r2-attempt-1/result.json').unlink()
+                if variant != 'unknown':
+                    self.complete(batch, 'review-r2-attempt-1', review, batch / 'review.prompt.txt')
+                with self.assertRaises((ValueError, OSError)):
+                    prepare_repair(batch)
+
+    def test_unknown_r3_blocks_even_another_stage_before_model_call(self):
+        with tempfile.TemporaryDirectory() as td:
+            batch = Path(td)
+            self.fixture(batch)
+            prepare_repair(batch)
+            (batch / 'review-r3-attempt-1').mkdir()
+            args = SimpleNamespace(input_revision=3)
+            with patch('curate.subprocess.run') as invoke, self.assertRaisesRegex(ValueError, 'Incomplete'):
+                execute(args, batch, 'generate', batch / 'generate-r3.prompt.txt', batch / 'generate.schema.json')
+            invoke.assert_not_called()
+
+    def test_completed_resume_never_invokes_model(self):
+        with tempfile.TemporaryDirectory() as td:
+            batch = Path(td)
+            _, goals, _ = self.fixture(batch)
+            args = SimpleNamespace(input_revision=2)
+            with patch('curate.subprocess.run') as invoke:
+                self.assertEqual(execute(args, batch, 'generate', batch / 'generate.prompt.txt',
+                                         batch / 'generate.schema.json'), goals)
+            invoke.assert_not_called()
+
+    def test_valid_repair_cannot_exceed_three_generation_attempts(self):
+        with tempfile.TemporaryDirectory() as td:
+            batch = Path(td)
+            self.fixture(batch)
+            RevisionTests().rejected(batch)
+            prepare_repair(batch)
+            (batch / 'generate-r1-attempt-1').mkdir()
+            with self.assertRaisesRegex(ValueError, 'budget'):
+                require_reconciled_revisions(batch, 'generate', 3, batch / 'generate-r3-attempt-1')
+
+    def test_completed_requires_matching_agent_message_and_terminal_event(self):
+        for variant in ['wrong_message', 'turn_failed']:
+            with self.subTest(variant=variant), tempfile.TemporaryDirectory() as td:
+                batch = Path(td)
+                self.fixture(batch)
+                output = batch / 'generate-r2-attempt-1'
+                events = [json.loads(line) for line in (output / 'events.jsonl').read_text().splitlines()]
+                if variant == 'wrong_message':
+                    events[0]['item']['text'] = '{}'
+                else:
+                    events[-1]['type'] = 'turn.failed'
+                raw = '\n'.join(canonical(e) for e in events)
+                (output / 'events.jsonl').write_text(raw)
+                execution = json.loads((output / 'execution.json').read_text())
+                execution['eventsHash'] = digest(raw)
+                save(output / 'execution.json', execution)
+                with self.assertRaises(ValueError):
+                    completed_attempt(batch, output.name, batch / 'generate.prompt.txt', batch / 'generate.schema.json')
+
+    def test_run_repairs_once_then_resumes_and_binds_final_artifacts(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            batch = root / 'curriculum/batches/01'
+            batch.mkdir(parents=True)
+            _, goals, review = self.fixture(batch)
+            stages = []
+            actual_execute = execute
+            def completed_model(args, batch, stage, prompt, schema):
+                stages.append((args.input_revision, stage))
+                if args.input_revision == 3 and not (batch / f'{stage}-r3-attempt-1').exists():
+                    result = copy.deepcopy(goals if stage == 'generate' else review)
+                    if stage == 'generate':
+                        result['cards'][1]['goalEn'] = 'Understand a single EC2 boundary'
+                    else:
+                        result['verdict'] = 'PASS'
+                        result['cards'][1]['verdict'] = 'PASS'
+                    self.complete(batch, f'{stage}-r3-attempt-1', result, prompt)
+                return actual_execute(args, batch, stage, prompt, schema)
+            (root / 'curriculum/batches/02').mkdir()
+            args = SimpleNamespace(root=root, input_revision=2, batch='01', workbench_review=root / 'unused')
+            with patch('curate.require_workbench_review'), patch('curate.execute', side_effect=completed_model), \
+                    patch('curate.subprocess.run') as invoke:
+                run(args)
+                self.assertEqual(stages, [(2, 'generate'), (2, 'review'), (3, 'generate'), (3, 'review')])
+                run(args)
+            invoke.assert_not_called()
+            verified = json.loads((batch / 'verified.json').read_text())
+            self.assertEqual(verified['generationAttempt'], 'generate-r3-attempt-1')
+            self.assertEqual(verified['reviewAttempt'], 'review-r3-attempt-1')
+            self.assertEqual(verified_goals(batch)['cards'][0], goals['cards'][0])
+            for field in ['generationAttempt', 'reviewAttempt']:
+                tampered = copy.deepcopy(verified)
+                tampered[field] = tampered[field].replace('r3', 'r2')
+                save(batch / 'verified.json', tampered)
+                with self.subTest(field=field), self.assertRaisesRegex(ValueError, 'pointers'):
+                    verified_goals(batch)
+            save(batch / 'verified.json', verified)
+            path = batch / 'review-r3-attempt-1/execution.json'
+            execution = json.loads(path.read_text())
+            execution['elapsedMs'] = 999
+            save(path, execution)
+            with self.assertRaisesRegex(ValueError, 'evidence changed'):
+                verified_goals(batch)
+
+    def test_r3_failed_review_stops_without_a_second_repair(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            batch = root / 'curriculum/batches/01'
+            batch.mkdir(parents=True)
+            packet, goals, review = self.fixture(batch)
+            prepare_repair(batch)
+            self.complete(batch, 'generate-r3-attempt-1', goals, batch / 'generate-r3.prompt.txt')
+            (batch / 'review-r3.prompt.txt').write_text(build_review_prompt(packet, goals))
+            self.complete(batch, 'review-r3-attempt-1', review, batch / 'review-r3.prompt.txt')
+            args = SimpleNamespace(root=root, input_revision=2, workbench_review=root / 'unused')
+            with patch('curate.require_workbench_review'), patch('curate.subprocess.run') as invoke:
+                with self.assertRaisesRegex(RuntimeError, 'exhausted'):
+                    run(args)
+            invoke.assert_not_called()
 
 
 if __name__ == '__main__':
