@@ -335,10 +335,12 @@ class AdjudicationTests(unittest.TestCase):
                 with self.assertRaises(ValueError): adjudicated_goals(batch, path)
 
     def test_unknown_attempt_blocks_even_valid_existing_selection(self):
-        with tempfile.TemporaryDirectory() as td:
-            batch, path, _, _ = self.fixture(Path(td))
-            (batch / 'review-r1-attempt-1').mkdir()
-            with self.assertRaises(ValueError): adjudicated_goals(batch, path)
+        for name in ('review-r1-attempt-1', 'review-r4-attempt-1', 'generate-r4-attempt-1',
+                     'generate-r2-attempt-4', 'generate-unrecognized'):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as td:
+                batch, path, _, _ = self.fixture(Path(td))
+                (batch / name).mkdir()
+                with self.assertRaises(ValueError): adjudicated_goals(batch, path)
 
 
 if __name__ == '__main__':

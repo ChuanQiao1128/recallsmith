@@ -299,8 +299,9 @@ def validate_repaired_goals(batch: Path, goals: dict):
 
 def require_reconciled_revisions(batch: Path, stage: str, revision: int, output: Path):
     """A new schema revision cannot hide an earlier unknown subscription request."""
-    attempts = [p for p in batch.iterdir() if p.is_dir() and
-                re.fullmatch(re.escape(stage) + r'(?:-r[1-3])?-attempt-[1-3]', p.name)]
+    attempts = [p for p in batch.iterdir() if p.is_dir() and p.name.startswith(stage + '-')]
+    if any(not re.fullmatch(re.escape(stage) + r'(?:-r[1-3])?-attempt-[1-3]', p.name) for p in attempts):
+        raise ValueError('Unknown or out-of-budget stage attempt namespace requires reconciliation')
     if len(attempts) > 3 or (output not in attempts and len(attempts) >= 3):
         raise ValueError('Stage attempt budget exhausted across input revisions')
     authorization = None
