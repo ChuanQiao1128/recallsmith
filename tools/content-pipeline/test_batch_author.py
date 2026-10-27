@@ -262,6 +262,76 @@ class BatchTests(unittest.TestCase):
         save(file, gate)
         return file
 
+    def test_F03_all_consumers_require_claim_before_holdout_content(self):
+        import readiness
+        from itertools import product
+        for consumer, mutation, shape in product(
+                ('readiness.run', 'readiness.verify_decisions', 'batch_author.require_rag_gate'),
+                ('missing', 'changed', 'valid'),
+                ('valid', 'wrong-split', 'missing-rows', 'none-rows', 'list-rows')):
+            if mutation == 'valid' and shape == 'valid':
+                continue
+            with self.subTest(consumer=consumer, mutation=mutation, shape=shape):
+                gate_path = self.gate_fixture()
+                gate = load(gate_path)
+                if shape != 'valid':
+                    ranking_path = self.root / 'evaluation/results/holdout.json'
+                    ranking = load(ranking_path)
+                    if shape == 'wrong-split':
+                        ranking['split'] = 'dev'
+                    elif shape == 'missing-rows':
+                        del ranking['rows']
+                    else:
+                        ranking['rows'] = None if shape == 'none-rows' else []
+                    save(ranking_path, ranking)
+                    next(item for item in gate['reports'] if item['kind'] == 'holdout_retrieval')['sha256'] = digest(ranking_path.read_bytes())
+                    save(gate_path, gate)
+                report = load(self.root / 'evaluation/results/readiness-holdout.json')
+                claim_path = self.root / 'evaluation/results/holdout.experiment.json'
+                if mutation == 'missing':
+                    claim_path.unlink()
+                elif mutation == 'changed':
+                    claim = load(claim_path)
+                    claim['profileHash'] = '0' * 64
+                    save(claim_path, claim)
+                state = load(self.root / 'run.json')
+                reference = self.root / 'evaluation/references.json'
+                review = self.root / state['nodes']['A3-reference-review']['reportPath']
+                readiness_report = self.root / 'evaluation/results/readiness-holdout.json'
+                events = []
+                original_bytes, original_text, original_refs = Path.read_bytes, Path.read_text, readiness.references
+                def observe_file(source):
+                    if source in (reference, review, readiness_report) or self.root / 'evaluation/model-runs' in source.parents:
+                        events.append(str(source.relative_to(self.root)))
+                def observed_bytes(source):
+                    observe_file(source)
+                    return original_bytes(source)
+                def observed_text(source, *args, **kwargs):
+                    observe_file(source)
+                    return original_text(source, *args, **kwargs)
+                def observed_refs(args):
+                    events.append('readiness.references')
+                    return original_refs(args)
+                args = SimpleNamespace(root=self.root, corpus_root=self.args.corpus_root, split='holdout',
+                    references=reference, reference_review=review, workbench_review=self.root / 'unused')
+                with patch.object(Path, 'read_bytes', autospec=True, side_effect=observed_bytes), patch.object(
+                        Path, 'read_text', autospec=True, side_effect=observed_text), patch.object(
+                        readiness, 'references', side_effect=observed_refs), patch.object(
+                        readiness, 'require_workbench_review'), patch.object(readiness, 'invoke') as invoke, patch.object(
+                        readiness, 'completed_model') as completed:
+                    with self.assertRaises(ValueError):
+                        if consumer == 'readiness.run':
+                            readiness.run(args)
+                        elif consumer == 'readiness.verify_decisions':
+                            readiness.verify_decisions(self.root, gate['referenceHash'], gate['corpusVersion'],
+                                                       gate['strategy'], report['decisions'])
+                        else:
+                            b.require_rag_gate(self.root, self.args.corpus_root, self.catalogue, gate_path)
+                    invoke.assert_not_called()
+                    completed.assert_not_called()
+                self.assertEqual([], events, 'Holdout content opened before missing/changed claim rejection')
+
+
     def test_full_rag_accepts_new_observed_native_pin_and_rejects_binding_substitutions(self):
         gate = self.gate_fixture()
         state = load(self.root / 'run.json')

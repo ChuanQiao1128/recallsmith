@@ -457,8 +457,27 @@ def require_rag_gate(root, corpus_root, catalogue, gate_path):
     if (len(reports) != 3 or {r.get('kind') for r in reports} !=
             {'reference_review', 'holdout_retrieval', 'holdout_readiness'}):
         raise ValueError('Three real full-RAG reports required')
-    contents = {}
+    from evaluate import pinned_reference_review, verify_selection, verify_ranking_binding
+    selection_record, _ = verify_selection(root, corpus_root)
+    verify_ranking_binding(root, selection_record, gate)
+    retrieval_binding = next(r for r in reports if r['kind'] == 'holdout_retrieval')
+    if retrieval_binding['path'] != 'evaluation/results/holdout.json':
+        raise ValueError('Use the canonical actual holdout retrieval report')
+    retrieval_source = path(root, retrieval_binding['path'])
+    if digest(retrieval_source.read_bytes()) != retrieval_binding['sha256']:
+        raise ValueError('Full-RAG report hash changed')
+    retrieval = load(retrieval_source)
+    if (retrieval.get('split') != 'holdout' or retrieval.get('corpusVersion') != gate['corpusVersion'] or
+            len(retrieval.get('summaries', {})) != 1 or not isinstance(retrieval.get('rows'), dict) or
+            not isinstance(retrieval['rows'].get(selection_record['strategy']), list)):
+        raise ValueError('Actual frozen holdout retrieval report required')
+    verify_ranking_binding(root, selection_record, retrieval)
+    if retrieval.get('referenceHash') != gate['referenceHash']:
+        raise ValueError('Full-RAG reference binding changed')
+    contents = {'holdout_retrieval': retrieval}
     for item in reports:
+        if item['kind'] == 'holdout_retrieval':
+            continue
         source = path(root, item['path'])
         if digest(source.read_bytes()) != item['sha256']:
             raise ValueError('Full-RAG report hash changed')
@@ -472,10 +491,7 @@ def require_rag_gate(root, corpus_root, catalogue, gate_path):
         raise ValueError('Canonical frozen reference labels changed')
     labels = load(reference_file)
     selected = next(r for r in reports if r['kind'] == 'reference_review')
-    from evaluate import pinned_reference_review, verify_selection, verify_ranking_binding
     pinned_reference_review(root, gate['referenceHash'], selected['path'])
-    selection_record, _ = verify_selection(root, corpus_root)
-    verify_ranking_binding(root, selection_record, gate)
     label_ids = [q['id'] for q in labels.get('queries', [])]
     if (labels.get('corpusVersion') != gate['corpusVersion'] or
             len(label_ids) != 80 or len(set(label_ids)) != 80 or
@@ -485,14 +501,6 @@ def require_rag_gate(root, corpus_root, catalogue, gate_path):
             len({q['id'] for q in reference['queries']}) != 80 or
             any(q.get('verdict') != 'PASS' for q in reference['queries'])):
         raise ValueError('All eighty independent reference checks required')
-    retrieval_binding = next(r for r in reports if r['kind'] == 'holdout_retrieval')
-    if retrieval_binding['path'] != 'evaluation/results/holdout.json':
-        raise ValueError('Use the canonical actual holdout retrieval report')
-    retrieval = contents['holdout_retrieval']
-    verify_ranking_binding(root, selection_record, retrieval)
-    if (retrieval.get('split') != 'holdout' or retrieval.get('corpusVersion') != gate['corpusVersion'] or
-            len(retrieval.get('summaries', {})) != 1):
-        raise ValueError('Actual frozen holdout retrieval report required')
     measured = next(iter(retrieval['summaries'].values()))
     if (measured.get('meanRecallAt8') != metrics['meanRecallAt8'] or
             measured.get('meanMrrAt8') != metrics['meanMrrAt8'] or

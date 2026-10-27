@@ -12,7 +12,7 @@ import jsonschema
 from author import invoke, validate_execution
 from curate import object_schema, require_workbench_review
 from evaluate import (references, verify_selection, verify_ranking_binding, retrieval_binding,
-                      pinned_reference_review, FROZEN_DEV)
+                      pinned_reference_review)
 from pipeline import MODEL, canonical, digest, load, save, verified_corpus
 
 
@@ -170,6 +170,17 @@ def projected_case(root, reference_hash, corpus_version, strategy, query, rankin
 def verify_decisions(root, reference_hash, corpus_version, strategy, decisions):
     """Reconstruct holdout decisions from raw reader/judge executions, never report booleans."""
     root = Path(root).resolve()
+    corpus_root = Path(load(checked_file(root, root / 'run.json'))['retrievalRoot'])
+    selection, _ = verify_selection(root, corpus_root)
+    ranking = load(checked_file(root, root / 'evaluation/results/holdout.json'))
+    if (ranking.get('split') != 'holdout' or not isinstance(ranking.get('rows'), dict) or
+            not isinstance(ranking['rows'].get(selection['strategy']), list)):
+        raise ValueError('Actual canonical holdout retrieval report required')
+    verify_ranking_binding(root, selection, ranking)
+    if (selection['strategy'] != strategy or selection['referenceHash'] != reference_hash or
+            selection['corpusVersion'] != corpus_version or ranking['referenceHash'] != reference_hash or
+            ranking['corpusVersion'] != corpus_version):
+        raise ValueError('Actual selected strategy/reference binding changed')
     reference_path = root / 'evaluation/references.json'
     if digest(checked_file(root, reference_path).read_bytes()) != reference_hash:
         raise ValueError('Canonical reference hash changed')
@@ -179,16 +190,8 @@ def verify_decisions(root, reference_hash, corpus_version, strategy, decisions):
     queries = [q for q in labels['queries'] if q['split'] == 'holdout']
     if len(queries) != 40 or len({q['id'] for q in queries}) != 40 or sum(q['answerable'] for q in queries) != 32:
         raise ValueError('Expected actual forty holdout cases')
-    corpus_root = Path(load(checked_file(root, root / 'run.json'))['retrievalRoot'])
-    selection, _ = verify_selection(root, corpus_root)
     pin = load(checked_file(root, root / 'run.json'))['nodes']['A3-reference-review']
     pinned_reference_review(root, reference_hash, pin['reportPath'])
-    ranking = load(checked_file(root, root / 'evaluation/results/holdout.json'))
-    verify_ranking_binding(root, selection, ranking)
-    if (selection['strategy'] != strategy or selection['referenceHash'] != reference_hash or
-            selection['corpusVersion'] != corpus_version or ranking['referenceHash'] != reference_hash or
-            ranking['corpusVersion'] != corpus_version or ranking['split'] != 'holdout'):
-        raise ValueError('Actual selected strategy/reference binding changed')
     checked_file(root, corpus_root / 'corpus/manifest.json')
     checked_file(root, corpus_root / 'corpus/chunks.json')
     manifest, chunks = verified_corpus(corpus_root)
@@ -249,16 +252,20 @@ def verify_decisions(root, reference_hash, corpus_version, strategy, decisions):
 
 
 def run(args):
+    if args.split != 'holdout':
+        raise ValueError('Live dev readiness is closed; release readiness requires the frozen holdout claim')
     require_workbench_review(args.workbench_review)
     selection, _ = verify_selection(args.root, args.corpus_root)
-    labels, reference_hash = references(args)
     results = args.root / 'evaluation/results'
+    ranking = load(results / 'holdout.json')
+    if (ranking.get('split') != 'holdout' or not isinstance(ranking.get('rows'), dict) or
+            not isinstance(ranking['rows'].get(selection['strategy']), list)):
+        raise ValueError('Actual canonical holdout retrieval report required')
+    verify_ranking_binding(args.root, selection, ranking)
+    labels, reference_hash = references(args)
     if selection['referenceHash'] != reference_hash or selection['corpusVersion'] != labels['corpusVersion']:
         raise ValueError('Selected strategy/reference changed')
     strategy = selection['strategy']
-    ranking = load(results / (args.split + '.json'))
-    if args.split == 'holdout':
-        verify_ranking_binding(args.root, selection, ranking)
     if ranking['referenceHash'] != reference_hash or ranking['corpusVersion'] != labels['corpusVersion']:
         raise ValueError('Actual retrieval report/reference changed')
     originals = {c['chunkId']: c for c in verified_corpus(args.corpus_root)[1]}
@@ -266,8 +273,7 @@ def run(args):
     queries = [q for q in labels['queries'] if q['split'] == args.split]
     cases, lookup = [], {}
     for query in queries:
-        packet_root = args.root / FROZEN_DEV / 'packets' if args.split == 'dev' else results / args.split
-        packet_path = packet_root / strategy / (query['id'] + '.json')
+        packet_path = results / 'holdout' / strategy / (query['id'] + '.json')
         packet = load(packet_path)
         if (digest(packet_path.read_bytes()) != rows[query['id']]['packetHash'] or
                 packet['query'] != query['queryEn'] or packet['corpusVersion'] != labels['corpusVersion'] or
@@ -336,7 +342,7 @@ def main():
     for name in ('root', 'references', 'reference-review', 'corpus-root', 'model-cache', 'dotnet', 'workbench-review'):
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--container', required=True)
-    parser.add_argument('--split', choices=['dev', 'holdout'], required=True)
+    parser.add_argument('--split', choices=['holdout'], required=True)
     run(parser.parse_args())
 
 

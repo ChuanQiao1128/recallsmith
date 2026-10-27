@@ -132,6 +132,16 @@ def make_fixture(root):
 
 
 class ReadinessTests(unittest.TestCase):
+    def test_release_dev_readiness_rejects_before_reference_or_model_access(self):
+        with patch.object(readiness, 'references') as refs, patch.object(readiness, 'invoke') as invoke, patch.object(
+                readiness, 'completed_model') as completed, patch.object(readiness, 'require_workbench_review') as review:
+            with self.assertRaisesRegex(ValueError, 'holdout'):
+                readiness.run(SimpleNamespace(split='dev'))
+            refs.assert_not_called()
+            invoke.assert_not_called()
+            completed.assert_not_called()
+            review.assert_not_called()
+
     def test_rehashed_ranking_profile_substitution_is_rejected(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td).resolve()
