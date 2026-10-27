@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -137,10 +138,43 @@ def require_workbench_review(path: Path):
             raise ValueError('Workbench changed after independent review')
 
 
+def require_reconciled_revisions(batch: Path, stage: str, revision: int, output: Path):
+    """A new schema revision cannot hide an earlier unknown subscription request."""
+    attempts = [p for p in batch.iterdir() if p.is_dir() and
+                re.fullmatch(re.escape(stage) + r'(?:-r[1-3])?-attempt-[1-3]', p.name)]
+    if output not in attempts and len(attempts) >= 3:
+        raise ValueError('Stage attempt budget exhausted across input revisions')
+    for prior in attempts:
+        if prior == output:
+            continue
+        try:
+            execution = load(prior / 'execution.json')
+            events_raw = (prior / 'events.jsonl').read_bytes()
+            events = [json.loads(line) for line in events_raw.splitlines() if line.strip()]
+            reconciliation = load(prior / 'supervisor-reconciliation.json')
+            errors = [json.loads(e['message']) for e in events if e.get('type') == 'error']
+            rejected = (
+                execution.get('success') is False and execution.get('exitCode') == 1 and
+                execution.get('outputHash') is None and not (prior / 'result.json').exists() and
+                execution.get('eventsHash') == digest(events_raw) == reconciliation.get('eventsHash') and
+                execution.get('stderrHash') == digest((prior / 'stderr.log').read_bytes()) and
+                reconciliation.get('resolution') == 'known_request_rejected_before_generation' and
+                reconciliation.get('nextInputRevision') == revision and errors and
+                all(e.get('status') == 400 and e.get('error', {}).get('code') == 'invalid_json_schema'
+                    for e in errors) and
+                all(e.get('type') in {'thread.started', 'turn.started', 'error', 'turn.failed'} for e in events) and
+                events[-1].get('type') == 'turn.failed')
+            if not rejected:
+                raise ValueError('Earlier revision is not a proven request rejection')
+        except (OSError, KeyError, TypeError, ValueError) as error:
+            raise ValueError('Earlier stage revision requires reconciliation; blind resubmission refused') from error
+
+
 def execute(args, batch: Path, stage: str, prompt: Path, schema: Path) -> dict:
     # Input revisions preserve rejected requests; they do not erase their attempt evidence.
+    output = batch / f'{stage}-r{args.input_revision}-attempt-1'
+    require_reconciled_revisions(batch, stage, args.input_revision, output)
     stage = f'{stage}-r{args.input_revision}'
-    output = batch / f'{stage}-attempt-1'
     if output.exists() and not (output / 'result.json').exists():
         raise ValueError('Incomplete attempt requires reconciliation, not blind replay')
     dll = REPO / 'tools/content-workbench/Workbench/bin/Debug/net10.0/Workbench.dll'
