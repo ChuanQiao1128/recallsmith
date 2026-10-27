@@ -13,11 +13,15 @@ import readiness
 from readiness import exact_rows, metrics, verify_decisions
 from pipeline import canonical, digest, load, save
 import test_author
+from test_evaluate import selection_fixture
+from evaluate import retrieval_binding
 
 
 def make_fixture(root):
     """SYNTHETIC unit transport originals; never evidence that a real model ran."""
     root = Path(root).resolve()
+    (root / 'evaluation/results/holdout.json').unlink(missing_ok=True)
+    (root / 'evaluation/results/holdout.experiment.json').unlink(missing_ok=True)
     _, _, seed = test_author.AuthorTests().prepared(root)
     cv, chunk = seed['corpusVersion'], seed['evidence'][0]
     chunk['title'] = 'Synthetic official source fixture'
@@ -57,10 +61,12 @@ def make_fixture(root):
         'provenance': 'native_collaboration_observed_by_supervisor', 'humanLabelCount': 0,
         'syntheticUnitFixture': True}
     save(root / 'run.json', state)
-    strategy, rows = 'bm25', []
+    selection = selection_fixture(root, root / 'corpus', labels, chunk)
+    strategy, rows = selection['strategy'], []
     for query in [q for q in queries if q['split'] == 'holdout']:
         packet = {'corpusVersion': cv, 'query': query['queryEn'], 'strategy': strategy,
-                  'evidence': [chunk], 'candidateRanks': [], 'retrievalConfigVersion': 1,
+                  'evidence': [chunk], 'candidateRanks': [], 'retrievalConfigVersion': 3,
+                  'retrievalProfileHash': selection['profileHash'],
                   'status': 'retrieved_not_semantically_validated'}
         packet['evidenceHash'] = digest(canonical(packet))
         packet_path = root / 'evaluation/results/holdout' / strategy / (query['id'] + '.json')
@@ -68,12 +74,16 @@ def make_fixture(root):
         rows.append({'id': query['id'], 'module': query['module'], 'packetHash': digest(packet_path.read_bytes()),
                      'recallAt8': 1.0 if query['answerable'] else None,
                      'mrrAt8': 1.0 if query['answerable'] else None, 'latencyMs': 1.0})
+    claim_path = root / 'evaluation/results/holdout.experiment.json'
+    save(claim_path, {'split': 'holdout', **retrieval_binding(selection), 'strategies': [strategy],
+        'referenceHash': reference_hash, 'corpusVersion': cv, 'status': 'started_before_first_query',
+        'selectionHash': digest((root / 'evaluation/results/strategy-selection.json').read_bytes())})
     save(root / 'evaluation/results/holdout.json', {'split': 'holdout', 'corpusVersion': cv,
-         'referenceHash': reference_hash, 'rows': {strategy: rows}, 'summaries': {strategy: {
+         'referenceHash': reference_hash, **retrieval_binding(selection),
+         'experimentHash': digest(claim_path.read_bytes()),
+         'selectionHash': digest((root / 'evaluation/results/strategy-selection.json').read_bytes()), 'rows': {strategy: rows}, 'summaries': {strategy: {
             'meanRecallAt8': 1.0, 'meanMrrAt8': 1.0, 'perTheme': {m: 1.0 for m in modules},
             'negativeCount': 8, 'answerableCount': 32}}})
-    save(root / 'evaluation/results/strategy-selection.json', {'strategy': strategy,
-                                                            'referenceHash': reference_hash, 'corpusVersion': cv})
 
     def transport(args, folder, stage, attempt, prompt, schema):
         inputs = json.loads(prompt.split('\n')[-1])['cases']
@@ -122,6 +132,17 @@ def make_fixture(root):
 
 
 class ReadinessTests(unittest.TestCase):
+    def test_rehashed_ranking_profile_substitution_is_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            rh, cv, strategy, decisions = make_fixture(root)
+            source = root / 'evaluation/results/holdout.json'
+            ranking = load(source)
+            ranking['profileHash'] = '0' * 64
+            save(source, ranking)
+            with self.assertRaisesRegex(ValueError, 'binding changed'):
+                verify_decisions(root, rh, cv, strategy, decisions)
+
     def test_report_only_or_tampered_decisions_cannot_substitute_for_originals(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td).resolve()

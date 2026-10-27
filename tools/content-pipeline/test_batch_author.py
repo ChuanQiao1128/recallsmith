@@ -239,7 +239,7 @@ class BatchTests(unittest.TestCase):
         from test_readiness import make_fixture
         reference_hash, cv, strategy, _ = make_fixture(self.root)
         retrieval_path = self.root / 'evaluation/results/holdout.json'
-        readiness_path = self.root / 'evaluation/holdout_readiness.json'
+        readiness_path = self.root / 'evaluation/results/readiness-holdout.json'
         readiness = load(self.root / 'evaluation/results/readiness-holdout.json')
         save(readiness_path, readiness)
         measured = load(retrieval_path)['summaries'][strategy]
@@ -250,7 +250,11 @@ class BatchTests(unittest.TestCase):
                      ('holdout_retrieval', retrieval_path), ('holdout_readiness', readiness_path)]
         bindings = [{'kind': kind, 'path': str(file.relative_to(self.root)), 'sha256': digest(file.read_bytes())}
                     for kind, file in originals]
+        from evaluate import retrieval_binding
+        selection = load(self.root / 'evaluation/results/strategy-selection.json')
         gate = {'schema': 'aws-basics-rag-gate-v1', 'verdict': 'PASS',
+                **retrieval_binding(selection),
+                'selectionHash': digest((self.root / 'evaluation/results/strategy-selection.json').read_bytes()),
                 'curriculumHash': self.catalogue['curriculumHash'], 'corpusVersion': cv,
                 'referenceHash': reference_hash, 'metrics': metrics, 'reports': bindings,
                 'syntheticUnitFixture': True}
@@ -258,10 +262,33 @@ class BatchTests(unittest.TestCase):
         save(file, gate)
         return file
 
+    def test_full_rag_accepts_new_observed_native_pin_and_rejects_binding_substitutions(self):
+        gate = self.gate_fixture()
+        state = load(self.root / 'run.json')
+        state['nodes']['A3-reference-review']['reviewerAgent'] = '/root/observed_reference_revision'
+        save(self.root / 'run.json', state)
+        b.require_rag_gate(self.root, self.args.corpus_root, self.catalogue, gate)
+        original = load(gate)
+        for field, value in (('strategy', 'vector'), ('retrievalConfigVersion', 1),
+                             ('profileHash', '0' * 64), ('retrieverSourceHash', '0' * 64),
+                             ('evaluatorSourceHash', '0' * 64), ('modelCacheHash', '0' * 64),
+                             ('selectionHash', '0' * 64)):
+            with self.subTest(field=field):
+                save(gate, {**original, field: value})
+                with self.assertRaisesRegex(ValueError, 'binding changed'):
+                    b.require_rag_gate(self.root, self.args.corpus_root, self.catalogue, gate)
+        save(gate, original)
+        selection_path = self.root / 'evaluation/results/strategy-selection.json'
+        selection = load(selection_path)
+        selection['strategy'] = 'vector'
+        save(selection_path, selection)
+        with self.assertRaisesRegex(ValueError, 'Selection differs'):
+            b.require_rag_gate(self.root, self.args.corpus_root, self.catalogue, gate)
+
     def test_full_rag_gate_cross_checks_real_reports_and_actual_40_decisions(self):
         gate = self.gate_fixture()
         b.require_rag_gate(self.root, self.args.corpus_root, self.catalogue, gate)
-        report_path = self.root / 'evaluation/holdout_readiness.json'
+        report_path = self.root / 'evaluation/results/readiness-holdout.json'
         report = load(report_path)
         report['decisions'][-1]['refused'] = False
         report['decisions'][-1]['verdict'] = 'ready'
@@ -287,7 +314,7 @@ class BatchTests(unittest.TestCase):
                 elif mutation == 'low':
                     data['metrics']['meanRecallAt8'] = .89
                 else:
-                    file = self.root / 'evaluation/holdout_readiness.json'
+                    file = self.root / 'evaluation/results/readiness-holdout.json'
                     report = load(file)
                     if mutation == 'duplicate':
                         report['decisions'][-1]['id'] = report['decisions'][0]['id']
@@ -301,7 +328,7 @@ class BatchTests(unittest.TestCase):
 
     def test_F01_explicit_unsupported_ready_judgment_cannot_hide_behind_zero_counts(self):
         gate = self.gate_fixture()
-        file = self.root / 'evaluation/holdout_readiness.json'
+        file = self.root / 'evaluation/results/readiness-holdout.json'
         report = load(file)
         for row in report['decisions']:
             row['unsupportedAccepted'] = False
@@ -333,7 +360,7 @@ class BatchTests(unittest.TestCase):
                     file = self.root / 'evaluation/references.json'
                     file.write_text(file.read_text() + ' ')
                 else:
-                    file = self.root / 'evaluation/holdout_readiness.json'
+                    file = self.root / 'evaluation/results/readiness-holdout.json'
                     report = load(file)
                     report['decisions'][0]['modelBatchRef'] = '../outside' if mutation == 'outside-ref' else 'evaluation/model-runs/never/reader-1'
                     save(file, report)

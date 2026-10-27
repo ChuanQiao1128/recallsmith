@@ -11,7 +11,8 @@ import jsonschema
 
 from author import invoke, validate_execution
 from curate import object_schema, require_workbench_review
-from evaluate import references
+from evaluate import (references, verify_selection, verify_ranking_binding, retrieval_binding,
+                      pinned_reference_review, FROZEN_DEV)
 from pipeline import MODEL, canonical, digest, load, save, verified_corpus
 
 
@@ -144,7 +145,10 @@ def projected_case(root, reference_hash, corpus_version, strategy, query, rankin
     packet = load(checked_file(root, packet_path))
     if (digest(packet_path.read_bytes()) != ranking_rows[query['id']]['packetHash'] or
             packet['query'] != query['queryEn'] or packet['corpusVersion'] != corpus_version or
-            packet['strategy'] != strategy or not 1 <= len(packet['evidence']) <= 8 or
+            packet['strategy'] != strategy or
+            packet.get('retrievalConfigVersion') != ranking_rows[query['id']]['retrievalConfigVersion'] or
+            packet.get('retrievalProfileHash') != ranking_rows[query['id']]['profileHash'] or
+            not 1 <= len(packet['evidence']) <= 8 or
             sum(len(c['text']) for c in packet['evidence']) > 12000 or
             any(c != originals.get(c['chunkId']) for c in packet['evidence'])):
         raise ValueError('Retrieved evaluation packet changed')
@@ -175,13 +179,16 @@ def verify_decisions(root, reference_hash, corpus_version, strategy, decisions):
     queries = [q for q in labels['queries'] if q['split'] == 'holdout']
     if len(queries) != 40 or len({q['id'] for q in queries}) != 40 or sum(q['answerable'] for q in queries) != 32:
         raise ValueError('Expected actual forty holdout cases')
-    selection = load(checked_file(root, root / 'evaluation/results/strategy-selection.json'))
+    corpus_root = Path(load(checked_file(root, root / 'run.json'))['retrievalRoot'])
+    selection, _ = verify_selection(root, corpus_root)
+    pin = load(checked_file(root, root / 'run.json'))['nodes']['A3-reference-review']
+    pinned_reference_review(root, reference_hash, pin['reportPath'])
     ranking = load(checked_file(root, root / 'evaluation/results/holdout.json'))
+    verify_ranking_binding(root, selection, ranking)
     if (selection['strategy'] != strategy or selection['referenceHash'] != reference_hash or
             selection['corpusVersion'] != corpus_version or ranking['referenceHash'] != reference_hash or
             ranking['corpusVersion'] != corpus_version or ranking['split'] != 'holdout'):
         raise ValueError('Actual selected strategy/reference binding changed')
-    corpus_root = Path(load(checked_file(root, root / 'run.json'))['retrievalRoot'])
     checked_file(root, corpus_root / 'corpus/manifest.json')
     checked_file(root, corpus_root / 'corpus/chunks.json')
     manifest, chunks = verified_corpus(corpus_root)
@@ -190,7 +197,7 @@ def verify_decisions(root, reference_hash, corpus_version, strategy, decisions):
     if manifest['corpusVersion'] != corpus_version or version != corpus_version:
         raise ValueError('Pinned original corpus changed')
     originals = {c['chunkId']: c for c in chunks}
-    ranking_rows = {r['id']: r for r in ranking['rows'][strategy]}
+    ranking_rows = {r['id']: {**r, **retrieval_binding(selection)} for r in ranking['rows'][strategy]}
     if set(ranking_rows) != {q['id'] for q in queries}:
         raise ValueError('Actual holdout retrieval case identities changed')
     if len(decisions) != 40 or {d['id'] for d in decisions} != set(ranking_rows):
@@ -243,13 +250,15 @@ def verify_decisions(root, reference_hash, corpus_version, strategy, decisions):
 
 def run(args):
     require_workbench_review(args.workbench_review)
+    selection, _ = verify_selection(args.root, args.corpus_root)
     labels, reference_hash = references(args)
     results = args.root / 'evaluation/results'
-    selection = load(results / 'strategy-selection.json')
     if selection['referenceHash'] != reference_hash or selection['corpusVersion'] != labels['corpusVersion']:
         raise ValueError('Selected strategy/reference changed')
     strategy = selection['strategy']
     ranking = load(results / (args.split + '.json'))
+    if args.split == 'holdout':
+        verify_ranking_binding(args.root, selection, ranking)
     if ranking['referenceHash'] != reference_hash or ranking['corpusVersion'] != labels['corpusVersion']:
         raise ValueError('Actual retrieval report/reference changed')
     originals = {c['chunkId']: c for c in verified_corpus(args.corpus_root)[1]}
@@ -257,11 +266,15 @@ def run(args):
     queries = [q for q in labels['queries'] if q['split'] == args.split]
     cases, lookup = [], {}
     for query in queries:
-        packet_path = results / args.split / strategy / (query['id'] + '.json')
+        packet_root = args.root / FROZEN_DEV / 'packets' if args.split == 'dev' else results / args.split
+        packet_path = packet_root / strategy / (query['id'] + '.json')
         packet = load(packet_path)
         if (digest(packet_path.read_bytes()) != rows[query['id']]['packetHash'] or
                 packet['query'] != query['queryEn'] or packet['corpusVersion'] != labels['corpusVersion'] or
-                packet['strategy'] != strategy or any(c != originals.get(c['chunkId']) for c in packet['evidence'])):
+                packet['strategy'] != strategy or
+                packet.get('retrievalConfigVersion') != selection['retrievalConfigVersion'] or
+                packet.get('retrievalProfileHash') != selection['profileHash'] or
+                any(c != originals.get(c['chunkId']) for c in packet['evidence'])):
             raise ValueError('Actual retrieved evidence was altered')
         opaque = 'case-' + digest(reference_hash + query['id'])[:16]
         projected = {'id': opaque, 'query': query['queryEn'], 'evidence': [
@@ -310,7 +323,8 @@ def run(args):
                 'judgeOutputHash': digest((folder / 'judge-1/result.json').read_bytes())})
         print(canonical({'split': args.split, 'completed': len(decisions), 'total': len(cases)}), flush=True)
     report = {'schema': 'aws-basics-evidence-readiness-v1', 'split': args.split,
-              'referenceHash': reference_hash, 'corpusVersion': labels['corpusVersion'], 'strategy': strategy,
+              'referenceHash': reference_hash, 'corpusVersion': labels['corpusVersion'],
+              **retrieval_binding(selection), 'selectionHash': digest((results / 'strategy-selection.json').read_bytes()),
               'decisions': decisions, 'metrics': metrics(decisions), 'humanLabelCount': 0,
               'scope': 'Actual restricted subscription reader and separate-context model judge; model-reviewed references'}
     save(results / ('readiness-' + args.split + '.json'), report)

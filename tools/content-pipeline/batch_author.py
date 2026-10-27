@@ -471,14 +471,11 @@ def require_rag_gate(root, corpus_root, catalogue, gate_path):
     if digest(reference_file.read_bytes()) != gate['referenceHash']:
         raise ValueError('Canonical frozen reference labels changed')
     labels = load(reference_file)
-    authority = load(path(root, 'run.json'))['nodes'].get('A3-reference-review', {})
     selected = next(r for r in reports if r['kind'] == 'reference_review')
-    if (authority.get('status') != 'verified' or authority.get('referenceHash') != gate['referenceHash'] or
-            authority.get('reportPath') != selected['path'] or authority.get('reportHash') != selected['sha256'] or
-            authority.get('reviewerAgent') != '/root/rag_labels_independent' or
-            authority.get('provenance') != 'native_collaboration_observed_by_supervisor' or
-            authority.get('humanLabelCount') != 0):
-        raise ValueError('Reference review is not the supervisor-pinned observed native review')
+    from evaluate import pinned_reference_review, verify_selection, verify_ranking_binding
+    pinned_reference_review(root, gate['referenceHash'], selected['path'])
+    selection_record, _ = verify_selection(root, corpus_root)
+    verify_ranking_binding(root, selection_record, gate)
     label_ids = [q['id'] for q in labels.get('queries', [])]
     if (labels.get('corpusVersion') != gate['corpusVersion'] or
             len(label_ids) != 80 or len(set(label_ids)) != 80 or
@@ -492,6 +489,7 @@ def require_rag_gate(root, corpus_root, catalogue, gate_path):
     if retrieval_binding['path'] != 'evaluation/results/holdout.json':
         raise ValueError('Use the canonical actual holdout retrieval report')
     retrieval = contents['holdout_retrieval']
+    verify_ranking_binding(root, selection_record, retrieval)
     if (retrieval.get('split') != 'holdout' or retrieval.get('corpusVersion') != gate['corpusVersion'] or
             len(retrieval.get('summaries', {})) != 1):
         raise ValueError('Actual frozen holdout retrieval report required')
@@ -513,7 +511,12 @@ def require_rag_gate(root, corpus_root, catalogue, gate_path):
         packet_file = path(root, f'evaluation/results/holdout/{strategy}/{row["id"]}.json')
         if digest(packet_file.read_bytes()) != row.get('packetHash'):
             raise ValueError('Actual scored retrieval packet changed')
-        scored = score(holdout[row['id']], load(packet_file))
+        packet = load(packet_file)
+        if (packet.get('strategy') != strategy or
+                packet.get('retrievalConfigVersion') != selection_record['retrievalConfigVersion'] or
+                packet.get('retrievalProfileHash') != selection_record['profileHash']):
+            raise ValueError('Actual holdout packet strategy/profile/config changed')
+        scored = score(holdout[row['id']], packet)
         if any(row.get(k) != scored[k] for k in ('recallAt8', 'mrrAt8')):
             raise ValueError('Retrieval scores differ from actual reference evidence groups and packets')
     positive = [r for r in rows if r['recallAt8'] is not None]
@@ -524,7 +527,10 @@ def require_rag_gate(root, corpus_root, catalogue, gate_path):
             any(statistics.mean(r['recallAt8'] for r in positive if r['module'] == theme) != per_theme[theme]
                 for theme in themes)):
         raise ValueError('Gate metrics differ from actual per-query retrieval scores')
+    if next(r for r in reports if r['kind'] == 'holdout_readiness')['path'] != 'evaluation/results/readiness-holdout.json':
+        raise ValueError('Use the canonical actual holdout readiness report')
     readiness = contents['holdout_readiness']
+    verify_ranking_binding(root, selection_record, readiness)
     decisions = readiness.get('decisions', [])
     if (readiness.get('schema') != 'aws-basics-evidence-readiness-v1' or
             readiness.get('split') != 'holdout' or readiness.get('strategy') != strategy or
