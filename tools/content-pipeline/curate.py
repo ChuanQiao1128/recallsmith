@@ -450,7 +450,9 @@ def run(args):
 def verified_goals(batch: Path) -> dict:
     verified = load(batch / 'verified.json')
     if verified.get('mode') == 'adjudicated_existing_variants':
-        candidate, files = adjudicated_goals(batch, Path(verified['adjudicationReport']))
+        addendum = verified.get('metadataNormalizationAddendum')
+        candidate, files = adjudicated_goals(batch, Path(verified['adjudicationReport']),
+                                             Path(addendum) if addendum else None)
         if (files != verified.get('files') or digest(canonical(candidate)) != verified.get('goalsHash') or
                 digest(canonical(load(batch / 'input.json'))) != verified.get('inputHash')):
             raise ValueError('Adjudicated goal evidence changed')
@@ -480,7 +482,70 @@ def verified_goals(batch: Path) -> dict:
     return candidate
 
 
-def adjudicated_goals(batch: Path, report_path: Path) -> tuple[dict, dict]:
+LAYER_NORMALIZATION_ADDENDUM_HASH = 'c5656b7ce6cf6c7a1be0e15aa1f90cd7b76071108c1c7bffbf035d6ef3020274'
+
+
+def normalized_metadata(batch: Path, report_path: Path, addendum_path: Path,
+                        record: dict, source: dict) -> tuple[dict, dict]:
+    """Apply the sole already-adjudicated classification correction, with fresh provenance."""
+    addendum_path = addendum_path.resolve(strict=True)
+    if (batch.parents[2].resolve() / 'review' not in addendum_path.parents or
+            digest(addendum_path.read_bytes()) != LAYER_NORMALIZATION_ADDENDUM_HASH):
+        raise ValueError('Unrecognized metadata normalization addendum')
+    addendum = load(addendum_path)
+    result_path = batch / 'generate-r3-attempt-1/result.json'
+    checks = record['checks']
+    expected_checks = {'retainedUnderlyingConcept', 'singleManageableObjective',
+                       'naturalEquivalentEnglishChinese', 'neutralGoalAndRetrievalQuery',
+                       'appropriateLayer', 'honestExamRelation', 'validCatalogIdentifiers',
+                       'artifactVersionBindings'}
+    if (addendum.get('reviewKind') != 'conditional_deterministic_metadata_normalization_addendum' or
+            addendum.get('decision') != 'SUPPORTED_CONDITIONALLY_BY_EXISTING_ADJUDICATION' or
+            addendum.get('reviewedBy') != 'codex' or
+            addendum['scope'] != {'batch': batch.name, 'uids': [source['stableUid']], 'sourceVariant': 'r3'} or
+            addendum['sourceResultPath'] != str(result_path.resolve()) or
+            addendum['sourceResultHash'] != digest(result_path.read_bytes()) or
+            addendum['sourceCandidateObjectHash'] != digest(canonical(source)) or
+            addendum['sourceReview'] != {'path': str(report_path.resolve()),
+                'sha256': digest(report_path.read_bytes()), 'originalVerdict': 'FAIL', 'preserved': True} or
+            record['verdict'] != 'FAIL' or set(checks) != expected_checks or
+            any(c['verdict'] != ('FAIL' if key == 'appropriateLayer' else 'PASS')
+                for key, c in checks.items()) or
+            canonical(addendum['permittedChange']) != canonical({'field': 'layer', 'from': 2, 'to': 3}) or
+            type(source.get('layer')) is not int or source['layer'] != 2 or
+            addendum['correctedLayerCheck']['verdict'] != 'PASS_IF' or
+            addendum['conditionalOverallConclusion']['verdict'] != 'PASS_IF_ALL_CONDITIONS_VERIFIED' or
+            addendum['conditionalOverallConclusion']['additionalUnresolvedSemanticRules'] != []):
+        raise ValueError('Metadata normalization conditions are not satisfied')
+    rule_source = addendum['basis']['ruleSource']
+    if (rule_source['path'] != str(generation_prompt(batch, 3).resolve()) or
+            rule_source['sha256'] != digest(generation_prompt(batch, 3).read_bytes()) or
+            rule_source['sha256'] != digest(Path(rule_source['frozenPath']).read_bytes()) or
+            set(addendum['originalChecks']) != expected_checks):
+        raise ValueError('Metadata classification prompt binding changed')
+    for key, check in checks.items():
+        original = addendum['originalChecks'][key]
+        if (original['originalVerdict'] != check['verdict'] or original['originalReason'] != check['reason'] or
+                original['conditionalConclusion']['verdict'] !=
+                ('PASS_FOR_ORIGINAL_ONLY' if key == 'artifactVersionBindings' else 'PASS_IF')):
+            raise ValueError('Metadata addendum does not preserve original classification')
+    derived = {**source, 'layer': 3}
+    result = {'cards': [derived]}
+    provenance = {'kind': 'deterministic_metadata_normalization', 'sourceVariant': 'r3',
+                  'stableUid': source['stableUid'], 'sourceResultHash': addendum['sourceResultHash'],
+                  'sourceCandidateObjectHash': addendum['sourceCandidateObjectHash'],
+                  'originalAdjudicationHash': digest(report_path.read_bytes()),
+                  'addendumHash': digest(addendum_path.read_bytes()),
+                  'generationPromptHash': rule_source['sha256'],
+                  'exactDiff': [{'field': 'layer', 'from': 2, 'to': 3}],
+                  'derivedCandidateObjectHash': digest(canonical(derived)),
+                  'derivedResultHash': digest(canonical(result) + '\n'),
+                  'conditionalAcceptance': 'ALL_CONDITIONS_VERIFIED',
+                  'modelGenerated': False, 'newGenerationAttempts': 0, 'budgetReset': False}
+    return result, provenance
+
+
+def adjudicated_goals(batch: Path, report_path: Path, addendum_path: Path | None = None) -> tuple[dict, dict]:
     """Select already-produced objects; no generation, edited review or budget reset."""
     root = batch.parents[2].resolve()
     report_path = report_path.resolve(strict=True)
@@ -508,34 +573,59 @@ def adjudicated_goals(batch: Path, report_path: Path) -> tuple[dict, dict]:
     selected = {g['stableUid']: g for g in variants[3]['cards']}
     failed = {c['stableUid'] for c in reviews[3]['cards'] if c['verdict'] != 'PASS'}
     decisions = report.get('selection', [])
-    if (len(decisions) != len(failed) or {d['stableUid'] for d in decisions} != failed or
+    if addendum_path is not None:
+        addendum_path = addendum_path.resolve(strict=True)
+        if (root / 'review' not in addendum_path.parents or
+                digest(addendum_path.read_bytes()) != LAYER_NORMALIZATION_ADDENDUM_HASH):
+            raise ValueError('Unrecognized metadata normalization addendum')
+    normalization_uids = set(load(addendum_path)['scope']['uids']) if addendum_path else set()
+    decision_uids = {d['stableUid'] for d in decisions}
+    if (len(decisions) != len(decision_uids) or decision_uids & normalization_uids or
+            decision_uids | normalization_uids != failed or len(report['scope']['uids']) != len(failed) or
             set(report['scope']['uids']) != failed):
         raise ValueError('Adjudication must cover exactly the unresolved goals')
-    old = {g['stableUid']: g for g in variants[2]['cards']}
-    for decision in decisions:
+    selections = decisions + [{'stableUid': uid, 'selectedVariant': 'r3'} for uid in normalization_uids]
+    for decision in selections:
         uid = decision['stableUid']
-        records = [r for r in report['records'] if r['stableUid'] == uid and r['variant'] == 'r2']
+        variant = decision.get('selectedVariant')
+        if variant not in {'r2', 'r3'}:
+            raise ValueError('Only existing r2/r3 variants may be selected')
+        revision = int(variant[1])
+        source = next(g for g in variants[revision]['cards'] if g['stableUid'] == uid)
+        records = [r for r in report['records'] if r['stableUid'] == uid and r['variant'] == variant]
         if len(records) != 1:
             raise ValueError('One explicit existing-variant assessment required')
         record = records[0]
-        if (decision.get('selectedVariant') != 'r2' or decision.get('decision') != 'SELECT_EXISTING_R2_UNCHANGED' or
+        if uid not in normalization_uids and (decision.get('decision') != f'SELECT_EXISTING_{variant.upper()}_UNCHANGED' or
                 record['verdict'] != 'PASS' or not record['checks'] or
                 any(c['verdict'] != 'PASS' for c in record['checks'].values()) or
-                record['candidateHash'] != digest((batch / 'generate-r2-attempt-1/result.json').read_bytes()) or
-                record['candidateObjectHash'] != digest(canonical(old[uid])) or
                 decision['candidateHash'] != record['candidateHash'] or
                 decision['selectedCandidateObjectHash'] != record['candidateObjectHash']):
             raise ValueError('Selected object has no bound independent PASS')
+        if (record['candidateHash'] != digest((batch / f'generate-{variant}-attempt-1/result.json').read_bytes()) or
+                record['candidateObjectHash'] != digest(canonical(source))):
+            raise ValueError('Adjudicated candidate object binding changed')
         for label, path in {'originalInput': batch / 'input.json',
-                            'candidateResult': batch / 'generate-r2-attempt-1/result.json',
-                            'generationPrompt': generation_prompt(batch, 2),
-                            'generationExecution': batch / 'generate-r2-attempt-1/execution.json',
-                            'reviewResult': batch / 'review-r2-attempt-1/result.json',
-                            'reviewPrompt': review_prompt(batch, 2),
-                            'reviewExecution': batch / 'review-r2-attempt-1/execution.json'}.items():
+                            'candidateResult': batch / f'generate-{variant}-attempt-1/result.json',
+                            'generationPrompt': generation_prompt(batch, revision),
+                            'generationExecution': batch / f'generate-{variant}-attempt-1/execution.json',
+                            'reviewResult': batch / f'review-{variant}-attempt-1/result.json',
+                            'reviewPrompt': review_prompt(batch, revision),
+                            'reviewExecution': batch / f'review-{variant}-attempt-1/execution.json'}.items():
             if record['bindings'][label]['sha256'] != digest(path.read_bytes()):
                 raise ValueError('Adjudication input binding changed')
-        selected[uid] = old[uid]
+        if uid in normalization_uids:
+            result, provenance = normalized_metadata(batch, report_path, addendum_path, record, source)
+            derived_dir = batch / 'deterministic-metadata-normalization'
+            if (canonical(load(derived_dir / 'result.json')) != canonical(result) or
+                    digest((derived_dir / 'result.json').read_bytes()) != provenance['derivedResultHash'] or
+                    canonical(load(derived_dir / 'provenance.json')) != canonical(provenance)):
+                raise ValueError('Derived metadata normalization evidence changed')
+            for name in ('result.json', 'provenance.json'):
+                files[str((derived_dir / name).relative_to(batch))] = digest((derived_dir / name).read_bytes())
+            files['metadata-addendum:' + str(addendum_path.resolve())] = digest(addendum_path.read_bytes())
+            source = result['cards'][0]
+        selected[uid] = source
     files['adjudication:' + str(report_path)] = digest(report_path.read_bytes())
     return {'cards': [selected[g['stableUid']] for g in variants[3]['cards']]}, files
 

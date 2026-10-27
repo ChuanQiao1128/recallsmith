@@ -9,7 +9,7 @@ import unittest
 from curate import (GOAL_SCHEMA, REVIEW_SCHEMA, build_review_prompt, completed_attempt, execute,
                     prepare_repair, require_reconciled_revisions, validate_goals,
                     validate_repair_authorization, validate_repaired_goals, verified_goals, run,
-                    adjudicated_goals)
+                    adjudicated_goals, normalized_metadata)
 from pipeline import canonical
 from pipeline import digest, save
 
@@ -341,6 +341,203 @@ class AdjudicationTests(unittest.TestCase):
                 batch, path, _, _ = self.fixture(Path(td))
                 (batch / name).mkdir()
                 with self.assertRaises(ValueError): adjudicated_goals(batch, path)
+
+    def select_r3(self, batch, path, report):
+        source = json.loads((batch / 'generate-r3-attempt-1/result.json').read_text())['cards'][1]
+        record = copy.deepcopy(report['records'][0])
+        record.update(variant='r3', candidateHash=digest((batch / 'generate-r3-attempt-1/result.json').read_bytes()),
+                      candidateObjectHash=digest(canonical(source)))
+        for label, binding in record['bindings'].items():
+            original = {'originalInput': 'input.json', 'candidateResult': 'generate-r3-attempt-1/result.json',
+                        'generationPrompt': 'generate-r3.prompt.txt',
+                        'generationExecution': 'generate-r3-attempt-1/execution.json',
+                        'reviewResult': 'review-r3-attempt-1/result.json', 'reviewPrompt': 'review-r3.prompt.txt',
+                        'reviewExecution': 'review-r3-attempt-1/execution.json'}[label]
+            binding['sha256'] = digest((batch / original).read_bytes())
+        report['records'].append(record)
+        report['selection'] = [{'stableUid': 'b', 'selectedVariant': 'r3',
+                                'decision': 'SELECT_EXISTING_R3_UNCHANGED',
+                                'candidateHash': record['candidateHash'],
+                                'selectedCandidateObjectHash': record['candidateObjectHash']}]
+        save(path, report)
+        return record, source
+
+    def test_r3_selection_preserves_already_passing_objects_and_uses_its_own_receipts(self):
+        with tempfile.TemporaryDirectory() as td:
+            batch, path, report, old = self.fixture(Path(td))
+            record, source = self.select_r3(batch, path, report)
+            with patch('curate.subprocess.run') as invoke:
+                selected, _ = adjudicated_goals(batch, path)
+            self.assertEqual(selected['cards'], [old['cards'][0], source])
+            invoke.assert_not_called()
+            record['bindings']['generationPrompt']['sha256'] = report['records'][0]['bindings']['generationPrompt']['sha256']
+            save(path, report)
+            with self.assertRaisesRegex(ValueError, 'binding'):
+                adjudicated_goals(batch, path)
+
+    def test_r3_cannot_use_a_failed_or_differently_hash_bound_record(self):
+        for mutation in ('failed', 'hash', 'object', 'decision'):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as td:
+                batch, path, report, _ = self.fixture(Path(td))
+                record, _ = self.select_r3(batch, path, report)
+                if mutation == 'failed': record['verdict'] = 'FAIL'
+                if mutation == 'hash': report['selection'][0]['candidateHash'] = '0' * 64
+                if mutation == 'object': report['selection'][0]['selectedCandidateObjectHash'] = '0' * 64
+                if mutation == 'decision': report['selection'][0]['decision'] = 'SELECT_EXISTING_R2_UNCHANGED'
+                save(path, report)
+                with self.assertRaises(ValueError): adjudicated_goals(batch, path)
+
+    def test_selection_revalidates_completed_receipts_of_both_revisions(self):
+        for revision in (2, 3):
+            for stage in ('generate', 'review'):
+                with self.subTest(revision=revision, stage=stage), tempfile.TemporaryDirectory() as td:
+                    batch, path, _, _ = self.fixture(Path(td))
+                    events = batch / f'{stage}-r{revision}-attempt-1/events.jsonl'
+                    events.write_bytes(events.read_bytes() + b' ')
+                    with self.assertRaisesRegex(ValueError, 'Completed attempt'):
+                        adjudicated_goals(batch, path)
+
+    def normalization_fixture(self, root):
+        batch, path, report, old = self.fixture(root)
+        # Complete the exact numeric layer-2 source before binding its independent classification.
+        source_result = json.loads((batch / 'generate-r3-attempt-1/result.json').read_text())
+        source_result['cards'][1]['layer'] = 2
+        RepairTests().complete(batch, 'generate-r3-attempt-1', source_result, batch / 'generate-r3.prompt.txt')
+        packet = json.loads((batch / 'input.json').read_text())
+        (batch / 'review-r3.prompt.txt').write_text(build_review_prompt(packet, source_result))
+        review = json.loads((batch / 'review-r3-attempt-1/result.json').read_text())
+        RepairTests().complete(batch, 'review-r3-attempt-1', review, batch / 'review-r3.prompt.txt')
+        record, source = self.select_r3(batch, path, report)
+        names = ['retainedUnderlyingConcept', 'singleManageableObjective', 'naturalEquivalentEnglishChinese',
+                 'neutralGoalAndRetrievalQuery', 'appropriateLayer', 'honestExamRelation',
+                 'validCatalogIdentifiers', 'artifactVersionBindings']
+        record['checks'] = {key: {'verdict': 'FAIL' if key == 'appropriateLayer' else 'PASS',
+                                  'reason': 'Already independently classified ' + key} for key in names}
+        record['verdict'] = 'FAIL'
+        report['selection'] = []
+        save(path, report)
+        prompt = batch / 'generate-r3.prompt.txt'
+        frozen_prompt = root / 'review/frozen-generate-r3.prompt.txt'
+        frozen_prompt.write_bytes(prompt.read_bytes())
+        addendum = {'reviewKind': 'conditional_deterministic_metadata_normalization_addendum',
+                    'decision': 'SUPPORTED_CONDITIONALLY_BY_EXISTING_ADJUDICATION', 'reviewedBy': 'codex',
+                    'scope': {'batch': '01', 'uids': ['b'], 'sourceVariant': 'r3'},
+                    'sourceResultPath': str((batch / 'generate-r3-attempt-1/result.json').resolve()),
+                    'sourceResultHash': record['candidateHash'], 'sourceCandidateObjectHash': record['candidateObjectHash'],
+                    'sourceReview': {'path': str(path.resolve()), 'sha256': digest(path.read_bytes()),
+                                     'originalVerdict': 'FAIL', 'preserved': True},
+                    'permittedChange': {'field': 'layer', 'from': 2, 'to': 3},
+                    'basis': {'ruleSource': {'path': str(prompt.resolve()), 'frozenPath': str(frozen_prompt),
+                                             'sha256': digest(prompt.read_bytes())}},
+                    'originalChecks': {key: {'originalVerdict': check['verdict'], 'originalReason': check['reason'],
+                        'conditionalConclusion': {'verdict': 'PASS_FOR_ORIGINAL_ONLY' if key == 'artifactVersionBindings'
+                                                  else 'PASS_IF'}} for key, check in record['checks'].items()},
+                    'correctedLayerCheck': {'verdict': 'PASS_IF'},
+                    'conditionalOverallConclusion': {'verdict': 'PASS_IF_ALL_CONDITIONS_VERIFIED',
+                                                     'additionalUnresolvedSemanticRules': []}}
+        addendum_path = root / 'review/metadata-normalization-addendum.json'
+        save(addendum_path, addendum)
+        with patch('curate.LAYER_NORMALIZATION_ADDENDUM_HASH', digest(addendum_path.read_bytes())):
+            derived, provenance = normalized_metadata(batch, path, addendum_path, record, source)
+        derived_dir = batch / 'deterministic-metadata-normalization'
+        derived_dir.mkdir()
+        (derived_dir / 'result.json').write_text(canonical(derived) + '\n')
+        save(derived_dir / 'provenance.json', provenance)
+        return batch, path, addendum_path, source, addendum
+
+    def test_only_numeric_layer_is_derived_and_original_failure_remains(self):
+        with tempfile.TemporaryDirectory() as td:
+            batch, path, addendum, source, _ = self.normalization_fixture(Path(td))
+            original_report = path.read_bytes()
+            original_result = (batch / 'generate-r3-attempt-1/result.json').read_bytes()
+            with patch('curate.LAYER_NORMALIZATION_ADDENDUM_HASH', digest(addendum.read_bytes())), \
+                    patch('curate.subprocess.run') as invoke:
+                selected, files = adjudicated_goals(batch, path, addendum)
+                marker = {'mode': 'adjudicated_existing_variants', 'adjudicationReport': str(path),
+                          'metadataNormalizationAddendum': str(addendum), 'files': files,
+                          'goalsHash': digest(canonical(selected)),
+                          'inputHash': digest(canonical(json.loads((batch / 'input.json').read_text())))}
+                save(batch / 'verified.json', marker)
+                self.assertEqual(verified_goals(batch), selected)
+            self.assertEqual(selected['cards'][1], {**source, 'layer': 3})
+            self.assertEqual(original_report, path.read_bytes())
+            self.assertEqual(original_result, (batch / 'generate-r3-attempt-1/result.json').read_bytes())
+            self.assertIn('deterministic-metadata-normalization/provenance.json', files)
+            invoke.assert_not_called()
+
+    def test_verified_resume_detects_each_bound_normalization_artifact(self):
+        for artifact in ('result.json', 'provenance.json', 'addendum', 'report'):
+            with self.subTest(artifact=artifact), tempfile.TemporaryDirectory() as td:
+                batch, path, addendum, _, _ = self.normalization_fixture(Path(td))
+                anchor = digest(addendum.read_bytes())
+                with patch('curate.LAYER_NORMALIZATION_ADDENDUM_HASH', anchor):
+                    selected, files = adjudicated_goals(batch, path, addendum)
+                    save(batch / 'verified.json', {'mode': 'adjudicated_existing_variants',
+                        'adjudicationReport': str(path), 'metadataNormalizationAddendum': str(addendum),
+                        'files': files, 'goalsHash': digest(canonical(selected)),
+                        'inputHash': digest(canonical(json.loads((batch / 'input.json').read_text())))})
+                    target = {'addendum': addendum, 'report': path}.get(
+                        artifact, batch / 'deterministic-metadata-normalization' / artifact)
+                    target.write_bytes(target.read_bytes() + b' ')
+                    with self.assertRaises(ValueError): verified_goals(batch)
+
+    def test_derived_nonlayer_fields_array_order_and_numeric_type_tamper_are_rejected(self):
+        for mutation in ('wording', 'query', 'array', 'extra', 'layer_bool', 'layer_float', 'layer_string', 'provenance'):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as td:
+                batch, path, addendum, _, _ = self.normalization_fixture(Path(td))
+                result_path = batch / 'deterministic-metadata-normalization/result.json'
+                derived = json.loads(result_path.read_text())
+                goal = derived['cards'][0]
+                if mutation == 'wording': goal['goalZh'] += ' changed'
+                if mutation == 'query': goal['retrievalQueryEn'] += ' changed'
+                if mutation == 'array': goal['serviceConceptIds'] = ['other', 'ec2']
+                if mutation == 'extra': goal['arbitrary'] = None
+                if mutation.startswith('layer_'): goal['layer'] = {'layer_bool': True, 'layer_float': 3.0,
+                                                                 'layer_string': '3'}[mutation]
+                if mutation == 'provenance':
+                    provenance_path = result_path.with_name('provenance.json')
+                    provenance = json.loads(provenance_path.read_text())
+                    provenance['modelGenerated'] = True
+                    save(provenance_path, provenance)
+                else:
+                    result_path.write_text(canonical(derived) + '\n')
+                with patch('curate.LAYER_NORMALIZATION_ADDENDUM_HASH', digest(addendum.read_bytes())), \
+                        self.assertRaisesRegex(ValueError, 'Derived'):
+                    adjudicated_goals(batch, path, addendum)
+
+    def test_addendum_cannot_override_semantic_failure_or_change_its_allowed_state(self):
+        for mutation in ('unresolved', 'overall', 'layer_check', 'permitted', 'source_hash', 'object_hash',
+                         'review_hash', 'prompt_hash', 'original_check'):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as td:
+                batch, path, addendum_path, _, addendum = self.normalization_fixture(Path(td))
+                if mutation == 'unresolved': addendum['conditionalOverallConclusion']['additionalUnresolvedSemanticRules'] = ['scope']
+                if mutation == 'overall': addendum['conditionalOverallConclusion']['verdict'] = 'PASS'
+                if mutation == 'layer_check': addendum['correctedLayerCheck']['verdict'] = 'PASS'
+                if mutation == 'permitted': addendum['permittedChange']['to'] = 1
+                if mutation == 'source_hash': addendum['sourceResultHash'] = '0' * 64
+                if mutation == 'object_hash': addendum['sourceCandidateObjectHash'] = '0' * 64
+                if mutation == 'review_hash': addendum['sourceReview']['sha256'] = '0' * 64
+                if mutation == 'prompt_hash': addendum['basis']['ruleSource']['sha256'] = '0' * 64
+                if mutation == 'original_check': addendum['originalChecks']['appropriateLayer']['originalVerdict'] = 'PASS'
+                save(addendum_path, addendum)
+                with patch('curate.LAYER_NORMALIZATION_ADDENDUM_HASH', digest(addendum_path.read_bytes())), \
+                        self.assertRaises(ValueError):
+                    adjudicated_goals(batch, path, addendum_path)
+
+    def test_unknown_attempt_and_unrecognized_addendum_cannot_be_hidden_by_normalization(self):
+        for mutation in ('unknown', 'unrecognized_addendum', 'semantic_failure', 'scope'):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as td:
+                batch, path, addendum, _, _ = self.normalization_fixture(Path(td))
+                anchor = digest(addendum.read_bytes())
+                if mutation == 'unknown': (batch / 'generate-unrecognized').mkdir()
+                if mutation == 'unrecognized_addendum': addendum.write_bytes(addendum.read_bytes() + b' ')
+                if mutation in {'semantic_failure', 'scope'}:
+                    report = json.loads(path.read_text())
+                    if mutation == 'semantic_failure': report['records'][1]['checks']['neutralGoalAndRetrievalQuery']['verdict'] = 'FAIL'
+                    else: report['scope']['uids'].append('a')
+                    save(path, report)
+                with patch('curate.LAYER_NORMALIZATION_ADDENDUM_HASH', anchor), self.assertRaises(ValueError):
+                    adjudicated_goals(batch, path, addendum)
 
 
 if __name__ == '__main__':
