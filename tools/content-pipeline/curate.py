@@ -138,12 +138,7 @@ def require_workbench_review(path: Path):
 
 def execute(args, batch: Path, stage: str, prompt: Path, schema: Path) -> dict:
     output = batch / f'{stage}-attempt-1'
-    if (output / 'result.json').exists():
-        execution = load(output / 'execution.json')
-        if not execution.get('success'):
-            raise ValueError('Cannot resume an unsuccessful result')
-        return load(output / 'result.json')
-    if output.exists():
+    if output.exists() and not (output / 'result.json').exists():
         raise ValueError('Incomplete attempt requires reconciliation, not blind replay')
     dll = REPO / 'tools/content-workbench/Workbench/bin/Debug/net10.0/Workbench.dll'
     command = [str(args.dotnet), str(dll), 'exec', '--control-root', str(args.root),
@@ -157,6 +152,11 @@ def execute(args, batch: Path, stage: str, prompt: Path, schema: Path) -> dict:
     save(batch / f'{stage}.command.json', {'args': command, 'exitCode': result.returncode})
     if result.returncode:
         raise RuntimeError('Workbench curation failed; inspect saved failure category before continuing')
+    execution = load(output / 'execution.json')
+    if (not execution.get('success') or execution.get('inputHash') != digest(prompt.read_text()) or
+            execution.get('schemaHash') != digest(schema.read_text().strip()) or
+            execution.get('outputHash') != digest((output / 'result.json').read_bytes())):
+        raise ValueError('Model result does not match frozen prompt, schema or output hash')
     return load(output / 'result.json')
 
 
@@ -209,7 +209,9 @@ def assemble(args):
     for batch in sorted((args.root / 'curriculum/batches').glob('[0-9][0-9]')):
         verified = load(batch / 'verified.json')
         candidate, review = load(batch / 'generate-attempt-1/result.json'), load(batch / 'review-attempt-1/result.json')
-        if verified['goalsHash'] != digest(canonical(candidate)) or verified['reviewHash'] != digest(canonical(review)):
+        if (verified['inputHash'] != digest(canonical(load(batch / 'input.json'))) or
+                verified['goalsHash'] != digest(canonical(candidate)) or verified['reviewHash'] != digest(canonical(review)) or
+                review['verdict'] != 'PASS' or any(c['verdict'] != 'PASS' for c in review['cards'])):
             raise ValueError('Goal review binding changed')
         goals.extend(candidate['cards'])
     if len(goals) != len(source_cards) or {g['stableUid'] for g in goals} != set(source_cards):
