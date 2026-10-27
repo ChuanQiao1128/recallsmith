@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+import json
+import os
 from pathlib import Path
 import re
 import statistics
@@ -96,6 +98,21 @@ def run(args):
     output = folder / (args.split + '.json')
     if output.exists():
         raise ValueError('Evaluation already exists; inspect it, never repeatedly tune against holdout')
+    folder.mkdir(parents=True, exist_ok=True)
+    experiment_path = folder / (args.split + '.experiment.json')
+    experiment = {'split': args.split, 'referenceHash': reference_hash, 'corpusVersion': labels['corpusVersion'],
+                  'strategies': strategies, 'retrievalConfigVersion': 1,
+                  'retrieverSourceHash': digest(Path(__file__).with_name('pipeline.py').read_bytes()),
+                  'evaluatorSourceHash': digest(Path(__file__).read_bytes()),
+                  'selectionHash': digest(selection_path.read_bytes()) if args.split == 'holdout' else None,
+                  'status': 'started_before_first_query'}
+    try:
+        with experiment_path.open('x') as stream:
+            stream.write(json.dumps(experiment, ensure_ascii=False, indent=2) + '\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+    except FileExistsError as error:
+        raise ValueError('Evaluation already started; partial observations require reconciliation, not replay') from error
     index = EvidenceIndex(args.corpus_root, args.model_cache, args.container)
     rows, summaries = {}, {}
     for strategy in strategies:

@@ -1,6 +1,7 @@
 """No models: fake only transport, exercise real packet/card/review/receipt validators."""
 import copy
 import json
+import shutil
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -234,43 +235,25 @@ class BatchTests(unittest.TestCase):
         self.assertIn(self.uids[-1], report['incompleteUids'])
 
     def gate_fixture(self):
-        themes = ('cloud', 'identity', 'compute', 'storage', 'databases', 'networking', 'messaging', 'operations')
-        cv = load(self.root / 'run.json')['nodes']['A2R-corpus']['corpusVersion']
-        reference_hash = digest('actual frozen references')
-        metrics = {'meanRecallAt8': 1, 'meanMrrAt8': 1, 'perThemeRecallAt8': {t: 1 for t in themes},
-                   'negativeCount': 8, 'negativeRefused': 8, 'falseRefusals': 0,
-                   'wrongDeploymentAccepted': 0, 'unsupportedAccepted': 0}
-        rows, decisions = [], []
-        for theme in themes:
-            for index in range(5):
-                positive = index < 4
-                qid = theme + '-' + str(index)
-                rows.append({'id': qid, 'module': theme, 'recallAt8': 1 if positive else None,
-                             'mrrAt8': 1 if positive else None})
-                decisions.append({'id': qid, 'answerable': positive, 'refused': not positive,
-                    'wrongDeploymentAccepted': False, 'verdict': 'ready' if positive else 'needs_evidence',
-                    'supportingEvidenceIds': ['ev-1'] if positive else [],
-                    'modelBatchRef': 'evaluation/reader-1', 'judgeBatchRef': 'evaluation/judge-1'})
-        reports = {
-            'reference_review': {'verdict': 'PASS', 'referenceHash': reference_hash,
-                                 'queries': [{'id': r['id'], 'verdict': 'PASS'} for r in rows] +
-                                            [{'id': 'dev-' + str(i), 'verdict': 'PASS'} for i in range(40)]},
-            'holdout_retrieval': {'split': 'holdout', 'referenceHash': reference_hash, 'corpusVersion': cv,
-                'summaries': {'bm25': {'meanRecallAt8': 1, 'meanMrrAt8': 1, 'perTheme': {t: 1 for t in themes},
-                                       'negativeCount': 8}}, 'rows': {'bm25': rows}},
-            'holdout_readiness': {'schema': 'aws-basics-evidence-readiness-v1', 'split': 'holdout',
-                'referenceHash': reference_hash, 'corpusVersion': cv, 'strategy': 'bm25', 'decisions': decisions,
-                'metrics': {k: metrics[k] for k in ('negativeCount', 'negativeRefused', 'falseRefusals',
-                                                    'wrongDeploymentAccepted', 'unsupportedAccepted')}}}
-        bindings = []
-        for kind, report in reports.items():
-            file = self.root / ('evaluation/' + kind + '.json')
-            save(file, report)
-            bindings.append({'kind': kind, 'path': str(file.relative_to(self.root)),
-                             'sha256': digest(file.read_bytes())})
+        # Full original-shaped SYNTHETIC receipts, not a mock of the verifier.
+        from test_readiness import make_fixture
+        reference_hash, cv, strategy, _ = make_fixture(self.root)
+        retrieval_path = self.root / 'evaluation/results/holdout.json'
+        readiness_path = self.root / 'evaluation/holdout_readiness.json'
+        readiness = load(self.root / 'evaluation/results/readiness-holdout.json')
+        save(readiness_path, readiness)
+        measured = load(retrieval_path)['summaries'][strategy]
+        metrics = {**readiness['metrics'], 'meanRecallAt8': measured['meanRecallAt8'],
+                   'meanMrrAt8': measured['meanMrrAt8'], 'perThemeRecallAt8': measured['perTheme']}
+        authority = load(self.root / 'run.json')['nodes']['A3-reference-review']
+        originals = [('reference_review', self.root / authority['reportPath']),
+                     ('holdout_retrieval', retrieval_path), ('holdout_readiness', readiness_path)]
+        bindings = [{'kind': kind, 'path': str(file.relative_to(self.root)), 'sha256': digest(file.read_bytes())}
+                    for kind, file in originals]
         gate = {'schema': 'aws-basics-rag-gate-v1', 'verdict': 'PASS',
                 'curriculumHash': self.catalogue['curriculumHash'], 'corpusVersion': cv,
-                'referenceHash': reference_hash, 'metrics': metrics, 'reports': bindings}
+                'referenceHash': reference_hash, 'metrics': metrics, 'reports': bindings,
+                'syntheticUnitFixture': True}
         file = self.root / 'evaluation/full-rag-gate.json'
         save(file, gate)
         return file
@@ -282,6 +265,7 @@ class BatchTests(unittest.TestCase):
         report = load(report_path)
         report['decisions'][-1]['refused'] = False
         report['decisions'][-1]['verdict'] = 'ready'
+        report['decisions'][-1]['judgment']['verdict'] = 'supported'
         report['decisions'][-1]['supportingEvidenceIds'] = ['ev-1']
         save(report_path, report)
         with self.assertRaisesRegex(ValueError, 'hash changed'):
@@ -314,6 +298,104 @@ class BatchTests(unittest.TestCase):
                 save(gate, data)
                 with self.assertRaises(ValueError):
                     b.require_rag_gate(self.root, self.args.corpus_root, self.catalogue, gate)
+
+    def test_F01_explicit_unsupported_ready_judgment_cannot_hide_behind_zero_counts(self):
+        gate = self.gate_fixture()
+        file = self.root / 'evaluation/holdout_readiness.json'
+        report = load(file)
+        for row in report['decisions']:
+            row['unsupportedAccepted'] = False
+            row['judgment'] = {'verdict': 'supported' if not row['refused'] else 'correct_refusal'}
+        report['decisions'][0]['unsupportedAccepted'] = True
+        report['decisions'][0]['judgment']['verdict'] = 'unsupported'
+        save(file, report)
+        outer = load(gate)
+        next(r for r in outer['reports'] if r['kind'] == 'holdout_readiness')['sha256'] = digest(file.read_bytes())
+        save(gate, outer)
+        with self.assertRaises(ValueError):
+            b.require_rag_gate(self.root, self.args.corpus_root, self.catalogue, gate)
+
+    def test_F02_report_only_fixture_without_original_receipts_is_rejected(self):
+        gate = self.gate_fixture()
+        shutil.rmtree(self.root / 'evaluation/model-runs', ignore_errors=True)
+        self.assertEqual([], list(self.root.rglob('execution.json')))
+        with self.assertRaises((ValueError, FileNotFoundError)):
+            b.require_rag_gate(self.root, self.args.corpus_root, self.catalogue, gate)
+
+    def test_F02_gate_reopens_original_receipt_and_rejects_substituted_batch_refs(self):
+        for mutation in ('missing-result', 'missing-receipt', 'outside-ref', 'nonexistent-ref', 'stale-reference'):
+            with self.subTest(mutation=mutation):
+                gate = self.gate_fixture()
+                if mutation in ('missing-result', 'missing-receipt'):
+                    filename = 'result.json' if mutation == 'missing-result' else 'execution.json'
+                    (self.root / 'evaluation/model-runs/holdout-01/reader-1' / filename).unlink()
+                elif mutation == 'stale-reference':
+                    file = self.root / 'evaluation/references.json'
+                    file.write_text(file.read_text() + ' ')
+                else:
+                    file = self.root / 'evaluation/holdout_readiness.json'
+                    report = load(file)
+                    report['decisions'][0]['modelBatchRef'] = '../outside' if mutation == 'outside-ref' else 'evaluation/model-runs/never/reader-1'
+                    save(file, report)
+                    outer = load(gate)
+                    next(r for r in outer['reports'] if r['kind'] == 'holdout_readiness')['sha256'] = digest(file.read_bytes())
+                    save(gate, outer)
+                with self.assertRaises((ValueError, FileNotFoundError)):
+                    b.require_rag_gate(self.root, self.args.corpus_root, self.catalogue, gate)
+
+    def test_F04_unknown_repair_after_initial_pass_still_blocks_without_replay(self):
+        self.false_check = {self.uids[0]}
+        original_transport = self.transport
+        def transport(args, folder, stage, attempt, prompt, schema):
+            if stage == 'repair-generate':
+                raise RuntimeError('unknown repair transport outcome')
+            return original_transport(args, folder, stage, attempt, prompt, schema)
+        with patch.object(b.author, 'invoke', side_effect=transport) as invoke:
+            with self.assertRaisesRegex(RuntimeError, 'unknown repair'):
+                b.run_batch(self.args, self.plan, self.batch, self.catalogue)
+            calls = invoke.call_count
+            self.assertEqual(3, calls)
+            with self.assertRaisesRegex(ValueError, 'Unknown/incomplete'):
+                b.run_batch(self.args, self.plan, self.batch, self.catalogue)
+            self.assertEqual(calls, invoke.call_count)
+        with self.assertRaisesRegex(ValueError, 'Unknown/incomplete'):
+            b.verify_record(self.root, self.args.corpus_root, self.catalogue, self.uids[1])
+
+    def test_F04_malformed_completed_repair_preserves_original_pass_siblings(self):
+        original_transport = self.transport
+        scenario = 0
+        for stage in ('repair-generate', 'repair-review'):
+            for malformed in ('uid', 'cardinality', 'order'):
+                with self.subTest(stage=stage, malformed=malformed):
+                    batch = self.plan['batches'][scenario]
+                    scenario += 1
+                    failed = batch['uids'][:2]
+                    self.false_check = set(failed)
+                    def transport(args, folder, actual_stage, attempt, prompt, schema):
+                        value = original_transport(args, folder, actual_stage, attempt, prompt, schema)
+                        if actual_stage == stage:
+                            if malformed == 'uid':
+                                value['cards'][0]['conceptId'] = 'foreign-uid'
+                            elif malformed == 'cardinality':
+                                value['cards'].pop()
+                            else:
+                                value['cards'].reverse()
+                            output = folder / (actual_stage + '-1')
+                            save(output / 'result.json', value)
+                            receipt = load(output / 'execution.json')
+                            receipt['outputHash'] = digest((output / 'result.json').read_bytes())
+                            save(output / 'execution.json', receipt)
+                        return value
+                    with patch.object(b.author, 'invoke', side_effect=transport):
+                        result = b.run_batch(self.args, self.plan, batch, self.catalogue)
+                        self.assertEqual(set(failed), set(result['failed']))
+                        self.assertEqual(set(batch['uids'][2:]), set(result['passed']))
+                        before = len(self.calls)
+                        self.assertEqual(result, b.run_batch(self.args, self.plan, batch, self.catalogue))
+                        self.assertEqual(before, len(self.calls))
+                    for uid in batch['uids'][2:]:
+                        _, _, meta = b.verify_record(self.root, self.args.corpus_root, self.catalogue, uid)
+                        self.assertEqual({'initial': 1, 'repair': 0, 'limit': 2}, meta['budget'])
 
     def test_symlink_and_outside_reference_rejected(self):
         for ref in ('../outside', '/tmp/outside'):

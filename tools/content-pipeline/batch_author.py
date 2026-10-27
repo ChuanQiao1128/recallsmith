@@ -323,11 +323,20 @@ def initial_and_repair(args, plan, batch, catalogue, readonly=False):
     else:
         frozen_json(authorization_path, authorization)
     # Request stage names are fixed; attempt=1 is transport only, not a new per-card budget.
-    revised = request(args, plan, batch, 'repair-generate', [packets[uid] for uid in failed],
-                      failures=failed, readonly=readonly)
+    try:
+        revised = request(args, plan, batch, 'repair-generate', [packets[uid] for uid in failed],
+                          failures=failed, readonly=readonly)
+    except ContentFailure as error:
+        # A completed bad repair cannot invalidate siblings with original independent PASSes.
+        return records, {uid: {**failure, 'repairValidationError': str(error),
+                              'repairStage': 'repair-generate'} for uid, failure in failed.items()}
     errors = {uid: issues(packets[uid], c) for uid, c in revised.items()}
     eligible = [packets[uid] for uid in failed if errors[uid] is None]
-    rereviews = request(args, plan, batch, 'repair-review', eligible, revised, readonly=readonly) if eligible else {}
+    try:
+        rereviews = request(args, plan, batch, 'repair-review', eligible, revised, readonly=readonly) if eligible else {}
+    except ContentFailure as error:
+        return records, {uid: {'candidate': revised[uid], 'repairValidationError': str(error),
+                              'repairStage': 'repair-review'} for uid in failed}
     for uid, review in rereviews.items():
         errors[uid] = issues(packets[uid], revised[uid], review)
     for uid in failed:
@@ -458,10 +467,30 @@ def require_rag_gate(root, corpus_root, catalogue, gate_path):
             raise ValueError('Full-RAG reference binding changed')
         contents[item['kind']] = report
     reference = contents['reference_review']
+    reference_file = path(root, 'evaluation/references.json')
+    if digest(reference_file.read_bytes()) != gate['referenceHash']:
+        raise ValueError('Canonical frozen reference labels changed')
+    labels = load(reference_file)
+    authority = load(path(root, 'run.json'))['nodes'].get('A3-reference-review', {})
+    selected = next(r for r in reports if r['kind'] == 'reference_review')
+    if (authority.get('status') != 'verified' or authority.get('referenceHash') != gate['referenceHash'] or
+            authority.get('reportPath') != selected['path'] or authority.get('reportHash') != selected['sha256'] or
+            authority.get('reviewerAgent') != '/root/rag_labels_independent' or
+            authority.get('provenance') != 'native_collaboration_observed_by_supervisor' or
+            authority.get('humanLabelCount') != 0):
+        raise ValueError('Reference review is not the supervisor-pinned observed native review')
+    label_ids = [q['id'] for q in labels.get('queries', [])]
+    if (labels.get('corpusVersion') != gate['corpusVersion'] or
+            len(label_ids) != 80 or len(set(label_ids)) != 80 or
+            set(label_ids) != {q['id'] for q in reference.get('queries', [])}):
+        raise ValueError('Observed reference review identities differ from canonical labels')
     if (reference.get('verdict') != 'PASS' or len(reference.get('queries', [])) != 80 or
             len({q['id'] for q in reference['queries']}) != 80 or
             any(q.get('verdict') != 'PASS' for q in reference['queries'])):
         raise ValueError('All eighty independent reference checks required')
+    retrieval_binding = next(r for r in reports if r['kind'] == 'holdout_retrieval')
+    if retrieval_binding['path'] != 'evaluation/results/holdout.json':
+        raise ValueError('Use the canonical actual holdout retrieval report')
     retrieval = contents['holdout_retrieval']
     if (retrieval.get('split') != 'holdout' or retrieval.get('corpusVersion') != gate['corpusVersion'] or
             len(retrieval.get('summaries', {})) != 1):
@@ -476,6 +505,17 @@ def require_rag_gate(root, corpus_root, catalogue, gate_path):
     if (len(rows) != 40 or len({row['id'] for row in rows}) != 40 or
             not {row['id'] for row in rows} <= {q['id'] for q in reference['queries']}):
         raise ValueError('Forty unique holdout retrieval decisions required')
+    from evaluate import score
+    holdout = {q['id']: q for q in labels['queries'] if q['split'] == 'holdout'}
+    if strategy not in {'bm25', 'vector', 'rrf'} or set(holdout) != {row['id'] for row in rows}:
+        raise ValueError('Actual canonical holdout queries/strategy required')
+    for row in rows:
+        packet_file = path(root, f'evaluation/results/holdout/{strategy}/{row["id"]}.json')
+        if digest(packet_file.read_bytes()) != row.get('packetHash'):
+            raise ValueError('Actual scored retrieval packet changed')
+        scored = score(holdout[row['id']], load(packet_file))
+        if any(row.get(k) != scored[k] for k in ('recallAt8', 'mrrAt8')):
+            raise ValueError('Retrieval scores differ from actual reference evidence groups and packets')
     positive = [r for r in rows if r['recallAt8'] is not None]
     if (len(positive) != 32 or any(sum(r['module'] == theme for r in positive) != 4 for theme in themes) or
             any(sum(r['module'] == theme and r['recallAt8'] is None for r in rows) != 1 for theme in themes) or
@@ -494,7 +534,7 @@ def require_rag_gate(root, corpus_root, catalogue, gate_path):
         raise ValueError('Actual forty unique holdout readiness decisions required')
     answers = {r['id']: r['recallAt8'] is not None for r in rows}
     for decision in decisions:
-        if (any(type(decision.get(k)) is not bool for k in ('answerable', 'refused', 'wrongDeploymentAccepted')) or
+        if (any(type(decision.get(k)) is not bool for k in ('answerable', 'refused', 'wrongDeploymentAccepted', 'unsupportedAccepted')) or
                 decision['answerable'] != answers[decision['id']] or
                 decision.get('verdict') != ('needs_evidence' if decision['refused'] else 'ready') or
                 not isinstance(decision.get('supportingEvidenceIds'), list) or
@@ -504,13 +544,27 @@ def require_rag_gate(root, corpus_root, catalogue, gate_path):
                 not isinstance(decision.get('judgeBatchRef'), str) or not decision['judgeBatchRef'] or
                 decision['modelBatchRef'] == decision['judgeBatchRef']):
             raise ValueError('Readiness decision is missing an independent per-query judgment')
+        judgment_row = decision.get('judgment')
+        if not isinstance(judgment_row, dict):
+            raise ValueError('Missing actual independent readiness judgment')
+        judgment = judgment_row.get('verdict')
+        allowed = {'correct_refusal', 'unnecessary_refusal'} if decision['refused'] else {
+            'supported', 'unsupported', 'wrong_deployment'}
+        if (judgment not in allowed or
+                decision['wrongDeploymentAccepted'] != (not decision['refused'] and judgment == 'wrong_deployment') or
+                decision['unsupportedAccepted'] != (not decision['refused'] and judgment in {'unsupported', 'wrong_deployment'})):
+            raise ValueError('Readiness outcome flags contradict the actual independent judgment')
     counts = {'negativeCount': sum(not d['answerable'] for d in decisions),
               'negativeRefused': sum(not d['answerable'] and d['refused'] for d in decisions),
               'falseRefusals': sum(d['answerable'] and d['refused'] for d in decisions),
               'wrongDeploymentAccepted': sum(d['wrongDeploymentAccepted'] for d in decisions),
-              'unsupportedAccepted': 0}
+              'unsupportedAccepted': sum(d['unsupportedAccepted'] for d in decisions)}
     if (readiness.get('metrics') != counts or any(metrics.get(k) != v for k, v in counts.items())):
         raise ValueError('Full-RAG readiness counts differ from actual decisions')
+    from readiness import verify_decisions
+    actual = verify_decisions(Path(root), gate['referenceHash'], gate['corpusVersion'], strategy, decisions)
+    if actual != counts:
+        raise ValueError('Readiness summaries differ from verified original reader/judge executions')
 
 
 def main():
