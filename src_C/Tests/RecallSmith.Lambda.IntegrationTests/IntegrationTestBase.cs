@@ -135,7 +135,7 @@ public sealed class PostgresFixture : Xunit.IAsyncLifetime
       await DbUtil.ExecuteAsync(conn, null, $"create database {name};", []);
     }
 
-    return new NpgsqlConnectionStringBuilder(ConnectionString) { Database = name }.ConnectionString;
+    return new NpgsqlConnectionStringBuilder(ConnectionString) { Database = name, Pooling = false }.ConnectionString;
   }
 
   /// <summary>

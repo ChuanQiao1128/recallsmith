@@ -202,8 +202,11 @@ public static class TranslationValidation
   /// </summary>
   public static void ShapeRow(Dictionary<string, object?> row)
   {
-    FrontHelpValidation.ShapeRow(row);
-    if (!row.ContainsKey("translations")) return;
+    if (!row.ContainsKey("translations"))
+    {
+      FrontHelpValidation.ShapeRow(row);
+      return;
+    }
 
     var translations = row["translations"] switch
     {
@@ -221,6 +224,8 @@ public static class TranslationValidation
     row["translationStatus"] = Status(translations, basis, EnglishFromRow(row));
     row.Remove("translationBasis");
     Helpers.JsonbCell(row, "translations");
+    // Remove empty help after inserting status so Dictionary does not reuse its position before translations.
+    FrontHelpValidation.ShapeRow(row);
   }
 
   // ------------------------------------------------------------------------------------------- parsing

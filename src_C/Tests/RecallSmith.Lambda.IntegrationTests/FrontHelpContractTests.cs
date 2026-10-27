@@ -30,6 +30,56 @@ public class FrontHelpContractTests
   }
 
   [Theory]
+  [InlineData("null")]
+  [InlineData("[]")]
+  public void ShapeRow_EmptyHelpPreservesSourceOrderAndTranslationStatus(string empty)
+  {
+    const string translated = """{"zh-CN":{"v":1,"question":"什么是 VPC？","explanation":"虚拟网络"}}""";
+    var english = English();
+    var canonical = TranslationValidation.Canonicalize(Json(translated), english, "en-US")!;
+    var basis = TranslationValidation.BasisJson(canonical, english);
+    var row = new Dictionary<string, object?>
+    {
+      ["question"] = english.Question,
+      ["explanation"] = english.Explanation,
+      ["source"] = null,
+      ["frontHelp"] = empty,
+      ["translations"] = canonical,
+      ["translationBasis"] = basis,
+    };
+
+    TranslationValidation.ShapeRow(row);
+
+    Assert.Equal(["source", "translations", "translationStatus"], row.Keys.TakeLast(3).ToArray());
+    Assert.False(row.ContainsKey("frontHelp"));
+    Assert.False(row.ContainsKey("translationBasis"));
+    Assert.Equal(english.Explanation, row["explanation"]);
+    Assert.Equal("虚拟网络", Assert.IsType<JsonElement>(row["translations"]).GetProperty("zh-CN").GetProperty("explanation").GetString());
+    Assert.Equal("ok", Assert.IsType<Dictionary<string, string>>(row["translationStatus"])["zh-CN"]);
+    row["explanation"] = "An edited explanation";
+    row["translationBasis"] = basis;
+    TranslationValidation.ShapeRow(row);
+    Assert.Equal("stale", Assert.IsType<Dictionary<string, string>>(row["translationStatus"])["zh-CN"]);
+  }
+
+  [Theory]
+  [InlineData("null", false)]
+  [InlineData("[]", false)]
+  [InlineData(Help, true)]
+  public void ShapeRow_LegacyRowWithoutTranslationsStillShapesHelp(string help, bool present)
+  {
+    var row = new Dictionary<string, object?> { ["question"] = "What is a VPC?", ["explanation"] = "A virtual network", ["frontHelp"] = help };
+
+    TranslationValidation.ShapeRow(row);
+
+    Assert.Equal(present, row.ContainsKey("frontHelp"));
+    if (present) Assert.Equal("VPC", Assert.IsType<JsonElement>(row["frontHelp"])[0].GetProperty("term").GetString());
+    Assert.Equal("A virtual network", row["explanation"]);
+    Assert.False(row.ContainsKey("translations"));
+    Assert.False(row.ContainsKey("translationStatus"));
+  }
+
+  [Theory]
   [InlineData("{}")]
   [InlineData("[null]")]
   [InlineData("[{\"term\":\"x\"}]")]
