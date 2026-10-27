@@ -303,7 +303,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
   const insets = useSafeAreaInsets();
   const trialRef = useRef<TrialInfo>(EMPTY_TRIAL_INFO);
   const scrollRef = useRef<ScrollView>(null);
-  const cardIndexRef = useRef<{ cards: CardExport[]; cardMap: Map<string, CardExport> } | null>(null);
+  const cardIndexRef = useRef<{ cards: CardExport[]; cardMap: Map<string, CardExport>; deckSlug?: string } | null>(null);
   // Non-null only in a focus run with at least one usable card; ratedUids holds the cards it served.
   const focusIndexRef = useRef<FocusIndex | null>(null);
   const focusRatedUidsRef = useRef<Set<string>>(new Set());
@@ -629,6 +629,7 @@ export function SessionCardScreen({ navigation, route }: Props) {
             : 0;
           const deckForStudy = isTrial ? buildPreviewDeck(resolved, previewCount) : resolved;
           cardIndexRef.current = {
+            deckSlug: deckForStudy.Slug,
             cards: sortCards(deckForStudy),
             cardMap: buildCardMap(deckForStudy),
           };

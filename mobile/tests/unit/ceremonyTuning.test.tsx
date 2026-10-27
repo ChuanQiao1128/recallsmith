@@ -34,9 +34,11 @@ vi.mock('../../src/features/gacha/rewards/rewardWallet', () => ({
 }));
 
 vi.mock('../../src/features/gacha/draw/drawStateStore', () => ({
-  loadDrawState: vi.fn(async () => fixtures.drawState),
-  saveDrawState: vi.fn(async () => {}),
+  loadDrawStateUnderLock: vi.fn(async () => fixtures.drawState),
+  saveDrawStateUnderLock: vi.fn(async () => {}),
 }));
+
+vi.mock('../../src/review/storage', () => ({ captureProgressUserSub: vi.fn(async () => 'user-a') }));
 
 vi.mock('../../src/content/activeDeck', () => ({
   loadActiveDeckSlug: vi.fn(async () => fixtures.activeSlug),
@@ -66,7 +68,7 @@ import { DebugMenuScreen } from '../../src/screens/DebugMenuScreen';
 import { DEVICE, TO_TABLE_CAP_MS, getCeremonyTimingOverride, resolveCeremonyTimings, setCeremonyTimingOverride } from '../../src/features/gacha/draw/ceremonyTimings';
 import { getCeremonyDevOverrides, setCeremonyDevOverride } from '../../src/features/gacha/draw/ceremonyPrefs';
 import { saveRewardWalletState } from '../../src/features/gacha/rewards/rewardWallet';
-import { loadDrawState, saveDrawState } from '../../src/features/gacha/draw/drawStateStore';
+import { loadDrawStateUnderLock as loadDrawState, saveDrawStateUnderLock as saveDrawState } from '../../src/features/gacha/draw/drawStateStore';
 import { loadActiveDeckSlug } from '../../src/content/activeDeck';
 import { resolveDeckBySlug } from '../../src/content/deckRepository';
 
@@ -289,7 +291,7 @@ describe('CeremonyTuning screen + DebugMenu ceremony seeds', () => {
       tree.root.findByProps({ testID: 'debug-only-legendary' }).props.onPress();
     });
     await act(async () => {});
-    expect(saveDrawState).toHaveBeenCalledWith('csharp', { owned: ['b', 'a'], pity: null });
+    expect(saveDrawState).toHaveBeenCalledWith('csharp', { owned: ['b', 'a'], pity: null }, 'user-a');
     expect(allText(tree)).toContain('1 Legendary left');
 
     (saveDrawState as any).mockClear();

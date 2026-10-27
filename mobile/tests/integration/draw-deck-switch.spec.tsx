@@ -132,6 +132,15 @@ vi.mock('../../src/features/gacha/draw/drawCommit', () => ({
   commitDraw: vi.fn(async (slug: string, drawCount: number, options?: any) => commitDrawMock(slug, drawCount, options)),
 }));
 
+vi.mock('../../src/features/gacha/draw/acquireDraw', () => ({
+  acquireDraw: vi.fn(async (slug: string, count: number, options?: any) => {
+    const result = await commitDrawMock(slug, count, options);
+    if (!result || result.cards.length === 0) return { result, wallet: walletFixture, spent: 0 };
+    const spent = await consumeDeckPullsMock(slug, Math.min(count, result.cards.length));
+    return { result, ...spent };
+  }),
+}));
+
 // The screen reads draw state through loadDrawStatus -> loadDrawState. Mocked
 // per the brief so the parallel-load assertion has a call to watch.
 vi.mock('../../src/features/gacha/draw/drawStateStore', () => ({

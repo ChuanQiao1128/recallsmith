@@ -1,3 +1,4 @@
+import { isOrderedDeck } from '../draw/orderedAcquisition';
 import type { DeckExport, CardExport } from '../../../types/deckExport';
 import type { CardProgress } from '../../../review/model';
 import type { ChallengeRoute, OwnedGate } from '../contracts';
@@ -97,7 +98,7 @@ export function pickNextCard(params: {
   now: Date;
   mode: 'review-due' | 'learn-new' | 'mixed' | 'sweep';
   avoidUid?: string | null;
-  index?: { cards: CardExport[]; cardMap: Map<string, CardExport> } | null;
+  index?: { cards: CardExport[]; cardMap: Map<string, CardExport>; deckSlug?: string } | null;
   ownedSet?: OwnedGate;
   kindHint?: McqKindHint | null;
 }): CurrentCardLike | null {
@@ -147,7 +148,7 @@ export function pickNextCard(params: {
   const isMcq = (card: CardExport) => normalizeMcq(card.Mcq) !== null;
   const pickNew = () => {
     const isNew = (card: CardExport, p: CardProgress) => owns(card) && isNewProgress(p);
-    if (!kindHint) return pickWith(isNew);
+    if (!kindHint || isOrderedDeck(deck?.Slug ?? index?.deckSlug ?? '')) return pickWith(isNew);
     // The cap: mcqAllowed false takes a Q/A new card only (hard filter; maxPerRun 0 = never an MCQ new
     // card). Past a positive mcq.maxPerRun (mcqFallback) a run with no Q/A new card left (an MCQ-only
     // exam deck, or every Q/A card already learned) takes an MCQ new card rather than ending short.

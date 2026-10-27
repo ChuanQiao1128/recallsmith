@@ -158,6 +158,15 @@ vi.mock('../../src/features/gacha/draw/drawCommit', () => ({
   commitDraw: vi.fn(async (slug: string, drawCount: number) => commitDrawMock(slug, drawCount)),
 }));
 
+vi.mock('../../src/features/gacha/draw/acquireDraw', () => ({
+  acquireDraw: vi.fn(async (slug: string, count: number) => {
+    const result = await commitDrawMock(slug, count);
+    if (!result || result.cards.length === 0) return { result, wallet: walletFixture, spent: 0 };
+    const spent = await consumeDeckPullsMock(slug, Math.min(count, result.cards.length));
+    return { result, ...spent };
+  }),
+}));
+
 // DrawScreen now schedules a sync when a draw commits. Mocked here for the
 // same reason every other module in this file is: importing the real one
 // drags expo-constants and the amplify session into a suite whose

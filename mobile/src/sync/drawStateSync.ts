@@ -1,3 +1,4 @@
+import { withDrawStateLock, drawStateGeneration } from '../features/gacha/draw/drawStateLock';
 // mobile/src/sync/drawStateSync.ts
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -7,8 +8,8 @@ import { notifyGamificationChanged } from './gamificationChanges';
 import {
   adoptAnonDrawState,
   listDrawStateSlugs,
-  loadDrawState,
-  saveDrawState,
+  saveDrawStateUnderLock,
+  loadDrawStateUnderLock,
   type AnonDrawStateAdoption,
 } from '../features/gacha/draw/drawStateStore';
 import {
@@ -22,10 +23,9 @@ import { adoptAnonNewCardLedger, type AnonLedgerAdoption } from '../features/gac
 import { adoptAnonMistakeBook } from '../features/gacha/mistakes/mistakeBook';
 import {
   adoptAnonDeckWallets,
-  loadDeckWallet,
   loadDeckWallets,
   migrateLegacyWalletIfNeeded,
-  saveDeckWallet,
+  updateDeckWallet,
 } from '../features/gacha/rewards/deckWallet';
 import type { PityState } from '../features/gacha/draw/pity';
 import { setDrawStateSyncInFlight } from './syncActivity';
@@ -318,8 +318,9 @@ export async function syncDrawStateNow(accessToken: string | null): Promise<Draw
   _inFlight = true;
   setDrawStateSyncInFlight(true);
   try {
-    const userSub = await captureProgressUserSub();
-    const scopeCurrent = async () => !isSyncBlocked() && await captureProgressUserSub() === userSub;
+    const generation = drawStateGeneration();
+    const userSub = await captureProgressUserSub(true);
+    const scopeCurrent = async () => generation === drawStateGeneration() && !isSyncBlocked() && await captureProgressUserSub(true) === userSub;
     // Adopt any anonymous-period state into this account BEFORE reading local
     // state, so an adopted deck is new to stamps.decks and is pushed with
     // UNKNOWN_STAMP_MS in this same run -- this is what makes the anon
@@ -342,7 +343,7 @@ export async function syncDrawStateNow(accessToken: string | null): Promise<Draw
     let localChanged = false;
 
     for (const slug of slugs) {
-      const record = await loadDrawState(slug);
+      const record = await withDrawStateLock(() => loadDrawStateUnderLock(slug, userSub, true));
       localDecks.set(slug, { owned: record.owned, pity: record.pity });
 
       const prev = stamps.decks[slug];
@@ -488,71 +489,76 @@ export async function syncDrawStateNow(accessToken: string | null): Promise<Draw
         ? remote.owned!.filter((uid): uid is string => typeof uid === 'string' && uid.length > 0)
         : [];
 
-      if (!await scopeCurrent()) return SKIPPED;
-      const current = await loadDrawState(slug);
-      if (!await scopeCurrent()) return SKIPPED;
-      const mergedOwned = unionOwned(current.owned, remoteOwned);
-      const ownedGrew = mergedOwned.length !== current.owned.length;
+      const applied = await withDrawStateLock(async () => {
+        if (!await scopeCurrent()) return false;
+        const current = await loadDrawStateUnderLock(slug, userSub, true);
+        if (!await scopeCurrent()) return false;
+        const mergedOwned = unionOwned(current.owned, remoteOwned);
+        const ownedGrew = mergedOwned.length !== current.owned.length;
 
-      const pushedPity = localDecks.get(slug)?.pity ?? null;
-      let nextPity = current.pity;
-      let pityChanged = false;
+        const pushedPity = localDecks.get(slug)?.pity ?? null;
+        let nextPity = current.pity;
+        let pityChanged = false;
 
-      let nextStamp: DeckStamp = stamps.decks[slug] ?? {
-        pity: current.pity,
-        ownedCount: current.owned.length,
-        updatedAtMs: UNKNOWN_STAMP_MS,
-      };
-      nextStamp = { ...nextStamp, ownedCount: mergedOwned.length };
-
-      const remotePity = remote?.pity;
-      if (remotePity && samePity(current.pity, pushedPity)) {
-        const adopted: PityState = {
-          draws: toFiniteInt(remotePity.draws, 0),
-          threshold: toFiniteInt(remotePity.threshold, 0),
+        let nextStamp: DeckStamp = stamps.decks[slug] ?? {
+          pity: current.pity,
+          ownedCount: current.owned.length,
+          updatedAtMs: UNKNOWN_STAMP_MS,
         };
-        if (!samePity(current.pity, adopted)) {
-          nextPity = adopted;
-          pityChanged = true;
+        nextStamp = { ...nextStamp, ownedCount: mergedOwned.length };
+
+        const remotePity = remote?.pity;
+        if (remotePity && samePity(current.pity, pushedPity)) {
+          const adopted: PityState = {
+            draws: toFiniteInt(remotePity.draws, 0),
+            threshold: toFiniteInt(remotePity.threshold, 0),
+          };
+          if (!samePity(current.pity, adopted)) {
+            nextPity = adopted;
+            pityChanged = true;
+          }
+          // Adopt the server's stamp along with its value. Keeping our own stamp
+          // here would make this device claim authorship of a decision another
+          // device made, and it would win the next merge with it.
+          nextStamp = { ...nextStamp, pity: adopted, updatedAtMs: toFiniteInt(remotePity.updatedAtMs, 0) };
         }
-        // Adopt the server's stamp along with its value. Keeping our own stamp
-        // here would make this device claim authorship of a decision another
-        // device made, and it would win the next merge with it.
-        nextStamp = { ...nextStamp, pity: adopted, updatedAtMs: toFiniteInt(remotePity.updatedAtMs, 0) };
-      }
 
-      stamps.decks[slug] = nextStamp;
+        stamps.decks[slug] = nextStamp;
 
-      if (ownedGrew || pityChanged) {
-        await saveDrawState(slug, { owned: mergedOwned, pity: nextPity }, userSub);
-        if (ownedGrew) appliedOwned += mergedOwned.length - current.owned.length;
-        if (pityChanged) appliedPity += 1;
-      }
+        if (ownedGrew || pityChanged) {
+          await saveDrawStateUnderLock(slug, { owned: mergedOwned, pity: nextPity }, userSub);
+          if (ownedGrew) appliedOwned += mergedOwned.length - current.owned.length;
+          if (pityChanged) appliedPity += 1;
+        }
 
-      // Per-pack pulls, compare-and-set exactly like the legacy wallet below.
-      // A response deck with no `pulls` (or null) means the server knows nothing
-      // about that pack: keep the local wallet and NEVER write a zero over it.
-      const remotePulls = remote?.pulls;
-      if (remotePulls) {
-        const pushedPulls = pushedDeckPulls.get(slug) ?? { availablePulls: 0, reservePulls: 0 };
-        // Re-read: the user can spend from this pack while the request is in
-        // flight. If the pool moved on, the server answered an older question --
-        // skip, and the next run pushes the newer value.
-        if (!await scopeCurrent()) return SKIPPED;
-        const currentPulls = await loadDeckWallet(slug);
-        if (!await scopeCurrent()) return SKIPPED;
-        if (sameWallet(currentPulls, pushedPulls)) {
+        // Per-pack pulls, compare-and-set exactly like the legacy wallet below.
+        // A response deck with no `pulls` (or null) means the server knows nothing
+        // about that pack: keep the local wallet and NEVER write a zero over it.
+        const remotePulls = remote?.pulls;
+        if (remotePulls) {
+          const pushedPulls = pushedDeckPulls.get(slug) ?? { availablePulls: 0, reservePulls: 0 };
+          // Re-read: the user can spend from this pack while the request is in
+          // flight. If the pool moved on, the server answered an older question --
+          // skip, and the next run pushes the newer value.
+          if (!await scopeCurrent()) return false;
           const adoptedPulls: RewardWalletState = {
             availablePulls: toFiniteInt(remotePulls.availablePulls, 0),
             reservePulls: toFiniteInt(remotePulls.reservePulls, 0),
           };
-          if (!sameWallet(currentPulls, adoptedPulls)) {
-            await saveDeckWallet(slug, adoptedPulls, userSub);
-            appliedDeckPulls += 1;
+          let accepted = false;
+          const updated = await updateDeckWallet(slug, async currentPulls => {
+            if (!await scopeCurrent() || !sameWallet(currentPulls, pushedPulls)) return null;
+            accepted = true;
+            return sameWallet(currentPulls, adoptedPulls) ? null : adoptedPulls;
+          }, userSub);
+          if (accepted) {
+            if (!sameWallet(updated.before, updated.after)) appliedDeckPulls += 1;
+            stamps.deckPulls[slug] = { value: adoptedPulls, updatedAtMs: toFiniteInt(remotePulls.updatedAtMs, 0) };
           }
-          stamps.deckPulls[slug] = { value: adoptedPulls, updatedAtMs: toFiniteInt(remotePulls.updatedAtMs, 0) };
         }
-      }
+        return true;
+      });
+      if (!applied) return SKIPPED;
     }
 
     let appliedWallet = false;

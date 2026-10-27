@@ -1,3 +1,4 @@
+import { withDrawStateLock, invalidateDrawStateOperations } from '../features/gacha/draw/drawStateLock';
 import { parseFrontHelp } from './frontHelp';
 // mobile/src/content/deckRepository.ts
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -1290,7 +1291,11 @@ async function reconcileRetiredDecks(manifest: RawManifest): Promise<void> {
   } catch {}
 }
 
-async function purgeLocalDeckForRetired(
+function purgeLocalDeckForRetired(slug: string, userKey: string, retiredAtMs: number | null): Promise<void> {
+  return withDrawStateLock(() => purgeLocalDeckForRetiredUnderDrawLock(slug, userKey, retiredAtMs));
+}
+
+async function purgeLocalDeckForRetiredUnderDrawLock(
   slug: string,
   userKey: string,
   retiredAtMs: number | null,
@@ -1315,6 +1320,7 @@ async function purgeLocalDeckForRetired(
     return;
   }
 
+  invalidateDrawStateOperations();
   const retiredAt = Number(retiredAtMs);
   try {
     const meta = await getDeckMeta(slug, userKey);

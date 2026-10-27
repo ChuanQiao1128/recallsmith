@@ -40,8 +40,9 @@ import { loadDrawState } from './drawStateStore';
 export async function resolveEffectiveOwned(
   slug: string,
   progress: readonly CardProgress[],
+  storedOwned?: readonly string[],
 ): Promise<Set<string>> {
-  const { owned } = await loadDrawState(slug);
+  const owned = storedOwned ?? (await loadDrawState(slug)).owned;
   const effective = new Set(owned);
 
   for (const entry of progress) {

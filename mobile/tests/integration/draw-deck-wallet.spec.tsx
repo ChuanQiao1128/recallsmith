@@ -129,6 +129,7 @@ vi.mock('../../src/content/deckRepository', () => ({
 }));
 
 vi.mock('../../src/review/storage', () => ({
+  captureProgressUserSub: vi.fn(async () => 'anon'),
   getUserScopedKey: vi.fn(async (baseKey: string) => `${SCOPE}${baseKey}`),
   loadDeckProgress: vi.fn(async () => []),
 }));
