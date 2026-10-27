@@ -5,11 +5,11 @@ describe('server', () => {
   let env: TestEnv;
   afterEach(() => env.cleanup());
 
-  it('lists exactly the four DeveloperCards tools', async () => {
+  it('lists the original tools and three bounded local evidence tools', async () => {
     env = makeTestEnv();
     const client = await connect(env.config);
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(['find_similar_cards', 'lint_card', 'read_source', 'submit_draft']);
+    expect(tools.map((t) => t.name).sort()).toEqual(['find_similar_cards', 'get_content_review_status', 'get_evidence', 'lint_card', 'read_source', 'search_evidence', 'submit_draft']);
     for (const tool of tools) {
       expect(tool.description?.length ?? 0).toBeGreaterThan(20);
       expect(tool.inputSchema.type).toBe('object');
@@ -71,10 +71,10 @@ describe('server', () => {
     await client.close();
   });
 
-  it('reports server name developercards and version 1.8.1', async () => {
+  it('reports server name developercards and version 1.9.0', async () => {
     env = makeTestEnv();
     const client = await connect(env.config);
-    expect(client.getServerVersion()).toMatchObject({ name: 'developercards', version: '1.8.1' });
+    expect(client.getServerVersion()).toMatchObject({ name: 'developercards', version: '1.9.0' });
     await client.close();
   });
 

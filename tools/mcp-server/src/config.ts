@@ -12,6 +12,31 @@ export interface Config {
   redirectPort: number;
   tokenFile: string;
   repoRoot: string;
+  evidence?: EvidenceConfig;
+}
+
+export interface EvidenceConfig {
+  corpusRoot: string;
+  modelCache: string;
+  container: string;
+  localPython: string;
+  controlRoot: string;
+  corpusVersion: string;
+  strategy: 'bm25' | 'vector' | 'rrf';
+}
+
+function evidenceConfig(env: Record<string, string | undefined>): EvidenceConfig | undefined {
+  if (env.DC_EVIDENCE_ENABLED !== '1') return undefined;
+  const fields = { corpusRoot: env.DC_EVIDENCE_CORPUS_ROOT, modelCache: env.DC_EVIDENCE_MODEL_CACHE,
+    container: env.DC_EVIDENCE_CONTAINER, localPython: env.DC_EVIDENCE_LOCAL_PYTHON,
+    controlRoot: env.DC_EVIDENCE_CONTROL_ROOT, corpusVersion: env.DC_EVIDENCE_CORPUS_VERSION };
+  if (Object.values(fields).some((value) => !value?.trim())) throw new Error('Explicit evidence configuration is required');
+  const strategy = env.DC_EVIDENCE_STRATEGY ?? 'rrf';
+  if (!['bm25', 'vector', 'rrf'].includes(strategy)) throw new Error('Invalid evidence strategy');
+  for (const key of ['corpusRoot', 'modelCache', 'localPython', 'controlRoot'] as const) {
+    if (!fields[key]?.startsWith('/')) throw new Error('Evidence paths must be absolute');
+  }
+  return { ...fields, strategy } as EvidenceConfig;
 }
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
@@ -44,6 +69,7 @@ function nonEmpty(value: string | undefined): string | undefined {
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
   const home = env.HOME ?? homedir();
   return {
+    evidence: evidenceConfig(env),
     apiBase: baseUrl('DC_API_BASE', nonEmpty(env.DC_API_BASE) ?? 'https://api.developercards.app'),
     cognitoDomain: baseUrl(
       'DC_COGNITO_DOMAIN',

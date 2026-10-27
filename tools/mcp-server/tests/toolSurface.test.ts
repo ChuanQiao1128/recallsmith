@@ -8,7 +8,7 @@ describe('tool surface (N4, ai-agent-24)', () => {
   it('lists every tool the agent sees, sorted by name, with its description and input schema', async () => {
     const surface = await listToolSurface();
     expect(surface.server).toEqual({ name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION });
-    expect(surface.tools.map((tool) => tool.name)).toEqual(['find_similar_cards', 'lint_card', 'read_source', 'submit_draft']);
+    expect(surface.tools.map((tool) => tool.name)).toEqual(['find_similar_cards', 'get_content_review_status', 'get_evidence', 'lint_card', 'read_source', 'search_evidence', 'submit_draft']);
     const similar = surface.tools.find((tool) => tool.name === 'find_similar_cards')!;
     expect(similar.description).toContain('likelyDuplicate');
     expect(similar.inputSchema).toMatchObject({ type: 'object', properties: { text: { type: 'string' } } });
