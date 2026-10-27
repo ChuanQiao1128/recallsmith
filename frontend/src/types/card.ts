@@ -1,3 +1,4 @@
+import type { FrontHelpEntry } from '../lib/frontHelp';
 import type { McqBlob } from './mcq';
 import type { CardTranslations, TranslationStatus } from './translation';
 
@@ -12,6 +13,7 @@ export interface Card {
   deckId: number;
   stableUid: string;
   question: string;
+  frontHelp?: FrontHelpEntry[] | null;
 
   difficulty: number;
   orderInDeck: number;

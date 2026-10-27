@@ -1,3 +1,4 @@
+import { CardFrontHelp } from './CardFrontHelp';
 import React, { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -409,6 +410,7 @@ export const McqReviewBody = React.memo(function McqReviewBody(props: McqReviewB
       ) : null}
 
       {question.code ? <QuestionCodeBlock code={question.code} /> : null}
+      <CardFrontHelp key={`${card.StableUid}:${lang ?? 'en'}`} help={card.FrontHelp} />
 
       {stage === 'stem' ? (
         <Text testID={MCQ_TEST_IDS.stemHint} style={styles.stemHint}>

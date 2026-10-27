@@ -64,10 +64,13 @@ import {
   type TranslationIssueCode,
 } from './translationRules';
 
+import { parseFrontHelp, parseFrontHelpJson, normalizeFrontHelpForCompare, type FrontHelpEntry } from './frontHelp';
+
 // ---------------------- types ----------------------
 
 /** Card content as it exists in a markdown document, before ordering. */
 export interface DeckCardContent {
+  frontHelp?: FrontHelpEntry[] | null;
   stableUid: string;
   difficulty: number;
   question: string;
@@ -110,6 +113,8 @@ export type ImportIssueCode =
   | 'DUPLICATE_TOPIC'
   | McqIssueCode
   | 'MCQ_DUPLICATE_QUALIFIER'
+  | 'FRONT_HELP_BAD_SHAPE'
+  | 'BAD_HELP_MARKER'
   | 'BAD_SOURCE_URL'
   | 'SOURCE_QUOTE_TOO_LONG'
   | 'ZH_UNSUPPORTED_FIELD'
@@ -157,7 +162,8 @@ export type ComparableField =
   | 'topic'
   | 'mcq'
   | 'source'
-  | 'translations';
+  | 'translations'
+  | 'frontHelp';
 
 export interface ImportCreate {
   kind: 'create';
@@ -262,11 +268,13 @@ const RESERVED_ZH_EXACT = /^[A-Z]+_ZH:/;
 const SLUG_PATTERN = /^[a-z0-9]+(?:[-_][a-z0-9]+)*$/;
 
 type SectionKind =
-  | 'question' | 'answer' | 'code' | 'usage' | 'source' | `option:${string}` | `why:${string}`
+  | 'help' | 'help_zh' | 'question' | 'answer' | 'code' | 'usage' | 'source' | `option:${string}` | `why:${string}`
   | 'question_zh' | 'answer_zh' | 'usage_zh' | `option_zh:${string}` | `why_zh:${string}`;
 
 /** The marker a zh section kind is written with, for messages; English kinds keep their old wording. */
 function sectionName(kind: SectionKind): string {
+  if (kind === 'help') return 'HELP:';
+  if (kind === 'help_zh') return 'HELP_ZH:';
   if (kind === 'question_zh') return 'Q_ZH:';
   if (kind === 'answer_zh') return 'A_ZH:';
   if (kind === 'usage_zh') return 'USAGE_ZH:';
@@ -399,6 +407,21 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
     const codeSnippet = sectionText(d.sections.code) || null;
     const realWorldUsage = sectionText(d.sections.usage) || null;
 
+    let frontHelp: FrontHelpEntry[] | undefined;
+    let frontHelpZh: FrontHelpEntry[] | undefined;
+    for (const kind of ['help', 'help_zh'] as const) {
+      const section = d.sections[kind];
+      if (!section) continue;
+      try {
+        const entries = parseFrontHelpJson(sectionText(section));
+        if (kind === 'help') frontHelp = entries;
+        else frontHelpZh = entries;
+      } catch (error) {
+        pushIssue('FRONT_HELP_BAD_SHAPE', section.line, `Card "${d.stableUid}": ${sectionName(kind)} ${error instanceof Error ? error.message : 'Invalid help JSON.'}`, d.stableUid);
+        return;
+      }
+    }
+
     // A translated card must translate every section its English card has
     // (contract §3): a half-translated card would show mixed languages, so it
     // is dropped like a card without Q:, one issue per missing section.
@@ -414,6 +437,7 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
       }
       if (!d.sections.answer_zh) missing.push('A_ZH:');
       if (realWorldUsage && !d.sections.usage_zh) missing.push('USAGE_ZH:');
+      if (frontHelp?.length && !d.sections.help_zh) missing.push('HELP_ZH:');
       for (const name of missing) {
         pushIssue(
           'ZH_MISSING_FIELD',
@@ -465,6 +489,7 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
         v: 1,
         question: sectionText(d.sections.question_zh),
         explanation: sectionText(d.sections.answer_zh),
+        ...(frontHelpZh !== undefined ? { frontHelp: frontHelpZh } : {}),
         ...(usageZh ? { realWorldUsage: usageZh } : {}),
         ...(zhMcq ? { mcq: zhMcq } : {}),
       };
@@ -473,6 +498,7 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
 
     cards.push({
       stableUid: d.stableUid,
+      ...(frontHelp !== undefined ? { frontHelp } : {}),
       difficulty: d.difficulty,
       question,
       explanation,
@@ -883,6 +909,21 @@ export function parseDeckMarkdown(text: string): ParsedDeck {
       continue;
     }
 
+    const helpMatch = /^(HELP|HELP_ZH):[ \t]?(.*)$/.exec(raw);
+    if (helpMatch) {
+      const kind = helpMatch[1] === 'HELP' ? 'help' : 'help_zh';
+      if (kind === 'help_zh') draft.zhLine ??= lineNo;
+      currentSection = openSection(kind, lineNo, helpMatch[2]);
+      continue;
+    }
+    // Reserve help-like markers without reclassifying legacy prose such as "TTFT:".
+    if (/^(?:HELP[A-Z_]*|HEPL[A-Z_]*)\s*[:\uFF1A]/i.test(raw)) {
+      pushIssue('BAD_HELP_MARKER', lineNo, `Card "${draft.stableUid}": unknown or misspelled section marker "${raw}".`, draft.stableUid);
+      currentSection = null;
+      swallowing = true;
+      continue;
+    }
+
     const reservedZhMatch = RESERVED_ZH_MARKER.exec(raw);
     if (reservedZhMatch) {
       // Every exact spelling of the six markers was taken above, so an exact
@@ -1088,10 +1129,14 @@ export function validateCards(
         });
       }
     }
+    if (parseFrontHelp(card.frontHelp) === undefined) {
+      issues.push({ code: 'FRONT_HELP_BAD_SHAPE', line: card.sourceLine, message: `Card "${card.stableUid}" has invalid frontHelp.`, stableUid: card.stableUid });
+    }
     if (card.translations) {
       for (const issue of validateTranslation({
         translations: card.translations,
         english: {
+          frontHelp: card.frontHelp,
           question: card.question,
           explanation: card.explanation,
           realWorldUsage: card.realWorldUsage,
@@ -1135,6 +1180,7 @@ const COMPARABLE_FIELDS: readonly ComparableField[] = [
   'mcq',
   'source',
   'translations',
+  'frontHelp',
 ];
 
 /**
@@ -1151,6 +1197,10 @@ function fieldsThatDiffer(card: ParsedCard, existing: Card): ComparableField[] {
   for (const field of COMPARABLE_FIELDS) {
     if (field === 'difficulty' || field === 'orderInDeck') {
       if (card[field] !== existing[field]) changed.push(field);
+      continue;
+    }
+    if (field === 'frontHelp') {
+      if (card.frontHelp !== undefined && normalizeFrontHelpForCompare(card.frontHelp) !== normalizeFrontHelpForCompare(existing.frontHelp)) changed.push(field);
       continue;
     }
     if (field === 'mcq') {
@@ -1245,7 +1295,8 @@ export function planImport(
 
   const seenInFile = new Set<string>();
 
-  for (const card of parsed.cards) {
+  for (const originalCard of parsed.cards) {
+    let card = originalCard;
     if (seenInFile.has(card.stableUid)) {
       plan.conflicts.push({
         kind: 'conflict',
@@ -1294,6 +1345,21 @@ export function planImport(
     }
 
     const target = live[0];
+    // A pre-help bilingual file must preserve both languages when it omits HELP entirely.
+    const zh = card.translations?.['zh-CN'];
+    const storedZhHelp = target.translations?.['zh-CN']?.frontHelp;
+    if (card.frontHelp === undefined && zh && zh.frontHelp === undefined && storedZhHelp?.length) {
+      card = { ...card, translations: { ...card.translations, 'zh-CN': { ...zh, frontHelp: storedZhHelp } } };
+    }
+    const effectiveIssue = validateTranslation({
+      translations: card.translations,
+      english: { ...card, frontHelp: card.frontHelp === undefined ? target.frontHelp : card.frontHelp, mcq: card.mcq ?? null },
+      deckLocale: options.deckLocale,
+    })[0];
+    if (effectiveIssue) {
+      plan.conflicts.push({ kind: 'conflict', card, reason: 'INVALID_CARD', message: effectiveIssue.message });
+      continue;
+    }
     const changedFields = fieldsThatDiffer(card, target);
     if (changedFields.length === 0) {
       plan.unchanged.push({ kind: 'unchanged', card, existingId: target.id });
@@ -1331,7 +1397,7 @@ export function planImport(
   return plan;
 }
 
-const ENGLISH_TRANSLATED_FIELDS: readonly ComparableField[] = ['question', 'explanation', 'realWorldUsage', 'mcq'];
+const ENGLISH_TRANSLATED_FIELDS: readonly ComparableField[] = ['question', 'explanation', 'realWorldUsage', 'mcq', 'frontHelp'];
 
 /**
  * ZH_WARN_MAYBE_STALE, non-blocking: an update that changes the English text of
@@ -1395,6 +1461,12 @@ export function serializeDeckMarkdown(
     if (zh) {
       out.push('Q_ZH:');
       out.push(zh.question);
+    }
+    if (card.frontHelp !== undefined) {
+      out.push('HELP:', JSON.stringify(card.frontHelp ?? []));
+    }
+    if (zh?.frontHelp !== undefined) {
+      out.push('HELP_ZH:', JSON.stringify(zh.frontHelp ?? []));
     }
     if (card.mcq) {
       for (const option of card.mcq.options) {

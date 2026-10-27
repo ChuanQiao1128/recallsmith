@@ -305,6 +305,7 @@ export function EditCardPage() {
           onCancel={() => navigate(-1)}
           onDirtyChange={setDirty}
           recoveryLabel={conflictRecoverable ? RETRY_WITH_LATEST : null}
+          frontHelp={card.frontHelp}
           mcq={card.mcq ?? null}
         />
         <CardTranslationPanel card={card} deck={deck} />

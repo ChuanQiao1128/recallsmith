@@ -1,3 +1,4 @@
+import { parseFrontHelp, type FrontHelpEntry } from './frontHelp';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import { fetchAuthSession } from 'aws-amplify/auth';
@@ -19,6 +20,7 @@ import { parseCardTranslations, type CardTranslations } from './cardTranslation'
  */
 
 export type InstalledDeckIndex = {
+  frontHelp: ReadonlyMap<string, FrontHelpEntry[]>;
   /** Valid sources by stableUid. */
   sources: ReadonlyMap<string, CardSource>;
   /** Cards with at least one valid translation entry, by stableUid. */
@@ -84,6 +86,7 @@ type CachedDeck = { key: string; index: Promise<InstalledDeckIndex> };
 const cache: CachedDeck[] = [];
 
 function buildIndex(text: string): InstalledDeckIndex {
+  const frontHelp = new Map<string, FrontHelpEntry[]>();
   const sources = new Map<string, CardSource>();
   const translations = new Map<string, CardTranslations>();
   const parsed: unknown = JSON.parse(text);
@@ -91,12 +94,14 @@ function buildIndex(text: string): InstalledDeckIndex {
   const cards = isRecord(parsed) && Array.isArray(parsed.cards) ? parsed.cards : [];
   for (const card of cards) {
     if (!isRecord(card) || typeof card.stableUid !== 'string') continue;
+    const help = parseFrontHelp(card.frontHelp);
+    if (help?.length) frontHelp.set(card.stableUid, help);
     const source = parseCardSource(card.source);
     if (source) sources.set(card.stableUid, source);
     const translated = parseCardTranslations(card.translations);
     if (translated) translations.set(card.stableUid, translated);
   }
-  return { sources, translations };
+  return { sources, translations, frontHelp };
 }
 
 /** Reads the installed index; callers choose whether to surface failures. */

@@ -8,6 +8,7 @@
 // after Revision only when present — the worker writes them with
 // WhenWritingNull, Translations last.
 
+import type { FrontHelpEntry } from './frontHelp';
 import type { Card } from '../types/card';
 import type { Deck } from '../types/deck';
 import type { McqBlob } from '../types/mcq';
@@ -27,6 +28,7 @@ export type DeckExportPreviewCard = {
   Topic?: string;
   Mcq?: McqBlob;
   Translations?: CardTranslations;
+  FrontHelp?: FrontHelpEntry[];
 };
 
 export type DeckExportPreview = {
@@ -120,6 +122,7 @@ export function buildDeckExportPreview(deck: Deck, cards: Card[]): DeckExportPre
       card.Translations = translations as CardTranslations;
     }
 
+    if (c.frontHelp?.length) card.FrontHelp = c.frontHelp;
     return card;
   });
 

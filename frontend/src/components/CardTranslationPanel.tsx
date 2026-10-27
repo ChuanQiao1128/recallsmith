@@ -1,3 +1,4 @@
+import { CardFrontHelp } from './CardFrontHelp';
 // src/components/CardTranslationPanel.tsx
 //
 // The card's built-in Simplified Chinese translation, read-only, on the Edit
@@ -25,6 +26,7 @@ const CHIP: Record<TranslationState, { label: string; className: string }> = {
 
 type ZhEntry = {
   question?: unknown;
+  frontHelp?: unknown;
   explanation?: unknown;
   realWorldUsage?: unknown;
   mcq?: { qualifier?: unknown; options?: Record<string, { text?: unknown; why?: unknown } | undefined> } | null;
@@ -91,6 +93,7 @@ export function CardTranslationPanel({ card, deck }: { card: Card; deck: Deck })
             <div data-testid="card-translation-question" className="whitespace-pre-wrap text-slate-800">
               {text(zh.question) ?? '—'}
             </div>
+            <CardFrontHelp help={zh.frontHelp} lang="zh-CN" />
           </div>
 
           {mcq ? (

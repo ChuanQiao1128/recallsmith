@@ -1,3 +1,4 @@
+import { parseFrontHelp } from './frontHelp';
 // mobile/src/content/deckRepository.ts
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -396,6 +397,7 @@ type RawDeckJsonV1 = {
   cards: Array<{
     stableUid: string;
     question: string;
+    frontHelp?: unknown;
     explanation?: string | null;
     codeSnippet?: string | null;
     codeLanguage?: string | null;
@@ -419,6 +421,7 @@ type RawDeckJsonFlat = {
   cards: Array<{
     stableUid: string;
     question: string;
+    frontHelp?: unknown;
     explanation?: string | null;
     codeSnippet?: string | null;
     codeLanguage?: string | null;
@@ -1699,6 +1702,7 @@ function mapRawDeckV1ToDeckExport(raw: RawDeckJsonV1): DeckExport {
       typeof c.version === 'number' && Number.isFinite(c.version) && c.version > 0 ? c.version : 1;
 
     return {
+      ...(parseFrontHelp(c.frontHelp)?.length ? { FrontHelp: parseFrontHelp(c.frontHelp) } : {}),
       StableUid: c.stableUid,
       Question: c.question,
       Explanation: c.explanation ?? null,
@@ -1760,6 +1764,7 @@ function mapRawDeckFlatToDeckExport(raw: RawDeckJsonFlat): DeckExport {
       typeof c.version === 'number' && Number.isFinite(c.version) && c.version > 0 ? c.version : 1;
 
     return {
+      ...(parseFrontHelp(c.frontHelp)?.length ? { FrontHelp: parseFrontHelp(c.frontHelp) } : {}),
       StableUid: c.stableUid,
       Question: c.question,
       Explanation: c.explanation ?? null,

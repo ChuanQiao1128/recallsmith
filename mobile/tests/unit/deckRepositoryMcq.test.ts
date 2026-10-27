@@ -148,6 +148,9 @@ const PLAN_CARD_1_MCQ = {
   shuffle: true,
   qualifier: 'LEAST operational overhead',
 };
+const FRONT_HELP = [{ term: 'latency', definition: 'Time until a response arrives.' }];
+const ZH_HELP = [{ term: '延迟', definition: '收到响应所需的时间。' }];
+const TRANSLATIONS = { 'zh-CN': { v: 1, question: '延迟衡量什么？', explanation: '收到响应所需的时间。', frontHelp: ZH_HELP } };
 const STEM = 'An order API runs on Amazon EC2 instances behind an Application Load Balancer.';
 const EXPLANATION = 'Put an SQS standard queue between the API and fulfilment and scale the fulfilment fleet on queue depth.';
 
@@ -299,7 +302,7 @@ beforeEach(() => {
 describe('deckRepository · mcq', () => {
   it('passes a server mcq blob through both mappers untouched', async () => {
     const flatCards = [
-      { stableUid: 'm1', question: STEM, explanation: EXPLANATION, difficulty: 2, orderInDeck: 1540, topic: 'Queues', mcq: PLAN_CARD_1_MCQ },
+      { stableUid: 'm1', question: STEM, explanation: EXPLANATION, difficulty: 2, orderInDeck: 1540, topic: 'Queues', mcq: PLAN_CARD_1_MCQ, frontHelp: FRONT_HELP, translations: TRANSLATIONS },
       { stableUid: 'q1', question: 'Q1', orderInDeck: 1550 },
     ];
     seed({ slug: 'algo', title: 'Algo', locale: 'en-US', deckType: 1, version: 'v1', cards: flatCards });
@@ -307,6 +310,8 @@ describe('deckRepository · mcq', () => {
     const flatDeck = await flatRepo.resolveDeckBySlug('algo');
 
     const assertSix = (deck: Awaited<ReturnType<typeof flatRepo.resolveDeckBySlug>>) => {
+      expect(deck!.Cards[0].FrontHelp).toEqual(FRONT_HELP);
+      expect(deck!.Cards[1]).not.toHaveProperty('FrontHelp');
       expect(deck!.Cards[0].Mcq).toEqual(PLAN_CARD_1_MCQ);
       expect(JSON.stringify(deck!.Cards[0].Mcq)).toBe(JSON.stringify(PLAN_CARD_1_MCQ));
       expect(deck!.Cards[0].Topic).toBe('Queues');
@@ -431,7 +436,7 @@ describe('deckRepository · mcq', () => {
 
   it('keeps mcq through a chunked install', async () => {
     const specs: ChunkSpec[] = [
-      { seq: 1, cards: [{ ...card('m1', 1540), mcq: PLAN_CARD_1_MCQ }, card('q1', 1550)] },
+      { seq: 1, cards: [{ ...card('m1', 1540), mcq: PLAN_CARD_1_MCQ, frontHelp: FRONT_HELP, translations: TRANSLATIONS }, card('q1', 1550)] },
     ];
     registerPackageAndChunks(specs);
 
@@ -441,9 +446,12 @@ describe('deckRepository · mcq', () => {
     expect(res).toEqual({ ok: true, cardCount: 2 });
 
     const written = JSON.parse(files.get(DECK_FILE)!);
+    expect(written.cards[0].frontHelp).toEqual(FRONT_HELP);
+    expect(written.cards[0].translations).toEqual(TRANSLATIONS);
     expect(written.cards[0].mcq).toEqual(PLAN_CARD_1_MCQ);
     expect(JSON.stringify(written.cards[0].mcq)).toBe(JSON.stringify(PLAN_CARD_1_MCQ));
     expect('mcq' in written.cards[1]).toBe(false);
+    expect(written.cards[1]).not.toHaveProperty('frontHelp');
 
     store.set(CACHE_KEY, JSON.stringify(manifestJson({ version: 'v2', buildId: 'v2', path: 'decks/algo/builds/v2/deck.json' })));
     store.set(
@@ -452,6 +460,11 @@ describe('deckRepository · mcq', () => {
     );
     const { resolveDeckBySlug } = await loadRepo();
     const deck = await resolveDeckBySlug('algo');
+    expect(deck!.Cards[0].FrontHelp).toEqual(FRONT_HELP);
+    const { getInstalledDeckIndex } = await import('../../src/content/installedDeckIndex');
+    const index = await getInstalledDeckIndex('algo');
+    expect(index?.frontHelp.get('m1')).toEqual(FRONT_HELP);
+    expect(index?.translations.get('m1')?.['zh-CN']?.frontHelp).toEqual(ZH_HELP);
     expect(deck!.Cards[0].Mcq).toEqual(PLAN_CARD_1_MCQ);
     expect(deck!.Cards[1].Mcq).toBe(null);
   });
@@ -468,7 +481,7 @@ describe('deckRepository · mcq', () => {
         totalCards: 2,
         cards: [
           { stableUid: 'q1', question: 'Q1', orderInDeck: 1 },
-          { stableUid: 'm2', question: 'Q2', orderInDeck: 2, mcq: PLAN_CARD_1_MCQ },
+          { stableUid: 'm2', question: 'Q2', orderInDeck: 2, mcq: PLAN_CARD_1_MCQ, frontHelp: FRONT_HELP },
         ],
       }),
     );
@@ -484,7 +497,7 @@ describe('deckRepository · mcq', () => {
       fromVersion: 'v1',
       toVersion: 'v2',
       deck: { slug: 'algo', title: 'Algo', locale: 'en-US', deckType: 1, version: 'v2', totalCards: 3 },
-      added: [{ stableUid: 'm3', question: STEM, orderInDeck: 3, mcq: PLAN_CARD_1_MCQ }],
+      added: [{ stableUid: 'm3', question: STEM, orderInDeck: 3, mcq: PLAN_CARD_1_MCQ, frontHelp: FRONT_HELP, translations: TRANSLATIONS }],
       updated: [{ stableUid: 'm2', question: 'Q2 now plain', orderInDeck: 2 }],
       deleted: [],
     });
@@ -510,10 +523,14 @@ describe('deckRepository · mcq', () => {
     expect(written.version).toBe('v2');
     expect(written.cards.map((c: { stableUid: string }) => c.stableUid)).toEqual(['q1', 'm2', 'm3']);
     expect('mcq' in written.cards[1]).toBe(false);
+    expect(written.cards[1]).not.toHaveProperty('frontHelp');
+    expect(written.cards[2].frontHelp).toEqual(FRONT_HELP);
+    expect(written.cards[2].translations).toEqual(TRANSLATIONS);
     expect(written.cards[2].mcq).toEqual(PLAN_CARD_1_MCQ);
     expect(JSON.stringify(written.cards[2].mcq)).toBe(JSON.stringify(PLAN_CARD_1_MCQ));
 
     const deck = await repo.resolveDeckBySlug('algo');
+    expect(deck!.Cards[2].FrontHelp).toEqual(FRONT_HELP);
     expect(deck!.Cards[2].Mcq).toEqual(PLAN_CARD_1_MCQ);
     expect(deck!.Cards[1].Mcq).toBe(null);
     expect(deck!.Cards[0].Mcq).toBe(null);

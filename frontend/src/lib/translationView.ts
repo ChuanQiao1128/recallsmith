@@ -6,6 +6,7 @@
 // React. The face follows the app's rule (contract §5): a card whose
 // translation is incomplete is shown wholly in English, never mixed.
 
+import type { FrontHelpEntry } from './frontHelp';
 import type { Card } from '../types/card';
 import type { Deck } from '../types/deck';
 import type { McqBlob } from '../types/mcq';
@@ -17,10 +18,11 @@ export type TranslationState = 'missing' | 'stale' | 'ok';
 
 export type DisplayLang = 'en' | TranslationLocale;
 
-type TranslatableCard = Pick<Card, 'question' | 'explanation' | 'realWorldUsage' | 'translations' | 'translationStatus'>;
+type TranslatableCard = Pick<Card, 'question' | 'explanation' | 'realWorldUsage' | 'translations' | 'translationStatus' | 'frontHelp'>;
 
 function englishOf(card: TranslatableCard): TranslationEnglish {
   return {
+    frontHelp: card.frontHelp,
     question: card.question ?? '',
     explanation: card.explanation ?? '',
     realWorldUsage: card.realWorldUsage ?? null,
@@ -120,6 +122,7 @@ export interface FaceOption {
 }
 
 export interface CardFace {
+  frontHelp?: FrontHelpEntry[] | null;
   lang: DisplayLang;
   /** Chinese was asked for, but the card has no complete translation, so the face is English. */
   fellBack: boolean;
@@ -133,11 +136,12 @@ export interface CardFace {
 
 /** The text of a card in one language. `english` is the card as stored; `translations` its wire map. */
 export function cardFace(
-  english: { question: string; explanation: string | null; realWorldUsage: string | null; mcq: McqBlob | null },
+  english: { frontHelp?: FrontHelpEntry[] | null; question: string; explanation: string | null; realWorldUsage: string | null; mcq: McqBlob | null },
   translations: unknown,
   lang: DisplayLang,
 ): CardFace {
   const englishFace: CardFace = {
+    ...(english.frontHelp?.length ? { frontHelp: english.frontHelp } : {}),
     lang: 'en',
     fellBack: false,
     question: english.question,
@@ -155,6 +159,7 @@ export function cardFace(
     validateTranslation({
       translations: { [lang]: entry },
       english: {
+        frontHelp: english.frontHelp,
         question: english.question,
         explanation: english.explanation ?? '',
         realWorldUsage: english.realWorldUsage,
@@ -166,12 +171,14 @@ export function cardFace(
   // validateTranslation passed, so every field below has the shape it names.
   const zh = entry as {
     question: string;
+    frontHelp?: FrontHelpEntry[] | null;
     explanation?: string;
     realWorldUsage?: string;
     mcq?: { qualifier: string | null; options: Record<string, { text: string; why: string | null }> } | null;
   };
   return {
     lang,
+    ...(zh.frontHelp?.length ? { frontHelp: zh.frontHelp } : {}),
     fellBack: false,
     question: zh.question,
     explanation: zh.explanation ?? null,

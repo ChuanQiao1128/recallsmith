@@ -111,6 +111,8 @@ export function localizeForDisplay(input: LocalizeInput): LocalizedCardDisplay {
     if (hasText(card.Explanation) && !hasText(translation.explanation)) return english;
     if (hasText(card.RealWorldUsage) && !hasText(translation.realWorldUsage)) return english;
 
+    if ((card.FrontHelp?.length ?? 0) !== (translation.frontHelp?.length ?? 0)) return english;
+
     let displayMcq: McqExport | null = null;
     let displayOrder: readonly McqOption[] = shownOrder;
     if (mcq) {
@@ -129,6 +131,7 @@ export function localizeForDisplay(input: LocalizeInput): LocalizedCardDisplay {
     return {
       card: {
         ...card,
+        ...(card.FrontHelp?.length ? { FrontHelp: translation.frontHelp } : {}),
         Question: translation.question,
         Explanation: hasText(card.Explanation) ? translation.explanation : card.Explanation,
         RealWorldUsage: hasText(card.RealWorldUsage) ? (translation.realWorldUsage as string) : card.RealWorldUsage,

@@ -1,3 +1,4 @@
+import type { FrontHelpEntry } from '../lib/frontHelp';
 // src/types/translation.ts
 //
 // The console's copy of a card's built-in translations (card translations
@@ -24,6 +25,7 @@ export interface TranslatedMcq {
 
 export interface CardTranslation {
   v: 1;
+  frontHelp?: FrontHelpEntry[] | null;
   question: string;
   /** Present when the English explanation is non-empty (always, for a valid card). */
   explanation?: string;

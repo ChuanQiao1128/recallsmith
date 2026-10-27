@@ -1,3 +1,4 @@
+import type { FrontHelpEntry } from '../content/frontHelp';
 // mobile/src/types/deckExport.ts
 
 export interface DeckExport {
@@ -13,6 +14,7 @@ export interface DeckExport {
 }
 
 export interface CardExport {
+  FrontHelp?: FrontHelpEntry[] | null;
   StableUid: string;
   Revision?: number; // ✅ Phase 0: 内容版本号（整数递增），改题/修订时+1
   Question: string;
