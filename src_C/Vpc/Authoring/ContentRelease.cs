@@ -90,8 +90,8 @@ public static partial class ContentRelease
         var receipt=Required(b,"receiptId"); var reason=Required(b,"reason",1000);
         var n=await DbUtil.ExecuteAsync(conn,tx,"insert into content_review_revocations(receipt_id,reason,actor_sub) select id,$4,$5 from content_review_receipts where id=$1 and deck_id=$2 and release_id=$3 on conflict do nothing",[receipt,id,releaseId,reason,auth.UserSub]);
         if(n==0 && await DbUtil.ExecuteScalarAsync(conn,tx,"select 1 from content_review_receipts where id=$1 and deck_id=$2 and release_id=$3",[receipt,id,releaseId]) is null)return res.BadRequest("RECEIPT_NOT_FOUND","Receipt does not belong to release/deck");
-        await DbUtil.ExecuteAsync(conn,tx,"update decks set release_generation=release_generation+1 where id=$1",[id]);
-        await DbUtil.ExecuteAsync(conn,tx,"update deck_publishes set status='FAILED',error_message='REVIEW_REVOKED',updated_at=now() where deck_id=$1 and status in('PENDING','PROCESSING')",[id]);
+        await DbUtil.ExecuteAsync(conn,tx,"update decks d set release_generation=release_generation+1 where id=$1 and exists(select 1 from deck_publishes p where p.deck_id=d.id and p.release_receipt_id=$2 and p.release_generation=d.release_generation and p.status in('PENDING','PROCESSING'))",[id,receipt]);
+        await DbUtil.ExecuteAsync(conn,tx,"update deck_publishes set status='FAILED',error_message='REVIEW_REVOKED',updated_at=now() where deck_id=$1 and release_receipt_id=$2 and status in('PENDING','PROCESSING')",[id,receipt]);
         result=res.Ok(new{receiptId=receipt,revoked=true,editingDatabaseRestored=false});
       }
       else if(req.Path.EndsWith("/review",StringComparison.OrdinalIgnoreCase))

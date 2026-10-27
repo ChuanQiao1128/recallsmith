@@ -44,6 +44,80 @@ public sealed class ContentReleaseTests(PostgresFixture db)
   private static Task<APIGatewayProxyResponse> AuthoringPublish(object body)=>Vpc.Authoring.Publish.HandleAuthoringPublish(Request("POST","/api/v1/authoring/publish",body),new Res("test"),Admin);
   private static async Task<NpgsqlConnection> Open(){var c=await Pg.OpenConnectionOrNullAsync();Assert.NotNull(c);return c!;}
 
+  [Theory]
+  [InlineData(false)]
+  [InlineData(true)]
+  public async Task Revoking_Older_Receipt_Preserves_Current_Receipt_Job(bool processing)
+  {
+    try{
+      var id=await Deck();var initial=await Snapshot(id);Data(await Import(id,initial.GetProperty("editingSnapshot").GetString()!));var snap=await Snapshot(id);
+      var old=await Review(id,snap);
+      var current=Data(await ContentRelease.Handle(Request("POST","/api/v1/authoring/release/review",Receipt(id,snap,"current-review")),new Res("test"),Admin)).GetProperty("receiptId").GetString()!;
+      var job=await Publish(id,snap,current);var jid=job.GetProperty("jobId").GetString()!;var repo=new JobRepository();
+      if(processing)Assert.True(await repo.TryAcquireJobAsync(jid));
+      await using var c=await Open();var generation=await DbUtil.ExecuteScalarAsync(c,null,"select release_generation from decks where id=$1",[id]);
+      async Task Revoke(string receipt,string action)=>Data(await ContentRelease.Handle(Request("POST","/api/v1/authoring/release/review/revoke",new{deckId=id,releaseId="release-test",actionId=action,receiptId=receipt,reason="receipt cleanup"}),new Res("test"),Admin));
+      await Revoke(old,"revoke-old");await Revoke(old,"revoke-old-again");
+      Assert.Equal(generation,await DbUtil.ExecuteScalarAsync(c,null,"select release_generation from decks where id=$1",[id]));
+      Assert.Equal(processing?"PROCESSING":"PENDING",await DbUtil.ExecuteScalarAsync(c,null,"select status from deck_publishes where job_id=$1",[jid]));
+      Assert.Equal(false,await DbUtil.ExecuteScalarAsync(c,null,"select exists(select 1 from content_review_revocations where receipt_id=$1)",[current]));
+      if(processing)await ContentReleaseFence.ValidateJob(c,jid);
+      await Revoke(current,"revoke-current");
+      Assert.Equal(Convert.ToInt64(generation)+1,await DbUtil.ExecuteScalarAsync(c,null,"select release_generation from decks where id=$1",[id]));
+      Assert.Equal("FAILED",await DbUtil.ExecuteScalarAsync(c,null,"select status from deck_publishes where job_id=$1",[jid]));
+      await Assert.ThrowsAsync<InvalidOperationException>(()=>ContentReleaseFence.ValidateJob(c,jid));
+      Assert.False(await repo.TryAcquireJobAsync(jid));await repo.CompleteJobAsync(jid,1);
+      Assert.Null(await DbUtil.ExecuteScalarAsync(c,null,"select live_build_id from decks where id=$1",[id]));
+    }finally{Vpc.Authoring.Publish.TestEnqueueSeam=null;await Restore();}
+  }
+
+  [Theory]
+  [InlineData(false)]
+  [InlineData(true)]
+  public async Task Publish_Send_Retry_Reuses_Committed_Job_And_Duplicate_Worker_Fences(bool acceptedBeforeFailure)
+  {
+    try{
+      var id=await Deck();var initial=await Snapshot(id);Data(await Import(id,initial.GetProperty("editingSnapshot").GetString()!));var snap=await Snapshot(id);var receipt=await Review(id,snap);
+      var body=new{deckId=id,releaseId="release-test",actionId="retry-publish",expectedEditingSnapshot=snap.GetProperty("editingSnapshot").GetString(),expectedLive=(string?)null,receiptId=receipt};
+      var sends=new List<string>();var accepted=new List<string>();
+      Vpc.Authoring.Publish.TestEnqueueSeam=new("test-queue","test-bucket",message=>{
+        var jid=JsonDocument.Parse(message.MessageBody).RootElement.GetProperty("jobId").GetString()!;sends.Add(jid);
+        if(sends.Count<=2){if(acceptedBeforeFailure)accepted.Add(jid);throw new IOException(acceptedBeforeFailure?"accepted but response lost":"failed before acceptance");}
+        accepted.Add(jid);return Task.CompletedTask;
+      });
+      await using var c=await Open();
+      for(var attempt=0;attempt<2;attempt++)
+      {
+        var failed=await AuthoringPublish(body);Assert.Equal(503,failed.StatusCode);Assert.Contains("PUBLISH_DISPATCH_UNCONFIRMED",failed.Body);
+        Assert.Equal(1L,await DbUtil.ExecuteScalarAsync(c,null,"select count(*) from deck_publishes where deck_id=$1",[id]));
+        Assert.Equal(1L,await DbUtil.ExecuteScalarAsync(c,null,"select release_generation from decks where id=$1",[id]));
+      }
+      var query=new LambdaRequest(JsonSerializer.SerializeToElement(new{rawPath="/api/v1/authoring/release/actions",requestContext=new{http=new{method="GET"}},queryStringParameters=new{deckId=id.ToString(),releaseId="release-test",actionId="retry-publish"}}));
+      var observed=Data(await ContentRelease.Handle(query,new Res("test"),Admin));
+      Assert.False(observed.GetProperty("manifestVerified").GetBoolean());
+      var committed=JsonDocument.Parse(observed.GetProperty("action").GetProperty("body").GetString()!).RootElement.GetProperty("data");
+      Assert.Equal("committed",committed.GetProperty("outcome").GetString());
+      var jobId=committed.GetProperty("jobId").GetString()!;
+      Assert.Equal("PENDING",observed.GetProperty("jobs")[0].GetProperty("status").GetString());
+      var queued=Data(await AuthoringPublish(body));Assert.Equal("queued",queued.GetProperty("outcome").GetString());Assert.Equal(jobId,queued.GetProperty("jobId").GetString());
+      Data(await AuthoringPublish(body));Assert.Equal(4,sends.Count);Assert.All(sends,j=>Assert.Equal(jobId,j));Assert.All(accepted,j=>Assert.Equal(jobId,j));
+      Assert.Equal(1L,await DbUtil.ExecuteScalarAsync(c,null,"select count(*) from content_release_actions where kind='publish' and deck_id=$1",[id]));
+      Assert.Equal(1L,await DbUtil.ExecuteScalarAsync(c,null,"select count(*) from deck_publishes where deck_id=$1",[id]));
+      Assert.Equal(1L,await DbUtil.ExecuteScalarAsync(c,null,"select release_generation from decks where id=$1",[id]));
+      var repo=new JobRepository();Assert.True(await repo.TryAcquireJobAsync(jobId));Assert.False(await repo.TryAcquireJobAsync(jobId));
+      Assert.Equal("processing",Data(await AuthoringPublish(body)).GetProperty("outcome").GetString());Assert.Equal(4,sends.Count);
+      await DbUtil.ExecuteAsync(c,null,"update deck_publishes set content_sha256=$2,content_bytes=100 where job_id=$1",[jobId,new string('a',64)]);
+      await repo.CompleteJobAsync(jobId,1);Assert.False(await repo.TryAcquireJobAsync(jobId));await repo.CompleteJobAsync(jobId,1);
+      var done=Data(await AuthoringPublish(body));Assert.Equal("success",done.GetProperty("outcome").GetString());Assert.False(done.GetProperty("manifestVerified").GetBoolean());Assert.Equal(4,sends.Count);
+      Assert.Equal(queued.GetProperty("buildId").GetString(),await DbUtil.ExecuteScalarAsync(c,null,"select live_build_id from decks where id=$1",[id]));
+      var replacement=await Publish(id,snap,receipt,"replacement",queued.GetProperty("buildId").GetString());
+      var generation=await DbUtil.ExecuteScalarAsync(c,null,"select release_generation from decks where id=$1",[id]);
+      Assert.Equal("success",Data(await AuthoringPublish(body)).GetProperty("outcome").GetString());
+      Assert.Equal(generation,await DbUtil.ExecuteScalarAsync(c,null,"select release_generation from decks where id=$1",[id]));
+      Assert.Equal("PENDING",await DbUtil.ExecuteScalarAsync(c,null,"select status from deck_publishes where job_id=$1",[replacement.GetProperty("jobId").GetString()]));
+    }finally{Vpc.Authoring.Publish.TestEnqueueSeam=null;await Restore();}
+  }
+
   [Fact]
   public async Task Import_Cas_Replay_Revision_And_DeletedUid()
   {
