@@ -19,6 +19,12 @@ if (args.Length > 0 && args[0] == "lock-child")
     catch (IOException) { return 73; }
 }
 
+if (args.Length > 0 && args[0] == "controller-child")
+{
+    Environment.SetEnvironmentVariable("WORKBENCH_CodexPath", args[2]);
+    return await WorkbenchCli.RunAsync(["exec", "--control-root", args[1], "--prompt", args[3], "--schema", args[4], "--output", args[5], "--run", args[6], "--timeout-seconds", "5"]);
+}
+
 var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evidence/workbench-canary", "tests-" + Guid.NewGuid().ToString("N"));
 Wire.PrivateDirectory(root);
 var fixture = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../fixtures/fake-codex.py"));
@@ -113,6 +119,72 @@ Test("bounded_capture_terminates_overproducing_process", async () =>
     var result = await Executor().ExecuteAsync(Request("oversize"));
     Check(result.Failure == FailureKind.Protocol && result.ExitCode is not null, "Unbounded capture or lost exit.");
 });
+Test("result_file_budget_is_enforced_during_execution_without_unbounded_hash", async () =>
+{
+    var result = await Executor(Settings(10)).ExecuteAsync(Request("oversize_result"));
+    Check(!result.Success && result.Failure == FailureKind.Protocol && result.OutputHash is null && result.OutputBytes is > 1_000_000 and <= 1_000_001, "Result transport escaped bounded budget or was fully hashed.");
+    Check(result.ElapsedMs < 5000 && !File.Exists(Path.Combine(result.AttemptDirectory, "result.json")), "Oversize result was accepted or timeout was required.");
+    var sparse = Path.Combine(root, "large-sparse-file");
+    using (var file = File.Create(sparse)) file.SetLength(1_000_000_000);
+    var allocated = GC.GetAllocatedBytesForCurrentThread();
+    Check(Wire.BoundedHashFile(sparse, 1_000_000, out var bytes) is null && bytes == 1_000_000_000, "Bounded hash accepted huge file.");
+    Check(GC.GetAllocatedBytesForCurrentThread() - allocated < 32_000, "Bounded hash allocated the file contents.");
+});
+Test("cli_leader_exit_still_cleans_descendants_and_inherited_pipes", async () =>
+{
+    var heartbeat = Path.Combine(root, "parent-exits.heartbeat");
+    var result = await Executor(Settings(10)).ExecuteAsync(Request("parent_exits", heartbeat));
+    Check(!result.Success && result.Failure == FailureKind.Environment && result.ExitCode == 0 && result.ElapsedMs < 5000, "Exited leader masked surviving descendants.");
+    if (File.Exists(heartbeat)) { var value = File.ReadAllText(heartbeat); await Task.Delay(200); Check(File.ReadAllText(heartbeat) == value, "Orphan descendant survived process-group cleanup."); }
+    Check(!File.Exists(Path.Combine(result.AttemptDirectory, "worker-active.json")), "Cleaned worker activity marker remained.");
+});
+Test("controller_crash_blocks_takeover_while_worker_lives_then_refuses_replay", async () =>
+{
+    var run = "controller-crash"; var heartbeat = Path.Combine(root, "controller-crash.heartbeat");
+    var promptPath = Path.Combine(root, "controller-crash.prompt"); var schemaPath = Path.Combine(root, "controller-crash.schema");
+    await File.WriteAllTextAsync(promptPath, Request("sleep", heartbeat).Prompt); await File.WriteAllTextAsync(schemaPath, schema);
+    var output = Path.Combine(root, "controller-crash-attempt"); var runPath = Path.Combine(root, "runs", run); var active = Path.Combine(runPath, "worker-active.json");
+    using var controller = Child("controller-child", root, fixture, promptPath, schemaPath, output, run);
+    var clock = Stopwatch.StartNew(); while (!File.Exists(heartbeat) && clock.Elapsed < TimeSpan.FromSeconds(5)) await Task.Delay(20);
+    Check(File.Exists(heartbeat), "Controller worker did not start.");
+    var owner = JsonSerializer.Deserialize<Owner>(File.ReadAllText(Path.Combine(runPath, "owner.json")), Wire.Json)!;
+    controller.Kill(); await controller.WaitForExitAsync(); // Kill controller only; worker host/CLI intentionally remain alive.
+    var before = File.ReadAllText(heartbeat); await Task.Delay(150);
+    Check(File.Exists(active) && File.ReadAllText(heartbeat) != before, "Worker was not alive after controller crash.");
+    Throws<ReconciliationRequiredException>(() => RunLedger.Acquire(root, run));
+    Check(await WorkbenchCli.RunAsync(["resume", "--control-root", root, "--run", run]) == 2, "Resume took over a live worker.");
+    Check(JsonSerializer.Deserialize<Owner>(File.ReadAllText(Path.Combine(runPath, "owner.json")), Wire.Json)!.Generation == owner.Generation, "Rejected takeover advanced owner generation.");
+    clock.Restart(); while (File.Exists(active) && clock.Elapsed < TimeSpan.FromSeconds(7)) await Task.Delay(30);
+    Check(!File.Exists(active), "Independent host deadline did not clean up crashed controller's worker.");
+    var stopped = File.ReadAllText(heartbeat); await Task.Delay(150); Check(File.ReadAllText(heartbeat) == stopped, "Crashed controller left a live descendant.");
+    using var recovered = RunLedger.Acquire(root, run);
+    Check(recovered.State.Nodes["model"].Attempts == 1, "Recovery reset model attempt count.");
+    await ThrowsAsync<ReconciliationRequiredException>(() => recovered.ReconcileAsync(new LocalEvidenceReconciler()));
+    Throws<ReconciliationRequiredException>(() => recovered.PrepareAction("model", "model", recovered.State.Actions["model"].PayloadHash));
+});
+foreach (var preflightPhase in new[] { "version", "login" })
+foreach (var stopKind in new[] { "caller", "deadline", "internal_cap" })
+{
+    Test("preflight_" + preflightPhase + "_" + stopKind + "_classification", async () =>
+    {
+        var ready = Path.Combine(root, preflightPhase + "-" + stopKind + ".ready");
+        var fakePath = Path.Combine(root, preflightPhase + "-" + stopKind + "-codex.py");
+        var original = await File.ReadAllTextAsync(fixture);
+        var line = preflightPhase == "version" ? "    print('codex-cli 0.155.1')" : "    print('Logged in using ChatGPT', file=sys.stderr)";
+        await File.WriteAllTextAsync(fakePath, original.Replace(line, "    pathlib.Path(" + JsonSerializer.Serialize(ready) + ").write_text('ready')\n    time.sleep(30)\n" + line));
+        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(fakePath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var settings = Settings(stopKind == "deadline" ? 1 : stopKind == "internal_cap" ? 25 : 10); settings.CodexPath = fakePath;
+        using var cts = new CancellationTokenSource();
+        var running = Executor(settings).ExecuteAsync(Request(), cts.Token);
+        var clock = Stopwatch.StartNew(); while (!File.Exists(ready) && clock.Elapsed < TimeSpan.FromSeconds(5)) await Task.Delay(20);
+        Check(File.Exists(ready), "Preflight test never reached requested phase.");
+        if (stopKind == "caller") cts.Cancel();
+        var result = await running;
+        var expected = stopKind == "caller" ? FailureKind.Cancelled : stopKind == "deadline" ? FailureKind.Timeout : FailureKind.PreflightTimeout;
+        Check(!result.Success && result.Failure == expected && result.Phase == preflightPhase && result.ExitCode is null, $"Preflight {preflightPhase}/{stopKind} misclassified as {result.Failure}.");
+        Check(!File.Exists(Path.Combine(result.AttemptDirectory, "invocation.json")), "Cancelled preflight started a model execution.");
+    });
+}
 Test("adapter_contract_rejects_roles_tools_options_and_buffers_stream", async () =>
 {
     using var doc = JsonDocument.Parse(schema);
@@ -124,6 +196,8 @@ Test("adapter_contract_rejects_roles_tools_options_and_buffers_stream", async ()
     await ThrowsAsync<NotSupportedException>(() => adapter.GetResponseAsync([new ChatMessage(ChatRole.User, "a")], new ChatOptions { ResponseFormat = options.ResponseFormat, Tools = [] }));
     await ThrowsAsync<NotSupportedException>(() => adapter.GetResponseAsync([new ChatMessage(ChatRole.User, "a")]));
     await ThrowsAsync<NotSupportedException>(() => adapter.GetResponseAsync([new ChatMessage(ChatRole.User, "a") { AuthorName = "unsupported" }], options));
+    await ThrowsAsync<NotSupportedException>(() => adapter.GetResponseAsync([new ChatMessage(ChatRole.User, "a")], new ChatOptions { ResponseFormat = ChatResponseFormat.ForJsonSchema(doc.RootElement, "unsupported_name") }));
+    await ThrowsAsync<NotSupportedException>(() => adapter.GetResponseAsync([new ChatMessage(ChatRole.User, "a")], new ChatOptions { ResponseFormat = ChatResponseFormat.ForJsonSchema(doc.RootElement, schemaDescription: "unsupported_description") }));
     Check(fake.Calls == 0, "Rejected request invoked model.");
     var updates = new List<ChatResponseUpdate>();
     await foreach (var update in adapter.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "frozen")], options)) { Check(fake.Completed, "Partial stream leaked."); updates.Add(update); }

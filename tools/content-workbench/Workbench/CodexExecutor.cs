@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Runtime.InteropServices;
 using Json.Schema;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -15,6 +16,7 @@ public sealed class CodexExecutor(IOptions<WorkbenchOptions> options, ILogger<Co
     public async Task<ExecutionResult> ExecuteAsync(FrozenRequest request, CancellationToken cancellationToken = default)
     {
         settings.Validate();
+        if (!OperatingSystem.IsMacOS()) throw new PlatformNotSupportedException("The bounded process host is currently validated for macOS only.");
         if (string.IsNullOrWhiteSpace(request.Prompt) || request.Prompt.Length > 60_000) throw new ArgumentException("Frozen input must contain 1..60000 characters.");
         var schema = Wire.ParseSchema(request.Schema);
         var attempt = settings.AttemptDirectory ?? Path.Combine(settings.ControlRoot, "attempts", Guid.NewGuid().ToString("N"));
@@ -30,37 +32,50 @@ public sealed class CodexExecutor(IOptions<WorkbenchOptions> options, ILogger<Co
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(settings.TimeoutSeconds));
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
         var failure = FailureKind.None; int? exit = null; string? output = null; string? outputHash = null;
-        string? reportedModel = null; long? inputTokens = null; long? outputTokens = null;
+        string? reportedModel = null; long? inputTokens = null; long? outputTokens = null; var phase = "version";
+        var activityPath = settings.WorkerActivityPath ?? Path.Combine(attempt, "worker-active.json");
+        RequireChildPath(settings.ControlRoot, activityPath);
+        TimeSpan Remaining() => TimeSpan.FromSeconds(Math.Max(.01, settings.TimeoutSeconds - watch.Elapsed.TotalSeconds));
+        async Task<ProcessCapture> Preflight(ProcessStartInfo info)
+        {
+            using var cap = CancellationTokenSource.CreateLinkedTokenSource(linked.Token); cap.CancelAfter(TimeSpan.FromSeconds(20));
+            var capture = await RunProcessAsync(info, "", null, cap.Token, TimeSpan.FromSeconds(Math.Min(20, Remaining().TotalSeconds)), activityPath);
+            if (capture.Cancelled || cap.IsCancellationRequested)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (deadline.IsCancellationRequested || watch.Elapsed.TotalSeconds >= settings.TimeoutSeconds) throw new OperationCanceledException(linked.Token);
+                throw new ExecutionFailure(FailureKind.PreflightTimeout);
+            }
+            return capture;
+        }
         try
         {
             var versionInfo = StartInfo(workspace); versionInfo.ArgumentList.Add("--version");
-            using var versionLimit = CancellationTokenSource.CreateLinkedTokenSource(linked.Token); versionLimit.CancelAfter(TimeSpan.FromSeconds(20));
-            var version = await RunProcessAsync(versionInfo, "", null, versionLimit.Token);
+            var version = await Preflight(versionInfo);
             var cliVersion = version.Stdout.Trim();
             if (version.ExitCode != 0 || version.CaptureFailed || cliVersion != "codex-cli 0.155.1") throw new ExecutionFailure(FailureKind.Environment);
             var loginInfo = StartInfo(workspace);
             loginInfo.ArgumentList.Add("login"); loginInfo.ArgumentList.Add("status");
-            using var loginLimit = CancellationTokenSource.CreateLinkedTokenSource(linked.Token); loginLimit.CancelAfter(TimeSpan.FromSeconds(20));
-            ProcessCapture login;
-            try { login = await RunProcessAsync(loginInfo, "", null, loginLimit.Token); }
-            catch (OperationCanceledException) when (!linked.IsCancellationRequested) { throw new ExecutionFailure(FailureKind.Environment); }
+            phase = "login";
+            var login = await Preflight(loginInfo);
             if (login.CaptureFailed) throw new ExecutionFailure(FailureKind.Environment);
             if (login.ExitCode != 0 || !(login.Stdout + login.Stderr).Contains("ChatGPT", StringComparison.OrdinalIgnoreCase) || (login.Stdout + login.Stderr).Contains("API key", StringComparison.OrdinalIgnoreCase))
                 throw new ExecutionFailure(FailureKind.Authentication);
             var info = StartInfo(workspace);
-            foreach (var arg in new[] { "exec", "--ignore-user-config", "--ignore-rules", "--strict-config", "--skip-git-repo-check", "--ephemeral", "--json", "--color", "never", "-C", workspace, "-m", settings.Model, "--output-schema", schemaPath, "-o", Path.Combine(attempt, "result.tmp"), "-" }) info.ArgumentList.Add(arg);
+            foreach (var arg in new[] { "exec", "--ignore-user-config", "--ignore-rules", "--strict-config", "--skip-git-repo-check", "--ephemeral", "--json", "--color", "never", "-C", workspace, "-m", settings.Model, "--output-schema", schemaPath, "-o", Path.Combine(attempt, "result.pipe"), "-" }) info.ArgumentList.Add(arg);
             var config = RestrictedConfig(workspace);
             foreach (var (key, value) in config) { info.ArgumentList.Add("-c"); info.ArgumentList.Add(key + "=" + value); }
             Wire.AtomicJson(Path.Combine(attempt, "invocation.json"), new
             {
                 requestedModel = settings.Model, requestedEffort = "high", auth = "chatgpt", inputHash = Wire.Hash(request.Prompt), schemaHash = Wire.Hash(request.Schema),
-                cli = settings.CodexPath, cliVersion, runnerAssemblyHash = Wire.HashFile(typeof(CodexExecutor).Assembly.Location), args = info.ArgumentList.ToArray(), config, environmentNames = info.Environment.Keys.Order().ToArray(), startedUtc = DateTimeOffset.UtcNow
+                cli = settings.CodexPath, cliVersion, runnerAssemblyHash = Wire.HashFile(typeof(CodexExecutor).Assembly.Location), processHostHash = Wire.HashFile(Path.Combine(AppContext.BaseDirectory, "unix-process-host.py")), args = info.ArgumentList.ToArray(), config, environmentNames = info.Environment.Keys.Order().ToArray(), startedUtc = DateTimeOffset.UtcNow
             });
-            var capture = await RunProcessAsync(info, request.Prompt, attempt, linked.Token);
+            phase = "execution";
+            var capture = await RunProcessAsync(info, request.Prompt, attempt, linked.Token, Remaining(), activityPath);
             exit = capture.ExitCode;
-            if (capture.CaptureFailed) throw new ExecutionFailure(FailureKind.Environment);
-            if (capture.Cancelled) throw new OperationCanceledException(linked.Token);
             if (capture.LimitExceeded) throw new ExecutionFailure(FailureKind.Protocol);
+            if (capture.Cancelled) throw new OperationCanceledException(linked.Token);
+            if (capture.CaptureFailed) throw new ExecutionFailure(FailureKind.Environment);
             if (capture.ExitCode != 0) throw new ExecutionFailure(ClassifyProviderFailure(capture.Stdout + capture.Stderr, FailureKind.ProcessExit));
             var events = ParseEvents(capture.Stdout);
             if (events.Failure != FailureKind.None) throw new ExecutionFailure(ClassifyProviderFailure(capture.Stdout + capture.Stderr, events.Failure));
@@ -68,7 +83,7 @@ public sealed class CodexExecutor(IOptions<WorkbenchOptions> options, ILogger<Co
             var resultPath = Path.Combine(attempt, "result.tmp");
             if (!File.Exists(resultPath) || new FileInfo(resultPath).Length > 1_000_000) throw new ExecutionFailure(FailureKind.Protocol);
             output = await File.ReadAllTextAsync(resultPath, linked.Token);
-            outputHash = Wire.Hash(output);
+            outputHash = Wire.HashFile(resultPath);
             JsonNode? result;
             try
             {
@@ -87,11 +102,12 @@ public sealed class CodexExecutor(IOptions<WorkbenchOptions> options, ILogger<Co
         catch (TimeoutException) { failure = FailureKind.Environment; }
         // Failed or partial results remain private evidence and are never returned as usable content.
         var temporaryResult = Path.Combine(attempt, "result.tmp");
-        if (outputHash is null && File.Exists(temporaryResult)) outputHash = Wire.HashFile(temporaryResult);
+        long? outputBytes = output is null ? null : Encoding.UTF8.GetByteCount(output);
+        if (File.Exists(temporaryResult)) { var hash = Wire.BoundedHashFile(temporaryResult, 1_000_000, out var bytes); outputHash ??= hash; outputBytes = bytes; }
         var resultRecord = new ExecutionResult(failure == FailureKind.None, failure, exit, attempt, Wire.Hash(request.Prompt), Wire.Hash(request.Schema), outputHash,
             settings.Model, reportedModel, inputTokens, outputTokens, watch.ElapsedMilliseconds, failure == FailureKind.None ? output : null,
             File.Exists(Path.Combine(attempt, "events.jsonl")) ? Wire.HashFile(Path.Combine(attempt, "events.jsonl")) : null,
-            File.Exists(Path.Combine(attempt, "stderr.log")) ? Wire.HashFile(Path.Combine(attempt, "stderr.log")) : null);
+            File.Exists(Path.Combine(attempt, "stderr.log")) ? Wire.HashFile(Path.Combine(attempt, "stderr.log")) : null, outputBytes, phase);
         Wire.AtomicJson(Path.Combine(attempt, "execution.json"), resultRecord with { Output = null });
         if (!resultRecord.Success) Wire.AtomicJson(Path.Combine(attempt, "failure.json"), resultRecord with { Output = null });
         WorkbenchTelemetry.Record(activity, failure, watch.ElapsedMilliseconds);
@@ -124,13 +140,37 @@ public sealed class CodexExecutor(IOptions<WorkbenchOptions> options, ILogger<Co
         foreach (var flag in new[] { "shell_tool", "shell_snapshot", "apps", "plugins", "hooks", "multi_agent", "browser_use", "browser_use_external", "computer_use", "view_image", "memories", "skill_search", "request_permissions_tool", "unbounded_connection_retries" }) config["features." + flag] = "false";
         return config;
     }
-    private sealed record ProcessCapture(int ExitCode, string Stdout, string Stderr, bool Cancelled, bool LimitExceeded, bool CaptureFailed);
-    private static async Task<ProcessCapture> RunProcessAsync(ProcessStartInfo info, string input, string? directory, CancellationToken token)
+    private sealed record ProcessCapture(int? ExitCode, string Stdout, string Stderr, bool Cancelled, bool LimitExceeded, bool CaptureFailed);
+    private sealed record HostStatus(int? CliExitCode, string Reason);
+    [DllImport("libc", SetLastError = true)]
+    private static extern int kill(int pid, int signal);
+    private static async Task<ProcessCapture> RunProcessAsync(ProcessStartInfo info, string input, string? directory, CancellationToken token, TimeSpan budget, string activityPath)
     {
-        using var child = Process.Start(info) ?? throw new IOException("Cannot start CLI.");
-        var cancelled = false; var limit = false; var captureFailed = false;
-        void Kill() { try { if (!child.HasExited) child.Kill(entireProcessTree: true); } catch (InvalidOperationException) { } }
-        using var registration = token.Register(Kill);
+        var hostScript = Path.Combine(AppContext.BaseDirectory, "unix-process-host.py");
+        var identity = Guid.NewGuid().ToString("N"); var statusPath = activityPath + "." + identity + ".exit.json";
+        if (File.Exists(activityPath)) throw new IOException("Worker lifecycle remains active or unresolved.");
+        Wire.AtomicJson(activityPath, new { token = identity, phase = "starting" });
+        var host = new ProcessStartInfo("/usr/bin/python3") { WorkingDirectory = info.WorkingDirectory, UseShellExecute = false, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
+        host.Environment.Clear(); foreach (var pair in info.Environment) host.Environment[pair.Key] = pair.Value;
+        foreach (var arg in new[] { "-I", "-u", hostScript, activityPath, identity, statusPath, budget.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture), directory is null ? "" : Path.Combine(directory, "result.tmp"), "--", info.FileName }) host.ArgumentList.Add(arg);
+        foreach (var arg in info.ArgumentList) host.ArgumentList.Add(arg);
+        Process child;
+        try { child = Process.Start(host) ?? throw new IOException("Cannot start process host."); }
+        catch { File.Delete(activityPath); throw; }
+        using var childLifetime = child;
+        var limit = false; var captureFailed = false;
+        void Stop() { try { File.WriteAllText(statusPath + ".stop", "stop"); Wire.PrivateFile(statusPath + ".stop"); } catch (IOException) { } }
+        void KillGroup()
+        {
+            try
+            {
+                using var state = JsonDocument.Parse(File.ReadAllText(activityPath));
+                var record = state.RootElement;
+                if (record.GetProperty("token").GetString() == identity && record.TryGetProperty("processGroup", out var group) && group.TryGetInt32(out var id) && id > 1) kill(-id, 9);
+            }
+            catch (Exception e) when (e is IOException or JsonException or InvalidOperationException) { }
+        }
+        using var registration = token.Register(Stop);
         async Task<string> Capture(StreamReader reader, string name)
         {
             var content = new StringBuilder();
@@ -141,22 +181,34 @@ public sealed class CodexExecutor(IOptions<WorkbenchOptions> options, ILogger<Co
                 var buffer = new char[4096]; int n;
                 while ((n = await reader.ReadAsync(buffer)) > 0)
                 {
-                    if (content.Length + n > 8_000_000) { limit = true; Kill(); break; }
+                    if (content.Length + n > 8_000_000) { limit = true; Stop(); break; }
                     content.Append(buffer, 0, n);
                     if (writer is not null) { await writer.WriteAsync(buffer.AsMemory(0, n)); await writer.FlushAsync(); }
                 }
             }
-            catch (Exception e) when (e is IOException or ObjectDisposedException or UnauthorizedAccessException) { captureFailed = true; Kill(); }
+            catch (Exception e) when (e is IOException or ObjectDisposedException or UnauthorizedAccessException) { captureFailed = true; Stop(); }
             return content.ToString();
         }
         var stdout = Capture(child.StandardOutput, "events.jsonl"); var stderr = Capture(child.StandardError, "stderr.log");
-        try { await child.StandardInput.WriteAsync(input.AsMemory(), token); child.StandardInput.Close(); await child.WaitForExitAsync(token); }
-        catch (OperationCanceledException) { cancelled = true; Kill(); }
-        catch (IOException) { Kill(); captureFailed = !token.IsCancellationRequested; cancelled = token.IsCancellationRequested; }
-        finally { if (!child.HasExited) { Kill(); await child.WaitForExitAsync(); } }
-        try { await Task.WhenAll(stdout, stderr).WaitAsync(TimeSpan.FromSeconds(10)); }
-        catch (Exception e) when (e is IOException or TimeoutException or ObjectDisposedException) { captureFailed = true; Kill(); }
-        return new(child.ExitCode, stdout.IsCompletedSuccessfully ? stdout.Result : "", stderr.IsCompletedSuccessfully ? stderr.Result : "", cancelled || token.IsCancellationRequested, limit, captureFailed);
+        try { await child.StandardInput.WriteAsync(input.AsMemory(), token); child.StandardInput.Close(); }
+        catch (OperationCanceledException) { Stop(); }
+        catch (IOException) { if (!token.IsCancellationRequested) captureFailed = true; Stop(); }
+        try { await child.WaitForExitAsync().WaitAsync(budget + TimeSpan.FromSeconds(3)); }
+        catch (TimeoutException)
+        {
+            captureFailed = true; Stop(); KillGroup();
+            if (!child.HasExited) child.Kill();
+            await child.WaitForExitAsync();
+        }
+        try { await Task.WhenAll(stdout, stderr).WaitAsync(TimeSpan.FromSeconds(2)); }
+        catch (Exception e) when (e is IOException or TimeoutException or ObjectDisposedException)
+        {
+            captureFailed = true; KillGroup();
+            child.StandardOutput.Dispose(); child.StandardError.Dispose();
+        }
+        var status = File.Exists(statusPath) ? JsonSerializer.Deserialize<HostStatus>(File.ReadAllText(statusPath), new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) : null;
+        return new(status?.CliExitCode, stdout.IsCompletedSuccessfully ? stdout.Result : "", stderr.IsCompletedSuccessfully ? stderr.Result : "",
+            token.IsCancellationRequested || status?.Reason == "watchdog_timeout", limit || status?.Reason == "result_limit", captureFailed || status is null || status.Reason is "orphaned_descendants" or "cleanup_unknown" or "result_transport_changed");
     }
     private sealed class ExecutionFailure(FailureKind kind) : Exception { public FailureKind Kind { get; } = kind; }
     private sealed record EventSummary(FailureKind Failure, string? Model, long? InputTokens, long? OutputTokens, string? FinalMessage);

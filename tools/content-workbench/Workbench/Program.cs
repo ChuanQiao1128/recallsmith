@@ -45,6 +45,7 @@ public static class WorkbenchCli
             {
                 var runId = values.GetValueOrDefault("run") ?? (command == "exec" ? "exec-" + Wire.Hash(Path.GetFullPath(Required("output")))[..24] : throw new ArgumentException("--run is required."));
                 using var ledger = RunLedger.Acquire(settings.ControlRoot, runId);
+                settings.WorkerActivityPath = Path.Combine(ledger.DirectoryPath, "worker-active.json");
                 if (command == "resume")
                 {
                     await ledger.ReconcileAsync(new LocalEvidenceReconciler(), cancel.Token);

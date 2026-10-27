@@ -57,6 +57,7 @@ public sealed class RunLedger : IDisposable
         try
         {
             Wire.PrivateFile(Path.Combine(directory, "controller.lock"));
+            if (File.Exists(Path.Combine(directory, "worker-active.json"))) throw new ReconciliationRequiredException("A prior worker is active or has not proved cleanup; refusing controller takeover.");
             var previous = File.Exists(ownerPath) ? Read<Owner>(ownerPath).Generation : 0;
             State = File.Exists(statePath) ? Read<RunState>(statePath) : new RunState { RunId = runId };
             if (State.SchemaVersion != 1 || State.RunId != runId || previous < State.Generation) throw new InvalidDataException("Ledger identity/version/owner mismatch.");

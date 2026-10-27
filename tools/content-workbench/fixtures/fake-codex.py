@@ -17,10 +17,11 @@ def event(value):
     print(json.dumps(value), flush=True)
 event({'type': 'thread.started', 'thread_id': 'fake'})
 event({'type': 'turn.started'})
-if mode in ('sleep', 'cancel'):
+if mode in ('sleep', 'cancel', 'parent_exits'):
     heartbeat = prompt['heartbeat']
     child = subprocess.Popen([sys.executable, '-c', 'import pathlib,time,sys\np=pathlib.Path(sys.argv[1])\nwhile True:\n p.write_text(str(time.time()))\n time.sleep(.05)', heartbeat])
     pathlib.Path(heartbeat + '.pid').write_text(str(child.pid))
+    if mode == 'parent_exits': sys.exit(0)
     time.sleep(30)
 elif mode == 'quota':
     event({'type': 'error', 'message': 'usage limit reached; reset unknown'})
@@ -32,6 +33,9 @@ elif mode == 'malformed':
     sys.exit(0)
 elif mode == 'tool':
     event({'type': 'item.completed', 'item': {'type': 'command_execution', 'command': 'forbidden'}})
+elif mode == 'oversize_result':
+    out.write_bytes(b'x' * 16000000)
+    time.sleep(30)
 elif mode == 'oversize':
     print('x' * 8001000, flush=True)
     sys.exit(0)

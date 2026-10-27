@@ -34,8 +34,9 @@ public sealed class CodexChatClient(ICodexExecutor executor, IOptions<WorkbenchO
             throw new NotSupportedException("Exactly one user message containing one frozen text is supported; system/assistant/tool roles and multimodal content are rejected.");
         if (list[0].AuthorName is not null || list[0].CreatedAt is not null || list[0].MessageId is not null || list[0].RawRepresentation is not null || list[0].AdditionalProperties is not null || text.RawRepresentation is not null || text.AdditionalProperties is not null)
             throw new NotSupportedException("Message/content metadata cannot be represented by the frozen stdin contract.");
-        if (chatOptions is null || chatOptions.ResponseFormat is not ChatResponseFormatJson { Schema: { } schema })
+        if (chatOptions is null || chatOptions.ResponseFormat is not ChatResponseFormatJson { Schema: { } schema } format)
             throw new NotSupportedException("An explicit JSON schema response format is required.");
+        if (!string.IsNullOrEmpty(format.SchemaName) || !string.IsNullOrEmpty(format.SchemaDescription)) throw new NotSupportedException("Schema name/description cannot be represented by the frozen stdin contract.");
         if (chatOptions.ModelId is not null && chatOptions.ModelId != options.Value.Model) throw new NotSupportedException("Model overrides are disabled.");
         // Fail closed for every present/future option this adapter cannot actually honor.
         foreach (var property in typeof(ChatOptions).GetProperties())

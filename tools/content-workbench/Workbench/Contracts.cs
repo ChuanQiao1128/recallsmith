@@ -12,6 +12,7 @@ public sealed class WorkbenchOptions
     public string CodexPath { get; set; } = "/opt/homebrew/bin/codex";
     public string? AttemptDirectory { get; set; }
     public string? WorkspaceRoot { get; set; }
+    public string? WorkerActivityPath { get; set; }
     public string Model { get; set; } = "gpt-6-sol";
     public int TimeoutSeconds { get; set; } = 300;
     public string? OtlpEndpoint { get; set; }
@@ -26,11 +27,11 @@ public sealed class WorkbenchOptions
     }
 }
 
-public enum FailureKind { None, Cancelled, Timeout, Authentication, Quota, Environment, ProcessExit, Protocol, Schema, ToolBoundary }
+public enum FailureKind { None, Cancelled, Timeout, PreflightTimeout, Authentication, Quota, Environment, ProcessExit, Protocol, Schema, ToolBoundary }
 public sealed record FrozenRequest(string Prompt, string Schema);
 public sealed record ExecutionResult(bool Success, FailureKind Failure, int? ExitCode, string AttemptDirectory,
     string InputHash, string SchemaHash, string? OutputHash, string RequestedModel, string? ReportedModel,
-    long? InputTokens, long? OutputTokens, long ElapsedMs, string? Output, string? EventsHash = null, string? StderrHash = null);
+    long? InputTokens, long? OutputTokens, long ElapsedMs, string? Output, string? EventsHash = null, string? StderrHash = null, long? OutputBytes = null, string? Phase = null);
 public interface ICodexExecutor
 {
     Task<ExecutionResult> ExecuteAsync(FrozenRequest request, CancellationToken cancellationToken = default);
@@ -43,7 +44,25 @@ public static class Wire
 {
     public static readonly JsonSerializerOptions Json = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase, Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower) } };
     public static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
-    public static string HashFile(string path) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
+    public static string HashFile(string path)
+    {
+        using var stream = File.OpenRead(path);
+        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+    }
+    public static string? BoundedHashFile(string path, long maximumBytes, out long bytes)
+    {
+        using var stream = File.OpenRead(path); bytes = stream.Length;
+        if (bytes > maximumBytes) return null;
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[8192]; long consumed = 0; int count;
+        while ((count = stream.Read(buffer)) > 0)
+        {
+            consumed += count;
+            if (consumed > maximumBytes) { bytes = Math.Max(stream.Length, consumed); return null; }
+            hash.AppendData(buffer, 0, count);
+        }
+        bytes = consumed; return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+    }
     public static void PrivateDirectory(string path)
     {
         Directory.CreateDirectory(path);
