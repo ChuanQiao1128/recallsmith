@@ -54,6 +54,8 @@ beforeEach(async () => {
   deck = { Slug: slug, Title: 'AWS', Locale: 'en', Version: 'course-1', DeckType: 1, IsFreeStarter: true, TotalCards: 12, FreeCardCount: 12,
     Cards: Array.from({ length: 12 }, (_, i) => ({ StableUid: `c${i + 1}`, OrderInDeck: i + 1, Question: `Q${i + 1}`, Difficulty: i === 11 ? 3 : 1, Revision: 1 })).reverse() };
   seed();
+  store.set('devcards:content:manifest:v2', JSON.stringify({ decks: [{ slug, availability: 'live' }, { slug: 'other', availability: 'live' }] }));
+  store.set(`devcards:content:deckmeta:v2:user-a:${slug}`, JSON.stringify({ buildId: deck.Version, fileUri: 'file:///aws.json' }));
 });
 describe('ordered-v1 selection and accounting', () => {
   it('new user gets earliest cards regardless of rarity or pity, leaving pity unchanged', async () => {
@@ -179,7 +181,7 @@ describe('lifecycle and account fences', () => {
     invalidateActiveUserSubCache(); store.set('devcards:auth:activeUserSub:v1', 'user-a');
     const g = barrier(); let once = true; onRead = async k => { if (k === 'devcards:auth:activeUserSub:v1' && once) { once = false; await g.block(); } };
     const pending = acquireDraw(slug, 1, { deck }); await g.reached; setActiveUserSubForStorage('user-b'); g.release();
-    expect((await pending).spent).toBe(0); expect(writes).toEqual([]);
+    await expect(pending).rejects.toThrow(); expect(writes).toEqual([]);
   });
   it('wallet reward queued during sync CAS is retained', async () => {
     const g = barrier(); let once = true; let applying = false;

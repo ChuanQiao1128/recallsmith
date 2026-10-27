@@ -1,3 +1,4 @@
+import { isInstalledDrawDeckEligibleUnderLock } from '../../../content/deckEligibility';
 import { captureProgressUserSub } from '../../../review/storage';
 import { purchaseDeckCards } from '../rewards/deckWallet';
 import { withDrawStateLock, drawStateGeneration } from './drawStateLock';
@@ -9,9 +10,10 @@ export async function acquireDraw(slug: string, requested: number, options?: Com
   const generation = drawStateGeneration();
   const userSub = await captureProgressUserSub(true);
   const deck = await resolveDrawDeck(slug, options?.deck);
-  const scopeCurrent = async () => generation === drawStateGeneration() && await captureProgressUserSub(true) === userSub;
+  const scopeCurrent = async () => generation === drawStateGeneration() && await captureProgressUserSub(true) === userSub
+    && await isInstalledDrawDeckEligibleUnderLock(slug, userSub, deck?.Version);
   return withDrawStateLock(async () => {
-    if (!await scopeCurrent()) throw new Error('Account changed; retry opening the pack');
+    if (!await scopeCurrent()) throw new Error('Account or installed deck changed; retry opening the pack');
     return purchaseDeckCards(slug, requested, userSub, count => commitDrawUnderLock(slug, count, { ...options, deck, scopeCurrent }, userSub), scopeCurrent);
   });
 }

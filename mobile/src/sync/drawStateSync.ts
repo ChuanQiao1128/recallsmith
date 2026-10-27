@@ -1,3 +1,4 @@
+import { readDeckEligibilityUnderLock } from '../content/deckEligibility';
 import { withDrawStateLock, drawStateGeneration } from '../features/gacha/draw/drawStateLock';
 // mobile/src/sync/drawStateSync.ts
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -491,6 +492,7 @@ export async function syncDrawStateNow(accessToken: string | null): Promise<Draw
 
       const applied = await withDrawStateLock(async () => {
         if (!await scopeCurrent()) return false;
+        if (await readDeckEligibilityUnderLock(slug) !== 'active') return true;
         const current = await loadDrawStateUnderLock(slug, userSub, true);
         if (!await scopeCurrent()) return false;
         const mergedOwned = unionOwned(current.owned, remoteOwned);
@@ -525,6 +527,8 @@ export async function syncDrawStateNow(accessToken: string | null): Promise<Draw
 
         stamps.decks[slug] = nextStamp;
 
+        if (await readDeckEligibilityUnderLock(slug) !== 'active') return true;
+        if (!await scopeCurrent()) return false;
         if (ownedGrew || pityChanged) {
           await saveDrawStateUnderLock(slug, { owned: mergedOwned, pity: nextPity }, userSub);
           if (ownedGrew) appliedOwned += mergedOwned.length - current.owned.length;
@@ -547,7 +551,7 @@ export async function syncDrawStateNow(accessToken: string | null): Promise<Draw
           };
           let accepted = false;
           const updated = await updateDeckWallet(slug, async currentPulls => {
-            if (!await scopeCurrent() || !sameWallet(currentPulls, pushedPulls)) return null;
+            if (!await scopeCurrent() || await readDeckEligibilityUnderLock(slug) !== 'active' || !sameWallet(currentPulls, pushedPulls)) return null;
             accepted = true;
             return sameWallet(currentPulls, adoptedPulls) ? null : adoptedPulls;
           }, userSub);

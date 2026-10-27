@@ -1,3 +1,4 @@
+import { MANIFEST_CACHE_KEY, DECK_META_PREFIX, sanitizeUserKey } from './deckEligibility';
 import { withDrawStateLock, invalidateDrawStateOperations } from '../features/gacha/draw/drawStateLock';
 import { parseFrontHelp } from './frontHelp';
 // mobile/src/content/deckRepository.ts
@@ -35,11 +36,9 @@ const API_BASE_URL =
   'https://ktbq1sie2c.execute-api.ap-southeast-2.amazonaws.com';
 
 const MANIFEST_URL = joinUrl(CONTENT_BASE_URL, 'content', 'manifest.json');
-const MANIFEST_CACHE_KEY = 'devcards:content:manifest:v2';
 // ✅ Conditional GET: ETag stored in a SIBLING key — MANIFEST_CACHE_KEY must keep
 // holding the raw RawManifest JSON (other code/tests seed & read it directly).
 const MANIFEST_ETAG_KEY = 'devcards:content:manifestEtag:v1';
-const DECK_META_PREFIX = 'devcards:content:deckmeta:v2:'; // + userKey + ":" + slug
 
 // Runtime-safe "utf8" encoding without relying on FileSystem.EncodingType types
 const UTF8_ENCODING: any = (FileSystem as any)?.EncodingType?.UTF8 ?? 'utf8';
@@ -252,12 +251,6 @@ async function getIsPremiumUserWithServerFallback(): Promise<boolean> {
  * - deck files stored under: <docDir>/devcards-decks-v2/<userKey>/<slug>.json
  * - meta stored under: devcards:content:deckmeta:v2:<userKey>:<slug>
  */
-function sanitizeUserKey(s: string): string {
-  const x = String(s || 'anon').trim();
-  if (!x) return 'anon';
-  return x.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 80) || 'anon';
-}
-
 async function getCurrentUserKey(): Promise<string> {
   try {
     const session: any = await fetchAuthSession();

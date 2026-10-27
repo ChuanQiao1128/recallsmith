@@ -50,6 +50,7 @@ const progressKey = (slug: string) => `devcards:u:user-a:deck-progress:${slug}`;
 describe('per-pack pulls cloud sync', () => {
   beforeEach(async () => {
     store.clear();
+    store.set('devcards:content:manifest:v2', JSON.stringify({ decks: [{"slug": "aws", "availability": "live"}, {"slug": "csharp", "availability": "live"}] }));
     invalidateDrawStateCache();
     apiJson.mockReset();
     setActiveUserSubForStorage('user-a');

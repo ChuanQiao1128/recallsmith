@@ -61,6 +61,8 @@ const HISTORY_KEY = `${SCOPE}devcards:draw-history:${SLUG}`;
 const WALLET_KEY = `${SCOPE}recallsmith:deck-wallets:v1`;
 
 function seedWallet(availablePulls: number, reservePulls = 0): void {
+  store.set('devcards:content:manifest:v2', JSON.stringify({ decks: [{ slug: SLUG, availability: 'live' }] }));
+  store.set(`devcards:content:deckmeta:v2:anon:${SLUG}`, JSON.stringify({ buildId: '1', fileUri: 'file:///csharp.json' }));
   store.set(
     WALLET_KEY,
     JSON.stringify({
