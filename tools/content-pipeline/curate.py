@@ -402,6 +402,10 @@ def run(args):
         raise ValueError('Prepare curation inputs first')
     initial_revision = args.input_revision
     for batch in batches:
+        if (batch / 'verified.json').exists():
+            goals = verified_goals(batch)
+            print(canonical({'batch': batch.name, 'goals': len(goals['cards']), 'status': 'verified_reused'}), flush=True)
+            continue
         packet = load(batch / 'input.json')
         args.input_revision = initial_revision
         if initial_revision == 3 or (batch / 'repair-authorization.json').exists():
@@ -444,6 +448,12 @@ def run(args):
 
 def verified_goals(batch: Path) -> dict:
     verified = load(batch / 'verified.json')
+    if verified.get('mode') == 'adjudicated_existing_variants':
+        candidate, files = adjudicated_goals(batch, Path(verified['adjudicationReport']))
+        if (files != verified.get('files') or digest(canonical(candidate)) != verified.get('goalsHash') or
+                digest(canonical(load(batch / 'input.json'))) != verified.get('inputHash')):
+            raise ValueError('Adjudicated goal evidence changed')
+        return candidate
     revision = verified['inputRevision']
     if (revision not in {2, 3} or verified['generationAttempt'] != f'generate-r{revision}-attempt-1' or
             verified['reviewAttempt'] != f'review-r{revision}-attempt-1'):
@@ -467,6 +477,66 @@ def verified_goals(batch: Path) -> dict:
             review['verdict'] != 'PASS' or any(c['verdict'] != 'PASS' for c in review['cards'])):
         raise ValueError('Goal review binding changed')
     return candidate
+
+
+def adjudicated_goals(batch: Path, report_path: Path) -> tuple[dict, dict]:
+    """Select already-produced objects; no generation, edited review or budget reset."""
+    root = batch.parents[2].resolve()
+    report_path = report_path.resolve(strict=True)
+    if root / 'review' not in report_path.parents:
+        raise ValueError('Adjudication must be a local independent review artifact')
+    report = load(report_path)
+    if (report.get('reviewKind') != 'independent_existing_variant_scope_adjudication' or
+            report['scope']['batch'] != batch.name or report.get('reviewedBy') != 'codex' or
+            report['budget'].get('newGenerationAttempts') != 0 or report['budget'].get('budgetReset') is not False):
+        raise ValueError('Invalid existing-variant adjudication scope')
+    packet = load(batch / 'input.json')
+    variants, reviews, files = {}, {}, {}
+    for revision in (2, 3):
+        variants[revision] = completed_attempt(batch, f'generate-r{revision}-attempt-1',
+                                               generation_prompt(batch, revision), batch / 'generate.schema.json')
+        reviews[revision] = completed_attempt(batch, f'review-r{revision}-attempt-1',
+                                              review_prompt(batch, revision), batch / 'review.schema.json')
+        validate_goals(packet, variants[revision])
+        validate_review(packet, reviews[revision])
+        review_binding(batch, review_prompt(batch, revision), variants[revision])
+        files.update(final_binding(batch, revision))
+    for stage in ('generate', 'review'):
+        require_reconciled_revisions(batch, stage, 3, batch / f'{stage}-r3-attempt-1')
+    validate_repaired_goals(batch, variants[3])
+    selected = {g['stableUid']: g for g in variants[3]['cards']}
+    failed = {c['stableUid'] for c in reviews[3]['cards'] if c['verdict'] != 'PASS'}
+    decisions = report.get('selection', [])
+    if (len(decisions) != len(failed) or {d['stableUid'] for d in decisions} != failed or
+            set(report['scope']['uids']) != failed):
+        raise ValueError('Adjudication must cover exactly the unresolved goals')
+    old = {g['stableUid']: g for g in variants[2]['cards']}
+    for decision in decisions:
+        uid = decision['stableUid']
+        records = [r for r in report['records'] if r['stableUid'] == uid and r['variant'] == 'r2']
+        if len(records) != 1:
+            raise ValueError('One explicit existing-variant assessment required')
+        record = records[0]
+        if (decision.get('selectedVariant') != 'r2' or decision.get('decision') != 'SELECT_EXISTING_R2_UNCHANGED' or
+                record['verdict'] != 'PASS' or not record['checks'] or
+                any(c['verdict'] != 'PASS' for c in record['checks'].values()) or
+                record['candidateHash'] != digest((batch / 'generate-r2-attempt-1/result.json').read_bytes()) or
+                record['candidateObjectHash'] != digest(canonical(old[uid])) or
+                decision['candidateHash'] != record['candidateHash'] or
+                decision['selectedCandidateObjectHash'] != record['candidateObjectHash']):
+            raise ValueError('Selected object has no bound independent PASS')
+        for label, path in {'originalInput': batch / 'input.json',
+                            'candidateResult': batch / 'generate-r2-attempt-1/result.json',
+                            'generationPrompt': generation_prompt(batch, 2),
+                            'generationExecution': batch / 'generate-r2-attempt-1/execution.json',
+                            'reviewResult': batch / 'review-r2-attempt-1/result.json',
+                            'reviewPrompt': review_prompt(batch, 2),
+                            'reviewExecution': batch / 'review-r2-attempt-1/execution.json'}.items():
+            if record['bindings'][label]['sha256'] != digest(path.read_bytes()):
+                raise ValueError('Adjudication input binding changed')
+        selected[uid] = old[uid]
+    files['adjudication:' + str(report_path)] = digest(report_path.read_bytes())
+    return {'cards': [selected[g['stableUid']] for g in variants[3]['cards']]}, files
 
 
 def assemble(args):

@@ -8,7 +8,8 @@ import unittest
 
 from curate import (GOAL_SCHEMA, REVIEW_SCHEMA, build_review_prompt, completed_attempt, execute,
                     prepare_repair, require_reconciled_revisions, validate_goals,
-                    validate_repair_authorization, validate_repaired_goals, verified_goals, run)
+                    validate_repair_authorization, validate_repaired_goals, verified_goals, run,
+                    adjudicated_goals)
 from pipeline import canonical
 from pipeline import digest, save
 
@@ -276,6 +277,68 @@ class RepairTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'exhausted'):
                     run(args)
             invoke.assert_not_called()
+
+
+class AdjudicationTests(unittest.TestCase):
+    def fixture(self, root):
+        batch = root / 'curriculum/batches/01'
+        batch.mkdir(parents=True)
+        helper = RepairTests()
+        packet, old, review = helper.fixture(batch)
+        prepare_repair(batch)
+        revised = copy.deepcopy(old)
+        revised['cards'][1]['goalEn'] = 'A different service-specific objective'
+        helper.complete(batch, 'generate-r3-attempt-1', revised, batch / 'generate-r3.prompt.txt')
+        (batch / 'review-r3.prompt.txt').write_text(build_review_prompt(packet, revised))
+        helper.complete(batch, 'review-r3-attempt-1', review, batch / 'review-r3.prompt.txt')
+        ch = digest((batch / 'generate-r2-attempt-1/result.json').read_bytes())
+        oh = digest(canonical(old['cards'][1]))
+        paths = {'originalInput': batch / 'input.json',
+                 'candidateResult': batch / 'generate-r2-attempt-1/result.json',
+                 'generationPrompt': batch / 'generate.prompt.txt',
+                 'generationExecution': batch / 'generate-r2-attempt-1/execution.json',
+                 'reviewResult': batch / 'review-r2-attempt-1/result.json',
+                 'reviewPrompt': batch / 'review.prompt.txt',
+                 'reviewExecution': batch / 'review-r2-attempt-1/execution.json'}
+        report = {'reviewKind': 'independent_existing_variant_scope_adjudication',
+                  'scope': {'batch': '01', 'uids': ['b']}, 'reviewedBy': 'codex',
+                  'budget': {'newGenerationAttempts': 0, 'budgetReset': False},
+                  'selection': [{'stableUid': 'b', 'selectedVariant': 'r2',
+                      'decision': 'SELECT_EXISTING_R2_UNCHANGED', 'candidateHash': ch,
+                      'selectedCandidateObjectHash': oh}],
+                  'records': [{'stableUid': 'b', 'variant': 'r2', 'verdict': 'PASS',
+                      'checks': {'identity': {'verdict': 'PASS'}}, 'candidateHash': ch,
+                      'candidateObjectHash': oh,
+                      'bindings': {k: {'sha256': digest(p.read_bytes())} for k, p in paths.items()}}]}
+        path = root / 'review/adjudication/review.json'
+        save(path, report)
+        return batch, path, report, old
+
+    def test_selects_only_unchanged_existing_object_with_bound_pass(self):
+        with tempfile.TemporaryDirectory() as td:
+            batch, path, report, old = self.fixture(Path(td))
+            with patch('curate.subprocess.run') as invoke:
+                selected, files = adjudicated_goals(batch, path)
+            self.assertEqual(old, selected)
+            self.assertEqual(digest(path.read_bytes()), files['adjudication:' + str(path.resolve())])
+            invoke.assert_not_called()
+
+    def test_cannot_extend_scope_or_accept_failed_tampered_object(self):
+        for mutation in ('scope', 'failed_check', 'object', 'budget'):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as td:
+                batch, path, report, _ = self.fixture(Path(td))
+                if mutation == 'scope': report['scope']['uids'].append('a')
+                if mutation == 'failed_check': report['records'][0]['checks']['identity']['verdict'] = 'FAIL'
+                if mutation == 'object': report['records'][0]['candidateObjectHash'] = '0' * 64
+                if mutation == 'budget': report['budget']['budgetReset'] = True
+                save(path, report)
+                with self.assertRaises(ValueError): adjudicated_goals(batch, path)
+
+    def test_unknown_attempt_blocks_even_valid_existing_selection(self):
+        with tempfile.TemporaryDirectory() as td:
+            batch, path, _, _ = self.fixture(Path(td))
+            (batch / 'review-r1-attempt-1').mkdir()
+            with self.assertRaises(ValueError): adjudicated_goals(batch, path)
 
 
 if __name__ == '__main__':
