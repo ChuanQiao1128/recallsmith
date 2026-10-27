@@ -132,6 +132,21 @@ def review_status(root, corpus, uid):
         return {**base, 'state': 'not_verified'}
     from author import GENERATE, REVIEW, validate_card, validate_execution, validate_packet, validate_review
     receipt = read(root, folder / 'verified.json')
+    if receipt.get('mode') == 'batch-v1':
+        from batch_author import verify_record
+        catalogue = read(root, root / 'curriculum/catalogue.json')
+        corpus_data(corpus)
+        _, _, metadata = verify_record(root, corpus, catalogue, uid)
+        # Batch receipts point to the original shared executions, not invented per-card calls.
+        for key in ('generation', 'independentReview'):
+            output = local_file(root, root / metadata[key]['result'], max_bytes=2_000_000).parent
+            completed_events(root, output)
+        hashes = {key: digest(local_file(root, folder / name).read_bytes()) for key, name in (
+            ('packetHash', 'packet.json'), ('candidateHash', 'candidate.json'), ('reviewHash', 'review.json'))}
+        hashes.update(sharedGenerationHash=metadata['generation']['resultHash'],
+                      sharedReviewHash=metadata['independentReview']['resultHash'])
+        return {**base, 'state': 'model_reviewed', 'modelReview': 'PASS', 'hashes': hashes,
+                'reviewMode': 'batch-v1', 'corpusVersion': CORPUS_VERSION}
     generation, review_name = receipt.get('generationAttempt'), receipt.get('reviewAttempt')
     if generation not in {'generate-1', 'generate-2'} or review_name != generation.replace('generate', 'review'):
         raise ValueError('Invalid attempt binding')

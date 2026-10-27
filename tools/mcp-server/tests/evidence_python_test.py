@@ -134,6 +134,45 @@ class EvidenceBoundaryTests(unittest.TestCase):
         (folder / 'verified.json').write_text(json.dumps({'verdict': 'PASS', 'stableUid': 'aws-01'}))
         with self.assertRaises(ValueError): m.review_status(self.root, self.corpus, 'aws-01')
 
+    def test_batch_status_reopens_shared_execution_and_rejects_tampering(self):
+        # Synthetic transport; use the production batch verifier without dispatching a model.
+        from test_batch_author import BatchTests
+        import batch_author as b
+        case = BatchTests()
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        transport = case.transport
+        def completed_transport(args, folder, stage, attempt, prompt, schema):
+            value = transport(args, folder, stage, attempt, prompt, schema)
+            output = b.stage_path(case.root, case.batch['batchId'], stage)
+            events = '\n'.join(json.dumps(event) for event in [
+                {'type': 'item.completed', 'item': {'type': 'agent_message', 'text': json.dumps(value)}},
+                {'type': 'turn.completed'}])
+            (output / 'events.jsonl').write_text(events)
+            execution = m.load(output / 'execution.json')
+            execution['eventsHash'] = m.digest(events)
+            (output / 'execution.json').write_text(json.dumps(execution))
+            return value
+        with patch.object(b.author, 'invoke', side_effect=completed_transport):
+            result = b.run_batch(case.args, case.plan, case.batch, case.catalogue)
+        self.assertEqual(result['verdict'], 'PASS')
+        uid = case.batch['uids'][0]
+        with patch.object(m, 'corpus_data'):
+            status = m.review_status(case.root, case.args.corpus_root, uid)
+            self.assertEqual((status['modelReview'], status['reviewMode']), ('PASS', 'batch-v1'))
+            self.assertFalse(status['approvalGranted'])
+            self.assertFalse(status['humanPerCardReview'])
+            self.assertIn('sharedReviewHash', status['hashes'])
+            events_file = b.stage_path(case.root, case.batch['batchId'], 'review') / 'events.jsonl'
+            original_events = events_file.read_text()
+            events_file.write_text('incomplete')
+            with self.assertRaises(ValueError): m.review_status(case.root, case.args.corpus_root, uid)
+            events_file.write_text(original_events)
+            review_file = case.root / 'authoring' / uid / 'review.json'
+            review_file.write_text('{}')
+            with self.assertRaises(ValueError): m.review_status(case.root, case.args.corpus_root, uid)
+        self.assertEqual(2, len(case.calls))  # Only the synthetic initial generation and review.
+
 
 if __name__ == '__main__':
     unittest.main()
