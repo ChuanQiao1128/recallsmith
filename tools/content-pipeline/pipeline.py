@@ -247,46 +247,59 @@ def embed(args) -> None:
     print(canonical({'indexed': len(chunks), 'corpusVersion': manifest['corpusVersion']}))
 
 
+class EvidenceIndex:
+    """One verified immutable corpus and local embedding runtime per authoring batch."""
+    def __init__(self, root: Path, model_cache: Path, container: str):
+        from fastembed import TextEmbedding
+        from dc_evals.retrieval import BM25
+        self.manifest, chunks = verified_corpus(root)
+        index = load(root / 'corpus/index.json')
+        if (index['corpusVersion'] != self.manifest['corpusVersion'] or index['model'] != MODEL or
+                index['dimension'] != DIMENSION or index['chunkCount'] != len(chunks)):
+            raise ValueError('Stale index')
+        self.container = container
+        self.ids = {i: c['chunkId'] for i, c in enumerate(chunks)}
+        self.by_id = {c['chunkId']: c for c in chunks}
+        self.bm = BM25([c['title'] + '\n' + c['text'] for c in chunks])
+        self.model = TextEmbedding(model_name=MODEL, cache_dir=str(model_cache), threads=2)
+
+    def retrieve(self, query: str, strategy='rrf') -> dict:
+        if not query.strip() or len(query) > 800:
+            raise ValueError('A bounded learning-goal query is required')
+        manifest = self.manifest
+        from dc_evals.retrieval import tokenize, rrf
+        bm = self.bm.scores(tokenize(query))
+        bm_scores = {self.ids[i]: score for i, score in bm.items()}
+        vector = next(iter(self.model.embed([QUERY_PREFIX + query])))
+        rows = sql(self.container, 'SELECT chunk_id,1-(embedding <=> ' + literal(vector_text(vector)) + '::vector) '
+                   'FROM official_chunks WHERE corpus_version=' + literal(manifest['corpusVersion']) +
+                   ' ORDER BY embedding <=> ' + literal(vector_text(vector)) + '::vector,chunk_id LIMIT 40;')
+        vector_scores = {r.split('|')[0]: float(r.split('|')[1]) for r in rows.splitlines() if '|' in r}
+        if not vector_scores:
+            raise ValueError('Missing PostgreSQL corpus collection')
+        bm_scores = dict(sorted(bm_scores.items(), key=lambda x: (-x[1], x[0]))[:40])
+        scores = {'bm25': bm_scores, 'vector': vector_scores,
+                  'rrf': rrf([bm_scores, vector_scores])}[strategy]
+        ranked = sorted(scores, key=lambda k: (-scores[k], k))[:20]
+        selected, chars = [], 0
+        for cid in ranked:
+            c = self.by_id[cid]
+            if chars + len(c['text']) > 12000:
+                continue
+            selected.append(c)
+            chars += len(c['text'])
+            if len(selected) == 8:
+                break
+        packet = {'corpusVersion': manifest['corpusVersion'], 'query': query, 'strategy': strategy,
+                  'retrievalConfigVersion': 1, 'candidateRanks': [{'chunkId': cid, 'rank': n + 1,
+                  'score': scores[cid]} for n, cid in enumerate(ranked)], 'evidence': selected,
+                  'status': 'retrieved_not_semantically_validated'}
+        packet['evidenceHash'] = digest(canonical(packet))
+        return packet
+
+
 def retrieve(root: Path, query: str, model_cache: Path, container: str, strategy='rrf') -> dict:
-    from fastembed import TextEmbedding
-    from dc_evals.retrieval import BM25, tokenize, rrf
-    if not query.strip() or len(query) > 800:
-        raise ValueError('A bounded learning-goal query is required')
-    manifest, chunks = verified_corpus(root)
-    index = load(root / 'corpus/index.json')
-    if index['corpusVersion'] != manifest['corpusVersion'] or index['model'] != MODEL:
-        raise ValueError('Stale index')
-    ids = {i: c['chunkId'] for i, c in enumerate(chunks)}
-    by_id = {c['chunkId']: c for c in chunks}
-    bm = BM25([c['title'] + '\n' + c['text'] for c in chunks]).scores(tokenize(query))
-    bm_scores = {ids[i]: score for i, score in bm.items()}
-    model = TextEmbedding(model_name=MODEL, cache_dir=str(model_cache), threads=2)
-    vector = next(iter(model.embed([QUERY_PREFIX + query])))
-    rows = sql(container, 'SELECT chunk_id,1-(embedding <=> ' + literal(vector_text(vector)) + '::vector) '
-               'FROM official_chunks WHERE corpus_version=' + literal(manifest['corpusVersion']) +
-               ' ORDER BY embedding <=> ' + literal(vector_text(vector)) + '::vector,chunk_id LIMIT 40;')
-    vector_scores = {r.split('|')[0]: float(r.split('|')[1]) for r in rows.splitlines() if '|' in r}
-    if not vector_scores:
-        raise ValueError('Missing PostgreSQL corpus collection')
-    bm_scores = dict(sorted(bm_scores.items(), key=lambda x: (-x[1], x[0]))[:40])
-    scores = {'bm25': bm_scores, 'vector': vector_scores,
-              'rrf': rrf([bm_scores, vector_scores])}[strategy]
-    ranked = sorted(scores, key=lambda k: (-scores[k], k))[:20]
-    selected, chars = [], 0
-    for cid in ranked:
-        c = by_id[cid]
-        if chars + len(c['text']) > 12000:
-            continue
-        selected.append(c)
-        chars += len(c['text'])
-        if len(selected) == 8:
-            break
-    packet = {'corpusVersion': manifest['corpusVersion'], 'query': query, 'strategy': strategy,
-              'retrievalConfigVersion': 1, 'candidateRanks': [{'chunkId': cid, 'rank': n + 1,
-              'score': scores[cid]} for n, cid in enumerate(ranked)], 'evidence': selected,
-              'status': 'retrieved_not_semantically_validated'}
-    packet['evidenceHash'] = digest(canonical(packet))
-    return packet
+    return EvidenceIndex(root, model_cache, container).retrieve(query, strategy)
 
 
 def search(args) -> None:

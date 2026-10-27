@@ -1,0 +1,131 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "conceptId": {
+      "type": "string"
+    },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail",
+        "insufficient_evidence"
+      ]
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "necessaryScope": {
+          "type": "boolean"
+        },
+        "faithfulChinese": {
+          "type": "boolean"
+        },
+        "evidenceSupportsClaims": {
+          "type": "boolean"
+        },
+        "clearLearningQuestion": {
+          "type": "boolean"
+        },
+        "noUnsupportedExamClaims": {
+          "type": "boolean"
+        },
+        "noAnswerLeakage": {
+          "type": "boolean"
+        },
+        "faithfulHelp": {
+          "type": "boolean"
+        },
+        "goalRetained": {
+          "type": "boolean"
+        },
+        "beginnerReadable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "necessaryScope",
+        "faithfulChinese",
+        "evidenceSupportsClaims",
+        "clearLearningQuestion",
+        "noUnsupportedExamClaims",
+        "noAnswerLeakage",
+        "faithfulHelp",
+        "goalRetained",
+        "beginnerReadable"
+      ]
+    },
+    "claimChecks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "field": {
+            "type": "string",
+            "enum": [
+              "answer",
+              "reason",
+              "examPurpose",
+              "boundary",
+              "frontHelp"
+            ]
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "supported",
+              "unsupported",
+              "contradicted"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "field",
+          "verdict",
+          "reason"
+        ]
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": [
+              "blocker",
+              "major",
+              "minor"
+            ]
+          },
+          "field": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "severity",
+          "field",
+          "message"
+        ]
+      }
+    }
+  },
+  "required": [
+    "conceptId",
+    "verdict",
+    "checks",
+    "claimChecks",
+    "findings"
+  ]
+}

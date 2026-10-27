@@ -1,0 +1,182 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "conceptId": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "insufficient_evidence"
+      ]
+    },
+    "en": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "question": {
+          "type": "string"
+        },
+        "answer": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "examPurpose": {
+          "type": "string"
+        },
+        "boundary": {
+          "type": "string"
+        },
+        "frontHelp": {
+          "type": "array",
+          "maxItems": 2,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "term",
+              "definition"
+            ],
+            "properties": {
+              "term": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "definition": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 240
+              }
+            }
+          }
+        }
+      },
+      "required": [
+        "question",
+        "answer",
+        "reason",
+        "examPurpose",
+        "boundary",
+        "frontHelp"
+      ]
+    },
+    "zh": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "question": {
+          "type": "string"
+        },
+        "answer": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "examPurpose": {
+          "type": "string"
+        },
+        "boundary": {
+          "type": "string"
+        },
+        "frontHelp": {
+          "type": "array",
+          "maxItems": 2,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "term",
+              "definition"
+            ],
+            "properties": {
+              "term": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "definition": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 240
+              }
+            }
+          }
+        }
+      },
+      "required": [
+        "question",
+        "answer",
+        "reason",
+        "examPurpose",
+        "boundary",
+        "frontHelp"
+      ]
+    },
+    "primaryEvidenceId": {
+      "type": "string"
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "field": {
+            "type": "string",
+            "enum": [
+              "answer",
+              "reason",
+              "examPurpose",
+              "boundary",
+              "frontHelp"
+            ]
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "evidenceId": {
+                  "type": "string"
+                },
+                "quote": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "evidenceId",
+                "quote"
+              ]
+            }
+          }
+        },
+        "required": [
+          "field",
+          "evidence"
+        ]
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "conceptId",
+    "status",
+    "en",
+    "zh",
+    "primaryEvidenceId",
+    "claims",
+    "warnings"
+  ]
+}
