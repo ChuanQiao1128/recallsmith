@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export const MANIFEST_CACHE_KEY = 'devcards:content:manifest:v2';
+export const BUNDLED_STARTER_RECEIPT_PREFIX = 'devcards:content:bundled-starter:v1:';
 export const DECK_META_PREFIX = 'devcards:content:deckmeta:v2:';
 
 export function sanitizeUserKey(sub: string): string {
@@ -46,10 +47,15 @@ export async function isInstalledDrawDeckEligibleUnderLock(slug: string, userSub
     const { STARTER_PACKS } = await import('./starter');
     const pack = Object.prototype.hasOwnProperty.call(STARTER_PACKS, slug)
       ? STARTER_PACKS[slug as keyof typeof STARTER_PACKS] : null;
-    const trusted = meta.bundledStarter;
+    const receipt = await AsyncStorage.getItem(`${BUNDLED_STARTER_RECEIPT_PREFIX}${sanitizeUserKey(userSub)}:${slug}`);
+    if (!receipt) return false;
+    const trusted = JSON.parse(receipt);
+    const installId = meta.installId ?? null;
+    if (installId !== null && (typeof installId !== 'string' || !installId)) return false;
     return !!pack && meta.slug === slug && meta.buildId === pack.version
       && meta.fileUri.endsWith(`/devcards-decks-v2/${sanitizeUserKey(userSub)}/${slug}.json`)
-      && trusted?.userSub === userSub && trusted.buildId === meta.buildId && trusted.fileUri === meta.fileUri;
+      && trusted?.userSub === userSub && trusted.buildId === meta.buildId && trusted.fileUri === meta.fileUri
+      && trusted.installId === installId;
   } catch {
     return false;
   }

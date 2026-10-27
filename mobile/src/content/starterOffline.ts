@@ -18,8 +18,8 @@ import { checkManifestForUpdates, type ManifestDeckEntry } from './deckRepositor
 import { getCachedDeck, installDeckAndInvalidate } from './deckCache';
 import { compareByDeckOrder, isHiddenDeck } from './hiddenDecks';
 import { STARTER_PACKS, type StarterSlug } from './starter';
-import { MANIFEST_CACHE_KEY, sanitizeUserKey, readDeckEligibilityUnderLock } from './deckEligibility';
-import { withDrawStateLock, drawStateGeneration } from '../features/gacha/draw/drawStateLock';
+import { MANIFEST_CACHE_KEY, BUNDLED_STARTER_RECEIPT_PREFIX, sanitizeUserKey, readDeckEligibilityUnderLock } from './deckEligibility';
+import { drawStateGeneration } from '../features/gacha/draw/drawStateLock';
 
 export type StarterInstallResult = 'installed-starter' | 'already-installed' | 'unavailable';
 
@@ -64,25 +64,26 @@ async function attestStarterPack(slug: StarterSlug, userSub: string, generation:
   const { captureProgressUserSub } = await import('../review/storage');
   const FileSystem = await loadFileSystem();
   if (!FileSystem) return false;
-  return withDrawStateLock(async () => {
-    if (generation !== drawStateGeneration() || await captureProgressUserSub(true) !== userSub) return false;
-    const manifest = await AsyncStorage.getItem(MANIFEST_CACHE_KEY);
-    if (manifest !== null) return await readDeckEligibilityUnderLock(slug) === 'active';
-    const key = `${DECK_META_PREFIX}${sanitizeUserKey(userSub)}:${slug}`;
-    const raw = await AsyncStorage.getItem(key);
-    if (!raw) return false;
-    const meta = JSON.parse(raw);
-    const pack = STARTER_PACKS[slug];
-    if (meta?.slug !== slug || meta.buildId !== pack.version || typeof meta.fileUri !== 'string'
-      || !meta.fileUri.endsWith(`/devcards-decks-v2/${sanitizeUserKey(userSub)}/${slug}.json`)) return false;
-    if (await FileSystem.readAsStringAsync(meta.fileUri) !== JSON.stringify(pack)) return false;
-    if (await captureProgressUserSub(true) !== userSub || generation !== drawStateGeneration()
-      || await AsyncStorage.getItem(key) !== raw || await AsyncStorage.getItem(MANIFEST_CACHE_KEY) !== null) return false;
-    await AsyncStorage.setItem(key, JSON.stringify({ ...meta,
-      bundledStarter: { userSub, buildId: meta.buildId, fileUri: meta.fileUri },
-    }));
-    return await captureProgressUserSub(true) === userSub && generation === drawStateGeneration();
-  });
+  if (generation !== drawStateGeneration() || await captureProgressUserSub(true) !== userSub) return false;
+  const manifest = await AsyncStorage.getItem(MANIFEST_CACHE_KEY);
+  if (manifest !== null) return await readDeckEligibilityUnderLock(slug) === 'active';
+  const key = `${DECK_META_PREFIX}${sanitizeUserKey(userSub)}:${slug}`;
+  const raw = await AsyncStorage.getItem(key);
+  if (!raw) return false;
+  const meta = JSON.parse(raw);
+  const pack = STARTER_PACKS[slug];
+  if (meta?.slug !== slug || meta.buildId !== pack.version || typeof meta.fileUri !== 'string'
+    || !meta.fileUri.endsWith(`/devcards-decks-v2/${sanitizeUserKey(userSub)}/${slug}.json`)) return false;
+  if (await FileSystem.readAsStringAsync(meta.fileUri) !== JSON.stringify(pack)) return false;
+  if (await captureProgressUserSub(true) !== userSub || generation !== drawStateGeneration()
+    || await AsyncStorage.getItem(key) !== raw || await AsyncStorage.getItem(MANIFEST_CACHE_KEY) !== null) return false;
+  const installId = meta.installId ?? null;
+  if (installId !== null && (typeof installId !== 'string' || !installId)) return false;
+  // Never rewrite metadata: a late receipt is inert after the authoritative install ID changes.
+  await AsyncStorage.setItem(`${BUNDLED_STARTER_RECEIPT_PREFIX}${sanitizeUserKey(userSub)}:${slug}`, JSON.stringify({
+    userSub, buildId: meta.buildId, fileUri: meta.fileUri, installId,
+  }));
+  return await captureProgressUserSub(true) === userSub && generation === drawStateGeneration();
 }
 
 async function installStarterPack(slug: StarterSlug, userSub: string, generation: number): Promise<StarterInstallResult> {
