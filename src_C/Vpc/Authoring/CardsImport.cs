@@ -282,6 +282,8 @@ public static class CardsImport
     var actions = new Dictionary<string, string>(StringComparer.Ordinal);
     var ids = new Dictionary<string, long>(StringComparer.Ordinal);
     var parked = 0;
+    string? releaseId = null, actionId = null, payloadHash = null;
+    APIGatewayProxyResponse? releaseResult = null;
 
     try
     {
@@ -297,6 +299,23 @@ public static class CardsImport
       var deckRows = await DbUtil.QueryAsync(conn, tx,
         "select id from decks where id = $1 and is_deleted = 0 for update", [deckId]);
       if (deckRows.Count == 0) return Helpers.ErrorEnvelope(res, 404, "DECK_NOT_FOUND", $"Deck {deckId} not found");
+
+      if (await ContentRelease.Applies(conn, deckId, tx))
+      {
+        using var releaseDoc = Validation.ParseJsonBody(req)!;
+        var body = releaseDoc.RootElement;
+        releaseId = ContentRelease.Required(body, "releaseId");
+        actionId = ContentRelease.Required(body, "idempotencyKey");
+        payloadHash = ContentRelease.PayloadHash(body);
+        var replay = await ContentRelease.Replay(conn, tx, deckId, releaseId, actionId, payloadHash);
+        if (replay is not null) return replay;
+        await ContentRelease.Lock(conn, tx, deckId);
+        if (ContentRelease.Required(body, "expectedEditingSnapshot") != await ContentRelease.EditingSnapshot(conn, tx, deckId))
+          return Helpers.ErrorEnvelope(res, 409, "EDITING_SNAPSHOT_CONFLICT", "Deck or cards changed since the editing backup; nothing was written");
+        var liveUids = await DbUtil.QueryAsync(conn, tx, "select stable_uid from cards where deck_id=$1 and is_deleted=0", [deckId]);
+        if (liveUids.Any(r => !uids.Contains((string)r["stable_uid"]!, StringComparer.Ordinal)))
+          return Helpers.ErrorEnvelope(res, 409, "RELEASE_COVERAGE", "Release import must retain every existing live UID");
+      }
 
       // A soft-deleted card in this deck whose stable_uid is in the payload cannot be revived by an
       // upsert (that would collide on uq_cards_deck_uid and silently resurrect a deleted card), so
@@ -481,6 +500,13 @@ public static class CardsImport
       }
 
       await DbUtil.ExecuteAsync(conn, tx, "set constraints uq_cards_deck_order immediate", []);
+      if (releaseId is not null)
+      {
+        releaseResult = res.Ok(new { deckId, releaseId, created, updated, unchanged = unchangedUids.Count,
+          editingSnapshot = await ContentRelease.EditingSnapshot(conn, tx, deckId),
+          cards = cards.Select(c => new { stableUid = c.StableUid, id = ids[c.StableUid], action = actions[c.StableUid] }).ToArray() });
+        await ContentRelease.Save(conn, tx, deckId, releaseId, actionId!, "import", payloadHash!, releaseResult);
+      }
       await tx.CommitAsync();
     }
     catch (PostgresException pg) when (pg is { SqlState: "42809" })
@@ -498,7 +524,7 @@ public static class CardsImport
     }
     catch (Exception ex) when (ex is ValidationError)
     {
-      return res.BadRequest("VALIDATION_ERROR", ex.Message);
+      return Helpers.ErrorEnvelope(res, ex.Message.StartsWith("IDEMPOTENCY_CONFLICT") ? 409 : 400, "VALIDATION_ERROR", ex.Message);
     }
     catch (Exception ex)
     {
@@ -517,6 +543,6 @@ public static class CardsImport
 
     outcome.Created = created;
     outcome.Updated = updated;
-    return res.Ok(new { deckId, created, updated, unchanged, cards = results });
+    return releaseResult ?? res.Ok(new { deckId, created, updated, unchanged, cards = results });
   }
 }

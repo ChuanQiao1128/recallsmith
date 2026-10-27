@@ -57,7 +57,10 @@ public static class DeckBuilds
 
       var buildRows = await DbUtil.QueryAsync(conn, null,
         """
-        select build_id as "buildId", job_id as "jobId", note, created_at as "createdAt"
+        select build_id as "buildId", job_id as "jobId", note, created_at as "createdAt",
+          to_jsonb(deck_publishes)->>'content_sha256' as "contentSha256",
+          to_jsonb(deck_publishes)->>'content_bytes' as "contentBytes",
+          to_jsonb(deck_publishes)->>'release_generation' as generation
         from deck_publishes
         where deck_id = $1 and status = 'SUCCESS'
         order by created_at desc, id desc
@@ -78,6 +81,9 @@ public static class DeckBuilds
           note = row.TryGetValue("note", out var nv) ? nv : null,
           createdAt = row.TryGetValue("createdAt", out var cv) ? cv : null,
           isLive,
+          contentSha256 = row["contentSha256"],
+          contentBytes = row["contentBytes"],
+          generation = row["generation"],
         });
       }
 

@@ -42,6 +42,8 @@ public static class DraftAcceptance
     var deckRows = await DbUtil.QueryAsync(conn, tx, "select id from decks where id = $1 and is_deleted = 0 for update", [deckId]);
     if (deckRows.Count == 0) throw new DraftAcceptanceException(DeckNotFound, "Deck not found");
 
+    if (await Authoring.ContentRelease.Applies(conn, deckId, tx)) throw new DraftAcceptanceException("CODEX_REVIEW_REQUIRED", "Use the controlled full-deck release import for this deck");
+
     DraftCard stored;
     using (var storedDoc = JsonDocument.Parse((string)draftRows[0]["card"]!))
     {

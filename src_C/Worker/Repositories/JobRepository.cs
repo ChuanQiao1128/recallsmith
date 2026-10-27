@@ -122,6 +122,8 @@ public class JobRepository : IJobRepository
       """;
 
     await using var tx = await conn.BeginTransactionAsync();
+    // Lock deck before job so final validation, rollback, revocation and card writes serialize.
+    await DbUtil.QueryAsync(conn, tx, "select d.id from decks d join deck_publishes p on p.deck_id=d.id where p.job_id=$1 and d.slug='aws-saa-fundamentals' for update of d", [jobId]);
     List<Dictionary<string, object?>> done;
     await tx.SaveAsync("complete");
     try

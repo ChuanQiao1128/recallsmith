@@ -12,7 +12,7 @@ using RecallSmith.Lambda.Db;
 
 namespace RecallSmith.Lambda.Vpc.Authoring;
 
-public static class Publish
+public static partial class Publish
 {
   private static readonly string? ContentBucket = Environment.GetEnvironmentVariable("CONTENT_BUCKET");
   private static readonly string? PremiumBucket = Environment.GetEnvironmentVariable("PREMIUM_BUCKET");
@@ -307,6 +307,8 @@ public static class Publish
       {
         // The publish path is shared with the automation (A00 §6.4); the console binds the snapshot only when the
         // AI QA gate is enforced and resumes a recent active job instead of refusing it.
+        if (await ContentRelease.Applies(conn, deckIdInt))
+          return await StartControlledAsync(conn, deckIdInt, body, auth, note, res);
         var start = await StartPublishAsync(conn, deckIdInt, adminSub!, note, bindSnapshot: Qa.QaGate.IsEnforced(), expectedSnapshot: null,
           allowResume: true);
         return StartResponse(start, res);
@@ -360,13 +362,17 @@ public static class Publish
         export = baseDeckJson,
       });
     }
+    catch (PostgresException pg) when (pg.SqlState == "P0001")
+    {
+      return Helpers.ErrorEnvelope(res, 409, "RELEASE_CONFLICT", pg.MessageText);
+    }
     catch (PostgresException pg) when (pg.SqlState == "23505")
     {
       return Helpers.MapUniqueViolation409(pg, res) ?? res.Error500(pg);
     }
     catch (Exception ex) when (ex is ValidationError)
     {
-      return res.BadRequest("VALIDATION_ERROR", ex.Message);
+      return Helpers.ErrorEnvelope(res, ex.Message.StartsWith("IDEMPOTENCY_CONFLICT") ? 409 : 400, "VALIDATION_ERROR", ex.Message);
     }
     catch (Exception ex)
     {
@@ -416,6 +422,7 @@ public static class Publish
     var contentBucket = TestEnqueueSeam?.ContentBucket ?? ContentBucket;
     if (string.IsNullOrEmpty(queueUrl)) return Refuse(503, "CONFIG_ERROR", "Missing env PUBLISH_JOB_QUEUE_URL");
 
+    if (await ContentRelease.Applies(conn, deckId)) return Refuse(409, "CODEX_REVIEW_REQUIRED", "Use the controlled Codex release publish with receipt, snapshot and expectedLive");
     var loaded = await LoadDeckAsync(conn, deckId);
     if (loaded.Refusal is not null) return loaded.Refusal;
     var (deckSlug, cardRows, tier) = (loaded.DeckSlug!, loaded.CardRows!, loaded.Tier!);

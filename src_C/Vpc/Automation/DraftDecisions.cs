@@ -296,6 +296,12 @@ public static class DraftDecisions
         var state = (string)row["state"]!;
         if (state != QaPending) return state;
         deckId = Convert.ToInt64(row["deck_id"], CultureInfo.InvariantCulture);
+        if (await Authoring.ContentRelease.Applies(conn, deckId, tx))
+        {
+          await TransitionAsync(conn, tx, draftId, QaPending, Human, "QA_UNAVAILABLE", "CLOUD_QA_RETIRED: aws-codex-bilingual-v1", AutomationEventActor, mode.Effective, null, ct);
+          await tx.CommitAsync(ct);
+          return Human;
+        }
         stableUid = (string)row["stable_uid"]!;
 
         if ((string)row["draft_status"]! != "pending")

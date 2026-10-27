@@ -67,6 +67,8 @@ public class PublishJobProcessor : IPublishJobProcessor, IReplayOutcome
 
     Console.WriteLine($"[JobId={jobId}] Acquired job for deck {job.DeckSlug}");
 
+    if (job.DeckSlug == "aws-saa-fundamentals") await ValidateReleaseJob(jobId);
+
     // Step 3: 业务数据准备
     var deckData = await LoadDeckDataAsync(job.DeckId);
 
@@ -101,10 +103,22 @@ public class PublishJobProcessor : IPublishJobProcessor, IReplayOutcome
       deckData.Version = job.BuildId;
     }
 
+    if (job.DeckSlug == "aws-saa-fundamentals") await ValidateReleaseJob(jobId);
+
     // Step 4: 外部系统调用 (S3)
     var uploadResult = await _s3Uploader.UploadAsync(job.S3Key, deckData);
 
     Console.WriteLine($"[JobId={jobId}] Uploaded to S3: {job.S3Key} (sha256={uploadResult.Sha256}, bytes={uploadResult.Bytes})");
+
+    if (job.DeckSlug == "aws-saa-fundamentals")
+    {
+      await using var uploadConn = await Pg.OpenConnectionOrNullAsync();
+      if (uploadConn is null) throw new InvalidOperationException("Failed to record reviewed build integrity");
+      var recorded = await DbUtil.ExecuteAsync(uploadConn, null,
+        "update deck_publishes set content_sha256=$2,content_bytes=$3 where job_id=$1 and status='PROCESSING'",
+        [jobId, uploadResult.Sha256, uploadResult.Bytes]);
+      if (recorded != 1) throw new BusinessException("RELEASE_GENERATION_CANCELLED: upload did not commit a live build");
+    }
 
     // Step 4.5: 内容分发 v3 附加产物（chunked package / delta patch / DB 元数据）
     // 完全 best-effort：生成器内部吞掉所有异常，绝不影响发布任务
@@ -112,6 +126,8 @@ public class PublishJobProcessor : IPublishJobProcessor, IReplayOutcome
 
     // Step 5: 最终一致性提交
     await _jobRepository.CompleteJobAsync(jobId, deckData.Cards.Count);
+    if (job.DeckSlug == "aws-saa-fundamentals" && (await _jobRepository.GetJobAsync(jobId))?.Status != "SUCCESS")
+      throw new BusinessException("RELEASE_GENERATION_CANCELLED: no live build was committed");
     await AfterPublishSucceededAsync(job);
 
     Console.WriteLine($"[JobId={jobId}] Job completed successfully");
@@ -179,6 +195,14 @@ public class PublishJobProcessor : IPublishJobProcessor, IReplayOutcome
     PublishSnapshot.Digest(cards.Select(c => new PublishSnapshotCard(c.StableUid, c.OrderInDeck, c.Difficulty, c.Question, c.Explanation,
       c.CodeLanguage, c.CodeSnippet, c.RealWorldUsage, c.Revision, c.Topic, c.Mcq?.GetRawText(), c.Source?.GetRawText(),
       c.Translations?.GetRawText(), c.FrontHelp?.GetRawText())));
+
+  private static async Task ValidateReleaseJob(string jobId)
+  {
+    await using var conn = await Pg.OpenConnectionOrNullAsync();
+    if (conn is null) throw new InvalidOperationException("Failed to open database connection");
+    try { await ContentReleaseFence.ValidateJob(conn, jobId); }
+    catch (InvalidOperationException ex) { throw new BusinessException(ex.Message); }
+  }
 
   public Task RecordAttemptErrorAsync(string jobId, string errorMessage) => _jobRepository.RecordAttemptErrorAsync(jobId, errorMessage);
 
