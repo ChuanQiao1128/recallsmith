@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using RecallSmith.Lambda.Db;
 
 namespace RecallSmith.Lambda.Vpc.Qa;
 
@@ -21,7 +22,8 @@ public static class CardContentHash
   public const string CardColumnsSql = """
     c.id, c.stable_uid as "stableUid", c.order_in_deck as "orderInDeck", c.question, c.explanation,
     c.code_snippet as "codeSnippet", c.code_language as "codeLanguage", c.real_world_usage as "realWorldUsage",
-    c.difficulty, c.topic, c.mcq, c.source, nullif(to_jsonb(c) -> 'translations', 'null'::jsonb) as translations
+    c.difficulty, c.topic, c.mcq, c.source, nullif(to_jsonb(c) -> 'translations', 'null'::jsonb) as translations,
+    nullif(to_jsonb(c) -> 'front_help', 'null'::jsonb) as "frontHelp"
     """;
 
   /// <summary>Lowercase hex SHA-256 of the canonical JSON array of the card's reviewable content.</summary>
@@ -39,12 +41,20 @@ public static class CardContentHash
       Node(Cell(row, "mcq")),
       Node(Cell(row, "source")),
     };
-    if (Node(Cell(row, "translations")) is { } translations) payload.Add(translations);
+    var translations = Node(Cell(row, "translations"));
+    var help = PublishSnapshot.NormalizeHelp(Node(Cell(row, "frontHelp"))?.ToJsonString());
+    var extended = Schema(row) == "front-help-v1";
+    if (translations is not null) payload.Add(extended ? JsonNode.Parse(PublishSnapshot.CanonicalJson(translations.ToJsonString())) : translations);
+    if (extended) payload.Add(new { schema = "front-help-v1", frontHelp = help is null ? null : JsonNode.Parse(help) });
 
     var json = JsonSerializer.Serialize(payload);
     var hash = SHA256.HashData(Encoding.UTF8.GetBytes(json));
     return Convert.ToHexString(hash).ToLowerInvariant();
   }
+
+  public static string Schema(IReadOnlyDictionary<string, object?> row) =>
+    PublishSnapshot.HasFrontHelp(Node(Cell(row, "translations"))?.ToJsonString(), Node(Cell(row, "frontHelp"))?.ToJsonString())
+      ? "front-help-v1" : "legacy-v1";
 
   private static object? Cell(IReadOnlyDictionary<string, object?> row, string key) =>
     row.TryGetValue(key, out var v) ? v : null;

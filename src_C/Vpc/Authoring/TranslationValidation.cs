@@ -42,7 +42,7 @@ public static class TranslationValidation
   /// <summary>The English option text cap (McqValidation step 9) applies to a translated option too.</summary>
   public const int OptionMaxLength = 600;
 
-  private static readonly string[] LocaleKeys = ["v", "question", "explanation", "realWorldUsage", "mcq"];
+  private static readonly string[] LocaleKeys = ["v", "question", "explanation", "realWorldUsage", "mcq", "frontHelp"];
   private static readonly string[] McqKeys = ["qualifier", "options"];
   private static readonly string[] OptionKeys = ["text", "why"];
 
@@ -62,7 +62,7 @@ public static class TranslationValidation
   /// The English side a translation mirrors: the card's effective question, explanation and real-world usage, and its
   /// MCQ blob (canonical or as PG text; null for a Q/A card).
   /// </summary>
-  public sealed record EnglishCard(string Question, string? Explanation, string? RealWorldUsage, string? Mcq);
+  public sealed record EnglishCard(string Question, string? Explanation, string? RealWorldUsage, string? Mcq, string? FrontHelp = null);
 
   private sealed record EnglishOption(string Key, bool HasWhy, bool Correct);
 
@@ -74,7 +74,7 @@ public static class TranslationValidation
   private sealed record Option(string Key, string Text, string? Why);
 
   private sealed record Translation(string Locale, string Question, string? Explanation, string? RealWorldUsage, string? Qualifier,
-    IReadOnlyList<Option>? Options);
+    IReadOnlyList<Option>? Options, string? FrontHelp);
 
   /// <summary>
   /// Validates <paramref name="raw"/> against the effective English card and returns the canonical compact JSON, or
@@ -119,16 +119,18 @@ public static class TranslationValidation
   /// <summary>
   /// First 16 lowercase hex chars of SHA-256 over the English a translation is written against: the trimmed question,
   /// explanation and real-world usage, and the MCQ blob as a JSON tree (so canonical text and PG text hash alike).
+  /// Nonempty vocabulary help appends a canonical tree; empty help preserves every legacy basis.
   /// </summary>
   public static string Basis(EnglishCard english)
   {
-    var payload = new object?[]
+    var payload = new List<object?>
     {
       english.Question.Trim(),
       (english.Explanation ?? string.Empty).Trim(),
       (english.RealWorldUsage ?? string.Empty).Trim(),
       english.Mcq is null ? null : JsonNode.Parse(english.Mcq),
     };
+    if (FrontHelpValidation.Normalize(english.FrontHelp) is { } help) payload.Add(JsonNode.Parse(help));
     var hash = SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(payload)));
     return Convert.ToHexString(hash).ToLowerInvariant()[..16];
   }
@@ -190,7 +192,7 @@ public static class TranslationValidation
       JsonElement { ValueKind: JsonValueKind.Object } e => e.GetRawText(),
       _ => null,
     } : null;
-    return new EnglishCard(Text(row, "question") ?? string.Empty, Text(row, "explanation"), Text(row, "realWorldUsage"), mcq);
+    return new EnglishCard(Text(row, "question") ?? string.Empty, Text(row, "explanation"), Text(row, "realWorldUsage"), mcq, Helpers.JsonbElement(row, "frontHelp") is { } help ? FrontHelpValidation.Canonicalize(help) : null);
   }
 
   /// <summary>
@@ -200,6 +202,7 @@ public static class TranslationValidation
   /// </summary>
   public static void ShapeRow(Dictionary<string, object?> row)
   {
+    FrontHelpValidation.ShapeRow(row);
     if (!row.ContainsKey("translations")) return;
 
     var translations = row["translations"] switch
@@ -293,7 +296,13 @@ public static class TranslationValidation
       (qualifier, options) = ParseMcq(locale, mcqEl, question, englishMcq);
     }
 
-    return new Translation(locale, question, explanation, realWorldUsage, qualifier, options);
+    var frontHelp = el.TryGetProperty("frontHelp", out var helpEl) ? FrontHelpValidation.Canonicalize(helpEl) : null;
+    var englishHelp = FrontHelpValidation.Normalize(english.FrontHelp);
+    var englishCount = englishHelp is null ? 0 : JsonSerializer.Deserialize<JsonElement>(englishHelp).GetArrayLength();
+    var translatedCount = frontHelp is null ? 0 : JsonSerializer.Deserialize<JsonElement>(frontHelp).GetArrayLength();
+    if (englishCount != translatedCount)
+      throw new TranslationValidationError("TRANSLATION_FRONT_HELP_MISMATCH", $"translations.{locale}.frontHelp must match the English help entry count");
+    return new Translation(locale, question, explanation, realWorldUsage, qualifier, options, frontHelp);
   }
 
   private static (string? Qualifier, List<Option> Options) ParseMcq(string locale, JsonElement mcqEl, string question, EnglishMcq englishMcq)
@@ -487,7 +496,7 @@ public static class TranslationValidation
 
   /// <summary>
   /// The canonical string in jsonb key order (shorter keys first, then bytewise): v, mcq, question, explanation,
-  /// realWorldUsage; mcq: options, qualifier; option: why, text. Absent optional fields are omitted, never null.
+  /// frontHelp, realWorldUsage; mcq: options, qualifier; option: why, text. Absent optional fields are omitted, never null.
   /// </summary>
   private static string Write(IReadOnlyList<Translation> translations)
   {
@@ -517,6 +526,11 @@ public static class TranslationValidation
           writer.WriteEndObject();
         }
         writer.WriteString("question", t.Question);
+        if (t.FrontHelp is not null)
+        {
+          writer.WritePropertyName("frontHelp");
+          writer.WriteRawValue(t.FrontHelp);
+        }
         if (t.Explanation is not null) writer.WriteString("explanation", t.Explanation);
         if (t.RealWorldUsage is not null) writer.WriteString("realWorldUsage", t.RealWorldUsage);
         writer.WriteEndObject();

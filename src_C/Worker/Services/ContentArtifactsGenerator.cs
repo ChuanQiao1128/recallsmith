@@ -281,6 +281,7 @@ public class ContentArtifactsGenerator : IContentArtifactsGenerator
         Mcq = c.Mcq,
         Source = c.Source,
         Translations = c.Translations,
+        FrontHelp = c.FrontHelp,
       });
     }
 
@@ -312,5 +313,6 @@ public class ContentArtifactsGenerator : IContentArtifactsGenerator
     public JsonElement? Mcq { get; set; }
     public JsonElement? Source { get; set; }
     public JsonElement? Translations { get; set; }
+    public JsonElement? FrontHelp { get; set; }
   }
 }

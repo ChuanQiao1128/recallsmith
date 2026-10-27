@@ -178,7 +178,7 @@ public class PublishJobProcessor : IPublishJobProcessor, IReplayOutcome
   public static string SnapshotDigest(IEnumerable<CardExportData> cards) =>
     PublishSnapshot.Digest(cards.Select(c => new PublishSnapshotCard(c.StableUid, c.OrderInDeck, c.Difficulty, c.Question, c.Explanation,
       c.CodeLanguage, c.CodeSnippet, c.RealWorldUsage, c.Revision, c.Topic, c.Mcq?.GetRawText(), c.Source?.GetRawText(),
-      c.Translations?.GetRawText())));
+      c.Translations?.GetRawText(), c.FrontHelp?.GetRawText())));
 
   public Task RecordAttemptErrorAsync(string jobId, string errorMessage) => _jobRepository.RecordAttemptErrorAsync(jobId, errorMessage);
 
@@ -253,135 +253,21 @@ public class PublishJobProcessor : IPublishJobProcessor, IReplayOutcome
     };
   }
 
+  // Row-image access tolerates every additive content migration without hiding unrelated SQL errors.
   private const string CardsSqlTranslations = """
-    SELECT
-      stable_uid as "stableUid",
-      order_in_deck as "orderInDeck",
-      difficulty,
-      question,
-      explanation,
-      code_language as "codeLanguage",
-      code_snippet as "codeSnippet",
-      real_world_usage as "realWorldUsage",
-      revision,
-      topic,
-      mcq,
-      source,
-      translations
-    FROM cards
-    WHERE deck_id = $1 AND is_deleted = 0
-    ORDER BY order_in_deck ASC, id ASC
+    select stable_uid as "stableUid", order_in_deck as "orderInDeck", difficulty, question, explanation,
+      code_language as "codeLanguage", code_snippet as "codeSnippet", real_world_usage as "realWorldUsage", revision,
+      to_jsonb(cards) ->> 'topic' as topic,
+      nullif(to_jsonb(cards) -> 'mcq', 'null'::jsonb) as mcq,
+      nullif(to_jsonb(cards) -> 'source', 'null'::jsonb) as source,
+      nullif(to_jsonb(cards) -> 'translations', 'null'::jsonb) as translations,
+      nullif(nullif(to_jsonb(cards) -> 'front_help', 'null'::jsonb), '[]'::jsonb) as "frontHelp"
+    from cards where deck_id = $1 and is_deleted = 0 order by order_in_deck asc, id asc
     """;
 
-  private const string CardsSqlSource = """
-    SELECT
-      stable_uid as "stableUid",
-      order_in_deck as "orderInDeck",
-      difficulty,
-      question,
-      explanation,
-      code_language as "codeLanguage",
-      code_snippet as "codeSnippet",
-      real_world_usage as "realWorldUsage",
-      revision,
-      topic,
-      mcq,
-      source
-    FROM cards
-    WHERE deck_id = $1 AND is_deleted = 0
-    ORDER BY order_in_deck ASC, id ASC
-    """;
-
-  private const string CardsSql = """
-    SELECT
-      stable_uid as "stableUid",
-      order_in_deck as "orderInDeck",
-      difficulty,
-      question,
-      explanation,
-      code_language as "codeLanguage",
-      code_snippet as "codeSnippet",
-      real_world_usage as "realWorldUsage",
-      revision,
-      topic,
-      mcq
-    FROM cards
-    WHERE deck_id = $1 AND is_deleted = 0
-    ORDER BY order_in_deck ASC, id ASC
-    """;
-
-  private const string CardsSqlTopicOnly = """
-    SELECT
-      stable_uid as "stableUid",
-      order_in_deck as "orderInDeck",
-      difficulty,
-      question,
-      explanation,
-      code_language as "codeLanguage",
-      code_snippet as "codeSnippet",
-      real_world_usage as "realWorldUsage",
-      revision,
-      topic
-    FROM cards
-    WHERE deck_id = $1 AND is_deleted = 0
-    ORDER BY order_in_deck ASC, id ASC
-    """;
-
-  private const string CardsSqlLegacy = """
-    SELECT
-      stable_uid as "stableUid",
-      order_in_deck as "orderInDeck",
-      difficulty,
-      question,
-      explanation,
-      code_language as "codeLanguage",
-      code_snippet as "codeSnippet",
-      real_world_usage as "realWorldUsage",
-      revision
-    FROM cards
-    WHERE deck_id = $1 AND is_deleted = 0
-    ORDER BY order_in_deck ASC, id ASC
-    """;
-
-  /// <summary>
-  /// Cards of one deck in export order, tolerant of a database that has not yet run 018/019/026/047:
-  /// the 13-column select runs first; a 42703 (undefined_column) retries the pre-047 12-column shape, a second 42703
-  /// the pre-026 11-column shape, a third the 018-only shape, a fourth the pre-018 shape. Each retry is a fresh
-  /// statement on the same connection (no transaction, so the failed statement leaves it usable — the ManifestRebuild
-  /// precedent). A column the schema lacks maps to null, never to "" (byte identity of existing decks).
-  /// </summary>
   public static async Task<List<CardExportData>> LoadCardsAsync(NpgsqlConnection conn, int deckId)
   {
-    List<Dictionary<string, object?>> cardRows;
-    try
-    {
-      cardRows = await DbUtil.QueryAsync(conn, null, CardsSqlTranslations, [deckId]);
-    }
-    catch (PostgresException pgT) when (pgT.SqlState == "42703")
-    {
-      try
-      {
-        cardRows = await DbUtil.QueryAsync(conn, null, CardsSqlSource, [deckId]);
-      }
-      catch (PostgresException pg0) when (pg0.SqlState == "42703")
-      {
-        try
-        {
-          cardRows = await DbUtil.QueryAsync(conn, null, CardsSql, [deckId]);
-        }
-        catch (PostgresException pg) when (pg.SqlState == "42703")
-        {
-          try
-          {
-            cardRows = await DbUtil.QueryAsync(conn, null, CardsSqlTopicOnly, [deckId]);
-          }
-          catch (PostgresException pg2) when (pg2.SqlState == "42703")
-          {
-            cardRows = await DbUtil.QueryAsync(conn, null, CardsSqlLegacy, [deckId]);
-          }
-        }
-      }
-    }
+    var cardRows = await DbUtil.QueryAsync(conn, null, CardsSqlTranslations, [deckId]);
 
     return cardRows.Select(c => new CardExportData
     {
@@ -397,6 +283,7 @@ public class PublishJobProcessor : IPublishJobProcessor, IReplayOutcome
       Topic = c.TryGetValue("topic", out var tp) ? tp as string : null,
       Mcq = c.TryGetValue("mcq", out var m) && m is string s ? JsonSerializer.Deserialize<JsonElement>(s) : (JsonElement?)null,
       Source = c.TryGetValue("source", out var so) && so is string ss ? JsonSerializer.Deserialize<JsonElement>(ss) : null,
+      FrontHelp = c.TryGetValue("frontHelp", out var fh) && fh is string hs ? JsonSerializer.Deserialize<JsonElement>(hs) : null,
       Translations = c.TryGetValue("translations", out var tr) && tr is string ts ? JsonSerializer.Deserialize<JsonElement>(ts) : null,
     }).ToList();
   }

@@ -159,6 +159,7 @@ public static class Publish
 
     var text = Cell(row, "question") + "\n" + Cell(row, "explanation") + "\n" + Cell(row, "difficulty") + "\n" + Cell(row, "mcq");
     if (Cell(row, "translations").Length > 0) text += "\n" + Cell(row, "translations") + "\n" + Cell(row, "translationBasis");
+    if (Helpers.JsonbElement(row, "frontHelp") is { } help && FrontHelpValidation.Canonicalize(help) is { } canonical) text += "\nfront-help-v1\n" + canonical;
     var hash = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text));
     return Convert.ToHexString(hash).ToLowerInvariant()[..16];
   }
@@ -260,6 +261,7 @@ public static class Publish
       topic,
       mcq,
       source,
+      nullif(to_jsonb(cards) -> 'front_help', 'null'::jsonb) as "frontHelp",
       nullif(to_jsonb(cards) -> 'translations', 'null'::jsonb) as translations,
       nullif(to_jsonb(cards) -> 'translation_basis', 'null'::jsonb) as "translationBasis"
     from cards
@@ -314,21 +316,27 @@ public static class Publish
       if (loaded.Refusal is not null) return StartResponse(loaded.Refusal, res);
       var (deck, deckSlug, cardRows, deckType, tier) = (loaded.Deck!, loaded.DeckSlug!, loaded.CardRows!, loaded.DeckType, loaded.Tier!);
 
-      var baseCards = cardRows.Select(c => new
+      var baseCards = cardRows.Select(c =>
       {
-        stableUid = Convert.ToString(c["stableUid"], CultureInfo.InvariantCulture),
-        orderInDeck = Convert.ToInt32(c["orderInDeck"], CultureInfo.InvariantCulture),
-        difficulty = Convert.ToInt32(c.TryGetValue("difficulty", out var dif) ? (dif ?? 2) : 2, CultureInfo.InvariantCulture),
-        question = Convert.ToString(c["question"], CultureInfo.InvariantCulture),
-        explanation = Convert.ToString(c.TryGetValue("explanation", out var ex) ? ex : null, CultureInfo.InvariantCulture) ?? string.Empty,
-        codeLanguage = c.TryGetValue("codeLanguage", out var cl) ? cl : null,
-        codeSnippet = Convert.ToString(c.TryGetValue("codeSnippet", out var cs) ? cs : null, CultureInfo.InvariantCulture) ?? string.Empty,
-        realWorldUsage = Convert.ToString(c.TryGetValue("realWorldUsage", out var rw) ? rw : null, CultureInfo.InvariantCulture) ?? string.Empty,
-        revision = Convert.ToInt32(c.TryGetValue("revision", out var rv) ? (rv ?? 1) : 1, CultureInfo.InvariantCulture),
-        topic = c.TryGetValue("topic", out var tp) ? tp as string : null,
-        mcq = Helpers.JsonbElement(c, "mcq"),
-        source = Helpers.JsonbElement(c, "source"),
-        translations = Helpers.JsonbElement(c, "translations"),
+        var fields = new Dictionary<string, object?>
+        {
+          ["stableUid"] = Convert.ToString(c["stableUid"], CultureInfo.InvariantCulture),
+          ["orderInDeck"] = Convert.ToInt32(c["orderInDeck"], CultureInfo.InvariantCulture),
+          ["difficulty"] = Convert.ToInt32(c.TryGetValue("difficulty", out var dif) ? (dif ?? 2) : 2, CultureInfo.InvariantCulture),
+          ["question"] = Convert.ToString(c["question"], CultureInfo.InvariantCulture),
+          ["explanation"] = Convert.ToString(c.TryGetValue("explanation", out var ex) ? ex : null, CultureInfo.InvariantCulture) ?? string.Empty,
+          ["codeLanguage"] = c.TryGetValue("codeLanguage", out var cl) ? cl : null,
+          ["codeSnippet"] = Convert.ToString(c.TryGetValue("codeSnippet", out var cs) ? cs : null, CultureInfo.InvariantCulture) ?? string.Empty,
+          ["realWorldUsage"] = Convert.ToString(c.TryGetValue("realWorldUsage", out var rw) ? rw : null, CultureInfo.InvariantCulture) ?? string.Empty,
+          ["revision"] = Convert.ToInt32(c.TryGetValue("revision", out var rv) ? (rv ?? 1) : 1, CultureInfo.InvariantCulture),
+          ["topic"] = c.TryGetValue("topic", out var tp) ? tp as string : null,
+          ["mcq"] = Helpers.JsonbElement(c, "mcq"),
+          ["source"] = Helpers.JsonbElement(c, "source"),
+          ["translations"] = Helpers.JsonbElement(c, "translations"),
+        };
+        if (Helpers.JsonbElement(c, "frontHelp") is { } help && FrontHelpValidation.Canonicalize(help) is { } canonical)
+          fields["frontHelp"] = JsonSerializer.Deserialize<JsonElement>(canonical);
+        return fields;
       }).ToList();
 
       var baseDeckJson = new
