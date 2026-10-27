@@ -9,6 +9,7 @@ import datetime as dt
 import hashlib
 import io
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -247,9 +248,91 @@ def embed(args) -> None:
     print(canonical({'indexed': len(chunks), 'corpusVersion': manifest['corpusVersion']}))
 
 
+RERANK_MODEL = 'Xenova/ms-marco-MiniLM-L-6-v2'
+RERANK_REVISION = 'a09144355adeed5f58c8ed011d209bf8ee5a1fec'
+RERANK_FILES = ('config.json', 'tokenizer.json', 'tokenizer_config.json',
+                'special_tokens_map.json', 'onnx/model.onnx')
+
+
+def final_profile(corpus_version: str, strategy: str) -> dict:
+    """The final bounded repair uses the existing ranks, with no learned reranker."""
+    return {'retrievalConfigVersion': 3, 'corpusVersion': corpus_version, 'candidatePoolSize': 40,
+            'selectedStrategy': strategy, 'eligibilityVersion': 1, 'purposeNormalizationVersion': 1}
+
+
+def eligibility_reason(chunk: dict) -> str | None:
+    lines = [line.strip() for line in chunk['text'].splitlines() if line.strip()]
+    if lines and all(re.match(r'^#{1,6}\s', line) for line in lines):
+        return 'heading_only'
+    # Certification task outlines name competencies; other exam passages and factual tables remain.
+    if ('/aws-certification/' in urlsplit(chunk['url']).path and
+            re.match(r'^Task \d+\.\d+:', chunk.get('heading') or '') and
+            not any('|' in line or line.startswith('```') for line in lines)):
+        markers = any(line in {'Knowledge of:', 'Skills in:'} for line in lines)
+        skills = any(re.match(r'^- (?:Applying|Aligning|Configuring|Decoupling|Designing|Determining|'
+                              r'Encrypting|Identifying|Implementing|Integrating|Recommending|Rotating|'
+                              r'Securing|Selecting|Using)\b', line) for line in lines)
+        if (markers and any(line.startswith('- ') for line in lines)) or skills:
+            return 'certification_competency_outline'
+    return None
+
+
+def normalize_purpose_query(query: str) -> str:
+    """Resolve ordinary 'role in' wording only when no identity-role context is present."""
+    protected = r'\b(?:iam|credential\w*|permission\w*|polic(?:y|ies)|sts|assum(?:e|ed|ing)|trust)\b|'
+    protected += r'\b(?:execution|service)[ -]+roles?\b|\binstance[ -]+profiles?\b|\brole[ -]+based\b'
+    if re.search(protected, query, re.I):
+        return query
+    return re.sub(r'\brole\s+in\b', 'purpose for', query, flags=re.I)
+
+
+def checked_profile(profile: dict, model_cache: Path, corpus_version: str) -> tuple[dict, Path | None]:
+    """Only a bounded repair or pinned local CPU reranker; neither downloads nor answer labels are accepted."""
+    if profile.get('retrievalConfigVersion') == 3:
+        if (profile != final_profile(corpus_version, profile.get('selectedStrategy')) or
+                profile.get('selectedStrategy') not in {'bm25', 'vector', 'rrf'} or
+                any(type(profile.get(key)) is not int for key in
+                    ('retrievalConfigVersion', 'candidatePoolSize', 'eligibilityVersion', 'purposeNormalizationVersion'))):
+            raise ValueError('Unsupported final retrieval profile')
+        return json.loads(canonical(profile)), None
+    keys = {'retrievalConfigVersion', 'corpusVersion', 'candidatePoolSize', 'reranker'}
+    reranker = profile.get('reranker', {})
+    if (set(profile) != keys or profile['retrievalConfigVersion'] != 2 or
+            profile['corpusVersion'] != corpus_version or
+            type(profile['candidatePoolSize']) is not int or not 40 <= profile['candidatePoolSize'] <= 100 or
+            set(reranker) != {'model', 'revision', 'license', 'files'} or
+            reranker['model'] != RERANK_MODEL or reranker['revision'] != RERANK_REVISION or
+            reranker['license'] != 'apache-2.0' or set(reranker['files']) != set(RERANK_FILES)):
+        raise ValueError('Unsupported retrieval profile')
+    directory = model_cache / 'models--Xenova--ms-marco-MiniLM-L-6-v2' / 'snapshots' / RERANK_REVISION
+    for name in RERANK_FILES:
+        path = directory / name
+        if not path.is_file() or digest(path.read_bytes()) != reranker['files'][name]:
+            raise ValueError('Missing or changed local reranker artifact')
+    return json.loads(canonical(profile)), directory
+
+
+def verify_source_chunk(root: Path, chunk: dict) -> None:
+    """Bind selected evidence back to its original official source, offsets and version."""
+    if not re.fullmatch(r'[0-9a-f]{64}', chunk['sourceId']):
+        raise ValueError('Invalid source identity')
+    source = load(root / 'corpus/sources' / (chunk['sourceId'] + '.json'))
+    official_url(source['url'])
+    official_url(source['finalUrl'])
+    start, end = chunk['charStart'], chunk['charEnd']
+    if (type(start) is not int or type(end) is not int or not 0 <= start < end <= len(source['text']) or
+            end - start > CHUNKING['maxChars'] or source['sourceId'] != digest(source['url']) or
+            source['url'] != chunk['url'] or source['title'] != chunk['title'] or
+            source['sourceVersion'] != digest(source['text']) or
+            source['sourceVersion'] != chunk['sourceVersion'] or
+            source['text'][start:end] != chunk['text'] or digest(chunk['text']) != chunk['textSha256'] or
+            chunk not in source['chunks']):
+        raise ValueError('Original source binding changed')
+
+
 class EvidenceIndex:
     """One verified immutable corpus and local embedding runtime per authoring batch."""
-    def __init__(self, root: Path, model_cache: Path, container: str):
+    def __init__(self, root: Path, model_cache: Path, container: str, *, profile: dict | None = None):
         from fastembed import TextEmbedding
         from dc_evals.retrieval import BM25
         self.manifest, chunks = verified_corpus(root)
@@ -257,48 +340,102 @@ class EvidenceIndex:
         if (index['corpusVersion'] != self.manifest['corpusVersion'] or index['model'] != MODEL or
                 index['dimension'] != DIMENSION or index['chunkCount'] != len(chunks)):
             raise ValueError('Stale index')
+        # Production callers share the fixed profile; an explicit profile is for dev-only probes.
+        profile_path = root / 'corpus/retrieval-profile.json'
+        self.profile = None
+        if profile is not None or profile_path.exists():
+            self.profile, directory = checked_profile(profile if profile is not None else load(profile_path),
+                                                      model_cache, self.manifest['corpusVersion'])
+            if directory is not None:
+                from fastembed.rerank.cross_encoder import TextCrossEncoder
+                self.reranker = TextCrossEncoder(RERANK_MODEL, cache_dir=str(model_cache), threads=2,
+                    providers=['CPUExecutionProvider'], specific_model_path=str(directory), local_files_only=True)
+        self.root = root
         self.container = container
         self.ids = {i: c['chunkId'] for i, c in enumerate(chunks)}
         self.by_id = {c['chunkId']: c for c in chunks}
+        self.excluded = ({c['chunkId']: reason for c in chunks if (reason := eligibility_reason(c))}
+                         if self.profile and self.profile['retrievalConfigVersion'] == 3 else {})
         self.bm = BM25([c['title'] + '\n' + c['text'] for c in chunks])
-        self.model = TextEmbedding(model_name=MODEL, cache_dir=str(model_cache), threads=2)
+        self.model = TextEmbedding(model_name=MODEL, cache_dir=str(model_cache), threads=2,
+                                   **({'local_files_only': True} if self.profile else {}))
 
-    def retrieve(self, query: str, strategy='rrf') -> dict:
+    def retrieve(self, query: str, strategy=None) -> dict:
         if not query.strip() or len(query) > 800:
             raise ValueError('A bounded learning-goal query is required')
         manifest = self.manifest
+        repaired = self.profile is not None and self.profile.get('retrievalConfigVersion') == 3
+        strategy = strategy or (self.profile['selectedStrategy'] if repaired else 'rrf')
+        if repaired and strategy != self.profile['selectedStrategy']:
+            raise ValueError('Strategy differs from frozen retrieval profile')
+        raw_query = query
+        if repaired:
+            query = normalize_purpose_query(query)
+        if strategy not in {'bm25', 'vector', 'rrf'}:
+            raise ValueError('Unsupported retrieval strategy')
+        pool_size = self.profile['candidatePoolSize'] if self.profile else 40
         from dc_evals.retrieval import tokenize, rrf
         bm = self.bm.scores(tokenize(query))
-        bm_scores = {self.ids[i]: score for i, score in bm.items()}
+        excluded = self.excluded if repaired else {}
+        bm_scores = {self.ids[i]: score for i, score in bm.items() if self.ids[i] not in excluded}
         vector = next(iter(self.model.embed([QUERY_PREFIX + query])))
+        eligibility_sql = (' AND chunk_id NOT IN (' + ','.join(literal(cid) for cid in sorted(excluded)) + ')'
+                           if excluded else '')
         rows = sql(self.container, 'SELECT chunk_id,1-(embedding <=> ' + literal(vector_text(vector)) + '::vector) '
-                   'FROM official_chunks WHERE corpus_version=' + literal(manifest['corpusVersion']) +
-                   ' ORDER BY embedding <=> ' + literal(vector_text(vector)) + '::vector,chunk_id LIMIT 40;')
+                   'FROM official_chunks WHERE corpus_version=' + literal(manifest['corpusVersion']) + eligibility_sql +
+                   ' ORDER BY embedding <=> ' + literal(vector_text(vector)) + '::vector,chunk_id LIMIT ' + str(pool_size) + ';')
         vector_scores = {r.split('|')[0]: float(r.split('|')[1]) for r in rows.splitlines() if '|' in r}
+        if repaired and any(cid not in self.by_id or cid in excluded or not math.isfinite(value)
+                            for cid, value in vector_scores.items()):
+            raise ValueError('Invalid eligible PostgreSQL candidate')
         if not vector_scores:
             raise ValueError('Missing PostgreSQL corpus collection')
-        bm_scores = dict(sorted(bm_scores.items(), key=lambda x: (-x[1], x[0]))[:40])
+        bm_scores = dict(sorted(bm_scores.items(), key=lambda x: (-x[1], x[0]))[:pool_size])
         scores = {'bm25': bm_scores, 'vector': vector_scores,
                   'rrf': rrf([bm_scores, vector_scores])}[strategy]
-        ranked = sorted(scores, key=lambda k: (-scores[k], k))[:20]
+        ranked = sorted(scores, key=lambda k: (-scores[k], k))[:pool_size if self.profile else 20]
+        initial_ranked = list(ranked)
+        initial_scores = scores.copy()
+        if self.profile and not repaired:
+            values = list(self.reranker.rerank(query,
+                [self.by_id[cid]['title'] + '\n' + self.by_id[cid]['text'] for cid in ranked], batch_size=16))
+            if len(values) != len(ranked) or not all(math.isfinite(float(value)) for value in values):
+                raise ValueError('Invalid local reranker output')
+            scores = {cid: float(value) for cid, value in zip(ranked, values, strict=True)}
+            ranked = sorted(scores, key=lambda k: (-scores[k], k))
         selected, chars = [], 0
         for cid in ranked:
             c = self.by_id[cid]
             if chars + len(c['text']) > 12000:
                 continue
+            if self.profile:
+                verify_source_chunk(self.root, c)
             selected.append(c)
             chars += len(c['text'])
             if len(selected) == 8:
                 break
-        packet = {'corpusVersion': manifest['corpusVersion'], 'query': query, 'strategy': strategy,
+        packet = {'corpusVersion': manifest['corpusVersion'], 'query': raw_query, 'strategy': strategy,
                   'retrievalConfigVersion': 1, 'candidateRanks': [{'chunkId': cid, 'rank': n + 1,
                   'score': scores[cid]} for n, cid in enumerate(ranked)], 'evidence': selected,
                   'status': 'retrieved_not_semantically_validated'}
+        if self.profile:
+            packet['retrievalConfigVersion'] = self.profile['retrievalConfigVersion']
+            packet['retrievalProfileHash'] = digest(canonical(self.profile))
+            if not repaired:
+                packet['rerankerArtifactHash'] = digest(canonical(self.profile['reranker']))
+            packet['initialCandidateRanks'] = [{'chunkId': cid, 'rank': n + 1, 'score': initial_scores[cid]}
+                                               for n, cid in enumerate(initial_ranked)]
+            packet['componentCandidateRanks'] = {name: [{'chunkId': cid, 'rank': n + 1, 'score': values[cid]}
+                for n, cid in enumerate(sorted(values, key=lambda k: (-values[k], k)))]
+                for name, values in [('bm25', bm_scores), ('vector', vector_scores)]}
+            if repaired:
+                packet['normalizedQuery'] = query
+                packet['excludedChunkCount'] = len(excluded)
         packet['evidenceHash'] = digest(canonical(packet))
         return packet
 
 
-def retrieve(root: Path, query: str, model_cache: Path, container: str, strategy='rrf') -> dict:
+def retrieve(root: Path, query: str, model_cache: Path, container: str, strategy=None) -> dict:
     return EvidenceIndex(root, model_cache, container).retrieve(query, strategy)
 
 
@@ -371,7 +508,7 @@ def main():
         q.add_argument('--container', required=True)
         if command == 'search':
             q.add_argument('--query', required=True)
-            q.add_argument('--strategy', choices=['bm25', 'vector', 'rrf'], default='rrf')
+            q.add_argument('--strategy', choices=['bm25', 'vector', 'rrf'])
             q.add_argument('--output', type=Path)
         q.set_defaults(func=function)
     q = commands.add_parser('private-coverage')
