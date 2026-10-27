@@ -98,7 +98,11 @@ const FIRST_LOAD_BUDGET_BYTES = 377_000;
  * closure did not move (372,460). Raised to the measurement rounded up to the
  * next 1,000, not measured+10k: the headroom stays as small as it already was.
  */
-const EAGER_BUDGET_BYTES = 487_000;
+// AWS bilingual help/release support, same installed dependencies and measurement:
+// main 298b154: 485,598 B; current: 487,429 B (+1,831 B). This includes the
+// shared frontHelp parser (995 B), entry (+347 B), CSS (+252 B), authoring (+205 B)
+// and deck-list chunk (+32 B). Keep the existing next-1,000-B rounding rule.
+const EAGER_BUDGET_BYTES = 488_000;
 
 /**
  * Floor, so a parser that degenerates to an empty or near-empty set cannot make
