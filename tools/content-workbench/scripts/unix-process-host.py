@@ -106,6 +106,15 @@ finally:
     kill_group()
     if child is not None:
         child.wait()
+    cleaned = False
+    for _ in range(20):
+        if not executing_group():
+            cleaned = True
+            break
+        time.sleep(.025)
+    # Writers may finish after the loop's last drain; consume their tail only once stopped.
+    if cleaned and reason not in ('result_limit', 'result_transport_changed'):
+        drain_result()
     if result_writer is not None:
         result_writer.close()
     if result_reader is not None:
@@ -115,12 +124,6 @@ finally:
     code = None if child is None else child.returncode
     if code is not None and code < 0:
         code = 128 - code
-    cleaned = False
-    for _ in range(20):
-        if not executing_group():
-            cleaned = True
-            break
-        time.sleep(.025)
     if not cleaned:
         reason = 'cleanup_unknown'
     atomic(status_file, {'cliExitCode': code, 'reason': reason, 'elapsedSeconds': time.monotonic() - started})
