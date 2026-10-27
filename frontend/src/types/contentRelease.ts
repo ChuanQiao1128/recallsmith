@@ -70,12 +70,15 @@ export interface ReleaseAction {
   payload: string;
   outcome: 'unknown' | 'confirmed';
   queried: boolean;
+  /** Only a response/query in this mounted session can authorize dependent writes. */
+  reconciled: boolean;
   result?: ApiResult<Record<string, unknown>>;
   query?: ReleaseActions;
 }
 
 export interface ReleaseSession {
   schema: 'aws-basics-console-session-v1';
+  ownerSubject: string;
   baseline: ReleaseSnapshot;
   bundle: ReleaseBundle;
   actions: Partial<Record<ReleaseKind, ReleaseAction>>;
