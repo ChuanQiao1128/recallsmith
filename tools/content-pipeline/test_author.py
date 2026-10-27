@@ -4,8 +4,8 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 
-from author import FIELDS, invoke, validate_card, validate_execution, validate_review
-from pipeline import digest, save
+from author import FIELDS, invoke, validate_card, validate_execution, validate_packet, validate_review
+from pipeline import CHUNKING, DIMENSION, MODEL, canonical, digest, save
 
 
 def fixture():
@@ -23,6 +23,62 @@ def fixture():
 
 
 class AuthorTests(unittest.TestCase):
+    def prepared(self, root):
+        packet, card = fixture()
+        text = packet['evidence'][0]['text']
+        url = packet['evidence'][0]['url']
+        sid, version = digest(url), digest(text)
+        chunk = {**packet['evidence'][0], 'sourceId': sid, 'sourceVersion': version,
+                 'charStart': 0, 'charEnd': len(text), 'textSha256': digest(text)}
+        sources = [{'sourceId': sid, 'sourceVersion': version}]
+        cv = digest(canonical({'sources': [(sid, version)], 'chunking': CHUNKING, 'embeddingModel': MODEL}))
+        save(root / 'corpus/corpus/manifest.json', {'model': MODEL, 'dimension': DIMENSION, 'chunkCount': 1,
+             'sources': sources, 'chunking': CHUNKING, 'corpusVersion': cv})
+        save(root / 'corpus/corpus/chunks.json', [chunk])
+        save(root / 'corpus/corpus/sources' / (sid + '.json'), {'url': url, 'sourceId': sid,
+             'sourceVersion': version, 'text': text, 'chunks': [chunk]})
+        save(root / 'run.json', {'nodes': {'A2R-corpus': {'corpusVersion': cv}}})
+        goal = {'stableUid': 'fixture', 'retrievalQueryEn': 'service capability'}
+        catalogue = {'goals': [goal]}
+        catalogue['curriculumHash'] = digest(canonical(catalogue))
+        packet = {'corpusVersion': cv, 'query': goal['retrievalQueryEn'], 'strategy': 'bm25',
+                  'evidence': [chunk], 'candidateRanks': [], 'retrievalConfigVersion': 1,
+                  'status': 'retrieved_not_semantically_validated'}
+        packet['evidenceHash'] = digest(canonical(packet))
+        packet.update(goal=goal, curriculumHash=catalogue['curriculumHash'])
+        packet['packetHash'] = digest(canonical(packet))
+        return catalogue, goal, packet
+
+    def test_packet_is_bound_to_original_source_not_its_own_hashes(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalogue, goal, packet = self.prepared(root)
+            validate_packet(root, root / 'corpus', catalogue, goal, packet)
+            for mutation in ('text', 'url', 'corpusVersion', 'curriculumHash'):
+                with self.subTest(mutation=mutation):
+                    changed = copy.deepcopy(packet)
+                    if mutation in ('text', 'url'):
+                        changed['evidence'][0][mutation] = 'untrusted replacement'
+                    else:
+                        changed[mutation] = 'untrusted replacement'
+                    base = {k: v for k, v in changed.items() if k not in
+                            {'evidenceHash', 'packetHash', 'goal', 'curriculumHash'}}
+                    changed['evidenceHash'] = digest(canonical(base))
+                    changed['packetHash'] = digest(canonical({k: v for k, v in changed.items() if k != 'packetHash'}))
+                    with self.assertRaises(ValueError):
+                        validate_packet(root, root / 'corpus', catalogue, goal, changed)
+
+    def test_modified_source_text_is_rejected_against_pinned_version(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalogue, goal, packet = self.prepared(root)
+            source_path = next((root / 'corpus/corpus/sources').glob('*.json'))
+            source = __import__('json').loads(source_path.read_text())
+            source['text'] += ' injected fact'
+            save(source_path, source)
+            with self.assertRaisesRegex(ValueError, 'source text'):
+                validate_packet(root, root / 'corpus', catalogue, goal, packet)
+
     def test_exact_quotes_record_source_offsets_not_semantic_pass(self):
         packet, card = fixture()
         result = validate_card(packet, card)

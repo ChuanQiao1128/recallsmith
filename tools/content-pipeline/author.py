@@ -12,7 +12,7 @@ import jsonschema
 
 from curate import require_workbench_review
 from model_dispatch import model_slot
-from pipeline import REPO, EvidenceIndex, canonical, digest, load, save
+from pipeline import REPO, MODEL, EvidenceIndex, canonical, digest, load, save, verified_corpus
 
 SCHEMAS = Path(__file__).with_name('schemas')
 FIELDS = ('answer', 'reason', 'examPurpose', 'boundary', 'frontHelp')
@@ -180,11 +180,48 @@ def prepare(args):
     print(canonical({'prepared': len(catalogue['goals']), 'corpusVersion': index.manifest['corpusVersion']}))
 
 
-def one(args, goal):
+def validate_packet(root, corpus_root, catalogue, goal, packet):
+    """Self hashes detect edits; the pinned original corpus establishes provenance."""
+    catalogue_body = {k: v for k, v in catalogue.items() if k != 'curriculumHash'}
+    if catalogue['curriculumHash'] != digest(canonical(catalogue_body)):
+        raise ValueError('Curriculum hash mismatch')
+    if packet.get('goal') != goal or packet.get('curriculumHash') != catalogue['curriculumHash']:
+        raise ValueError('Prepared curriculum/goal changed')
+    if packet.get('query') != goal['retrievalQueryEn']:
+        raise ValueError('Prepared retrieval query changed')
+    if packet.get('packetHash') != digest(canonical({k: v for k, v in packet.items() if k != 'packetHash'})):
+        raise ValueError('Prepared packet hash mismatch')
+    base = {k: v for k, v in packet.items() if k not in {'packetHash', 'goal', 'curriculumHash', 'evidenceHash'}}
+    if packet.get('evidenceHash') != digest(canonical(base)):
+        raise ValueError('Prepared retrieval evidence hash mismatch')
+    manifest, chunks = verified_corpus(corpus_root)
+    expected = load(root / 'run.json')['nodes']['A2R-corpus']['corpusVersion']
+    version = digest(canonical({'sources': [(s['sourceId'], s['sourceVersion']) for s in manifest['sources']],
+                                'chunking': manifest['chunking'], 'embeddingModel': MODEL}))
+    if packet.get('corpusVersion') != expected or manifest['corpusVersion'] != expected or version != expected:
+        raise ValueError('Prepared corpus does not match the pinned source collection')
+    originals = {c['chunkId']: c for c in chunks}
+    if not 1 <= len(packet['evidence']) <= 8 or sum(len(c['text']) for c in packet['evidence']) > 12000:
+        raise ValueError('Evidence selection bounds changed')
+    seen = set()
+    for selected in packet['evidence']:
+        cid = selected['chunkId']
+        if cid in seen or selected != originals.get(cid):
+            raise ValueError('Evidence object differs from its original official chunk')
+        seen.add(cid)
+        source = load(corpus_root / 'corpus/sources' / (selected['sourceId'] + '.json'))
+        if (source['sourceId'] != digest(source['url']) or source['url'] != selected['url'] or
+                source['sourceVersion'] != digest(source['text']) or
+                source['sourceVersion'] != selected['sourceVersion'] or
+                source['text'][selected['charStart']:selected['charEnd']] != selected['text'] or
+                not any(c == selected for c in source['chunks'])):
+            raise ValueError('Evidence differs from the pinned official source text')
+
+
+def one(args, goal, catalogue):
     folder = args.root / 'authoring' / goal['stableUid']
     packet = load(folder / 'packet.json')
-    if packet['goal'] != goal:
-        raise ValueError('Prepared goal changed')
+    validate_packet(args.root, args.corpus_root, catalogue, goal, packet)
     repair = None
     for attempt in (1, 2):
         prompt = GENERATE + canonical(packet)
@@ -232,7 +269,7 @@ def run(args):
             raise ValueError('Unknown card requested')
         goals = [g for g in goals if g['stableUid'] in selected]
     for goal in goals:
-        one(args, goal)
+        one(args, goal, catalogue)
 
 
 def main():
@@ -248,6 +285,7 @@ def main():
     p = sub.add_parser('run')
     p.add_argument('--dotnet', type=Path, required=True)
     p.add_argument('--workbench-review', type=Path, required=True)
+    p.add_argument('--corpus-root', type=Path, required=True)
     p.add_argument('--uids')
     p.set_defaults(func=run)
     args = parser.parse_args()
