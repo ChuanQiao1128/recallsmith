@@ -11,14 +11,16 @@ import { describe, expect, it } from 'vitest';
 describe('installed deck reader contract with deckRepository', () => {
   it('the frozen deck repository still uses the meta key, folder and user-key rule the reader mirrors', () => {
     const repo = readFileSync(resolve(__dirname, '../../src/content/deckRepository.ts'), 'utf8');
+    const eligibility = readFileSync(resolve(__dirname, '../../src/content/deckEligibility.ts'), 'utf8');
     const mirror = readFileSync(resolve(__dirname, '../../src/content/installedDeckIndex.ts'), 'utf8');
 
+    // The repository now imports these versioned rules from the shared eligibility module.
+    expect(repo).toContain("from './deckEligibility'");
     for (const literal of [
       "'devcards:content:deckmeta:v2:'",
-      'devcards-decks-v2/',
       ".replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 80)",
     ]) {
-      expect(repo).toContain(literal);
+      expect(eligibility).toContain(literal);
     }
     expect(repo).toContain('return `${DECK_META_PREFIX}${u}:${slug}`;');
     expect(repo).toContain('session?.userSub ??');

@@ -116,10 +116,18 @@ vi.mock('../../src/config/featureFlags', () => {
 
 // In-memory AsyncStorage.
 const store = new Map<string, string>();
+let onRead: ((key: string) => void | Promise<void>) | null = null;
+let onWrite: ((key: string, value: string) => void | Promise<void>) | null = null;
+let authUserSub: string | null = null;
 vi.mock('@react-native-async-storage/async-storage', () => ({
   default: {
-    getItem: vi.fn(async (key: string) => (store.has(key) ? store.get(key)! : null)),
+    getItem: vi.fn(async (key: string) => {
+      const raw = store.get(key) ?? null;
+      await onRead?.(key);
+      return raw;
+    }),
     setItem: vi.fn(async (key: string, value: string) => {
+      await onWrite?.(key, value);
       store.set(key, value);
     }),
     removeItem: vi.fn(async (key: string) => {
@@ -156,6 +164,10 @@ vi.mock('expo-file-system/legacy', () => ({
     const dirUri = asDirUri(uri);
     dirs.delete(dirUri);
     for (const k of [...files.keys()]) if (k.startsWith(dirUri)) files.delete(k);
+  }),
+  copyAsync: vi.fn(async ({ from, to }: { from: string; to: string }) => {
+    if (!files.has(from)) throw new Error(`ENOENT: ${from}`);
+    files.set(to, files.get(from)!);
   }),
   moveAsync: vi.fn(async ({ from, to }: { from: string; to: string }) => {
     if (!files.has(from)) throw new Error(`ENOENT: ${from}`);
@@ -194,7 +206,7 @@ vi.mock('expo-crypto', () => ({
 
 // Signed out on a fresh install: the deck user key is 'anon'.
 vi.mock('aws-amplify/auth', () => ({
-  fetchAuthSession: vi.fn(async () => ({})),
+  fetchAuthSession: vi.fn(async () => authUserSub ? { userSub: authUserSub } : {}),
 }));
 
 vi.mock('../../src/review/progressScope', () => ({
@@ -246,10 +258,14 @@ import { STUDY_GOAL_KEY } from '../../src/features/goal/studyGoal';
 import { pickStarterUids, STARTER_LESSON_KEY } from '../../src/features/gacha/starter/starterGate';
 import { STARTER_COPY } from '../../src/features/gacha/starter/starterCopy';
 import { resetSessionStore } from '../../src/features/gacha/session/sessionStore';
-import { DECK_BOOTSTRAP_GRANT, loadDeckWallet } from '../../src/features/gacha/rewards/deckWallet';
+import { DECK_BOOTSTRAP_GRANT, loadDeckWallet, saveDeckWallet } from '../../src/features/gacha/rewards/deckWallet';
 import { loadDrawState } from '../../src/features/gacha/draw/drawStateStore';
 import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStateCache';
-import { loadDeckProgress } from '../../src/review/storage';
+import { loadDeckProgress, setActiveUserSubForStorage } from '../../src/review/storage';
+import { acquireDraw } from '../../src/features/gacha/draw/acquireDraw';
+import { flushDrawHistory } from '../../src/features/gacha/draw/drawCommit';
+import { readDeckEligibilityUnderLock, MANIFEST_CACHE_KEY } from '../../src/content/deckEligibility';
+import { listManifestDecks, adoptAnonymousPublicDecks } from '../../src/content/deckRepository';
 import {
   loadHomeDeckSummaries,
   resetAutoUpdateAttemptsForTests,
@@ -444,6 +460,11 @@ describe('offline first run with the bundled starter pack (R24 §2.2)', () => {
   let logSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
+    await flushDrawHistory();
+    onRead = null;
+    onWrite = null;
+    authUserSub = null;
+    setActiveUserSubForStorage(null);
     store.clear();
     await setActiveDeckSlug(null);
     files.clear();
@@ -546,6 +567,7 @@ describe('offline first run with the bundled starter pack (R24 §2.2)', () => {
     expect(fullDeck.Version).toBe(FULL_BUILD);
     expect(fullDeck.Cards).toHaveLength(FULL_DECK.cards.length);
     expect(JSON.parse(store.get(META_KEY)!).buildId).toBe(FULL_BUILD);
+    expect(JSON.parse(store.get(META_KEY)!).bundledStarter).toBeUndefined();
 
     // Same uids and revisions: the learner's record carries over untouched.
     expect(store.get(STARTER_LESSON_KEY)).toBe(lessonBefore);
@@ -583,6 +605,147 @@ describe('offline first run with the bundled starter pack (R24 §2.2)', () => {
     expect(shownStudyQuestion(tree)).toBe(questionOf(LESSON_UIDS[0]));
     expect(JSON.parse(store.get(META_KEY)!).buildId).toBe(FULL_BUILD);
     act(() => tree.unmount());
+  });
+
+  async function installedStarterForDraw() {
+    store.set(STAGE_KEY, 'done');
+    expect(await ensureStarterDeckInstalled(SLUG)).toBe('installed-starter');
+    await saveDeckWallet(SLUG, { availablePulls: 5, reservePulls: 0 });
+    return (await getCachedDeck(SLUG))!;
+  }
+
+  it('persists exact bundled provenance across a cold read, while sync still sees an unknown manifest', async () => {
+    const deck = await installedStarterForDraw();
+    const meta = JSON.parse(store.get(META_KEY)!);
+    expect(meta.bundledStarter).toEqual({ userSub: 'anon', buildId: PACK.version, fileUri: meta.fileUri });
+    expect(store.has(MANIFEST_CACHE_KEY)).toBe(false);
+    expect(await readDeckEligibilityUnderLock(SLUG)).toBe('unknown');
+    invalidateDeckCache();
+    invalidateDrawStateCache();
+    const acquired = await acquireDraw(SLUG, 1, { deck: await getCachedDeck(SLUG) });
+    expect(acquired.spent).toBe(1);
+    expect(acquired.result?.cards).toHaveLength(1);
+    expect(PACK.cards.map(c => c.stableUid)).toContain(acquired.result?.cards[0].stableUid);
+    expect((await loadDeckWallet(SLUG)).availablePulls).toBe(4);
+    expect(deck.Version).toBe(PACK.version);
+  });
+
+  it.each(['corrupt-manifest', 'manifest-io', 'missing-entry', 'coming', 'unknown-status', 'retired',
+    'missing-meta', 'corrupt-meta', 'meta-io', 'missing-provenance', 'wrong-account', 'wrong-build', 'wrong-file', 'stale-file-marker', 'foreign-file-marker', 'account-switch'])(
+    'bundled provenance fails closed for %s without ownership or wallet writes', async mode => {
+      const deck = await installedStarterForDraw();
+      const meta = JSON.parse(store.get(META_KEY)!);
+      if (mode === 'corrupt-manifest') store.set(MANIFEST_CACHE_KEY, '{');
+      if (mode === 'missing-entry') store.set(MANIFEST_CACHE_KEY, '{"decks":[]}');
+      if (['coming', 'unknown-status', 'retired'].includes(mode)) {
+        store.set(MANIFEST_CACHE_KEY, JSON.stringify({ decks: [{ slug: SLUG, availability: mode }] }));
+      }
+      if (mode === 'missing-meta') store.delete(META_KEY);
+      if (mode === 'corrupt-meta') store.set(META_KEY, '{');
+      if (mode === 'missing-provenance') delete meta.bundledStarter;
+      if (mode === 'wrong-account') meta.bundledStarter.userSub = 'someone-else';
+      if (mode === 'wrong-build') meta.buildId = FULL_BUILD;
+      if (mode === 'wrong-file') meta.fileUri = 'file:///docs/other.json';
+      if (mode === 'stale-file-marker') meta.bundledStarter.fileUri = 'file:///docs/other.json';
+      if (mode === 'foreign-file-marker') meta.fileUri = meta.bundledStarter.fileUri = 'file:///docs/other.json';
+      if (mode === 'account-switch') onRead = key => { if (key === META_KEY) setActiveUserSubForStorage('user-b'); };
+      if (['missing-provenance', 'wrong-account', 'wrong-build', 'wrong-file', 'stale-file-marker', 'foreign-file-marker'].includes(mode)) {
+        store.set(META_KEY, JSON.stringify(meta));
+      }
+      if (mode.endsWith('-io')) onRead = key => {
+        if (key === (mode === 'manifest-io' ? MANIFEST_CACHE_KEY : META_KEY)) throw Error('IO');
+      };
+      const wallet = store.get('devcards:u:anon:recallsmith:deck-wallets:v1');
+      const state = store.get(`devcards:u:anon:devcards:draw-state:${SLUG}`);
+      const write = vi.fn(); onWrite = write;
+      await expect(acquireDraw(SLUG, 1, { deck })).rejects.toThrow();
+      expect(store.get('devcards:u:anon:recallsmith:deck-wallets:v1')).toBe(wallet);
+      expect(store.get(`devcards:u:anon:devcards:draw-state:${SLUG}`)).toBe(state);
+      expect(write).not.toHaveBeenCalled();
+    },
+  );
+
+  it('actual retirement removes bundled provenance and cannot be revived by removing the manifest', async () => {
+    const deck = await installedStarterForDraw();
+    store.set(MANIFEST_CACHE_KEY, JSON.stringify({ ...MANIFEST, decks: [{ ...MANIFEST.decks[0], availability: 'retired', retiredAtMs: FIXED_NOW_MS }] }));
+    await listManifestDecks({ preferRemote: false });
+    expect(store.has(META_KEY)).toBe(false);
+    await expect(acquireDraw(SLUG, 1, { deck })).rejects.toThrow();
+    store.delete(MANIFEST_CACHE_KEY);
+    await expect(acquireDraw(SLUG, 1, { deck })).rejects.toThrow();
+    expect((await loadDeckWallet(SLUG)).availablePulls).toBe(5);
+  });
+
+  it('a failed provenance write denies spending, then a retry verifies the actual bundle before attesting', async () => {
+    store.set(STAGE_KEY, 'done');
+    onWrite = (key, value) => { if (key === META_KEY && JSON.parse(value).bundledStarter) throw Error('disk full'); };
+    expect(await ensureStarterDeckInstalled(SLUG)).toBe('unavailable');
+    expect(JSON.parse(store.get(META_KEY)!).bundledStarter).toBeUndefined();
+    await saveDeckWallet(SLUG, { availablePulls: 5, reservePulls: 0 });
+    const deck = await getCachedDeck(SLUG);
+    await expect(acquireDraw(SLUG, 1, { deck })).rejects.toThrow();
+    expect((await loadDeckWallet(SLUG)).availablePulls).toBe(5);
+    onWrite = null;
+    expect(await ensureStarterDeckInstalled(SLUG)).toBe('already-installed');
+    expect((await acquireDraw(SLUG, 1, { deck })).spent).toBe(1);
+  });
+
+  it('an unsuccessful install meta write cannot attest the bundle or spend pulls', async () => {
+    store.set(STAGE_KEY, 'done');
+    await saveDeckWallet(SLUG, { availablePulls: 5, reservePulls: 0 });
+    onWrite = key => { if (key === META_KEY) throw Error('disk full'); };
+    expect(await ensureStarterDeckInstalled(SLUG)).toBe('unavailable');
+    expect(store.has(META_KEY)).toBe(false);
+    await expect(acquireDraw(SLUG, 1)).rejects.toThrow();
+    expect((await loadDeckWallet(SLUG)).availablePulls).toBe(5);
+    expect(store.has(`devcards:u:anon:devcards:draw-state:${SLUG}`)).toBe(false);
+  });
+
+  it('an unrecognized remote slug cannot use a lookalike bundled receipt without a manifest', async () => {
+    const deck = await installedStarterForDraw();
+    const slug = 'remote-unknown';
+    const fileUri = `file:///docs/devcards-decks-v2/anon/${slug}.json`;
+    store.set(`devcards:content:deckmeta:v2:anon:${slug}`, JSON.stringify({ slug, buildId: PACK.version, fileUri,
+      bundledStarter: { userSub: 'anon', buildId: PACK.version, fileUri } }));
+    await saveDeckWallet(slug, { availablePulls: 5, reservePulls: 0 });
+    await expect(acquireDraw(slug, 1, { deck: { ...deck, Slug: slug } })).rejects.toThrow();
+    expect((await loadDeckWallet(slug)).availablePulls).toBe(5);
+    expect(store.has(`devcards:u:anon:devcards:draw-state:${slug}`)).toBe(false);
+  });
+
+  it('does not attest a changed file or an account switch during bundled read-back', async () => {
+    await installedStarterForDraw();
+    const meta = JSON.parse(store.get(META_KEY)!);
+    delete meta.bundledStarter;
+    store.set(META_KEY, JSON.stringify(meta));
+    files.set(meta.fileUri, JSON.stringify({ ...PACK, cards: PACK.cards.slice(1) }));
+    expect(await ensureStarterDeckInstalled(SLUG)).toBe('unavailable');
+    expect(JSON.parse(store.get(META_KEY)!).bundledStarter).toBeUndefined();
+    files.set(meta.fileUri, JSON.stringify(PACK));
+    onRead = key => { if (key === META_KEY) setActiveUserSubForStorage('user-b'); };
+    expect(await ensureStarterDeckInstalled(SLUG)).toBe('unavailable');
+    expect(JSON.parse(store.get(META_KEY)!).bundledStarter).toBeUndefined();
+  });
+
+  it('does not trust an adopted guest marker for an account; explicit bundled read-back can attest the copy', async () => {
+    await installedStarterForDraw();
+    // The existing public adoption path authorizes a real file copy using the live manifest.
+    store.set(MANIFEST_CACHE_KEY, JSON.stringify(MANIFEST));
+    authUserSub = 'user-a';
+    setActiveUserSubForStorage('user-a');
+    invalidateDeckCache();
+    await adoptAnonymousPublicDecks('user-a');
+    const accountMetaKey = `devcards:content:deckmeta:v2:user-a:${SLUG}`;
+    expect(JSON.parse(store.get(accountMetaKey)!).bundledStarter.userSub).toBe('anon');
+    store.delete(MANIFEST_CACHE_KEY);
+    await saveDeckWallet(SLUG, { availablePulls: 5, reservePulls: 0 });
+    const deck = await getCachedDeck(SLUG);
+    await expect(acquireDraw(SLUG, 1, { deck })).rejects.toThrow();
+    expect((await loadDeckWallet(SLUG)).availablePulls).toBe(5);
+    expect(await ensureStarterDeckInstalled(SLUG)).toBe('already-installed');
+    expect(JSON.parse(store.get(accountMetaKey)!).bundledStarter.userSub).toBe('user-a');
+    expect((await acquireDraw(SLUG, 1, { deck })).spent).toBe(1);
+    expect(JSON.parse(store.get('devcards:u:anon:recallsmith:deck-wallets:v1')!).decks[SLUG].availablePulls).toBe(5);
   });
 
   it('ensureStarterDeckInstalled: installs once, then reports the installed deck; unknown slugs have no pack', async () => {
