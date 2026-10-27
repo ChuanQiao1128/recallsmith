@@ -76,10 +76,17 @@ export interface ReleaseAction {
   query?: ReleaseActions;
 }
 
+/** Frozen at first capture; detects row omission/identity changes while preserving raw backup data. */
+export interface ReleaseBackupInventory {
+  editingSnapshot: string;
+  rows: Array<{ id: number; stableUid: string; orderInDeck: number; version: number; revision: number; isDeleted: 0 | 1 }>;
+}
+
 export interface ReleaseSession {
   schema: 'aws-basics-console-session-v1';
   ownerSubject: string;
   baseline: ReleaseSnapshot;
+  baselineInventory: ReleaseBackupInventory;
   bundle: ReleaseBundle;
   actions: Partial<Record<ReleaseKind, ReleaseAction>>;
   verifiedSnapshot?: ReleaseSnapshot;

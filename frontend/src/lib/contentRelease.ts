@@ -1,7 +1,7 @@
 import type { ImportCardInput } from '../api/authoring';
 import type { Card } from '../types/card';
 import type { ApiResult } from '../types/api';
-import type { ReleaseAction, ReleaseBundle, ReleaseKind, ReleaseSession, ReleaseSnapshot } from '../types/contentRelease';
+import type { ReleaseAction, ReleaseBackupInventory, ReleaseBundle, ReleaseKind, ReleaseSession, ReleaseSnapshot } from '../types/contentRelease';
 import { isValidDifficulty, isValidStableUid } from './cardRules';
 import { parseFrontHelp, normalizeFrontHelpForCompare } from './frontHelp';
 import { normalizeMcqForCompare, validateMcq } from './mcqRules';
@@ -103,14 +103,14 @@ export function assertReleaseSnapshot(snapshot: ReleaseSnapshot): void {
   hasFields(deck, ['id', 'slug', 'title', 'author', 'description', 'locale', 'deck_type', 'is_deleted', 'version', 'created_at', 'updated_at', 'manifest_order', 'tier', 'availability', 'eta', 'retired_at_ms', 'download_mode', 'total_cards', 'preview_cards', 'live_build_id', 'translation_locales', 'release_generation']);
   requireValue(['title', 'author', 'locale'].every(field => typeof deck[field] === 'string') && ['description', 'eta', 'live_build_id'].every(field => nullableText(deck[field])) && deck.is_deleted === 0 && integer(deck.deck_type) && integer(deck.version) && integer(deck.manifest_order, 0) && integer(deck.total_cards, 0) && integer(deck.release_generation, 0) && (deck.preview_cards === null || integer(deck.preview_cards)) && (deck.retired_at_ms === null || integer(deck.retired_at_ms)) && timestamp(deck.created_at) && timestamp(deck.updated_at) && ['free', 'premium'].includes(String(deck.tier)) && ['live', 'coming', 'retired'].includes(String(deck.availability)) && ['public', 'auth', 'none'].includes(String(deck.download_mode)) && Array.isArray(deck.translation_locales) && deck.translation_locales.every(locale => typeof locale === 'string'), 'Snapshot backup deck fields are invalid.');
   requireValue(Array.isArray(snapshot.backup) && Array.isArray(snapshot.cards), 'Snapshot is missing the complete editing backup.');
-  const rows = new Map<string, Record<string, unknown>>(); const ids = new Set<number>();
+  const rows = new Map<string, Record<string, unknown>>(); const ids = new Set<number>(); const orders = new Set<number>();
   for (const raw of snapshot.backup) {
     const row = object(raw);
     hasFields(row, ['id', 'deck_id', 'stable_uid', 'question', 'explanation', 'code_snippet', 'code_language', 'real_world_usage', 'difficulty', 'order_in_deck', 'revision', 'is_deleted', 'version', 'created_at', 'updated_at', 'topic', 'mcq', 'source', 'translations', 'translation_basis', 'front_help']);
-    requireValue(integer(row.id) && !ids.has(row.id) && row.deck_id === 15 && typeof row.stable_uid === 'string' && isValidStableUid(row.stable_uid) && !rows.has(row.stable_uid) && typeof row.question === 'string' && ['explanation', 'code_snippet', 'code_language', 'real_world_usage', 'topic'].every(field => nullableText(row[field])) && typeof row.difficulty === 'number' && isValidDifficulty(row.difficulty) && integer(row.order_in_deck) && integer(row.version) && integer(row.revision) && (row.is_deleted === 0 || row.is_deleted === 1) && timestamp(row.created_at) && timestamp(row.updated_at), 'Snapshot backup card fields are invalid.');
+    requireValue(integer(row.id) && !ids.has(row.id) && row.deck_id === 15 && typeof row.stable_uid === 'string' && isValidStableUid(row.stable_uid) && !rows.has(row.stable_uid) && typeof row.question === 'string' && ['explanation', 'code_snippet', 'code_language', 'real_world_usage', 'topic'].every(field => nullableText(row[field])) && typeof row.difficulty === 'number' && isValidDifficulty(row.difficulty) && integer(row.order_in_deck) && !orders.has(row.order_in_deck) && integer(row.version) && integer(row.revision) && (row.is_deleted === 0 || row.is_deleted === 1) && timestamp(row.created_at) && timestamp(row.updated_at), 'Snapshot backup card fields are invalid.');
     for (const field of ['mcq', 'source', 'translations', 'translation_basis']) if (row[field] !== null) object(row[field]);
     requireValue(parseFrontHelp(row.front_help) !== undefined, 'Snapshot backup front_help is invalid.');
-    rows.set(row.stable_uid, row); ids.add(row.id);
+    rows.set(row.stable_uid, row); ids.add(row.id); orders.add(row.order_in_deck);
   }
   const active = [...rows.values()].filter(row => row.is_deleted === 0); const seen = new Set<string>();
   requireValue(active.length === snapshot.cards.length, 'Snapshot backup active-card coverage is inconsistent.');
@@ -123,6 +123,14 @@ export function assertReleaseSnapshot(snapshot: ReleaseSnapshot): void {
     requireValue(card.schema === (hasHelp ? 'front-help-v1' : 'legacy-v1'), 'Snapshot backup schema metadata is inconsistent.');
     seen.add(card.stableUid);
   }
+}
+
+export function captureReleaseBackupInventory(snapshot: ReleaseSnapshot): ReleaseBackupInventory {
+  assertReleaseSnapshot(snapshot);
+  return {
+    editingSnapshot: snapshot.editingSnapshot,
+    rows: snapshot.backup.map(row => ({ id: row.id as number, stableUid: row.stable_uid as string, orderInDeck: row.order_in_deck as number, version: row.version as number, revision: row.revision as number, isDeleted: row.is_deleted as 0 | 1 })),
+  };
 }
 
 export function assertOriginalLive(session: ReleaseSession, snapshot: ReleaseSnapshot) {
@@ -240,6 +248,7 @@ export function parseReleaseSession(raw: string, ownerSubject?: string): Release
   text(session.ownerSubject, 256);
   if (ownerSubject !== undefined) requireValue(session.ownerSubject === ownerSubject, 'Recovery journal belongs to another signed-in subject.');
   assertReleaseSnapshot(session.baseline);
+  requireValue(structurallyEqual(session.baselineInventory, captureReleaseBackupInventory(session.baseline)), 'Recovery backup inventory is missing or differs from the original editing snapshot/all-row capture.');
   session.bundle = parseReleaseBundle(JSON.stringify(session.bundle), Date.now(), false);
   object(session.actions);
   if (session.verifiedSnapshot) assertOriginalLive(session, session.verifiedSnapshot);

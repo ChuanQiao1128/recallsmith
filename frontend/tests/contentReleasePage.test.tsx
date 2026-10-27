@@ -44,10 +44,12 @@ describe('AWS Basics release operator flow', () => {
   });
   it('captures and persists the entire editing backup before the first import request', async () => {
     const user = userEvent.setup(); const { bundle, snapshot } = releaseFixture();
-    snapshot.backup.push({ ...structuredClone(snapshot.backup[0]), id: 9999, stable_uid: 'deleted-card', version: 9, revision: 3, is_deleted: 1, private_column: 'preserved' });
+    snapshot.backup.push({ ...structuredClone(snapshot.backup[0]), id: 9999, stable_uid: 'deleted-card', order_in_deck: 9999, version: 9, revision: 3, is_deleted: 1, private_column: 'preserved' });
     api.fetchReleaseSnapshot.mockResolvedValue(ok(snapshot));
     api.sendReleaseAction.mockImplementation(async action => {
       const saved = JSON.parse(sessionStorage.getItem(key)!);
+      expect(saved.baselineInventory.editingSnapshot).toBe(snapshot.editingSnapshot);
+      expect(saved.baselineInventory.rows.at(-1)).toMatchObject({ id: 9999, stableUid: 'deleted-card', orderInDeck: 9999, version: 9, revision: 3, isDeleted: 1 });
       expect(saved.baseline.backup.at(-1)).toMatchObject({ stable_uid: 'deleted-card', private_column: 'preserved' });
       expect(saved.actions.import.payload).toBe(action.payload);
       expect(saved.actions.import.outcome).toBe('unknown');

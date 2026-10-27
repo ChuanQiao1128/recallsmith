@@ -1,3 +1,4 @@
+import type { AxiosRequestHeaders } from 'axios';
 import { http } from './http';
 import { readSessionUser } from '../auth/sessionUser';
 import { apiResultFromError, failResult } from './httpFailure';
@@ -5,11 +6,27 @@ import type { Card } from '../types/card';
 import type { ApiResult } from '../types/api';
 import type { ReleaseAction, ReleaseActions, ReleaseSnapshot } from '../types/contentRelease';
 
-// Runs after the shared async auth interceptor, immediately before HTTP dispatch.
+function assertCurrentSubject(ownerSubject: string) {
+  const active = readSessionUser();
+  if (!ownerSubject || active?.sub !== ownerSubject || !active.groups.some(group => group === 'editor' || group === 'super_admin')) throw new Error('Signed-in subject changed before release request.');
+}
+
+// Check the actual bearer attached by shared auth; current stored identity alone can race.
 function subjectGuard(ownerSubject: string) {
-  return (data: unknown) => {
-    const active = readSessionUser();
-    if (!ownerSubject || active?.sub !== ownerSubject || !active.groups.some(group => group === 'editor' || group === 'super_admin')) throw new Error('Signed-in subject changed before release request.');
+  return (data: unknown, headers: AxiosRequestHeaders) => {
+    assertCurrentSubject(ownerSubject);
+    const authorization = headers.get('Authorization');
+    let bearerSubject: unknown;
+    try {
+      const bearer = typeof authorization === 'string' && /^Bearer ([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/i.exec(authorization);
+      if (bearer) {
+        const payload = bearer[1].split('.')[1];
+        const padded = payload + '='.repeat((4 - payload.length % 4) % 4);
+        bearerSubject = JSON.parse(atob(padded.replace(/-/g, '+').replace(/_/g, '/')))?.sub;
+      }
+    } catch { /* Malformed/missing bearer claims fail closed without exposing credentials. */ }
+    // The server remains the signature/authorization authority; this is local owner isolation.
+    if (bearerSubject !== ownerSubject) throw new Error('Request bearer subject does not match the release journal owner.');
     return data;
   };
 }
@@ -33,10 +50,10 @@ export async function fetchReleaseCards(ownerSubject: string): Promise<ApiResult
     const cards: Card[] = []; const cursors = new Set<string>();
     let cursor: string | null = null;
     for (let page = 0; page < 100; page++) {
-      guard(undefined);
+      assertCurrentSubject(ownerSubject);
       const params: Record<string, unknown> = { deckId: 15, limit: 200, ...(cursor === null ? {} : { cursor }) };
       const result = (await http.get<ApiResult<{ items: Card[]; hasMore: boolean; nextCursor: string | null }>>('/api/v1/authoring/cards/page', { params, transformRequest: [guard] })).data;
-      guard(undefined);
+      assertCurrentSubject(ownerSubject);
       if (!result.success) return { ...result, data: null };
       if (!result.data || !Array.isArray(result.data.items) || typeof result.data.hasMore !== 'boolean') return failResult('Invalid release card page.', 'PAGING_ERROR');
       cards.push(...result.data.items);

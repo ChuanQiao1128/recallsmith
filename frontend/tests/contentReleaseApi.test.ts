@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { AxiosHeaders } from 'axios';
+import { readStoredTokens } from '../src/auth/tokenStore';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { prepareReleaseAction } from '../src/lib/contentRelease';
 import { releaseFixture } from './support/contentReleaseFixtures';
@@ -34,7 +36,7 @@ describe('subject guard at HTTP dispatch after shared authentication', () => {
     http.post.mockResolvedValue({ data: ok({}) });
     await sendReleaseAction(action, TEST_EDITOR_SUB);
     const guard = http.post.mock.calls[0][2].transformRequest[0];
-    expect(guard(action.payload)).toBe(action.payload);
+    expect(guard(action.payload, new AxiosHeaders({ Authorization: `Bearer ${readStoredTokens()!.accessToken}` }))).toBe(action.payload);
     signInAsSuperAdmin();
     expect(() => guard(action.payload)).toThrow(/subject changed/);
   });
@@ -82,5 +84,21 @@ describe('subject-isolated full release readback', () => {
     http.get.mockResolvedValueOnce({ data: kind === 'refused' ? { success: false, data: null, error: { code: 'DENIED', message: 'Denied' } } : ok({ items: [], hasMore: true, nextCursor: 'repeat' }) });
     const result = await fetchReleaseCards(TEST_EDITOR_SUB);
     expect(result.success).toBe(false); expect(result.data).toBeNull();
+  });
+});
+
+describe('actual dispatched bearer ownership (F03 residual)', () => {
+  it.each(['missing', 'opaque', 'malformed', 'missingSubject', 'foreign'] as const)('rejects %s actual Authorization with the current owner still signed in', async kind => {
+    const { session } = releaseFixture(); const action = prepareReleaseAction(session, 'import', 'import');
+    http.post.mockResolvedValue({ data: ok({}) }); await sendReleaseAction(action, TEST_EDITOR_SUB);
+    const guard = http.post.mock.calls[0][2].transformRequest[0];
+    let authorization: string | undefined;
+    if (kind === 'opaque') authorization = 'Bearer opaque';
+    if (kind === 'malformed') authorization = 'Bearer e30.invalid.signature';
+    if (kind === 'missingSubject') authorization = 'Bearer e30.e30.signature';
+    if (kind === 'foreign') { signInAsSuperAdmin(); authorization = `Bearer ${readStoredTokens()!.accessToken}`; signInAsEditor(); }
+    const headers = new AxiosHeaders();
+    if (authorization !== undefined) headers.set('Authorization', authorization);
+    expect(() => guard(action.payload, headers)).toThrow(/bearer subject/);
   });
 });

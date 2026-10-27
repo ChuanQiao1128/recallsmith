@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assertReleaseSnapshot, assertReplayAllowed, canonicalReleaseCard, parseReleaseBundle, parseReleaseSession, prepareReleaseAction, verifyReleaseReadback } from '../src/lib/contentRelease';
+import { captureReleaseBackupInventory, assertReleaseSnapshot, assertReplayAllowed, canonicalReleaseCard, parseReleaseBundle, parseReleaseSession, prepareReleaseAction, verifyReleaseReadback } from '../src/lib/contentRelease';
 import { releaseFixture } from './support/contentReleaseFixtures';
 import { ok } from './support/apiResult';
 
@@ -139,7 +139,7 @@ describe('recovery trust boundaries (F01–F04)', () => {
   });
   it.each(['question', 'explanation', 'source', 'translations', 'front_help', 'translation_basis', 'created_at', 'deck_id'])('rejects backup missing recoverable %s on active and deleted rows', field => {
     const { snapshot } = releaseFixture();
-    const deleted: Record<string, unknown> = { ...snapshot.backup[0], id: 9999, stable_uid: 'deleted-synthetic', is_deleted: 1 };
+    const deleted: Record<string, unknown> = { ...snapshot.backup[0], id: 9999, stable_uid: 'deleted-synthetic', order_in_deck: 9999, is_deleted: 1 };
     snapshot.backup.push(deleted);
     delete snapshot.backup[0][field];
     expect(() => assertReleaseSnapshot(snapshot)).toThrow(/backup/);
@@ -162,9 +162,40 @@ describe('recovery trust boundaries (F01–F04)', () => {
   });
   it('preserves every complete raw backend/deleted row and unknown future column', () => {
     const { session } = releaseFixture();
-    session.baseline.backup.push({ ...session.baseline.backup[0], id: 9999, stable_uid: 'deleted-synthetic', is_deleted: 1, future_column: { exact: ['retained', null] } });
+    session.baseline.backup.push({ ...session.baseline.backup[0], id: 9999, stable_uid: 'deleted-synthetic', order_in_deck: 9999, is_deleted: 1, future_column: { exact: ['retained', null] } });
     session.baseline.deck.future_column = { exact: 'retained' };
+    session.baselineInventory = captureReleaseBackupInventory(session.baseline);
     const restored = parseReleaseSession(JSON.stringify(session), session.ownerSubject);
     expect(restored.baseline).toEqual(session.baseline);
+  });
+});
+
+describe('captured complete all-row inventory (F04 residual)', () => {
+  function captured() {
+    const { session } = releaseFixture();
+    session.baseline.backup.push({ ...structuredClone(session.baseline.backup[0]), id: 9999, stable_uid: 'deleted-inventory-synthetic', order_in_deck: 9999, is_deleted: 1, future_column: { preserved: true } });
+    session.baselineInventory = captureReleaseBackupInventory(session.baseline);
+    return session;
+  }
+  it('rejects a whole omitted deleted row while retaining the original editing snapshot/inventory', () => {
+    const session = captured(); const raw = JSON.stringify(session);
+    expect(parseReleaseSession(raw, session.ownerSubject).baseline.backup).toEqual(session.baseline.backup);
+    session.baseline.backup.pop();
+    expect(() => parseReleaseSession(JSON.stringify(session), session.ownerSubject)).toThrow(/inventory/);
+  });
+  it.each(['missing', 'snapshot', 'id', 'stableUid', 'orderInDeck', 'version', 'revision', 'isDeleted', 'missingInventoryRow'])('rejects %s inventory without regenerating its binding', field => {
+    const session = captured();
+    if (field === 'missing') delete (session as Partial<typeof session>).baselineInventory;
+    else if (field === 'snapshot') session.baselineInventory.editingSnapshot = '0'.repeat(64);
+    else if (field === 'missingInventoryRow') session.baselineInventory.rows.pop();
+    else if (field === 'stableUid') session.baselineInventory.rows[0].stableUid = 'wrong-inventory-uid';
+    else if (field === 'isDeleted') session.baselineInventory.rows[0].isDeleted = 1;
+    else session.baselineInventory.rows[0][field as 'id' | 'orderInDeck' | 'version' | 'revision']++;
+    expect(() => parseReleaseSession(JSON.stringify(session), session.ownerSubject)).toThrow(/inventory/);
+  });
+  it('rejects duplicate order values across active and deleted rows even with a rewritten inventory', () => {
+    const session = captured(); session.baseline.backup.at(-1)!.order_in_deck = 1;
+    session.baselineInventory.rows.at(-1)!.orderInDeck = 1;
+    expect(() => parseReleaseSession(JSON.stringify(session), session.ownerSubject)).toThrow(/backup/);
   });
 });

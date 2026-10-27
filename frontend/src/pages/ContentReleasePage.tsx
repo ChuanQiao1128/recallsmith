@@ -8,7 +8,7 @@ import { CARD_CLASS, H1_CLASS, H2_CLASS, INPUT_CLASS } from '../components/conso
 import { Button } from '../components/ui/Button';
 import { Callout } from '../components/ui/Callout';
 import { CONSOLE_NAME } from '../lib/brand';
-import { assertActionDependencies, assertActionResult, assertFrozenAction, isConfirmedAction, assertOriginalLive, assertReleaseSnapshot, assertReplayAllowed, decodeCommittedAction, parseReleaseBundle, parseReleaseSession, prepareReleaseAction, verifyReleaseReadback } from '../lib/contentRelease';
+import { captureReleaseBackupInventory, assertActionDependencies, assertActionResult, assertFrozenAction, isConfirmedAction, assertOriginalLive, assertReleaseSnapshot, assertReplayAllowed, decodeCommittedAction, parseReleaseBundle, parseReleaseSession, prepareReleaseAction, verifyReleaseReadback } from '../lib/contentRelease';
 import type { ApiResult } from '../types/api';
 import type { ReleaseBundle, ReleaseKind, ReleaseSession } from '../types/contentRelease';
 
@@ -77,7 +77,7 @@ export function ContentReleasePage() {
     if (!bundle || session) return;
     const baseline = dataOrThrow(await owned(() => fetchReleaseSnapshot(user!.sub!)));
     assertReleaseSnapshot(baseline);
-    save({ schema: 'aws-basics-console-session-v1', ownerSubject: user!.sub!, baseline, bundle, actions: {} });
+    save({ schema: 'aws-basics-console-session-v1', ownerSubject: user!.sub!, baseline, baselineInventory: captureReleaseBackupInventory(baseline), bundle, actions: {} });
     setMessage('Complete editing backup captured. The initial live build and bundle are now frozen for this release.');
   }
   async function verify(current: ReleaseSession): Promise<ReleaseSession> {
