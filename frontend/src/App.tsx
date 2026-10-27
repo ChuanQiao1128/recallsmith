@@ -45,6 +45,7 @@ const CardListPage = lazy(() => import('./pages/CardListPage').then(m => ({ defa
 const NewCardPage = lazy(() => import('./pages/NewCardPage').then(m => ({ default: m.NewCardPage })));
 const EditCardPage = lazy(() => import('./pages/EditCardPage').then(m => ({ default: m.EditCardPage })));
 const DeckImportPage = lazy(() => import('./pages/DeckImportPage').then(m => ({ default: m.DeckImportPage })));
+const ContentReleasePage = lazy(() => import('./pages/ContentReleasePage').then(m => ({ default: m.ContentReleasePage })));
 const DeckPreviewPage = lazy(() => import('./pages/DeckPreviewPage').then(m => ({ default: m.DeckPreviewPage })));
 const AdminUsersPage = lazy(() => import('./pages/AdminUsersPage').then(m => ({ default: m.AdminUsersPage })));
 const DeckEditPage = lazy(() => import('./pages/DeckEditPage').then(m => ({ default: m.DeckEditPage })));
@@ -124,6 +125,7 @@ function App() {
                 <Route path="/decks/cards/new" element={<NewCardPage />} />
                 <Route path="/decks/cards/edit" element={<EditCardPage />} />
                 <Route path="/decks/cards/import" element={<DeckImportPage />} />
+                <Route path="/decks/release" element={<ContentReleasePage />} />
 
                 <Route path="/decks/preview" element={<DeckPreviewPage />} />
 
