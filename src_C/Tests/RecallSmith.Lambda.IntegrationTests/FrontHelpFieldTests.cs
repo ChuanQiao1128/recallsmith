@@ -28,7 +28,7 @@ public class FrontHelpFieldTests(PostgresFixture db)
   }
   private static string Code(APIGatewayProxyResponse response) => Json(response.Body).GetProperty("error").GetProperty("code").GetString()!;
   private async Task<long> NewDeck() => Convert.ToInt64(await db.ScalarAsync("insert into decks (slug,title,author) values ($1,'help deck','tests') returning id", $"it-help-{Guid.NewGuid():N}"), CultureInfo.InvariantCulture);
-  private static Dictionary<string, object?> Card(long deckId, bool help = true, bool translations = true) 
+  private static Dictionary<string, object?> Card(long deckId, bool help = true, bool translations = true)
   {
     var card = new Dictionary<string, object?> { ["deckId"] = deckId, ["stableUid"] = "u", ["orderInDeck"] = 1, ["question"] = "What is a VPC?", ["explanation"] = "A virtual network" };
     if (help) card["frontHelp"] = Help;
