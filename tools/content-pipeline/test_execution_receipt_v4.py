@@ -1,5 +1,6 @@
 """SYNTHETIC fixtures only: these tests establish no real model execution."""
 import copy
+from decimal import localcontext
 import hashlib
 import json
 import os
@@ -334,6 +335,166 @@ class SyntheticReceiptTests(unittest.TestCase):
             self.events[3]['item']['text'] = text
             self.write_fixture()
             self.reject()
+
+    def test_completed_only_and_full_item_lifecycles(self):
+        self.assertTrue(self.verify()['rawReceiptIntegrityVerified'])
+        reason, message = copy.deepcopy(self.events[2:4])
+        items = []
+        for completed in (reason, message):
+            for kind in ('item.started', 'item.updated', 'item.completed'):
+                event = copy.deepcopy(completed)
+                event['type'] = kind
+                event['item']['status'] = 'completed' if kind == 'item.completed' else 'in_progress'
+                items.append(event)
+        self.events = self.events[:2] + items + self.events[-1:]
+        self.write_fixture()
+        self.assertTrue(self.verify()['rawReceiptIntegrityVerified'])
+
+    def test_item_ids_transitions_and_pending_items(self):
+        original = copy.deepcopy(self.events)
+        reason, message = copy.deepcopy(original[2:4])
+        cases = []
+        for index in (2, 3):
+            for identity in (None, '', ' ', True, 'bad id', 'bad\nidentity', 'x' * 257):
+                events = copy.deepcopy(original)
+                events[index]['item']['id'] = identity
+                cases.append(events)
+            events = copy.deepcopy(original)
+            del events[index]['item']['id']
+            cases.append(events)
+        for item_type in ('reasoning', 'agent_message'):
+            pending = {'type': 'item.started', 'item': {'id': 'pending', 'type': item_type, 'text': 'partial'}}
+            cases.append(original[:-1] + [pending] + original[-1:])
+        for extra in (reason, message, {**reason, 'type': 'item.updated'},
+                      {**reason, 'type': 'item.started'},
+                      {'type': 'item.updated', 'item': {'id': 'never-started', 'type': 'reasoning'}},
+                      {'type': 'item.completed', 'item': {'id': 'reason-1', 'type': 'agent_message', 'text': '{}'}}):
+            cases.append(original[:-1] + [extra] + original[-1:])
+        started = {'type': 'item.started', 'item': {'id': 'reason-1', 'type': 'reasoning'}}
+        cases.append(original[:2] + [started, started] + original[2:])
+        changed_type = copy.deepcopy(reason)
+        changed_type['item']['type'] = 'agent_message'
+        cases.append(original[:2] + [started, changed_type] + original[3:])
+        for events in cases:
+            with self.subTest(events=events):
+                self.events = copy.deepcopy(events)
+                self.write_fixture()
+                self.reject()
+
+    def test_nested_failure_and_invalid_status_markers(self):
+        original = copy.deepcopy(self.events)
+        for marker in ({'status': 'failed'}, {'status': 'error'}, {'status': 'in_progress'},
+                       {'status': None}, {'error': 'synthetic failure'}, {'failed': True},
+                       {'failure': None}, {'cancelled': True}, {'success': False},
+                       {'metadata': {'details': [{'errors': ['synthetic']}]}},
+                       {'metadata': {'status': 'failed'}}, {'metadata': {'type': 'error'}}):
+            for index in (2, 3):
+                self.events = copy.deepcopy(original)
+                self.events[index]['item'].update(marker)
+                self.write_fixture()
+                self.reject()
+        self.events = copy.deepcopy(original)
+        self.events[-1]['metadata'] = {'status': 'failed'}
+        self.write_fixture()
+        self.reject()
+        self.events = copy.deepcopy(original)
+        self.events.insert(2, {'type': 'item.started', 'item': {'id': 'reason-1', 'type': 'reasoning',
+                                                            'status': 'completed'}})
+        self.write_fixture()
+        self.reject()
+
+    def test_terminal_usage_is_typed(self):
+        original = copy.deepcopy(self.events)
+        for usage in ('malformed', [], None, {'input_tokens': True}, {'output_tokens': -1},
+                      {'output_tokens': 1.0}):
+            self.events = copy.deepcopy(original)
+            self.events[-1]['usage'] = usage
+            self.write_fixture()
+            self.reject()
+
+    def raw_numeric_fixture(self, number_schema, result_number, event_number=None):
+        self.schema = b'{"type":"object","properties":{"answer":' + number_schema + b'}}'
+        self.result = b'{"answer":' + result_number + b'}'
+        self.invocation['schemaHash'] = self.execution['schemaHash'] = digest(self.schema)
+        self.execution.update(outputHash=digest(self.result), outputBytes=len(self.result))
+        self.events[3]['item']['text'] = (b'{"answer":' + (event_number or result_number) + b'}').decode()
+        self.write_fixture()
+
+    def test_distinct_exact_decimals_and_numeric_types_never_compare_equal(self):
+        for result, event in ((b'9007199254740992.0', b'9007199254740993.0'),
+                              (b'0.1234567890123456789012345678901', b'0.1234567890123456789012345678902'),
+                              (b'1', b'1.0'), (b'1.0', b'1'), (b'true', b'1'), (b'1', b'true')):
+            with self.subTest(result=result, event=event):
+                self.raw_numeric_fixture(b'{}', result, event)
+                self.reject()
+
+    def test_exact_numeric_schema_boundaries(self):
+        for schema, result in ((b'{"type":"number","maximum":9007199254740992}', b'9007199254740993.0'),
+                               (b'{"type":"number","maximum":0.1}', b'0.10000000000000000000000000001'),
+                               (b'{"type":"number","minimum":0.1}', b'0.09999999999999999999999999999'),
+                               (b'{"type":"number","exclusiveMaximum":0.1}', b'0.1'),
+                               (b'{"type":"number","exclusiveMinimum":0.1}', b'0.1'),
+                               (b'{"type":"integer"}', b'1.00000000000000000000000000001'),
+                               (b'{"type":"integer"}', b'true'), (b'{"type":"number"}', b'true')):
+            with self.subTest(schema=schema, result=result):
+                self.raw_numeric_fixture(schema, result)
+                self.reject()
+
+    def test_matching_decimals_integral_decimals_and_exact_multiples(self):
+        for schema, result in ((b'{"type":"number"}', b'9007199254740993.0'),
+                               (b'{"type":"number"}', b'0.1234567890123456789012345678901'),
+                               (b'{"type":"integer"}', b'1.0'), (b'{"type":"integer"}', b'1e0'),
+                               (b'{"type":"number","multipleOf":0.1}', b'0.3'),
+                               (b'{"type":"number","multipleOf":0.1}', b'12345678901234567890123456789.3'),
+                               (b'{"type":"number","multipleOf":1e-400}', b'3e-400'),
+                               (b'{"type":"integer","multipleOf":0.1}', b'1.0')):
+            with self.subTest(schema=schema, result=result), localcontext() as context:
+                context.prec = 6  # Validation must not depend on ambient Decimal rounding.
+                self.raw_numeric_fixture(schema, result)
+                self.assertTrue(self.verify()['rawReceiptIntegrityVerified'])
+        self.raw_numeric_fixture(b'{"type":"number"}', b'0.1', b'0.10')
+        self.assertTrue(self.verify()['rawReceiptIntegrityVerified'])
+
+    def test_inexact_decimal_multiples_are_rejected(self):
+        for divisor, value in ((b'0.1', b'0.30000000000000000000000000001'),
+                               (b'0.00000000000000000000000000003', b'0.00000000000000000000000000008')):
+            self.raw_numeric_fixture(b'{"type":"number","multipleOf":' + divisor + b'}', value)
+            with localcontext() as context:
+                context.prec = 6
+                self.reject()
+
+    def test_exact_numeric_validation_survives_local_recursive_refs(self):
+        for dialect in ('https://json-schema.org/draft/2020-12/schema', 'http://json-schema.org/draft-07/schema#'):
+            schema = {'$schema': dialect, 'type': 'object', 'properties': {
+                'child': {'$ref': '#'}, 'answer': {'type': 'number', 'multipleOf': 1}}}
+            self.schema_fixture(schema, {'child': {'answer': 1}})
+            self.assertTrue(self.verify()['rawReceiptIntegrityVerified'])
+            self.result = b'{"child":{"answer":12345678901234567890123456789.0}}'
+            self.execution.update(outputHash=digest(self.result), outputBytes=len(self.result))
+            self.events[3]['item']['text'] = self.result.decode()
+            self.write_fixture()
+            with localcontext() as context:
+                context.prec = 6
+                self.assertTrue(self.verify()['rawReceiptIntegrityVerified'])
+            # This exactly nonintegral number would round to an integer with short Decimal contexts.
+            self.result = b'{"child":{"answer":12345678901234567890123456789.1}}'
+            self.execution.update(outputHash=digest(self.result), outputBytes=len(self.result))
+            self.events[3]['item']['text'] = self.result.decode()
+            self.write_fixture()
+            with localcontext() as context:
+                context.prec = 6
+                self.reject()
+        self.schema_fixture({'properties': {'answer': {'$schema': 'http://json-schema.org/draft-07/schema#',
+                                                       'type': 'number'}}}, {'answer': 1})
+        with self.assertRaisesRegex(ValueError, 'Nested schema dialects unsupported'):
+            self.verify()
+
+    def test_decimal_bounds_and_nonfinite_rejection(self):
+        for value in (b'1e400', b'NaN', b'Infinity', b'-Infinity', b'1e-4097',
+                      b'1e-999999999999999999999999999', b'0.' + b'1' * 4097):
+            with self.subTest(value=value):
+                self.raw_numeric_fixture(b'{"type":"number"}', value)
+                self.reject()
 
     def test_reported_model_string_or_null_is_honest(self):
         self.execution['reportedModel'] = 'declared-only-other-model'

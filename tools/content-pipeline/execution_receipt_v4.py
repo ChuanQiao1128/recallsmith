@@ -12,7 +12,12 @@ is opened. Only the six bounded files beneath the registered root are read.
 Pins establish record consistency, never model identity/authenticity, source
 review, capability/denial authority, semantic quality, or release permission.
 The caller must freeze files/pins independently; this is no signature verifier.
+Decimals retain exact values (<=4096 digits and absolute exponent <=4096); binary
+float overflow remains rejected. Integral decimals satisfy schema integer types,
+but result/event equality preserves boolean/integer/decimal distinctions.
 """
+from decimal import Decimal, DecimalException
+from fractions import Fraction
 import hashlib
 import json
 import math
@@ -55,8 +60,10 @@ def _json(data):
         return result
 
     def number(value):
-        result = float(value)
-        _require(math.isfinite(result), 'Non-finite JSON number')
+        result = Decimal(value)
+        _require(result.is_finite() and math.isfinite(float(result)), 'Non-finite/overflow JSON number')
+        _require(len(result.as_tuple().digits) <= 4096 and abs(result.as_tuple().exponent) <= 4096,
+                 'Exact decimal precision/exponent limit')
         return result
 
     def walk(value, depth=0):
@@ -75,7 +82,7 @@ def _json(data):
                            parse_constant=lambda _: _require(False, 'Non-finite JSON constant'))
         walk(value)
         return value
-    except (UnicodeError, RecursionError, OverflowError) as exc:
+    except (UnicodeError, RecursionError, OverflowError, DecimalException) as exc:
         raise ValueError('Invalid strict UTF-8 JSON') from exc
 
 
@@ -161,20 +168,51 @@ def _events(data, result, reported_model):
     thread = events[0].get('thread_id')
     _require(isinstance(thread, str) and bool(thread.strip()) and len(thread) <= 256 and
              not any(ord(c) < 32 for c in thread), 'Real nonempty raw thread_id required')
-    messages = []
+    def clean_markers(value, expected_status):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                marker = key.casefold()
+                _require(marker not in {'error', 'errors', 'failure', 'failed', 'cancel', 'cancelled', 'canceled'},
+                         'Nested failure/error/cancel marker')
+                if marker == 'status':
+                    _require(child == expected_status, 'Invalid lifecycle status')
+                if marker == 'success':
+                    _require(child is True, 'Failed success marker')
+                if marker == 'type' and isinstance(child, str):
+                    _require(child not in {'error', 'failed', 'cancelled', 'canceled'}, 'Nested failure type')
+                clean_markers(child, expected_status)
+        elif isinstance(value, list):
+            for child in value:
+                clean_markers(child, expected_status)
+    messages, items = [], {}
     for event in events:
         kind = event.get('type')
-        _require(type(kind) is str and kind in allowed and not any(k in event for k in ('error', 'errors', 'cancelled')),
-                 'Error/cancel/unknown event')
+        _require(type(kind) is str and kind in allowed, 'Error/cancel/unknown event')
+        clean_markers(event, 'in_progress' if kind in ('item.started', 'item.updated') else 'completed')
         if kind.startswith('item.'):
             item = event.get('item')
             _require(type(item) is dict and type(item.get('type')) is str and
                      item['type'] in {'reasoning', 'agent_message'}, 'Tool/invalid item')
+            identity = item.get('id')
+            _require(isinstance(identity, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,256}', identity), 'Invalid item id')
+            previous = items.get(identity)
+            _require(previous is None or previous[0] == item['type'], 'Item type changed')
+            if kind == 'item.started':
+                _require(previous is None, 'Duplicate item start')
+            elif kind == 'item.updated':
+                _require(previous is not None and previous[1] != 'item.completed', 'Update without pending item')
+            else:  # Completed-only items are emitted by the frozen CLI records.
+                _require(previous is None or previous[1] != 'item.completed', 'Duplicate item completion')
+            items[identity] = (item['type'], kind)
             if kind == 'item.completed' and item['type'] == 'agent_message':
                 _require(isinstance(item.get('text'), str), 'Missing agent text')
                 messages.append(_json(item['text'].encode('utf-8')))
         else:
             _require('item' not in event, 'Item outside item event')
+    _require(all(state == 'item.completed' for _, state in items.values()), 'Pending item at turn completion')
+    if 'usage' in events[-1]:
+        usage = events[-1]['usage']
+        _require(type(usage) is dict and all(type(v) is int and v >= 0 for v in usage.values()), 'Malformed usage')
     _require(len(messages) == 1 and _same(messages[0], result), 'Final message/result mismatch')
     _require(events[-1].get('model') == reported_model, 'Reported model/event mismatch')
     return thread
@@ -249,6 +287,7 @@ def verify_execution_v4(output_dir, *, frozen_prompt, frozen_schema_bytes, trust
         if not isinstance(value, dict):
             return
         _require(not any(k in value for k in ('$id', 'id')), 'Schema identifiers forbidden')
+        _require(value is schema or '$schema' not in value, 'Nested schema dialects unsupported')
         for key in ('$ref', '$dynamicRef', '$recursiveRef'):
             if key in value:
                 _require(isinstance(value[key], str) and value[key].startswith('#'),
@@ -271,8 +310,20 @@ def verify_execution_v4(output_dir, *, frozen_prompt, frozen_schema_bytes, trust
     schema_refs(schema)
     validator = jsonschema.validators.validator_for(schema, default=None) if '$schema' in schema else jsonschema.Draft202012Validator
     _require(validator is not None, 'Unknown JSON Schema dialect')
-    validator.check_schema(schema)
-    validator(schema, registry=Registry()).validate(result)
+    def exact_multiple(checker, divisor, instance, _schema):
+        if checker.is_type(instance, 'number') and (Fraction(instance) / Fraction(divisor)).denominator != 1:
+            yield jsonschema.ValidationError('Number is not an exact multiple')
+    types = validator.TYPE_CHECKER.redefine('integer', lambda _, v:
+        type(v) is int or isinstance(v, Decimal) and v == v.to_integral_value())
+    exact_validator = jsonschema.validators.extend(validator,
+        {k: exact_multiple for k in ('multipleOf', 'divisibleBy') if k in validator.VALIDATORS}, type_checker=types)
+    try:
+        exact_validator.check_schema(schema)
+        # Fix the selected dialect so recursive local refs cannot select the unextended class.
+        validation_schema = {k: v for k, v in schema.items() if k != '$schema'}
+        exact_validator(validation_schema, registry=Registry()).validate(result)
+    except (ArithmeticError, TypeError) as exc:
+        raise ValueError('Unsupported exact schema arithmetic') from exc
     call_id = _events(raw['events.jsonl'], result, execution['reportedModel'])
     return {'rawReceiptIntegrityVerified': True, 'requestedModel': 'gpt-6-sol', 'requestedEffort': 'high',
             'auth': 'chatgpt', 'reportedModel': execution['reportedModel'], 'callId': call_id,
