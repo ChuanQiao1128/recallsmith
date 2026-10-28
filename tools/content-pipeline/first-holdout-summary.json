@@ -1,0 +1,62 @@
+{
+  "schema": "aws-basics-public-readiness-summary-v1",
+  "observedDate": "2026-10-28",
+  "releaseVerdict": "FAIL",
+  "curriculumGoals": 337,
+  "legacyStableUidsPreservedInCatalogue": 334,
+  "newCardBodiesGenerated": 0,
+  "newCardBodiesIndependentlyReviewed": 0,
+  "humanLabelCount": 0,
+  "corpus": {
+    "officialSources": 327,
+    "originalChunks": 4668,
+    "embeddingModel": "BAAI/bge-small-en-v1.5",
+    "dimensions": 384,
+    "engine": "local PostgreSQL/pgvector exact cosine",
+    "version": "ca1729f26aee90931ae7571749816dbebbb0ccf2e2810f56d70f900d6ac855c9"
+  },
+  "retrieval": {
+    "split": "first holdout; observed once",
+    "positives": 32,
+    "negatives": 8,
+    "strategy": "vector",
+    "profileHash": "a652c43f7a5e9ff1a6cd2097db22166569574a63a7d9b42f3a19956c553de367",
+    "retrievalConfigVersion": 3,
+    "meanRecallAt8": 0.7078125,
+    "meanMrrAt8": 0.5911458333333334,
+    "perThemeRecallAt8": {
+      "cloud": 0.25,
+      "compute": 0.75,
+      "databases": 0.8333333333333334,
+      "identity": 0.6375,
+      "messaging": 0.75,
+      "networking": 1.0,
+      "operations": 0.6916666666666667,
+      "storage": 0.75
+    },
+    "requiredRecallAt8": 0.9,
+    "requiredMrrAt8": 0.75,
+    "requiredPerThemeRecallAt8": 0.75
+  },
+  "readiness": {
+    "negativeCount": 8,
+    "negativeRefused": 8,
+    "falseRefusals": 1,
+    "wrongDeploymentAccepted": 0,
+    "unsupportedAccepted": 12,
+    "actualSubscriptionExecutions": 28,
+    "requestedRoute": "gpt-6-sol/high via restricted .NET IChatClient and Codex subscription CLI",
+    "reportedModel": null,
+    "inputTokens": 450324,
+    "outputTokens": 14543,
+    "unsupportedCategoryExplanation": "The 12 judgments identified incomplete required coverage or missing qualifiers; this count does not assert fabricated factual claims."
+  },
+  "observability": {
+    "officialLocalCollectorReceivedModelSpans": 28,
+    "promptContentExportedByTelemetry": false
+  },
+  "fullRagGateSha256": "2eeafb47eaa0de900d73bd0f4723c8cae236e10255288b0ec6e6067a10a63423",
+  "softwareMerged": false,
+  "softwareDeployed": false,
+  "newDeckPublished": false
+}
