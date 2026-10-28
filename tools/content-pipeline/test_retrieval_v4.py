@@ -1,7 +1,8 @@
 import hashlib
 import unittest
 
-from retrieval_v4 import StructuralIndex, pack, parse_blocks, plan_query
+from mcp_evidence import validate_goal
+from retrieval_v4 import StructuralIndex, _form, pack, parse_blocks, plan_query
 
 
 def digest(text):
@@ -35,7 +36,7 @@ class QueryTests(unittest.TestCase):
         cases = [('what A and how B', ['what A', 'how B']), ('what A and B', []),
                  ('what A; how B in Z', []), ('what "A;B"; how C', ['what "A;B"', 'how C']),
                  ('what (A; how B', []), ('what A;;how B', []), ('what A;what A', ['what A']),
-                 ('what A]; how B', []), ('what \\"A; how B', []),
+                 ('what A]; how B', []),
                  ('what [A;B]; how C', ['what [A;B]', 'how C']),
                  ('what A or how B', []), ('what A; how B without C', [])]
         for raw, expected in cases:
@@ -43,17 +44,33 @@ class QueryTests(unittest.TestCase):
                 self.assertEqual([f['text'] for f in plan_query(raw)['forms'][1:]], expected)
 
     def test_scalar_origins_and_ascii_whitespace(self):
+        # Scalar source/provenance normalization remains valid internally;
+        # the public query boundary retains its printable-ASCII admission.
         raw = ' \twhat 😀A;\r\n how B\u00a0C '
-        plan = plan_query(raw)
-        self.assertEqual(plan['queryHash'], digest(raw))
-        self.assertEqual(plan['forms'][2]['text'], 'how B\u00a0C')
-        for form in plan['forms']:
+        forms = [_form(raw, [(0, len(raw))]), _form(raw, [(2, 9)]),
+                 _form(raw, [(13, len(raw) - 1)])]
+        self.assertEqual(forms[2]['text'], 'how B\u00a0C')
+        for form in forms:
             self.assertEqual(len(form['text']), len(form['origin']))
             for char, origin in zip(form['text'], form['origin']):
                 if char not in ' \t\r\n\v\f':
                     self.assertEqual(raw[slice(*origin)], char)
                     self.assertTrue(any(a <= origin[0] < origin[1] <= b for a, b in form['rawSpans']))
-        self.assertEqual(plan['forms'][1]['rawSpans'], [[2, 9]])
+        self.assertEqual(forms[1]['rawSpans'], [[2, 9]])
+
+    def test_public_query_admission_matches_existing_goal_validator(self):
+        cases = ['A', 'what 😀A; how B', 'what A;\n how B', 'www.example.org',
+                 'answer: allowed', 'what \\"A; how B', 'What is EC2?',
+                 'For Z, what A; how B', 'a' * 800, 'a' * 801]
+        for raw in cases:
+            with self.subTest(raw=repr(raw)):
+                try:
+                    validate_goal(raw)
+                except ValueError:
+                    with self.assertRaises(ValueError):
+                        plan_query(raw)
+                else:
+                    self.assertEqual(digest(raw), plan_query(raw)['queryHash'])
 
     def test_reject_invalid_text(self):
         for raw in ['what\0 A', 'what \ud800', '', '123', 'a' * 801]:
@@ -109,6 +126,22 @@ class StructureTests(unittest.TestCase):
         index, chunks = fixture(text, spans)
         self.assertEqual(index.closure(chunks[0]['chunkId'], 2), chunks[:3])
         self.assertIs(index.closure(chunks[0]['chunkId'], 2)[2], chunks[2])
+
+    def test_standalone_note_labels_with_trailing_whitespace(self):
+        for label in ['Note', 'Warning', 'Important', 'Caution']:
+            for whitespace in ['', ' ', '\t', ' \t']:
+                with self.subTest(label=label, whitespace=repr(whitespace)):
+                    text = label + ':' + whitespace + '\n\nB.\n'
+                    blocks = parse_blocks('s', text)
+                    self.assertEqual(['note'], [b['kind'] for b in blocks])
+                    self.assertFalse(blocks[0]['ambiguous'])
+                    self.assertEqual(text, text[blocks[0]['start']:blocks[0]['end']])
+                    split = text.index('B.')
+                    index, chunks = fixture(text, [(0, split), (split, len(text))])
+                    self.assertEqual(chunks, index.closure(chunks[1]['chunkId'], 1))
+                    text = label + ':' + whitespace + '\n'
+                    index, chunks = fixture(text)
+                    self.assertIsNone(index.closure(chunks[0]['chunkId'], 1))
 
     def test_original_validation(self):
         index, chunks = fixture('A.\n')

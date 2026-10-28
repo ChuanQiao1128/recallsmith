@@ -5,6 +5,8 @@ import hashlib
 import math
 import re
 
+from mcp_evidence import validate_goal
+
 WS = ' \t\r\n\v\f'
 FLAGS = re.I | re.ASCII
 WORD = re.compile(r'[A-Za-z]+')
@@ -53,8 +55,7 @@ def _form(raw, spans):
 def plan_query(raw, profile=None):
     """Return A1 fields; integration supplies the frozen profile ArtifactRef."""
     _text(raw)
-    if not raw.strip() or len(raw) > 800 or not re.search('[A-Za-z]', raw):
-        raise ValueError('A bounded English/ASCII learning-goal query is required')
+    validate_goal(raw)
     plan = {'queryHash': _hash(raw), 'forms': [_form(raw, [(0, len(raw))])],
             'droppedFacetCount': 0, 'fallbackReason': None}
     if profile is not None:
@@ -212,7 +213,7 @@ def parse_blocks(source_id, text):
                 i += 1
         elif note(i):
             kind = 'note'
-            label_only = bool(LABEL.fullmatch(syntax[i].strip()) or re.fullmatch(r'(?:Note|Warning|Important|Caution):', syntax[i], FLAGS))
+            label_only = bool(LABEL.fullmatch(syntax[i].strip()) or re.fullmatch(r'(?:Note|Warning|Important|Caution):', syntax[i].rstrip(' \t'), FLAGS))
             i += 1
             if label_only and i + 1 < len(lines) and blank(i) and not blank(i + 1) and not special(i + 1):
                 i += 1
