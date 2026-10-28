@@ -51,3 +51,25 @@ entry points. The historical failed holdout is observed, not a fresh blind test.
 New holdout labels require the reviewed access/sealing prerequisites. The
 previously platform-blocked source-boundary review remains UNKNOWN. Until those
 required checks pass, this code does not authorize card generation or publishing.
+
+## First actual local DEV observations
+
+At runtime-source commit `0116675`, both predeclared configurations ran once
+against all 80 already observed queries (64 positive, 16 negative, 148 required
+groups). All 4,668 stored pgvector rows were checked against the source-bound
+index before retrieval; corpus, active profile, source code and local model cache
+hashes were unchanged afterward. No generative execution or new holdout occurred.
+
+Legacy anchor Recall@8 was 0.59921875 for A and 0.6908854167 for B. Legacy MRR
+was 0.6011904762 and 0.6317708333 respectively. These are legacy diagnostic
+metrics, not the new complete-group semantic metrics or blind acceptance scores.
+No configuration is approved for generation by these observations. Raw candidate
+queues, original packets and packing traces are retained in the local workflow
+control directory. The non-sensitive aggregate is
+[retrieval-v4-dev-summary.json](retrieval-v4-dev-summary.json).
+
+The two configuration observation slots are consumed; their low diagnostic scores
+do not authorize retuning and repeating this cycle. Actual independent semantic
+checks, a new independently sealed holdout, evidence readiness and the previously
+blocked common source-boundary review remain unresolved. New card bodies remain
+0/337 and learner simulations 0/3. Existing failed observations remain intact.
