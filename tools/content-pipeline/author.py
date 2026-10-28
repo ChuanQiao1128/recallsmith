@@ -6,6 +6,7 @@ import argparse
 from collections import Counter
 import json
 from pathlib import Path
+import re
 import subprocess
 
 import jsonschema
@@ -180,6 +181,18 @@ def prepare(args):
     print(canonical({'prepared': len(catalogue['goals']), 'corpusVersion': index.manifest['corpusVersion']}))
 
 
+def corpus_file(corpus_root, relative):
+    path = corpus_root
+    for part in Path(relative).parts:
+        path = path / part
+        if path.is_symlink():
+            raise ValueError('Untrusted corpus file or directory symlink')
+    resolved = path.resolve(strict=True)
+    if not resolved.is_relative_to(corpus_root) or not resolved.is_file():
+        raise ValueError('Untrusted corpus file')
+    return resolved
+
+
 def validate_packet(root, corpus_root, catalogue, goal, packet):
     """Self hashes detect edits; the pinned original corpus establishes provenance."""
     catalogue_body = {k: v for k, v in catalogue.items() if k != 'curriculumHash'}
@@ -194,6 +207,10 @@ def validate_packet(root, corpus_root, catalogue, goal, packet):
     base = {k: v for k, v in packet.items() if k not in {'packetHash', 'goal', 'curriculumHash', 'evidenceHash'}}
     if packet.get('evidenceHash') != digest(canonical(base)):
         raise ValueError('Prepared retrieval evidence hash mismatch')
+    # Normalize trusted system ancestors before checking paths beneath the registered corpus.
+    corpus_root = corpus_root.resolve(strict=True)
+    for relative in ('corpus/manifest.json', 'corpus/chunks.json'):
+        corpus_file(corpus_root, relative)
     manifest, chunks = verified_corpus(corpus_root)
     expected = load(root / 'run.json')['nodes']['A2R-corpus']['corpusVersion']
     version = digest(canonical({'sources': [(s['sourceId'], s['sourceVersion']) for s in manifest['sources']],
@@ -209,7 +226,10 @@ def validate_packet(root, corpus_root, catalogue, goal, packet):
         if cid in seen or selected != originals.get(cid):
             raise ValueError('Evidence object differs from its original official chunk')
         seen.add(cid)
-        source = load(corpus_root / 'corpus/sources' / (selected['sourceId'] + '.json'))
+        source_id = selected['sourceId']
+        if not isinstance(source_id, str) or not re.fullmatch(r'[0-9a-f]{64}', source_id):
+            raise ValueError('Invalid original source identity')
+        source = load(corpus_file(corpus_root, 'corpus/sources/' + source_id + '.json'))
         if (source['sourceId'] != digest(source['url']) or source['url'] != selected['url'] or
                 source['sourceVersion'] != digest(source['text']) or
                 source['sourceVersion'] != selected['sourceVersion'] or

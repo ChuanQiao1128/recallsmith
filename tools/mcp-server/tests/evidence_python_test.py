@@ -141,6 +141,40 @@ class EvidenceBoundaryTests(unittest.TestCase):
         case = BatchTests()
         case.setUp()
         self.addCleanup(case.doCleanups)
+        # Give an unrequested batch sibling its own authentic regular source.
+        import copy
+        from pipeline import save
+        corpus = case.args.corpus_root / 'corpus'
+        chunks = m.load(corpus / 'chunks.json')
+        sibling_chunk = copy.deepcopy(chunks[0])
+        sibling_chunk.update(url='https://docs.aws.amazon.com/sibling', chunkId='sibling')
+        sibling_chunk['sourceId'] = m.digest(sibling_chunk['url'])
+        source_path = corpus / 'sources' / (sibling_chunk['sourceId'] + '.json')
+        source = m.load(corpus / 'sources' / (chunks[0]['sourceId'] + '.json'))
+        source.update(url=sibling_chunk['url'], sourceId=sibling_chunk['sourceId'], chunks=[sibling_chunk])
+        save(source_path, source)
+        manifest = m.load(corpus / 'manifest.json')
+        manifest['sources'].append({k: sibling_chunk[k] for k in ('sourceId', 'sourceVersion')})
+        manifest['chunkCount'] = 2
+        manifest['corpusVersion'] = m.digest(m.canonical({'sources': [(s['sourceId'], s['sourceVersion'])
+            for s in manifest['sources']], 'chunking': manifest['chunking'], 'embeddingModel': m.MODEL}))
+        save(corpus / 'manifest.json', manifest)
+        save(corpus / 'chunks.json', chunks + [sibling_chunk])
+        save(case.root / 'run.json', {'nodes': {'A2R-corpus': {'corpusVersion': manifest['corpusVersion']}}})
+        sibling = case.batch['uids'][1]
+        for goal in case.catalogue['goals']:
+            packet_path = b.uid_path(case.root, goal['stableUid'], 'packet.json')
+            packet = m.load(packet_path)
+            packet['corpusVersion'] = manifest['corpusVersion']
+            if goal['stableUid'] == sibling:
+                packet['evidence'] = [sibling_chunk]
+            packet['evidenceHash'] = m.digest(m.canonical({k: v for k, v in packet.items() if k not in
+                {'evidenceHash', 'packetHash', 'goal', 'curriculumHash'}}))
+            packet['packetHash'] = m.digest(m.canonical({k: v for k, v in packet.items() if k != 'packetHash'}))
+            save(packet_path, packet)
+        case.plan = b.make_plan(case.root, case.args.corpus_root, case.catalogue, case.config)
+        save(case.root / b.PLAN, case.plan)
+        case.batch = case.plan['batches'][0]
         transport = case.transport
         def completed_transport(args, folder, stage, attempt, prompt, schema):
             value = transport(args, folder, stage, attempt, prompt, schema)
@@ -163,6 +197,17 @@ class EvidenceBoundaryTests(unittest.TestCase):
             self.assertFalse(status['approvalGranted'])
             self.assertFalse(status['humanPerCardReview'])
             self.assertIn('sharedReviewHash', status['hashes'])
+            original_source = source_path.read_bytes()
+            outside = case.root / 'outside-source.json'
+            outside.write_bytes(original_source)
+            source_path.unlink()
+            source_path.symlink_to(outside)
+            with patch('author.load', wraps=m.load) as source_load:
+                with self.assertRaisesRegex(ValueError, 'corpus'):
+                    m.review_status(case.root, case.args.corpus_root, uid)
+            self.assertNotIn(source_path, [call.args[0] for call in source_load.call_args_list])
+            source_path.unlink()
+            source_path.write_bytes(original_source)
             events_file = b.stage_path(case.root, case.batch['batchId'], 'review') / 'events.jsonl'
             original_events = events_file.read_text()
             events_file.write_text('incomplete')

@@ -3,6 +3,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from author import FIELDS, invoke, validate_card, validate_execution, validate_packet, validate_review
 from pipeline import CHUNKING, DIMENSION, MODEL, canonical, digest, save
@@ -78,6 +79,62 @@ class AuthorTests(unittest.TestCase):
             save(source_path, source)
             with self.assertRaisesRegex(ValueError, 'source text'):
                 validate_packet(root, root / 'corpus', catalogue, goal, packet)
+
+    def test_packet_rejects_corpus_symlinks_before_read(self):
+        for relative, outside in [('sources/source', True), ('sources/source', False),
+                                  ('sources', True), ('manifest.json', True),
+                                  ('chunks.json', True), ('.', True)]:
+            with self.subTest(relative=relative, outside=outside), tempfile.TemporaryDirectory() as td:
+                root = Path(td).resolve()
+                catalogue, goal, packet = self.prepared(root)
+                corpus = root / 'corpus/corpus'
+                source = corpus / 'sources' / (packet['evidence'][0]['sourceId'] + '.json')
+                path = source if relative == 'sources/source' else corpus / relative
+                target = root / 'outside' if outside else corpus / 'another-source.json'
+                path.rename(target)
+                path.symlink_to(target, target_is_directory=target.is_dir())
+                opened = []
+                original_open = Path.open
+                def spy_open(path, *args, **kwargs):
+                    opened.append(path)
+                    return original_open(path, *args, **kwargs)
+                with patch.object(Path, 'open', spy_open):
+                    with self.assertRaisesRegex(ValueError, 'corpus'):
+                        validate_packet(root, root / 'corpus', catalogue, goal, packet)
+                self.assertFalse(any(p.resolve().is_relative_to(target) for p in opened), opened)
+
+    def test_packet_rejects_noncanonical_source_id_before_source_read(self):
+        from pipeline import load
+        for source_id in ['../outside', '/tmp/outside', 'A' * 64, 'a' * 63, 'a' * 65, 'g' * 64]:
+            with self.subTest(source_id=source_id), tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                catalogue, goal, packet = self.prepared(root)
+                chunk = packet['evidence'][0]
+                chunk['sourceId'] = source_id
+                manifest = load(root / 'corpus/corpus/manifest.json')
+                manifest['sources'][0]['sourceId'] = source_id
+                cv = digest(canonical({'sources': [(source_id, chunk['sourceVersion'])],
+                                      'chunking': CHUNKING, 'embeddingModel': MODEL}))
+                manifest['corpusVersion'] = packet['corpusVersion'] = cv
+                save(root / 'corpus/corpus/manifest.json', manifest)
+                save(root / 'corpus/corpus/chunks.json', [chunk])
+                save(root / 'run.json', {'nodes': {'A2R-corpus': {'corpusVersion': cv}}})
+                packet['evidenceHash'] = digest(canonical({k: v for k, v in packet.items() if k not in
+                    {'evidenceHash', 'packetHash', 'goal', 'curriculumHash'}}))
+                packet['packetHash'] = digest(canonical({k: v for k, v in packet.items() if k != 'packetHash'}))
+                with patch('author.load', wraps=load) as source_load:
+                    with self.assertRaisesRegex(ValueError, 'source identity'):
+                        validate_packet(root, root / 'corpus', catalogue, goal, packet)
+                self.assertEqual([root / 'run.json'], [call.args[0] for call in source_load.call_args_list])
+
+    def test_regular_corpus_accepts_trusted_base_alias(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            catalogue, goal, packet = self.prepared(root)
+            # macOS temporary roots may use /var, whose trusted system ancestor is a symlink.
+            if root.is_relative_to('/private/var'):
+                root = Path('/var') / root.relative_to('/private/var')
+            validate_packet(root, root / 'corpus', catalogue, goal, packet)
 
     def test_exact_quotes_record_source_offsets_not_semantic_pass(self):
         packet, card = fixture()
