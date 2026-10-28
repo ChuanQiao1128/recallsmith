@@ -11,8 +11,11 @@ All batch ordinals are per checker, in compact_schedule order. Every expected
 pair must occur exactly once, and no other pairs are accepted.
 
 bindings retains semantic_proof_v4's caller-expected packet/reference/protocol
-hashes and projectionHash/batches contract. These common hashes are not inferred
-source-review authority. Rebuilt projection identities and memberships must match.
+hashes and projectionHash/batches contract. Mandatory frozen_inputs supplies exact
+packetBytes/referenceBytes/protocolBytes and is checked against all three hashes
+before replay. Query, full ordered packet and exact adapted case/group must match.
+These caller-frozen identities do not establish production/source-review authority.
+Rebuilt projection identities and memberships must match.
 Original rawResultBytes go directly from the verifier to expand_response.
 
 No functions here execute a model, perform retrieval, alter run state, inspect
@@ -25,20 +28,23 @@ from collections import Counter
 from fractions import Fraction
 import hashlib
 
-from execution_receipt_v4 import verify_execution_v4
+from execution_receipt_v4 import _json, _same, _text as _utf8, verify_execution_v4
 from proof_transport_v4 import compact_schedule, expand_response
-from semantic_proof_v4 import (_id, _packet, _plan, _require, _shape,
+from semantic_proof_v4 import (_hash, _id, _packet, _plan, _require, _shape,
                                _text, inspect_decisions_v4)
 from proof_schedule_v4 import subsets
 
 
 CYCLE_ID = 'aws-basics-v4-1'
+# Exact original reference FILE bytes, not the canonical-object digest.
+FROZEN_REFERENCE_FILE_SHA256 = '4b97d31214f5634917c82b22d50d1b6f6c004b9a1e78f88ccb18c221e394be24'
+INPUT_BYTE_LIMIT = 2_000_000
 THEMES = {'cloud', 'identity', 'compute', 'storage', 'databases', 'networking',
           'messaging', 'operations'}
 
 
 def replay_group_v4(case_id, query, group, evidence, originals, sources, *, bindings,
-                    frozen_schema_bytes, execution_pins, per_call=255):
+                    frozen_schema_bytes, execution_pins, frozen_inputs, per_call=255):
     """Replay exactly both roles/all batches, reporting diagnostics without trust upgrades.
 
     Calls/workspaces must be distinct across this group. ``executionProvenance``
@@ -46,6 +52,7 @@ def replay_group_v4(case_id, query, group, evidence, originals, sources, *, bind
     Empty evidence requires zero registrations and earns no completion or receipt
     verification. Exceptions reject the whole group, never partial credit.
     """
+    input_identities = _verify_frozen_inputs(case_id, query, group, evidence, bindings, frozen_inputs)
     packet, _ = _packet(evidence, originals, sources)
     planned = compact_schedule(case_id, query, group, evidence, originals, per_call=per_call)
     expected = set(subsets(packet))
@@ -98,9 +105,71 @@ def replay_group_v4(case_id, query, group, evidence, originals, sources, *, bind
                                   decisions['one'], decisions['two'], bindings)
     return {**result, 'caseId': case_id, 'cycleId': CYCLE_ID,
             'perCallSubsetLimit': per_call, 'executionProvenance': provenance,
+            'verifiedInputIdentities': input_identities,
             'rawReceiptIntegrityVerified': bool(provenance),
             'hostRecordStatus': 'VERIFIED' if provenance else 'NO_EXECUTIONS_REQUIRED',
             'executionAuthenticity': 'HOST_RECORDS_ONLY'}
+
+
+def _bounded_bytes(data, name):
+    _require(type(data) is bytes and 0 < len(data) <= INPUT_BYTE_LIMIT,
+             f'{name} must be exact nonempty bytes within 2000000-byte limit')
+    _utf8(data)
+    return hashlib.sha256(data).hexdigest()
+
+
+def _verify_frozen_inputs(case_id, query, group, evidence, bindings, frozen_inputs):
+    """Validate file identities before any raw execution read or rank computation.
+
+    frozen_inputs has EXACT keys packetBytes/referenceBytes/protocolBytes, each
+    original UTF-8 file bytes (<=2 MB). Bindings hashes are SHA256 of those exact
+    bytes, including whitespace. The packet object needs query/evidence; its full
+    evidence array must equal the passed original objects in original rank order.
+    Adapted references use queries/id/queryEn/groups with v4 group.id and exact
+    full group equality. Protocol bytes are pinned as a whole, never reconstructed.
+
+    This validates consistency relative to caller-frozen bytes/pins, not where
+    they came from. A future fixed-path trusted loader and adoption/source/denial
+    authority are still required. No receipt-supplied path or input is opened.
+    """
+    _shape(frozen_inputs, {'packetBytes', 'referenceBytes', 'protocolBytes'}, 'frozen input bytes')
+    _require(isinstance(bindings, dict), 'Invalid bindings')
+    identities = {}
+    for kind in ('packet', 'reference', 'protocol'):
+        field = kind + 'Hash'
+        _hash(bindings.get(field), field)
+        digest = _bounded_bytes(frozen_inputs[kind + 'Bytes'], kind)
+        _require(digest == bindings[field], 'Frozen input hash mismatch: ' + field)
+        identities[field] = digest
+    packet = _json(frozen_inputs['packetBytes'])
+    _require(isinstance(packet, dict) and 'query' in packet and 'evidence' in packet and
+             _same(packet['query'], query) and _same(packet['evidence'], evidence),
+             'Frozen packet query/ordered full evidence mismatch')
+    references = _json(frozen_inputs['referenceBytes'])
+    _require(isinstance(references, dict) and isinstance(references.get('queries'), list),
+             'Frozen adapted references need queries')
+    cases = {}
+    for index, case in enumerate(references['queries']):
+        _require(isinstance(case, dict), 'Invalid frozen adapted case')
+        _id(case.get('id'), r'[a-z][a-z0-9-]{0,63}', 'adapted case ID')
+        _require(case['id'] not in cases, 'Duplicate frozen adapted case ID')
+        cases[case['id']] = (index, case)
+    _require(case_id in cases, 'Case absent from frozen adapted references')
+    case_index, case = cases[case_id]
+    _require(_same(case.get('queryEn'), query) and isinstance(case.get('groups'), list),
+             'Frozen adapted case query/groups mismatch')
+    groups = {}
+    for index, entry in enumerate(case['groups']):
+        _require(isinstance(entry, dict), 'Invalid frozen adapted group')
+        _id(entry.get('id'), r'[a-z][a-z0-9-]{0,63}', 'adapted group ID')
+        _require(entry['id'] not in groups, 'Duplicate frozen adapted group ID')
+        groups[entry['id']] = (index, entry)
+    _require(isinstance(group, dict) and isinstance(group.get('id'), str) and group['id'] in groups,
+             'Group absent from frozen adapted references')
+    group_index, frozen_group = groups[group['id']]
+    _require(_same(frozen_group, group), 'Frozen adapted group/atoms mismatch')
+    return {**identities, 'caseId': case_id, 'groupId': group['id'],
+            'referenceCaseIndex': case_index, 'referenceGroupIndex': group_index}
 
 
 def _ratio(total, count):
@@ -230,17 +299,26 @@ def aggregate_groups_generic_v4(references, case_results):
             'executionAuthenticity': 'HOST_RECORDS_ONLY'}
 
 
-def aggregate_groups_v4(references, case_results):
+def aggregate_groups_v4(references, case_results, *, raw_reference_bytes):
     """Strict current DEV80 wrapper; historical split names do not exclude cases.
 
-    Counts/distribution come from the supplied canonical frozen queries/groups,
-    never caller summary numbers. This does not review or approve their labels.
+    raw_reference_bytes is mandatory original UTF-8 file bytes, pinned to this
+    cycle's fixed FROZEN_REFERENCE_FILE_SHA256 (not a caller override). Membership
+    is derived from those decoded bytes; the supplied dict must match exactly.
+    Historical split names remain observed DEV history. This is input integrity,
+    not a semantic label review, proof recomputation or release/source authority.
     """
-    cases = _reference_cases(references)
+    reference_hash = _bounded_bytes(raw_reference_bytes, 'original reference')
+    _require(reference_hash == FROZEN_REFERENCE_FILE_SHA256,
+             'Wrong frozen original reference file digest for current DEV cycle')
+    frozen_references = _json(raw_reference_bytes)
+    _require(_same(references, frozen_references), 'References differ from frozen original file bytes')
+    cases = _reference_cases(frozen_references)
     distribution = Counter((q['module'], q['answerable']) for q, _ in cases.values())
     expected = {(theme, answerable): 8 if answerable else 2
                 for theme in THEMES for answerable in (True, False)}
     _require(distribution == expected and len(cases) == 80 and
              sum(len(groups) for _, groups in cases.values()) == 148,
              'Current frozen DEV80/64-positive/16-negative/148-group references required')
-    return aggregate_groups_generic_v4(references, case_results)
+    return {**aggregate_groups_generic_v4(frozen_references, case_results),
+            'originalReferenceFileSha256': reference_hash}

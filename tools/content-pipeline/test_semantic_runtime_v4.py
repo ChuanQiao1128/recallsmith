@@ -13,6 +13,20 @@ from semantic_runtime_v4 import (CYCLE_ID, THEMES, aggregate_groups_generic_v4,
                                  aggregate_groups_v4, replay_group_v4)
 
 
+def freeze_synthetic_inputs(args):
+    """Explicit SYNTHETIC bytes/pins; these are not production authority."""
+    raw = {'packetBytes': json.dumps({'query': args['query'], 'evidence': args['evidence']},
+                                    ensure_ascii=False, indent=1).encode() + b'\n',
+           'referenceBytes': json.dumps({'queries': [{'id': args['case_id'], 'queryEn': args['query'],
+                                                       'groups': [args['group']]}]},
+                                       ensure_ascii=False, indent=1).encode() + b'\n',
+           'protocolBytes': b'SYNTHETIC protocol file; no semantic/release authority.\n'}
+    args['frozen_inputs'] = raw
+    args['bindings'].update({kind + 'Hash': host_fixtures.digest(raw[kind + 'Bytes'])
+                             for kind in ('packet', 'reference', 'protocol')})
+    return args
+
+
 class SyntheticRuntimeTests(unittest.TestCase):
     def fixture(self, count=2, per_call=1, mutate=None, disagree=False):
         content = content_fixtures.SemanticProofDiagnosticsTests()
@@ -61,10 +75,11 @@ class SyntheticRuntimeTests(unittest.TestCase):
                             'outputDirectory': str(host.output), 'trustedPins': host.pins})
             ordinals[role] += 1
             hosts.append(host)
-        return {'case_id': data['case_id'], 'query': query, 'group': data['group'],
+        args = {'case_id': data['case_id'], 'query': query, 'group': data['group'],
                 'evidence': data['evidence'], 'originals': data['originals'], 'sources': data['sources'],
                 'bindings': bindings, 'frozen_schema_bytes': schema, 'execution_pins': entries,
-                'per_call': per_call}, hosts
+                'per_call': per_call}
+        return freeze_synthetic_inputs(args), hosts
 
     def test_all_batches_both_roles_original_bytes_and_honest_flags(self):
         args, hosts = self.fixture()
@@ -85,6 +100,10 @@ class SyntheticRuntimeTests(unittest.TestCase):
         self.assertEqual(result['semanticTruth'], 'UNVERIFIED')
         self.assertNotIn('sourceReview', result)
         self.assertNotIn('denialReceipt', result)
+        self.assertEqual({k: result['verifiedInputIdentities'][k] for k in
+                          ('packetHash', 'referenceHash', 'protocolHash')},
+                         {k: args['bindings'][k] for k in
+                          ('packetHash', 'referenceHash', 'protocolHash')})
 
     def test_altered_prompt_schema_and_raw_bytes_reject(self):
         args, hosts = self.fixture(1)
@@ -93,6 +112,7 @@ class SyntheticRuntimeTests(unittest.TestCase):
                                 changed['evidence'], changed['originals'], per_call=1)['calls'][0]
         changed['bindings'] = copy.deepcopy(args['bindings'])
         changed['bindings']['batches'][0]['projectionHash'] = call['projectionHash']
+        freeze_synthetic_inputs(changed)
         with self.assertRaisesRegex(ValueError, 'binding changed'):
             replay_group_v4(**changed)
         with self.assertRaisesRegex(ValueError, 'schema bytes changed'):
@@ -150,11 +170,71 @@ class SyntheticRuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Stale or changed source'):
             replay_group_v4(**args)
 
-    def test_changed_packet_ranks_and_checker_disagreement(self):
+    def test_unchanged_frozen_packet_rejects_rank_reorder(self):
         args, _ = self.fixture()
         self.assertEqual(replay_group_v4(**args)['completionRank'], 2)
         args['evidence'].reverse()
-        self.assertEqual(replay_group_v4(**args)['completionRank'], 1)
+        with self.assertRaises(ValueError):
+            replay_group_v4(**args)
+
+    def test_common_binding_hash_mutations_reject(self):
+        for field in ('packetHash', 'referenceHash', 'protocolHash'):
+            args, _ = self.fixture()
+            args['bindings'][field] = 'e' * 64
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                replay_group_v4(**args)
+
+    def test_frozen_input_bytes_and_argument_mutations_reject_before_reader(self):
+        for field in ('packetBytes', 'referenceBytes', 'protocolBytes'):
+            args, _ = self.fixture(1)
+            args['frozen_inputs'][field] += b' '
+            with self.subTest(field=field), patch('semantic_runtime_v4.verify_execution_v4',
+                    side_effect=AssertionError('input mismatch must precede execution reads')):
+                with self.assertRaisesRegex(ValueError, 'Frozen input hash mismatch'):
+                    replay_group_v4(**args)
+        for change in ('query', 'chunk-text', 'group-atom', 'case', 'group'):
+            args, _ = self.fixture(1)
+            if change == 'query':
+                args['query'] += ' changed'
+            elif change == 'chunk-text':
+                args['evidence'][0]['text'] += ' changed'
+            elif change == 'group-atom':
+                args['group']['requiredFacts'][0]['text'] += ' changed'
+            elif change == 'case':
+                args['case_id'] = 'other-case'
+            else:
+                args['group']['id'] = 'other-group'
+            with self.subTest(change=change), patch('semantic_runtime_v4.verify_execution_v4',
+                    side_effect=AssertionError('input mismatch must precede execution reads')):
+                with self.assertRaises(ValueError):
+                    replay_group_v4(**args)
+
+    def test_frozen_input_shape_duplicate_reference_ids_and_types_reject(self):
+        for change in ('missing', 'extra', 'not-bytes', 'duplicate-case', 'duplicate-group'):
+            args, _ = self.fixture(1)
+            if change == 'missing':
+                args['frozen_inputs'].pop('protocolBytes')
+            elif change == 'extra':
+                args['frozen_inputs']['extra'] = b'no'
+            elif change == 'not-bytes':
+                args['frozen_inputs']['protocolBytes'] = 'text'
+            else:
+                refs = json.loads(args['frozen_inputs']['referenceBytes'])
+                if change == 'duplicate-case':
+                    refs['queries'].append(copy.deepcopy(refs['queries'][0]))
+                else:
+                    refs['queries'][0]['groups'].append(copy.deepcopy(refs['queries'][0]['groups'][0]))
+                raw = json.dumps(refs).encode()
+                args['frozen_inputs']['referenceBytes'] = raw
+                args['bindings']['referenceHash'] = host_fixtures.digest(raw)
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                replay_group_v4(**args)
+        args, _ = self.fixture(0)
+        args.pop('frozen_inputs')
+        with self.assertRaises(TypeError):
+            replay_group_v4(**args)
+
+    def test_checker_disagreement(self):
         args, _ = self.fixture(disagree=True)
         self.assertIsNone(replay_group_v4(**args)['completionRank'])
 
@@ -308,20 +388,45 @@ class SyntheticAggregateTests(unittest.TestCase):
                     serial += 1
                     output.append(synthetic_group(cid, group['groupId'], None, serial))
                 results.append({'caseId': cid, 'groups': output})
-        report = aggregate_groups_v4(refs, results)
-        self.assertEqual((report['caseCount'], report['positiveCount'], report['negativeCount'], report['requiredGroups']),
-                         (80, 64, 16, 148))
-        self.assertEqual(report['semanticRecallAt8'], Fraction(0))
-        with self.assertRaises(ValueError):
-            aggregate_groups_v4(*self.fixture())
-        changed = copy.deepcopy(refs)
-        changed['queries'][0]['requiredEvidenceGroups'].pop()
-        with self.assertRaises(ValueError):
-            aggregate_groups_v4(changed, results)
-        changed = copy.deepcopy(refs)
-        changed['queries'][0]['module'] = 'invented-theme'
-        with self.assertRaises(ValueError):
-            aggregate_groups_v4(changed, results)
+        raw = json.dumps(refs, indent=1).encode() + b'\n'
+        with self.assertRaisesRegex(ValueError, 'frozen original reference file digest'):
+            aggregate_groups_v4(refs, results, raw_reference_bytes=raw)
+        # Patch the fixed expected pin only inside an explicitly synthetic test.
+        # Production callers cannot override it through function arguments.
+        with patch('semantic_runtime_v4.FROZEN_REFERENCE_FILE_SHA256', host_fixtures.digest(raw)):
+            report = aggregate_groups_v4(refs, results, raw_reference_bytes=raw)
+            self.assertEqual((report['caseCount'], report['positiveCount'], report['negativeCount'], report['requiredGroups']),
+                             (80, 64, 16, 148))
+            self.assertEqual(report['semanticRecallAt8'], Fraction(0))
+            self.assertEqual(report['originalReferenceFileSha256'], host_fixtures.digest(raw))
+            self.assertFalse(report['releaseAuthorized'])
+            for change in ('group-count', 'theme', 'case-rename', 'group-rename', 'group-reassign'):
+                changed = copy.deepcopy(refs)
+                if change == 'group-count':
+                    changed['queries'][0]['requiredEvidenceGroups'].pop()
+                elif change == 'theme':
+                    changed['queries'][0]['module'] = 'invented-theme'
+                elif change == 'case-rename':
+                    changed['queries'][0]['id'] = 'invented-case'
+                elif change == 'group-rename':
+                    changed['queries'][0]['requiredEvidenceGroups'][0]['groupId'] = 'invented-group'
+                else:
+                    changed['queries'][0]['requiredEvidenceGroups'][0]['groupId'] = 'reassigned-group'
+                    changed['queries'][1]['requiredEvidenceGroups'][0]['groupId'] = 'group-1'
+                with self.subTest(change=change), self.assertRaisesRegex(ValueError, 'differ from frozen'):
+                    aggregate_groups_v4(changed, results, raw_reference_bytes=raw)
+                with self.subTest(bytes=change), self.assertRaisesRegex(ValueError, 'file digest'):
+                    aggregate_groups_v4(changed, results, raw_reference_bytes=json.dumps(changed).encode())
+            with self.assertRaisesRegex(ValueError, 'file digest'):
+                aggregate_groups_v4(refs, results, raw_reference_bytes=raw + b' ')
+            # Even under the synthetic pin, matching invented count summaries
+            # cannot substitute for exact case/group membership.
+            renamed = copy.deepcopy(results)
+            renamed[0]['caseId'] = 'invented-case'
+            with self.assertRaises(ValueError):
+                aggregate_groups_v4(refs, renamed, raw_reference_bytes=raw)
+        with self.assertRaises(TypeError):
+            aggregate_groups_v4(refs, results)
 
     def test_zero_packet_group_remains_in_positive_denominator(self):
         refs, results = self.fixture()
