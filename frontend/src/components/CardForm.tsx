@@ -1,3 +1,4 @@
+import { CardFrontHelp } from './CardFrontHelp';
 // src/components/CardForm.tsx
 
 import { useDeferredValue, useEffect, useMemo, useState } from 'react';
@@ -73,6 +74,7 @@ interface CardFormProps {
    * same rules here and surfaces the verdict before submit (see below).
    */
   mcq?: McqBlob | null;
+  frontHelp?: unknown;
 
   /**
    * Reports whether any field now differs from the values the form mounted
@@ -245,7 +247,7 @@ function slugifyWhileTyping(input: string): string {
 }
 
 export function CardForm(props: CardFormProps) {
-  const { mode, deck, initialValues, onSubmit, onCancel, recoveryLabel, mcq, onDirtyChange, submitLabel } = props;
+  const { mode, deck, initialValues, onSubmit, onCancel, recoveryLabel, mcq, frontHelp, onDirtyChange, submitLabel } = props;
   const isDraft = props.variant === 'draft';
 
   const mcqRequiredCount = mcq ? mcq.options.filter(option => option.correct).length : 0;
@@ -484,6 +486,7 @@ export function CardForm(props: CardFormProps) {
         />
       </div>
 
+      <CardFrontHelp help={frontHelp} />
       {/* StableUid */}
       <div>
         <label htmlFor="stableUid" className="block text-sm font-medium text-slate-700 mb-1">

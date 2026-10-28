@@ -330,6 +330,9 @@ public static class Helpers
       [$"public.{table}", column]) is true;
 
   /// <summary>503 MIGRATION_REQUIRED for a card translations write that reached a database without migration 047.</summary>
+  public static APIGatewayProxyResponse FrontHelpNotMigrated(Res res) =>
+    ErrorEnvelope(res, 503, "MIGRATION_REQUIRED", "cards.front_help does not exist yet; run migration 049 first");
+
   public static APIGatewayProxyResponse TranslationsNotMigrated(Res res) =>
     ErrorEnvelope(res, 503, "MIGRATION_REQUIRED", "cards.translations does not exist yet; run migration 047 first");
 

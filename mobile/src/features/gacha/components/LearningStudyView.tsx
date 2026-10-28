@@ -1,3 +1,4 @@
+import { CardFrontHelp } from './CardFrontHelp';
 import React, { useEffect, useState } from 'react';
 import * as RN from 'react-native';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
@@ -104,6 +105,7 @@ export const LearningStudyView = React.memo(function LearningStudyView(props: Le
         text={question.text}
       />
       {question.code ? <QuestionCodeBlock code={question.code} /> : null}
+      <CardFrontHelp key={`${card.StableUid}:${lang ?? 'en'}`} help={card.FrontHelp} />
       {/* Question first: the answer and its source stay off screen until "Show answer". The source
           is still read on mount, so it is ready by the time the answer opens. */}
       {revealed ? (

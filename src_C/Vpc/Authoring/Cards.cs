@@ -55,6 +55,7 @@ public static class Cards
             c.topic,
             c.mcq,
             c.source,
+            nullif(to_jsonb(c) -> 'front_help', 'null'::jsonb) as "frontHelp",
             nullif(to_jsonb(c) -> 'translations', 'null'::jsonb) as translations,
             nullif(to_jsonb(c) -> 'translation_basis', 'null'::jsonb) as "translationBasis"
           from cards c
@@ -156,25 +157,29 @@ public static class Cards
           if (!McqValidation.IsMcqDifficulty(difficultyInt ?? 2)) return res.BadRequest("MCQ_DIFFICULTY_RANGE", "difficulty must be 1..3 for an MCQ card");
         }
 
+        var frontHelp = FrontHelpValidation.Read(body, out _);
+
         // Translations mirror the English just validated above; the basis records which English that was.
         string? translations = null;
         string? translationBasis = null;
         if (body.TryGetProperty("translations", out var trEl))
         {
-          var english = new TranslationValidation.EnglishCard(question, explanation, realWorldUsage, mcq);
+          var english = new TranslationValidation.EnglishCard(question, explanation, realWorldUsage, mcq, frontHelp);
           translations = TranslationValidation.Canonicalize(trEl, english, await Helpers.DeckLocaleAsync(conn, deckIdInt));
           translationBasis = TranslationValidation.BasisJson(translations, english);
         }
 
         // An untranslated card inserts exactly as before migration 047, so this route works on either side of it; a
         // translated one needs the columns.
+        var withFrontHelp = frontHelp is not null;
+        if (withFrontHelp && !await Helpers.ColumnExistsAsync(conn, null, "cards", "front_help")) return Helpers.FrontHelpNotMigrated(res);
         var withTranslations = translations is not null;
         if (withTranslations && !await Helpers.ColumnExistsAsync(conn, null, "cards", "translations")) return Helpers.TranslationsNotMigrated(res);
 
         var sql = $"""
           insert into cards (
             deck_id, stable_uid, question, explanation, code_snippet, code_language,
-            real_world_usage, difficulty, order_in_deck, revision, version, topic, mcq, source{(withTranslations ? ", translations, translation_basis" : "")}
+            real_world_usage, difficulty, order_in_deck, revision, version, topic, mcq, source{(withTranslations ? ", translations, translation_basis" : "")}{(withFrontHelp ? ", front_help" : "")}
           )
           values (
             $1,$2,$3,$4,$5,$6,$7,
@@ -184,7 +189,7 @@ public static class Cards
             coalesce($11,1),
             $12,
             $13::jsonb,
-            $14::jsonb{(withTranslations ? ", $15::jsonb, $16::jsonb" : "")}
+            $14::jsonb{(withTranslations ? ", $15::jsonb, $16::jsonb" : "")}{(withFrontHelp ? (withTranslations ? ", $17::jsonb" : ", $15::jsonb") : "")}
           )
           returning
             id,
@@ -205,6 +210,7 @@ public static class Cards
             topic,
             mcq,
             source,
+            nullif(to_jsonb(cards) -> 'front_help', 'null'::jsonb) as "frontHelp",
             nullif(to_jsonb(cards) -> 'translations', 'null'::jsonb) as translations,
             nullif(to_jsonb(cards) -> 'translation_basis', 'null'::jsonb) as "translationBasis";
           """;
@@ -230,6 +236,7 @@ public static class Cards
           parameters.Add(translationBasis);
         }
 
+        if (withFrontHelp) parameters.Add(frontHelp);
         var rows = await DbUtil.QueryAsync(conn, null, sql, parameters);
         if (rows.Count > 0)
         {
@@ -303,6 +310,7 @@ public static class Cards
         var stored = await DbUtil.QueryAsync(conn, null,
           """
           select question, explanation, real_world_usage as "realWorldUsage", difficulty, mcq,
+            nullif(to_jsonb(cards) -> 'front_help', 'null'::jsonb) as "frontHelp",
             nullif(to_jsonb(cards) -> 'translations', 'null'::jsonb) as translations
           from cards where id = $1
           """, [idInt]);
@@ -339,7 +347,12 @@ public static class Cards
         var effectiveRealWorldUsage = body.TryGetProperty("realWorldUsage", out var rwEl)
           ? (rwEl.ValueKind == JsonValueKind.Null ? null : rwEl.ToString().Trim())
           : storedRow["realWorldUsage"] as string;
-        var english = new TranslationValidation.EnglishCard(effectiveQuestion, effectiveExplanation, effectiveRealWorldUsage, effectiveMcq);
+        var incomingFrontHelp = FrontHelpValidation.Read(body, out var frontHelpSent);
+        var effectiveFrontHelp = frontHelpSent ? incomingFrontHelp
+          : Helpers.JsonbElement(storedRow, "frontHelp") is { } storedHelp ? FrontHelpValidation.Canonicalize(storedHelp) : null;
+        var frontHelpReady = !frontHelpSent || await Helpers.ColumnExistsAsync(conn, null, "cards", "front_help");
+        if (!frontHelpReady && effectiveFrontHelp is not null) return Helpers.FrontHelpNotMigrated(res);
+        var english = new TranslationValidation.EnglishCard(effectiveQuestion, effectiveExplanation, effectiveRealWorldUsage, effectiveMcq, effectiveFrontHelp);
         var effectiveDeckLocale = await Helpers.DeckLocaleAsync(conn, nextDeckId ?? deckIdFromDb.Value);
         string? translations = null;
         string? translationBasis = null;
@@ -374,6 +387,7 @@ public static class Cards
           new("source", "source", v => v.ValueKind == JsonValueKind.Null ? null : Helpers.NormalizeSource(v), "::jsonb"),
           new("isDeleted", "is_deleted", v => Helpers.ParseBoolean(v, false) ? 1 : 0),
         };
+        if (frontHelpSent && frontHelpReady) spec.Add(new("frontHelp", "front_help", _ => effectiveFrontHelp, "::jsonb"));
         if (writeTranslations)
         {
           // One body key, two columns: a translations block always writes its basis alongside.
@@ -424,6 +438,7 @@ public static class Cards
             topic,
             mcq,
             source,
+            nullif(to_jsonb(cards) -> 'front_help', 'null'::jsonb) as "frontHelp",
             nullif(to_jsonb(cards) -> 'translations', 'null'::jsonb) as translations,
             nullif(to_jsonb(cards) -> 'translation_basis', 'null'::jsonb) as "translationBasis";
           """;

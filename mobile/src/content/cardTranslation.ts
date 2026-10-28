@@ -1,3 +1,4 @@
+import { parseFrontHelp, type FrontHelpEntry } from './frontHelp';
 import { MCQ_KEYS, MCQ_MAX_OPTION_TEXT } from '../features/gacha/mcq/normalizeMcq';
 
 /**
@@ -20,6 +21,7 @@ export type McqOptionTranslation = { text: string; why: string | null };
 
 export type CardTranslation = {
   v: 1;
+  frontHelp?: FrontHelpEntry[] | null;
   question: string;
   /** Null when the entry has none. */
   explanation: string | null;
@@ -30,7 +32,7 @@ export type CardTranslation = {
 
 export type CardTranslations = Readonly<Partial<Record<CardTranslationLocale, CardTranslation>>>;
 
-const ENTRY_KEYS = new Set(['v', 'question', 'explanation', 'realWorldUsage', 'mcq']);
+const ENTRY_KEYS = new Set(['v', 'question', 'explanation', 'realWorldUsage', 'mcq', 'frontHelp']);
 const MCQ_ENTRY_KEYS = new Set(['qualifier', 'options']);
 const OPTION_ENTRY_KEYS = new Set(['text', 'why']);
 const OPTION_KEYS: ReadonlySet<string> = new Set(MCQ_KEYS);
@@ -92,6 +94,9 @@ export function parseRawCardTranslation(raw: unknown): CardTranslation | null {
     const realWorldUsage = optionalText(raw.realWorldUsage);
     if (explanation === undefined || realWorldUsage === undefined) return null;
 
+    const frontHelp = parseFrontHelp(raw.frontHelp);
+    if (frontHelp === undefined) return null;
+
     let mcq: CardTranslation['mcq'] = null;
     if (raw.mcq !== null && raw.mcq !== undefined) {
       if (!isRecord(raw.mcq) || !hasOnlyKeys(raw.mcq, MCQ_ENTRY_KEYS)) return null;
@@ -102,7 +107,7 @@ export function parseRawCardTranslation(raw: unknown): CardTranslation | null {
       mcq = Object.freeze({ qualifier, options });
     }
 
-    return Object.freeze({ v: 1 as const, question, explanation, realWorldUsage, mcq });
+    return Object.freeze({ v: 1 as const, question, explanation, realWorldUsage, mcq, ...(frontHelp?.length ? { frontHelp } : {}) });
   } catch {
     return null;
   }

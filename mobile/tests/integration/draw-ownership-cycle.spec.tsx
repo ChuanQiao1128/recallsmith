@@ -35,6 +35,7 @@ vi.mock('../../src/content/deckRepository', () => ({
 }));
 
 vi.mock('../../src/review/storage', () => ({
+  captureProgressUserSub: vi.fn(async () => 'anon'),
   loadDeckProgress: vi.fn(async () => []),
   // Draw state keys are user-scoped through this helper; the mock keeps
   // the signed-out shape the real helper produces.

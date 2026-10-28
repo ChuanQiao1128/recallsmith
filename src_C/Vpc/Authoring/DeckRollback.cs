@@ -67,6 +67,12 @@ public static class DeckRollback
       await using var conn = await Pg.OpenConnectionOrNullAsync();
       if (conn is null) return Helpers.ConfigError(res, "Missing PG env vars");
 
+      if (await ContentRelease.Applies(conn, deckId.Value))
+      {
+        using var controlledDoc = Validation.ParseJsonBody(req)!;
+        return await ContentRelease.Rollback(conn, deckId.Value, controlledDoc.RootElement, auth, res, rebuild);
+      }
+
       var deckRows = await DbUtil.QueryAsync(conn, null,
         "select id, slug, live_build_id from decks where id = $1 and is_deleted = 0", [deckId.Value]);
       if (deckRows.Count == 0) return Helpers.ErrorEnvelope(res, 404, "DECK_NOT_FOUND", $"Deck {deckId.Value} not found");

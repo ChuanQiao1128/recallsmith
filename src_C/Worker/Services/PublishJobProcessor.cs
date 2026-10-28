@@ -67,6 +67,8 @@ public class PublishJobProcessor : IPublishJobProcessor, IReplayOutcome
 
     Console.WriteLine($"[JobId={jobId}] Acquired job for deck {job.DeckSlug}");
 
+    if (job.DeckSlug == "aws-saa-fundamentals") await ValidateReleaseJob(jobId);
+
     // Step 3: 业务数据准备
     var deckData = await LoadDeckDataAsync(job.DeckId);
 
@@ -101,10 +103,22 @@ public class PublishJobProcessor : IPublishJobProcessor, IReplayOutcome
       deckData.Version = job.BuildId;
     }
 
+    if (job.DeckSlug == "aws-saa-fundamentals") await ValidateReleaseJob(jobId);
+
     // Step 4: 外部系统调用 (S3)
     var uploadResult = await _s3Uploader.UploadAsync(job.S3Key, deckData);
 
     Console.WriteLine($"[JobId={jobId}] Uploaded to S3: {job.S3Key} (sha256={uploadResult.Sha256}, bytes={uploadResult.Bytes})");
+
+    if (job.DeckSlug == "aws-saa-fundamentals")
+    {
+      await using var uploadConn = await Pg.OpenConnectionOrNullAsync();
+      if (uploadConn is null) throw new InvalidOperationException("Failed to record reviewed build integrity");
+      var recorded = await DbUtil.ExecuteAsync(uploadConn, null,
+        "update deck_publishes set content_sha256=$2,content_bytes=$3 where job_id=$1 and status='PROCESSING'",
+        [jobId, uploadResult.Sha256, uploadResult.Bytes]);
+      if (recorded != 1) throw new BusinessException("RELEASE_GENERATION_CANCELLED: upload did not commit a live build");
+    }
 
     // Step 4.5: 内容分发 v3 附加产物（chunked package / delta patch / DB 元数据）
     // 完全 best-effort：生成器内部吞掉所有异常，绝不影响发布任务
@@ -112,6 +126,8 @@ public class PublishJobProcessor : IPublishJobProcessor, IReplayOutcome
 
     // Step 5: 最终一致性提交
     await _jobRepository.CompleteJobAsync(jobId, deckData.Cards.Count);
+    if (job.DeckSlug == "aws-saa-fundamentals" && (await _jobRepository.GetJobAsync(jobId))?.Status != "SUCCESS")
+      throw new BusinessException("RELEASE_GENERATION_CANCELLED: no live build was committed");
     await AfterPublishSucceededAsync(job);
 
     Console.WriteLine($"[JobId={jobId}] Job completed successfully");
@@ -178,7 +194,15 @@ public class PublishJobProcessor : IPublishJobProcessor, IReplayOutcome
   public static string SnapshotDigest(IEnumerable<CardExportData> cards) =>
     PublishSnapshot.Digest(cards.Select(c => new PublishSnapshotCard(c.StableUid, c.OrderInDeck, c.Difficulty, c.Question, c.Explanation,
       c.CodeLanguage, c.CodeSnippet, c.RealWorldUsage, c.Revision, c.Topic, c.Mcq?.GetRawText(), c.Source?.GetRawText(),
-      c.Translations?.GetRawText())));
+      c.Translations?.GetRawText(), c.FrontHelp?.GetRawText())));
+
+  private static async Task ValidateReleaseJob(string jobId)
+  {
+    await using var conn = await Pg.OpenConnectionOrNullAsync();
+    if (conn is null) throw new InvalidOperationException("Failed to open database connection");
+    try { await ContentReleaseFence.ValidateJob(conn, jobId); }
+    catch (InvalidOperationException ex) { throw new BusinessException(ex.Message); }
+  }
 
   public Task RecordAttemptErrorAsync(string jobId, string errorMessage) => _jobRepository.RecordAttemptErrorAsync(jobId, errorMessage);
 
@@ -253,135 +277,21 @@ public class PublishJobProcessor : IPublishJobProcessor, IReplayOutcome
     };
   }
 
+  // Row-image access tolerates every additive content migration without hiding unrelated SQL errors.
   private const string CardsSqlTranslations = """
-    SELECT
-      stable_uid as "stableUid",
-      order_in_deck as "orderInDeck",
-      difficulty,
-      question,
-      explanation,
-      code_language as "codeLanguage",
-      code_snippet as "codeSnippet",
-      real_world_usage as "realWorldUsage",
-      revision,
-      topic,
-      mcq,
-      source,
-      translations
-    FROM cards
-    WHERE deck_id = $1 AND is_deleted = 0
-    ORDER BY order_in_deck ASC, id ASC
+    select stable_uid as "stableUid", order_in_deck as "orderInDeck", difficulty, question, explanation,
+      code_language as "codeLanguage", code_snippet as "codeSnippet", real_world_usage as "realWorldUsage", revision,
+      to_jsonb(cards) ->> 'topic' as topic,
+      nullif(to_jsonb(cards) -> 'mcq', 'null'::jsonb) as mcq,
+      nullif(to_jsonb(cards) -> 'source', 'null'::jsonb) as source,
+      nullif(to_jsonb(cards) -> 'translations', 'null'::jsonb) as translations,
+      nullif(nullif(to_jsonb(cards) -> 'front_help', 'null'::jsonb), '[]'::jsonb) as "frontHelp"
+    from cards where deck_id = $1 and is_deleted = 0 order by order_in_deck asc, id asc
     """;
 
-  private const string CardsSqlSource = """
-    SELECT
-      stable_uid as "stableUid",
-      order_in_deck as "orderInDeck",
-      difficulty,
-      question,
-      explanation,
-      code_language as "codeLanguage",
-      code_snippet as "codeSnippet",
-      real_world_usage as "realWorldUsage",
-      revision,
-      topic,
-      mcq,
-      source
-    FROM cards
-    WHERE deck_id = $1 AND is_deleted = 0
-    ORDER BY order_in_deck ASC, id ASC
-    """;
-
-  private const string CardsSql = """
-    SELECT
-      stable_uid as "stableUid",
-      order_in_deck as "orderInDeck",
-      difficulty,
-      question,
-      explanation,
-      code_language as "codeLanguage",
-      code_snippet as "codeSnippet",
-      real_world_usage as "realWorldUsage",
-      revision,
-      topic,
-      mcq
-    FROM cards
-    WHERE deck_id = $1 AND is_deleted = 0
-    ORDER BY order_in_deck ASC, id ASC
-    """;
-
-  private const string CardsSqlTopicOnly = """
-    SELECT
-      stable_uid as "stableUid",
-      order_in_deck as "orderInDeck",
-      difficulty,
-      question,
-      explanation,
-      code_language as "codeLanguage",
-      code_snippet as "codeSnippet",
-      real_world_usage as "realWorldUsage",
-      revision,
-      topic
-    FROM cards
-    WHERE deck_id = $1 AND is_deleted = 0
-    ORDER BY order_in_deck ASC, id ASC
-    """;
-
-  private const string CardsSqlLegacy = """
-    SELECT
-      stable_uid as "stableUid",
-      order_in_deck as "orderInDeck",
-      difficulty,
-      question,
-      explanation,
-      code_language as "codeLanguage",
-      code_snippet as "codeSnippet",
-      real_world_usage as "realWorldUsage",
-      revision
-    FROM cards
-    WHERE deck_id = $1 AND is_deleted = 0
-    ORDER BY order_in_deck ASC, id ASC
-    """;
-
-  /// <summary>
-  /// Cards of one deck in export order, tolerant of a database that has not yet run 018/019/026/047:
-  /// the 13-column select runs first; a 42703 (undefined_column) retries the pre-047 12-column shape, a second 42703
-  /// the pre-026 11-column shape, a third the 018-only shape, a fourth the pre-018 shape. Each retry is a fresh
-  /// statement on the same connection (no transaction, so the failed statement leaves it usable — the ManifestRebuild
-  /// precedent). A column the schema lacks maps to null, never to "" (byte identity of existing decks).
-  /// </summary>
   public static async Task<List<CardExportData>> LoadCardsAsync(NpgsqlConnection conn, int deckId)
   {
-    List<Dictionary<string, object?>> cardRows;
-    try
-    {
-      cardRows = await DbUtil.QueryAsync(conn, null, CardsSqlTranslations, [deckId]);
-    }
-    catch (PostgresException pgT) when (pgT.SqlState == "42703")
-    {
-      try
-      {
-        cardRows = await DbUtil.QueryAsync(conn, null, CardsSqlSource, [deckId]);
-      }
-      catch (PostgresException pg0) when (pg0.SqlState == "42703")
-      {
-        try
-        {
-          cardRows = await DbUtil.QueryAsync(conn, null, CardsSql, [deckId]);
-        }
-        catch (PostgresException pg) when (pg.SqlState == "42703")
-        {
-          try
-          {
-            cardRows = await DbUtil.QueryAsync(conn, null, CardsSqlTopicOnly, [deckId]);
-          }
-          catch (PostgresException pg2) when (pg2.SqlState == "42703")
-          {
-            cardRows = await DbUtil.QueryAsync(conn, null, CardsSqlLegacy, [deckId]);
-          }
-        }
-      }
-    }
+    var cardRows = await DbUtil.QueryAsync(conn, null, CardsSqlTranslations, [deckId]);
 
     return cardRows.Select(c => new CardExportData
     {
@@ -397,6 +307,7 @@ public class PublishJobProcessor : IPublishJobProcessor, IReplayOutcome
       Topic = c.TryGetValue("topic", out var tp) ? tp as string : null,
       Mcq = c.TryGetValue("mcq", out var m) && m is string s ? JsonSerializer.Deserialize<JsonElement>(s) : (JsonElement?)null,
       Source = c.TryGetValue("source", out var so) && so is string ss ? JsonSerializer.Deserialize<JsonElement>(ss) : null,
+      FrontHelp = c.TryGetValue("frontHelp", out var fh) && fh is string hs ? JsonSerializer.Deserialize<JsonElement>(hs) : null,
       Translations = c.TryGetValue("translations", out var tr) && tr is string ts ? JsonSerializer.Deserialize<JsonElement>(ts) : null,
     }).ToList();
   }

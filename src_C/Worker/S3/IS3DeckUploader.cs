@@ -77,4 +77,7 @@ public class CardExportData
   /// </summary>
   [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
   public JsonElement? Translations { get; set; }
+
+  [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+  public JsonElement? FrontHelp { get; set; }
 }

@@ -4,10 +4,13 @@ import { stripInlineCode } from '../../../content/inlineCode';
 import { rarityOfCard } from './cardRarity';
 import {
   appendDrawHistory,
-  loadDrawState,
-  saveDrawState,
+  loadDrawStateUnderLock,
+  saveDrawStateUnderLock,
   type DrawHistoryEntry,
 } from './drawStateStore';
+import { getUserScopedKey } from '../../../review/storage';
+import { withDrawStateLock } from './drawStateLock';
+import { isOrderedDeck, orderedCards, orderedEffectiveOwned, sortingHash } from './orderedAcquisition';
 import { normalizePityState } from './pity';
 import { loadDrawPoolOwned } from './drawPool';
 import { selectDrawCards } from './poolSelection';
@@ -60,6 +63,8 @@ export type CommitDrawOptions = {
   // added latency in the window right before the ceremony mounts. A null,
   // mismatched, or Cards-less value falls back to the dynamic-import resolve.
   deck?: DeckExport | null;
+  /** Checked immediately before persistence, after every qualification read. */
+  scopeCurrent?: () => Promise<boolean>;
 };
 
 // Draw history is diagnostics, never on the critical path. Appends are chained
@@ -68,8 +73,8 @@ export type CommitDrawOptions = {
 // that needs the writes to have landed awaits `flushDrawHistory()`.
 let historyQueue: Promise<void> = Promise.resolve();
 
-function enqueueDrawHistory(slug: string, entry: DrawHistoryEntry): void {
-  historyQueue = historyQueue.then(() => appendDrawHistory(slug, entry)).catch(() => {});
+function enqueueDrawHistory(slug: string, entry: DrawHistoryEntry, userSub?: string): void {
+  historyQueue = historyQueue.then(() => appendDrawHistory(slug, entry, userSub)).catch(() => {});
 }
 
 /** Resolves once every enqueued history append has settled. */
@@ -87,6 +92,30 @@ export async function commitDraw(
   drawCount: number,
   options?: CommitDrawOptions,
 ): Promise<DrawCommitResult | null> {
+  if (!Number.isInteger(drawCount) || drawCount < 1 || drawCount > MAX_COMMIT_DRAW_COUNT) {
+    throw new RangeError(`commitDraw: drawCount must be an integer from 1 to ${MAX_COMMIT_DRAW_COUNT}, got ${drawCount}`);
+  }
+  const snapshot = await resolveDrawDeck(slug, options?.deck);
+  const prefix = await getUserScopedKey('');
+  const userSub = prefix.slice('devcards:u:'.length, -1);
+  return withDrawStateLock(() => commitDrawUnderLock(slug, drawCount, { ...options, deck: snapshot }, userSub));
+}
+
+/** Resolve before taking the ownership lock: repository retirement may itself
+ * take that lock to purge state. The selected version is the draw's snapshot. */
+export async function resolveDrawDeck(slug: string, passed?: DeckExport | null): Promise<DeckExport | null> {
+  if (passed && passed.Slug === slug && Array.isArray(passed.Cards)) return passed;
+  const { resolveDeckBySlug } = await import('../../../content/deckRepository');
+  return resolveDeckBySlug(slug);
+}
+
+/** Internal acquisition primitive; the caller holds the draw-state boundary. */
+export async function commitDrawUnderLock(
+  slug: string,
+  drawCount: number,
+  options?: CommitDrawOptions,
+  userSub?: string,
+): Promise<DrawCommitResult | null> {
   // Checked before anything is read or written: a count outside 1..10 (or not a whole number) is
   // a caller bug, and it must not reach the selection, the draw state or the history.
   if (!Number.isInteger(drawCount) || drawCount < 1 || drawCount > MAX_COMMIT_DRAW_COUNT) {
@@ -101,17 +130,14 @@ export async function commitDraw(
   // loadDrawPoolOwned), so a card the Library already shows as collected
   // -- learned, or in the open starter lesson -- is never drawn. That read
   // is write-free and only decides membership, never weighting.
-  const passed = options?.deck;
-  let deck: DeckExport | null;
-  if (passed && passed.Slug === slug && Array.isArray(passed.Cards)) {
-    deck = passed;
-  } else {
-    const { resolveDeckBySlug } = await import('../../../content/deckRepository');
-    deck = await resolveDeckBySlug(slug);
-  }
+  const deck = options?.deck;
   if (!deck) return null;
 
-  const [drawState, ownedSet] = await Promise.all([loadDrawState(slug), loadDrawPoolOwned(slug)]);
+  const ordered = isOrderedDeck(slug);
+  const drawState = await loadDrawStateUnderLock(slug, userSub, ordered);
+  const ownedSet = ordered
+    ? await orderedEffectiveOwned(slug, drawState.owned, userSub!)
+    : await loadDrawPoolOwned(slug, drawState.owned);
   const pityState = normalizePityState(drawState.pity);
 
   // Same value for both fields today: the RNG is seeded from the clock.
@@ -121,7 +147,13 @@ export async function commitDraw(
   const ts = Date.now();
   const seed = ts;
 
-  const selection = selectDrawCards({
+  const remaining = ordered ? orderedCards(deck.Cards).filter(card => !ownedSet.has(card.StableUid)) : [];
+  const selection = ordered ? {
+    cards: remaining.slice(0, drawCount),
+    poolExhausted: remaining.length <= drawCount,
+    pityNext: pityState,
+    pityFiredFor: null,
+  } : selectDrawCards({
     deckCards: deck.Cards,
     ownedSet,
     drawCount,
@@ -144,10 +176,11 @@ export async function commitDraw(
   // independent setItem calls; being killed between them left a card
   // granted that never counted toward pity (or the reverse), and nothing
   // on disk could tell us which half to trust.
-  await saveDrawState(slug, {
+  if (options?.scopeCurrent && !await options.scopeCurrent()) throw new Error('Account changed; retry opening the pack');
+  await saveDrawStateUnderLock(slug, {
     owned: [...storedOwnedAfter],
-    pity: selection.pityNext,
-  });
+    pity: ordered ? drawState.pity : selection.pityNext,
+  }, userSub);
 
   // After the commit, never before: a history entry that outlives a
   // failed commit would describe a draw that did not happen. Enqueued rather
@@ -164,7 +197,10 @@ export async function commitDraw(
     pityBefore: pityState,
     drawnUids,
     ts,
-  });
+    selectionPolicy: ordered ? 'ordered-v1' : 'random-v1',
+    deckVersion: deck.Version,
+    ...(ordered ? { sortingHash: sortingHash(deck.Cards) } : {}),
+  }, userSub);
 
   const flags = getFeatureFlags();
   const ranks = rankCardsByOrder(deck.Cards);
@@ -239,7 +275,12 @@ export type DrawReplayResult = {
  * comes back, that state joins DrawHistoryEntry in the same change or
  * replay quietly stops being a replay.
  */
-export function replayDraw(record: DrawHistoryEntry, deckCards: CardExport[]): DrawReplayResult {
+export function replayDraw(record: DrawHistoryEntry, deckCards: CardExport[], deckVersion?: string): DrawReplayResult {
+  if (record.selectionPolicy === 'ordered-v1') {
+    if (!record.deckVersion || deckVersion !== record.deckVersion || record.sortingHash !== sortingHash(deckCards)) return { drawnUids: [], matches: false };
+    const drawnUids = orderedCards(deckCards).filter(card => !new Set(record.ownedBefore).has(card.StableUid)).slice(0, record.drawCount).map(card => card.StableUid);
+    return { drawnUids, matches: drawnUids.length === record.drawnUids.length && drawnUids.every((uid, index) => uid === record.drawnUids[index]) };
+  }
   const selection = selectDrawCards({
     deckCards,
     ownedSet: new Set(record.ownedBefore),

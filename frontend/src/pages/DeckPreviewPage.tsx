@@ -1,3 +1,4 @@
+import { CardFrontHelp } from '../components/CardFrontHelp';
 // src/pages/DeckPreviewPage.tsx
 
 import { useMemo, useState } from 'react';
@@ -51,6 +52,7 @@ function downloadText(filename: string, text: string) {
 function PreviewCardFace({ card, lang }: { card: DeckExportPreviewCard; lang: DisplayLang }) {
   const face = cardFace(
     {
+      frontHelp: card.FrontHelp,
       question: card.Question,
       explanation: card.Explanation,
       realWorldUsage: card.RealWorldUsage ?? null,
@@ -73,6 +75,7 @@ function PreviewCardFace({ card, lang }: { card: DeckExportPreviewCard; lang: Di
         ) : null}
       </div>
       <div className="mt-1 whitespace-pre-wrap text-sm text-slate-900">{face.question}</div>
+      <CardFrontHelp key={`${card.StableUid}:${face.lang}`} help={face.frontHelp} lang={face.lang} />
       {face.options.length > 0 ? (
         <ol className="mt-1 space-y-1 text-sm">
           {face.options.map(option => (
@@ -310,7 +313,7 @@ export function DeckPreviewPage() {
         </div>
 
         <div className="bg-white border border-slate-200 rounded-lg shadow-sm p-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-sm font-semibold text-slate-800">Cards as the app shows them</h2>
             {showLangToggle ? (
               <div role="group" aria-label="Card language" className="inline-flex rounded-md border border-slate-300 overflow-hidden text-xs">

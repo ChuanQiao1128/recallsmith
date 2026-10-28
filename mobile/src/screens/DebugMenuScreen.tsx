@@ -1,3 +1,5 @@
+import { captureProgressUserSub } from '../review/storage';
+import { withDrawStateLock } from '../features/gacha/draw/drawStateLock';
 import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -5,7 +7,7 @@ import type { RootStackParamList } from '../navigation/types';
 import AppInfoScreen from '../components/AppInfoScreen';
 import { resetAllProgress } from '../features/debug/resetProgress';
 import { saveRewardWalletState } from '../features/gacha/rewards/rewardWallet';
-import { loadDrawState, saveDrawState } from '../features/gacha/draw/drawStateStore';
+import { loadDrawStateUnderLock, saveDrawStateUnderLock } from '../features/gacha/draw/drawStateStore';
 import { rarityOfCard } from '../features/gacha/draw/cardRarity';
 import { getCeremonyDevOverrides, setCeremonyDevOverride } from '../features/gacha/draw/ceremonyPrefs';
 import {
@@ -113,18 +115,21 @@ export function DebugMenuScreen({ navigation }: Props) {
         setLastResult(`Deck ${slug} is not installed.`);
         return;
       }
-      const current = await loadDrawState(slug);
-      const owned = new Set(current.owned);
-      let added = 0;
-      for (const card of cards) {
-        if (rarityOfCard(card) !== 'LEG' && !owned.has(card.StableUid)) {
-          owned.add(card.StableUid);
-          added += 1;
+      const userSub = await captureProgressUserSub(true);
+      await withDrawStateLock(async () => {
+        const current = await loadDrawStateUnderLock(slug, userSub, true);
+        const owned = new Set(current.owned);
+        let added = 0;
+        for (const card of cards) {
+          if (rarityOfCard(card) !== 'LEG' && !owned.has(card.StableUid)) {
+            owned.add(card.StableUid);
+            added += 1;
+          }
         }
-      }
-      await saveDrawState(slug, { owned: [...owned], pity: current.pity });
-      const legendaryLeft = cards.filter((card) => rarityOfCard(card) === 'LEG' && !owned.has(card.StableUid)).length;
-      setLastResult(`Owned +${added} non-Legendary in ${slug}; ${legendaryLeft} Legendary left.`);
+        await saveDrawStateUnderLock(slug, { owned: [...owned], pity: current.pity }, userSub);
+        const legendaryLeft = cards.filter((card) => rarityOfCard(card) === 'LEG' && !owned.has(card.StableUid)).length;
+        setLastResult(`Owned +${added} non-Legendary in ${slug}; ${legendaryLeft} Legendary left.`);
+      });
     } catch (e: any) {
       setLastResult(`Seed failed: ${e?.message ?? String(e)}`);
     } finally {

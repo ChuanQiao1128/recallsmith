@@ -1,5 +1,6 @@
 import type { CardProgress } from '../../../review/model';
 import { readStoredDeckProgress } from '../../../review/storage';
+import { isOrderedDeck } from './orderedAcquisition';
 import { rarityOfCard } from './cardRarity';
 import { resolveEffectiveOwned } from './effectiveOwned';
 import { loadDrawState } from './drawStateStore';
@@ -23,14 +24,14 @@ import { buildPityProgressLabelV9, DEFAULT_PITY_STATE, normalizePityState } from
  * A failed read (or no stored progress yet) counts as "nothing learned": the
  * draw falls back to owned + starter rather than failing the pull.
  */
-export async function loadDrawPoolOwned(slug: string): Promise<Set<string>> {
+export async function loadDrawPoolOwned(slug: string, storedOwned?: readonly string[]): Promise<Set<string>> {
   let progress: CardProgress[] = [];
   try {
     progress = (await readStoredDeckProgress(slug)) ?? [];
   } catch {
     progress = [];
   }
-  return resolveEffectiveOwned(slug, progress);
+  return resolveEffectiveOwned(slug, progress, storedOwned);
 }
 
 export type DrawStatus = {
@@ -80,7 +81,7 @@ export async function loadDrawStatus(slug: string, deckCards: any[]): Promise<Dr
     const collectionComplete =
       deckCards.length > 0 && deckCards.every((card) => owned.has(card?.StableUid));
     return {
-      pityLabel: buildPityProgressLabelV9(normalizePityState(state.pity), missingLegCount),
+      pityLabel: isOrderedDeck(slug) ? '' : buildPityProgressLabelV9(normalizePityState(state.pity), missingLegCount),
       collectionComplete,
       pityThreshold: normalizePityState(state.pity).threshold,
       undrawnCount: countUndrawn(deckCards, owned),

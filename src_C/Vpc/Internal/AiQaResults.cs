@@ -144,6 +144,8 @@ public static class AiQaResults
           "select id, deck_id, status, chunk_count, prompt_version from ai_qa_runs where id = $1 for update", [report.RunId]);
         if (runRows.Count == 0) return Authoring.Helpers.ErrorEnvelope(res, 404, "RUN_NOT_FOUND", "AI QA run not found");
         deckId = Convert.ToInt64(runRows[0]["deck_id"], CultureInfo.InvariantCulture);
+        if (await Authoring.ContentRelease.Applies(conn, deckId, tx))
+          return res.Ok(new { runId = report.RunId, runStatus = "failed", code = "CLOUD_QA_RETIRED" });
         storedPromptVersion = runRows[0]["prompt_version"] as string;
         var chunkCount = Convert.ToInt32(runRows[0]["chunk_count"], CultureInfo.InvariantCulture);
         if (report.Chunk >= chunkCount)

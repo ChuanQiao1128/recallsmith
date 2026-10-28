@@ -1,3 +1,4 @@
+import { withDrawStateLock, invalidateDrawStateOperations } from '../features/gacha/draw/drawStateLock';
 // mobile/src/sync/progressSync.ts
 import * as Crypto from 'expo-crypto';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -1988,7 +1989,8 @@ export async function resetProgressSyncState(): Promise<void> {
   // race existed against the snapshot in flight; now it would also leave a
   // cache entry describing keys that no longer exist, so the deletion and the
   // invalidation belong in one critical section.
-  await withQueueLock(async () => {
+  await withDrawStateLock(() => withQueueLock(async () => {
+    invalidateDrawStateOperations();
     try {
       const keys = await AsyncStorage.getAllKeys();
       const prefix = userPrefix(userSub);
@@ -2012,7 +2014,7 @@ export async function resetProgressSyncState(): Promise<void> {
     // not by sub -- filtering here would duplicate the key layout that
     // drawStateStore owns.
     invalidateDrawStateCache();
-  });
+  }));
 
   _lastPullAtMs = 0;
   _unconfirmedPush = false;

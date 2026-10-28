@@ -2,7 +2,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { getUserScopedKey, loadAllProgress } from '../../../review/storage';
 import { loadActiveDeckSlug } from '../../../content/activeDeck';
-import { ANON_USER_SCOPE_PREFIX, loadDrawState } from '../draw/drawStateStore';
+import { ANON_USER_SCOPE_PREFIX, loadDrawStateUnderLock } from '../draw/drawStateStore';
+import { withDrawStateLock } from '../draw/drawStateLock';
 import {
   applyRewardToWallet,
   consumePullsFromWallet,
@@ -381,8 +382,7 @@ async function liveDeckUids(slug: string): Promise<Set<string> | null> {
  * sources the owned gate reads. False when nothing is held (the first-visit path covers that), when
  * any held uid is still in the deck, or when the deck cannot be read.
  */
-async function ownsOnlyRetiredCards(slug: string, owned: readonly string[]): Promise<boolean> {
-  const live = await liveDeckUids(slug);
+async function ownsOnlyRetiredCards(slug: string, owned: readonly string[], live: Set<string> | null): Promise<boolean> {
   if (!live) return false;
   // The draw state first: for almost every learner an owned card is still in the deck, and that
   // answers without reading progress.
@@ -424,13 +424,21 @@ async function ownsOnlyRetiredCards(slug: string, owned: readonly string[]): Pro
  * in the deck never qualifies.
  */
 export async function ensureDeckBootstrap(slug: string): Promise<{ granted: number; wallet: RewardWalletState }> {
+  // Repository reads can purge retired decks; resolve outside the draw lock.
+  const prefix = await getUserScopedKey('');
+  const userSub = prefix.slice('devcards:u:'.length, -1);
+  const live = await liveDeckUids(slug);
+  return withDrawStateLock(() => ensureDeckBootstrapUnderDrawLock(slug, live, userSub));
+}
+
+async function ensureDeckBootstrapUnderDrawLock(slug: string, live: Set<string> | null, userSub: string): Promise<{ granted: number; wallet: RewardWalletState }> {
   try {
     if (await isStarterLessonOpen()) {
       return { granted: 0, wallet: await loadDeckWallet(slug) };
     }
     type FirstVisit = { granted: number; wallet: RewardWalletState; rebootstrapCandidate: boolean; owned: string[] };
     const first = await withLock(async (): Promise<FirstVisit> => {
-      const key = await walletsKey();
+      const key = await walletsKey(userSub);
       const record = await readRecord(key);
       const current = record.decks[slug] ?? zeroWallet();
       const alreadyMarked = Object.prototype.hasOwnProperty.call(record.bootstrappedAtMs, slug);
@@ -439,7 +447,7 @@ export async function ensureDeckBootstrap(slug: string): Promise<{ granted: numb
         return { granted: 0, wallet: current, rebootstrapCandidate: false, owned: [] };
       }
       const rebootstrapped = Object.prototype.hasOwnProperty.call(record.rebootstrappedAtMs ?? {}, slug);
-      const drawState = await loadDrawState(slug);
+      const drawState = await loadDrawStateUnderLock(slug, userSub, true);
       if (alreadyMarked || drawState.owned.length !== 0 || drawState.pity != null) {
         // Not a first visit. An empty pack that was never re-bootstrapped may still qualify below.
         return { granted: 0, wallet: current, rebootstrapCandidate: !rebootstrapped, owned: [...drawState.owned] };
@@ -457,9 +465,9 @@ export async function ensureDeckBootstrap(slug: string): Promise<{ granted: numb
     if (first.granted > 0 || !first.rebootstrapCandidate) return { granted: first.granted, wallet: first.wallet };
 
     // The deck read happens outside the lock; the grant re-checks the wallet and the mark under it.
-    if (!(await ownsOnlyRetiredCards(slug, first.owned))) return { granted: 0, wallet: first.wallet };
+    if (!(await ownsOnlyRetiredCards(slug, first.owned, live))) return { granted: 0, wallet: first.wallet };
     return await withLock(async () => {
-      const key = await walletsKey();
+      const key = await walletsKey(userSub);
       const record = await readRecord(key);
       const current = record.decks[slug] ?? zeroWallet();
       const marks = record.rebootstrappedAtMs ?? {};
@@ -733,4 +741,37 @@ export async function adoptAnonDeckWallets(userSub?: string): Promise<{
     // Never throw: adoption must not fail sign-in.
   }
   return result;
+}
+
+/** Caller holds the draw boundary. Wallet lock stays held from fresh balance to
+ * owned commit to debit. Cross-key failure deliberately leaves the cards free;
+ * there is no ambiguous-debit recovery job to charge the learner again. */
+export async function purchaseDeckCards<T extends { cards: unknown[] }>(
+  slug: string,
+  requested: number,
+  userSub: string,
+  commit: (count: number) => Promise<T | null>,
+  scopeCurrent: () => Promise<boolean>,
+): Promise<{ result: T | null; wallet: RewardWalletState; spent: number }> {
+  const key = await walletsKey(userSub);
+  return withLock(async () => {
+    const raw = await AsyncStorage.getItem(key);
+    if (raw != null) {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !parsed.decks || typeof parsed.decks !== 'object') throw new Error('Pack balance is corrupt');
+      const wallet = parsed.decks[slug];
+      if (wallet && (!Number.isInteger(wallet.availablePulls) || wallet.availablePulls < 0 || !Number.isInteger(wallet.reservePulls) || wallet.reservePulls < 0)) throw new Error('Pack balance is corrupt');
+    }
+    const record = parseRecord(raw);
+    const before = record.decks[slug] ?? zeroWallet();
+    const count = Math.min(requested, before.availablePulls);
+    if (count <= 0) return { result: null, wallet: before, spent: 0 };
+    const result = await commit(count);
+    if (!result || result.cards.length === 0) return { result, wallet: before, spent: 0 };
+    if (!await scopeCurrent()) throw new Error('Account changed after grant; cards are retained without charge');
+    const consumed = consumePullsFromWallet(before, result.cards.length);
+    const next = { ...record, decks: { ...record.decks, [slug]: consumed.wallet } };
+    await AsyncStorage.setItem(key, JSON.stringify(next));
+    return { result, wallet: consumed.wallet, spent: consumed.spent };
+  });
 }

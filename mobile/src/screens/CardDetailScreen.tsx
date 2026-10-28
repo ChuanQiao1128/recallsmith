@@ -1,3 +1,4 @@
+import { CardFrontHelp } from '../features/gacha/components/CardFrontHelp';
 import React, { useEffect, useState } from 'react';
 import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -492,6 +493,7 @@ export function CardDetailScreen({ navigation, route }: Props) {
                 text={title}
               />
               {questionCode ? <QuestionCodeBlock code={questionCode} /> : null}
+              <CardFrontHelp key={`${displayCard?.StableUid}:${cardTextLang ?? 'en'}`} help={displayCard?.FrontHelp} />
             </View>
           </CardTextLangContext.Provider>
 

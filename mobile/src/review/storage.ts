@@ -57,6 +57,7 @@ async function getActiveUserSub(strict = false): Promise<string | null> {
 
   try {
     const raw = await AsyncStorage.getItem(ACTIVE_USER_SUB_KEY);
+    if (strict && revision !== _userSubCacheRevision) return getActiveUserSub(strict);
     const sub = normalizeSub(raw);
     if (revision === _userSubCacheRevision) {
       _cachedUserSub = sub;
@@ -673,8 +674,8 @@ async function saveDeckProgressUnlocked(deck: DeckExport, progress: CardProgress
 // One serializer for reconciliation, rating and remote merges. The scope is
 // captured before waiting so a queued write cannot follow an account switch.
 const progressLocks = new Map<string, Promise<unknown>>();
-export async function captureProgressUserSub(): Promise<string> {
-  return (await getActiveUserSub()) ?? 'anon';
+export async function captureProgressUserSub(strict = false): Promise<string> {
+  return (await getActiveUserSub(strict)) ?? 'anon';
 }
 async function withProgressLock<T>(slug: string, sub: string, action: () => Promise<T>): Promise<T> {
   const key = `${sub}:${slug}`;

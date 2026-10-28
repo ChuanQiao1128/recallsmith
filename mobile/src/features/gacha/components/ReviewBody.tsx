@@ -1,3 +1,4 @@
+import { CardFrontHelp } from './CardFrontHelp';
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -117,6 +118,8 @@ export const ReviewBody = React.memo(function ReviewBody(props: ReviewBodyProps)
           {question.code ? <QuestionCodeBlock code={question.code} /> : null}
         </View>
       )}
+
+      <CardFrontHelp key={`${card.StableUid}:${lang ?? 'en'}`} help={card.FrontHelp} />
 
       {!faceUp ? (
         <Pressable

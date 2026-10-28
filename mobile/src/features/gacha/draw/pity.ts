@@ -1,4 +1,6 @@
-import { loadDrawState, saveDrawState } from './drawStateStore';
+import { loadDrawState, loadDrawStateUnderLock, saveDrawStateUnderLock } from './drawStateStore';
+import { getUserScopedKey } from '../../../review/storage';
+import { withDrawStateLock } from './drawStateLock';
 
 export type MockDrawCard = {
   stableUid: string;
@@ -130,6 +132,10 @@ export async function loadPityState(slug: string): Promise<PityState> {
 export async function savePityState(slug: string, state: PityState): Promise<void> {
   // Read-modify-write of the merged record: pity shares its key with the
   // owned set now, so writing pity alone would erase the collection.
-  const current = await loadDrawState(slug);
-  await saveDrawState(slug, { owned: current.owned, pity: state });
+  const prefix = await getUserScopedKey('');
+  const userSub = prefix.slice('devcards:u:'.length, -1);
+  await withDrawStateLock(async () => {
+    const current = await loadDrawStateUnderLock(slug, userSub, true);
+    await saveDrawStateUnderLock(slug, { owned: current.owned, pity: state }, userSub);
+  });
 }

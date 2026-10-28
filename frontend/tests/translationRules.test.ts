@@ -258,6 +258,11 @@ describe('validateTranslation', () => {
     expect(hasCjk('plain English')).toBe(false);
   });
 
+  it('validates the optional frontHelp extension and bilingual entry count', () => {
+    expect(codes({ 'zh-CN': { ...zh(), frontHelp: [{ term: 'x', definition: 5 }] } })).toContain('FRONT_HELP_BAD_SHAPE');
+    expect(codes({ 'zh-CN': zh() }, { ...ENGLISH, frontHelp: [{ term: 'latency', definition: 'Time until a response.' }] })).toContain('TRANSLATION_FRONT_HELP_MISMATCH');
+  });
+
   // Last on purpose: every case above recorded its codes in `seen`.
   it('reaches every contract §2 code from a concrete input', () => {
     expect([...seen].sort()).toEqual([...TRANSLATION_ISSUE_CODES].sort());

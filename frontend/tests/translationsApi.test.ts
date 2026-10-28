@@ -171,3 +171,23 @@ describe('card reports: displayLocale', () => {
     expect(reports.cardReportLocaleBadge({})).toBeNull();
   });
 });
+
+describe('optional frontHelp API field', () => {
+  const frontHelp = [{ term: 'latency', definition: 'Time until a response.' }];
+  it('reads the help and leaves a legacy card without an added field', async () => {
+    httpMock.get.mockResolvedValueOnce(envelope([{ ...WIRE_CARD, frontHelp }]));
+    expect((await authoring.fetchCardById(1)).data?.frontHelp).toEqual(frontHelp);
+    httpMock.get.mockResolvedValueOnce(envelope([WIRE_CARD]));
+    expect((await authoring.fetchCardById(1)).data).not.toHaveProperty('frontHelp');
+  });
+  it('forwards create/update help, omits undefined on save and forwards explicit null clearing', async () => {
+    httpMock.post.mockResolvedValue(envelope(WIRE_CARD));
+    httpMock.put.mockResolvedValue(envelope(WIRE_CARD));
+    await authoring.createCard({ deckId: 7, question: 'Q', stableUid: 'help-01', frontHelp });
+    expect(httpMock.post.mock.calls.at(-1)?.[1].frontHelp).toEqual(frontHelp);
+    await authoring.updateCard({ id: 1, deckId: 7, question: 'Q', expectedVersion: 3 });
+    expect(httpMock.put.mock.calls.at(-1)?.[1]).not.toHaveProperty('frontHelp');
+    await authoring.updateCard({ id: 1, deckId: 7, question: 'Q', expectedVersion: 3, frontHelp: null });
+    expect(httpMock.put.mock.calls.at(-1)?.[1].frontHelp).toBeNull();
+  });
+});

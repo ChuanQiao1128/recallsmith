@@ -73,7 +73,8 @@ public static class DeckDiff
       || !string.Equals(a.Topic, b.Topic, StringComparison.Ordinal)
       || !McqEquals(a.Mcq, b.Mcq)
       || !McqEquals(a.Source, b.Source)
-      || !McqEquals(a.Translations, b.Translations);
+      || !McqEquals(a.Translations, b.Translations)
+      || !McqEquals(a.FrontHelp, b.FrontHelp);
   }
 
   /// <summary>

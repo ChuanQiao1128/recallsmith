@@ -48,6 +48,7 @@ function okResponse(data: any) {
 describe('draw state cloud sync', () => {
   beforeEach(() => {
     store.clear();
+    store.set('devcards:content:manifest:v2', JSON.stringify({ decks: [{"slug": "csharp", "availability": "live"}] }));
     invalidateDrawStateCache();
     apiJson.mockReset();
     setActiveUserSubForStorage('user-a');

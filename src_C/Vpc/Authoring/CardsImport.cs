@@ -22,7 +22,7 @@ namespace RecallSmith.Lambda.Vpc.Authoring;
 /// maps to 503 MIGRATION_REQUIRED on this route alone. Deploy order is migrate, then code.
 ///
 /// Every card field is whole-file (an absent field takes its default and replaces the stored value)
-/// except <c>translations</c>: a card object without that key keeps the stored translations and their
+/// except <c>frontHelp</c> and <c>translations</c>: a card object without that key keeps the stored translations and their
 /// basis, and only an explicit <c>"translations": null</c> clears them.
 /// </summary>
 public static class CardsImport
@@ -45,7 +45,7 @@ public static class CardsImport
     string? Source,
     string? Translations,
     string? TranslationBasis,
-    bool TranslationsSent);
+    bool TranslationsSent, string? FrontHelp, bool FrontHelpSent);
 
   /// <summary>What the core learned about the import, for the after-response side effects.</summary>
   private sealed class ImportOutcome
@@ -233,18 +233,11 @@ public static class CardsImport
           // Translations are not whole-file: a card object without the key keeps the stored translations and their basis
           // (a client that predates translations must not wipe them), and only an explicit null clears them. A present
           // block mirrors this card's English and is restamped, so the file is the translation's new basis.
-          string? translations = null;
-          string? translationBasis = null;
+          var frontHelp = FrontHelpValidation.Read(cardEl, out var frontHelpSent);
           var translationsSent = cardEl.TryGetProperty("translations", out var trEl);
-          if (translationsSent)
-          {
-            var english = new TranslationValidation.EnglishCard(question, explanation, realWorldUsage, mcq);
-            translations = TranslationValidation.Canonicalize(trEl, english, deckLocale);
-            translationBasis = TranslationValidation.BasisJson(translations, english);
-          }
-
+          // Validate translations after locking the row: an older client may omit the stored English help.
           cards.Add(new ImportCard(i, uid, question, explanation, codeSnippet, codeLanguage, realWorldUsage, difficulty, orderInDeck, topic, mcq, source,
-            translations, translationBasis, translationsSent));
+            translationsSent ? trEl.GetRawText() : null, null, translationsSent, frontHelp, frontHelpSent));
         }
         catch (McqValidationError ex)
         {
@@ -289,6 +282,8 @@ public static class CardsImport
     var actions = new Dictionary<string, string>(StringComparer.Ordinal);
     var ids = new Dictionary<string, long>(StringComparer.Ordinal);
     var parked = 0;
+    string? releaseId = null, actionId = null, payloadHash = null;
+    APIGatewayProxyResponse? releaseResult = null;
 
     try
     {
@@ -298,11 +293,29 @@ public static class CardsImport
 
       // Before migration 047 a file without translations upserts exactly as before; one with translations needs the columns.
       var translationsReady = await Helpers.ColumnExistsAsync(conn, tx, "cards", "translations");
-      if (!translationsReady && cards.Any(c => c.Translations is not null)) return Helpers.TranslationsNotMigrated(res);
+      var frontHelpReady = await Helpers.ColumnExistsAsync(conn, tx, "cards", "front_help");
+      if (!frontHelpReady && cards.Any(c => c.FrontHelp is not null)) return Helpers.FrontHelpNotMigrated(res);
 
       var deckRows = await DbUtil.QueryAsync(conn, tx,
         "select id from decks where id = $1 and is_deleted = 0 for update", [deckId]);
       if (deckRows.Count == 0) return Helpers.ErrorEnvelope(res, 404, "DECK_NOT_FOUND", $"Deck {deckId} not found");
+
+      if (await ContentRelease.Applies(conn, deckId, tx))
+      {
+        using var releaseDoc = Validation.ParseJsonBody(req)!;
+        var body = releaseDoc.RootElement;
+        releaseId = ContentRelease.Required(body, "releaseId");
+        actionId = ContentRelease.Required(body, "idempotencyKey");
+        payloadHash = ContentRelease.PayloadHash(body);
+        var replay = await ContentRelease.Replay(conn, tx, deckId, releaseId, actionId, payloadHash);
+        if (replay is not null) return replay;
+        await ContentRelease.Lock(conn, tx, deckId);
+        if (ContentRelease.Required(body, "expectedEditingSnapshot") != await ContentRelease.EditingSnapshot(conn, tx, deckId))
+          return Helpers.ErrorEnvelope(res, 409, "EDITING_SNAPSHOT_CONFLICT", "Deck or cards changed since the editing backup; nothing was written");
+        var liveUids = await DbUtil.QueryAsync(conn, tx, "select stable_uid from cards where deck_id=$1 and is_deleted=0", [deckId]);
+        if (liveUids.Any(r => !uids.Contains((string)r["stable_uid"]!, StringComparer.Ordinal)))
+          return Helpers.ErrorEnvelope(res, 409, "RELEASE_COVERAGE", "Release import must retain every existing live UID");
+      }
 
       // A soft-deleted card in this deck whose stable_uid is in the payload cannot be revived by an
       // upsert (that would collide on uq_cards_deck_uid and silently resurrect a deleted card), so
@@ -347,47 +360,48 @@ public static class CardsImport
           $"{pairs}, which is not in this import; nothing was written. Retry after resolving the conflict.");
       }
 
-      // A card sent without translations keeps the stored ones, so, as on PUT, they must still mirror the English this
-      // file writes (a text-only English change keeps the old basis, so the translation reads as stale until it is
-      // restamped). The rows stay locked, so the upsert keeps exactly the translations checked here.
-      var keptUids = cards.Where(c => !c.TranslationsSent).Select(c => c.StableUid).ToArray();
-      if (translationsReady && keptUids.Length > 0)
+      // Lock every existing payload row, so omitted help/translations are validated and preserved atomically.
+      var storedRows = await DbUtil.QueryAsync(conn, tx,
+        """
+        select stable_uid as "stableUid",
+          nullif(to_jsonb(cards) -> 'translations', 'null'::jsonb) as translations,
+          nullif(to_jsonb(cards) -> 'front_help', 'null'::jsonb) as "frontHelp"
+        from cards where deck_id = $1 and is_deleted = 0 and stable_uid = any($2) for update
+        """, [deckId, uids]);
+      var storedByUid = storedRows.ToDictionary(r => (string)r["stableUid"]!, StringComparer.Ordinal);
+      for (var index = 0; index < cards.Count; index++)
       {
-        var storedRows = await DbUtil.QueryAsync(conn, tx,
-          """
-          select stable_uid as "stableUid", translations from cards
-          where deck_id = $1 and is_deleted = 0 and stable_uid = any($2) and translations is not null
-          for update
-          """,
-          [deckId, keptUids]);
-        var stored = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
-        foreach (var r in storedRows)
+        var c = cards[index];
+        storedByUid.TryGetValue(c.StableUid, out var storedRow);
+        var help = c.FrontHelpSent ? c.FrontHelp
+          : storedRow is not null && Helpers.JsonbElement(storedRow, "frontHelp") is { } keptHelp ? FrontHelpValidation.Canonicalize(keptHelp) : null;
+        var english = new TranslationValidation.EnglishCard(c.Question, c.Explanation, c.RealWorldUsage, c.Mcq, help);
+        try
         {
-          if (Helpers.JsonbElement(r, "translations") is { } kept) stored[(string)r["stableUid"]!] = kept;
+          var translations = c.TranslationsSent
+            ? TranslationValidation.Canonicalize(JsonSerializer.Deserialize<JsonElement>(c.Translations!), english, deckLocale)
+            : storedRow is not null && Helpers.JsonbElement(storedRow, "translations") is { } kept
+              ? TranslationValidation.Canonicalize(kept, english, deckLocale) : null;
+          if (!translationsReady && translations is not null) return Helpers.TranslationsNotMigrated(res);
+          cards[index] = c with { FrontHelp = help, Translations = translations,
+            TranslationBasis = c.TranslationsSent ? TranslationValidation.BasisJson(translations, english) : null };
         }
-
-        foreach (var c in cards)
+        catch (TranslationValidationError ex)
         {
-          if (c.TranslationsSent || !stored.TryGetValue(c.StableUid, out var kept)) continue;
-          try
-          {
-            TranslationValidation.Canonicalize(kept, new TranslationValidation.EnglishCard(c.Question, c.Explanation, c.RealWorldUsage, c.Mcq), deckLocale);
-          }
-          catch (TranslationValidationError ex)
-          {
-            return res.BadRequest(ex.Code,
+          return c.TranslationsSent
+            ? res.BadRequest(ex.Code, $"cards[{c.Index}] ({c.StableUid}): {ex.Message}")
+            : res.BadRequest(ex.Code,
               $"cards[{c.Index}] ({c.StableUid}): the stored translations no longer match this card's English ({ex.Message}); " +
               "send translations with the card, or translations: null to clear them");
-          }
         }
       }
 
-      const string upsertSql = """
+      var upsertSql = $"""
         insert into cards (
           deck_id, stable_uid, question, explanation, code_snippet, code_language,
-          real_world_usage, difficulty, order_in_deck, topic, mcq, source, translations, translation_basis
+          real_world_usage, difficulty, order_in_deck, topic, mcq, source, translations, translation_basis{(frontHelpReady ? ", front_help" : "")}
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb{(frontHelpReady ? ", $16::jsonb" : "")})
         on conflict (deck_id, stable_uid) do update set
           question = excluded.question,
           explanation = excluded.explanation,
@@ -401,15 +415,16 @@ public static class CardsImport
           source = excluded.source,
           translations = case when $15::boolean then excluded.translations else cards.translations end,
           translation_basis = case when $15::boolean then excluded.translation_basis else cards.translation_basis end,
+          {(frontHelpReady ? "front_help = case when $17::boolean then excluded.front_help else cards.front_help end," : "")}
           version = cards.version + 1,
           updated_at = now()
         where (cards.question, cards.explanation, cards.code_snippet, cards.code_language, cards.real_world_usage,
-               cards.difficulty, cards.order_in_deck, cards.topic, cards.mcq, cards.source, cards.translations, cards.translation_basis)
+               cards.difficulty, cards.order_in_deck, cards.topic, cards.mcq, cards.source, cards.translations, cards.translation_basis{(frontHelpReady ? ", cards.front_help" : "")})
           is distinct from
               (excluded.question, excluded.explanation, excluded.code_snippet, excluded.code_language, excluded.real_world_usage,
                excluded.difficulty, excluded.order_in_deck, excluded.topic, excluded.mcq, excluded.source,
                case when $15::boolean then excluded.translations else cards.translations end,
-               case when $15::boolean then excluded.translation_basis else cards.translation_basis end)
+               case when $15::boolean then excluded.translation_basis else cards.translation_basis end{(frontHelpReady ? ", case when $17::boolean then excluded.front_help else cards.front_help end" : "")})
         returning id, (xmax = 0) as inserted
         """;
       const string upsertSqlPre047 = """
@@ -441,17 +456,16 @@ public static class CardsImport
 
       foreach (var c in cards)
       {
+        var parameters = new List<object?>
+        {
+          deckId, c.StableUid, c.Question, c.Explanation, c.CodeSnippet, c.CodeLanguage,
+          c.RealWorldUsage, c.Difficulty, c.OrderInDeck, c.Topic, c.Mcq, c.Source,
+        };
+        if (translationsReady) parameters.AddRange([c.Translations, c.TranslationBasis, c.TranslationsSent]);
+        if (translationsReady && frontHelpReady) parameters.AddRange([c.FrontHelp, c.FrontHelpSent]);
         var rows = translationsReady
-          ? await DbUtil.QueryAsync(conn, tx, upsertSql, new object?[]
-          {
-            deckId, c.StableUid, c.Question, c.Explanation, c.CodeSnippet, c.CodeLanguage,
-            c.RealWorldUsage, c.Difficulty, c.OrderInDeck, c.Topic, c.Mcq, c.Source, c.Translations, c.TranslationBasis, c.TranslationsSent,
-          })
-          : await DbUtil.QueryAsync(conn, tx, upsertSqlPre047, new object?[]
-          {
-            deckId, c.StableUid, c.Question, c.Explanation, c.CodeSnippet, c.CodeLanguage,
-            c.RealWorldUsage, c.Difficulty, c.OrderInDeck, c.Topic, c.Mcq, c.Source,
-          });
+          ? await DbUtil.QueryAsync(conn, tx, upsertSql, parameters)
+          : await DbUtil.QueryAsync(conn, tx, upsertSqlPre047, parameters);
 
         if (rows.Count == 0)
         {
@@ -486,6 +500,13 @@ public static class CardsImport
       }
 
       await DbUtil.ExecuteAsync(conn, tx, "set constraints uq_cards_deck_order immediate", []);
+      if (releaseId is not null)
+      {
+        releaseResult = res.Ok(new { deckId, releaseId, created, updated, unchanged = unchangedUids.Count,
+          editingSnapshot = await ContentRelease.EditingSnapshot(conn, tx, deckId),
+          cards = cards.Select(c => new { stableUid = c.StableUid, id = ids[c.StableUid], action = actions[c.StableUid] }).ToArray() });
+        await ContentRelease.Save(conn, tx, deckId, releaseId, actionId!, "import", payloadHash!, releaseResult);
+      }
       await tx.CommitAsync();
     }
     catch (PostgresException pg) when (pg is { SqlState: "42809" })
@@ -503,7 +524,7 @@ public static class CardsImport
     }
     catch (Exception ex) when (ex is ValidationError)
     {
-      return res.BadRequest("VALIDATION_ERROR", ex.Message);
+      return Helpers.ErrorEnvelope(res, ex.Message.StartsWith("IDEMPOTENCY_CONFLICT") ? 409 : 400, "VALIDATION_ERROR", ex.Message);
     }
     catch (Exception ex)
     {
@@ -522,6 +543,6 @@ public static class CardsImport
 
     outcome.Created = created;
     outcome.Updated = updated;
-    return res.Ok(new { deckId, created, updated, unchanged, cards = results });
+    return releaseResult ?? res.Ok(new { deckId, created, updated, unchanged, cards = results });
   }
 }

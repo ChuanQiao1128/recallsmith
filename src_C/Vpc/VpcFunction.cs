@@ -185,6 +185,8 @@ public sealed class VpcFunction
       }
 
       // Authoring
+      if (p.Contains("/api/v1/authoring/release/", StringComparison.OrdinalIgnoreCase))
+        return await Vpc.Authoring.ContentRelease.Handle(req, res, auth);
       if (p.EndsWith("/api/v1/authoring/decks", StringComparison.OrdinalIgnoreCase))
       {
         return await Vpc.Authoring.Decks.HandleAuthoringDecks(req, res, auth);

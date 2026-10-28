@@ -189,8 +189,8 @@ describe('who consumes each shared rule today', () => {
       MAX_UID_LENGTH: ['src/components/CardForm.tsx'],
       MIN_DIFFICULTY: ['src/components/CardForm.tsx'],
       hasContent: ['src/components/CardForm.tsx', 'src/lib/deckImport.ts'],
-      isValidDifficulty: ['src/components/CardForm.tsx', 'src/lib/deckImport.ts'],
-      isValidStableUid: ['src/components/CardForm.tsx', 'src/lib/deckImport.ts'],
+      isValidDifficulty: ['src/components/CardForm.tsx', 'src/lib/contentRelease.ts', 'src/lib/deckImport.ts'],
+      isValidStableUid: ['src/components/CardForm.tsx', 'src/lib/contentRelease.ts', 'src/lib/deckImport.ts'],
     });
   });
 });

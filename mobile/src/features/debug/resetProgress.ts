@@ -1,3 +1,4 @@
+import { withDrawStateLock, invalidateDrawStateOperations } from '../gacha/draw/drawStateLock';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { invalidateDrawStateCache } from '../gacha/draw/drawStateCache';
@@ -41,7 +42,12 @@ export type ResetOptions = {
  * tester can simulate a fresh install without re-onboarding (default)
  * or with full onboarding (resetOnboarding=true).
  */
-export async function resetAllProgress(opts: ResetOptions = {}): Promise<ResetProgressResult> {
+export function resetAllProgress(opts: ResetOptions = {}): Promise<ResetProgressResult> {
+  return withDrawStateLock(() => resetAllProgressUnderLock(opts));
+}
+
+async function resetAllProgressUnderLock(opts: ResetOptions): Promise<ResetProgressResult> {
+  invalidateDrawStateOperations();
   const prefixes = opts.resetOnboarding
     ? [...PROGRESS_KEY_PREFIXES, ...ONBOARDING_KEY_PREFIXES]
     : PROGRESS_KEY_PREFIXES;

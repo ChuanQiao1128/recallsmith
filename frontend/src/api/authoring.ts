@@ -1,4 +1,5 @@
 // src/api/authoring.ts
+import { parseFrontHelp, type FrontHelpEntry } from '../lib/frontHelp';
 import type { ApiResult } from '../types/api';
 import type { Deck, DeckAvailability, DeckTier } from '../types/deck';
 import type { Card, CardSource } from '../types/card';
@@ -107,6 +108,7 @@ function normalizeCard(c: Card): Card {
     version: toInt(o.version, c.version),
     isDeleted: o.isDeleted === undefined ? c.isDeleted : toInt(o.isDeleted, c.isDeleted ?? 0),
     // Like isDeleted: an absent key (an older server) stays absent.
+    ...(o.frontHelp === undefined ? {} : { frontHelp: parseFrontHelp(o.frontHelp) ?? null }),
     ...(o.translations === undefined ? {} : { translations: toTranslations(o.translations) }),
     ...(o.translationStatus === undefined ? {} : { translationStatus: toTranslationStatus(o.translationStatus) }),
   };
@@ -507,6 +509,7 @@ export async function createCard(params: {
   // key with value null. `undefined` means "leave alone".
   mcq?: McqBlob | null;
   source?: CardSource | null;
+  frontHelp?: FrontHelpEntry[] | null;
 }): Promise<ApiResult<Card>> {
   try {
     const body: Record<string, unknown> = {
@@ -523,6 +526,7 @@ export async function createCard(params: {
     if (params.mcq !== undefined) body.mcq = params.mcq;
     // Like mcq: null clears the stored source, undefined leaves it alone.
     if (params.source !== undefined) body.source = params.source;
+    if (params.frontHelp !== undefined) body.frontHelp = params.frontHelp;
     if (params.revision !== undefined) body.revision = params.revision;
     body.stableUid = ensureStableUid(params.stableUid);
 
@@ -567,6 +571,7 @@ export async function updateCard(params: {
   expectedVersion?: number;
   mcq?: McqBlob | null;
   source?: CardSource | null;
+  frontHelp?: FrontHelpEntry[] | null;
 }): Promise<ApiResult<Card>> {
   try {
     // Backend expects id and expectedVersion in JSON body, not query string.
@@ -593,6 +598,7 @@ export async function updateCard(params: {
     if (params.mcq !== undefined) body.mcq = params.mcq;
     // Like mcq: null clears the stored source, undefined leaves it alone.
     if (params.source !== undefined) body.source = params.source;
+    if (params.frontHelp !== undefined) body.frontHelp = params.frontHelp;
     if (params.difficulty !== undefined) body.difficulty = params.difficulty;
     if (params.orderInDeck !== undefined) body.orderInDeck = params.orderInDeck;
     if (params.revision !== undefined) body.revision = params.revision;
@@ -646,6 +652,7 @@ export interface ImportCardInput {
   mcq: McqBlob | null;
   /** Optional on the type; the import runner always sets it (null clears the column). */
   source?: CardSource | null;
+  frontHelp?: FrontHelpEntry[] | null;
   /** Optional on the type; the import runner always sets it (null clears the column, see TRANSLATIONS_WOULD_BE_CLEARED). */
   translations?: CardTranslations | null;
   difficulty: number;

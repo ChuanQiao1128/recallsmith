@@ -78,6 +78,7 @@ vi.mock('../../src/review/storage', () => ({
 
 import { listManifestDecks } from '../../src/content/deckRepository';
 import { loadDrawState, saveDrawState } from '../../src/features/gacha/draw/drawStateStore';
+import { withDrawStateLock, drawStateGeneration } from '../../src/features/gacha/draw/drawStateLock';
 import { invalidateDrawStateCache } from '../../src/features/gacha/draw/drawStateCache';
 
 function retiredManifest(): string {
@@ -120,6 +121,22 @@ describe('draw state cache vs the deck retire purge', () => {
         headers: { get: () => null },
       } as unknown as Response;
     }) as unknown as typeof fetch;
+  });
+
+  it('retirement waits for ownership work and invalidates older snapshots', async () => {
+    await saveDrawState(SLUG, { owned: ['c1'], pity: null });
+    let entered!: () => void; let release!: () => void;
+    const reached = new Promise<void>(resolve => { entered = resolve; });
+    const wait = new Promise<void>(resolve => { release = resolve; });
+    const generation = drawStateGeneration();
+    const ownedWrite = withDrawStateLock(async () => { entered(); await wait; });
+    await reached;
+    const retire = listManifestDecks({ preferRemote: true });
+    // Await manifest retrieval, leaving only the locked local purge queued.
+    await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+    expect(store.has(STATE_KEY)).toBe(true); expect(drawStateGeneration()).toBe(generation);
+    release(); await ownedWrite; await retire;
+    expect(store.has(STATE_KEY)).toBe(false); expect(drawStateGeneration()).toBeGreaterThan(generation);
   });
 
   it('forgets the collection of a deck retired under it', async () => {

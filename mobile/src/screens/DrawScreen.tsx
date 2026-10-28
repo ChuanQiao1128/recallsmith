@@ -16,12 +16,12 @@ import { visibleDeckSlug } from '../content/hiddenDecks';
 import { ensureStarterDeckInstalled } from '../content/starterOffline';
 import { listVisibleManifestDecks } from '../content/visibleManifest';
 import { deckShortTitle } from '../content/deckShortTitle';
-import { commitDraw } from '../features/gacha/draw/drawCommit';
+import { acquireDraw } from '../features/gacha/draw/acquireDraw';
+import { isOrderedDeck } from '../features/gacha/draw/orderedAcquisition';
 import { clampOpenCount, drawButtonPlan, MAX_BATCH_OPEN } from '../features/gacha/draw/drawBatch';
 import { loadDrawStatus } from '../features/gacha/draw/drawPool';
 import { drawCommittedSyncDelayMs } from '../features/gacha/draw/ceremonyTimings';
 import {
-  consumeDeckPulls,
   ensureDeckBootstrap,
   loadDeckWallet,
   migrateLegacyWalletIfNeeded,
@@ -617,9 +617,10 @@ export function DrawScreen({ navigation, route }: Props) {
         // can hand out a free pull (cards, no charge). Same call the reward
         // wallet's dedupe ordering makes -- fail toward the user, because a
         // free pull is recoverable and "where did my pull go" is not.
-        const result = await commitDraw(ready.slug, drawCount, {
+        const spent = await acquireDraw(ready.slug, drawCount, {
           deck: loadedDeckRef.current?.slug === ready.slug ? loadedDeckRef.current.deck : null,
         });
+        const result = spent.result;
         // An exhausted pool is not an error return: selectDrawCards answers
         // `{ cards: [], poolExhausted: true }`, which is non-null, so the old
         // `!result` guard let it through -- wallet debited, ceremony played
@@ -643,7 +644,6 @@ export function DrawScreen({ navigation, route }: Props) {
         // here spent all five. The near-complete collector, who is exactly who
         // this pack is for by then, paid three draws for nothing and was told
         // nothing about it.
-        const spent = await consumeDeckPulls(ready.slug, Math.min(drawCount, result.cards.length));
         chargedPulls = spent.spent;
 
         // The gacha half of the sync had no trigger of its own: draw state
@@ -822,7 +822,7 @@ export function DrawScreen({ navigation, route }: Props) {
           <View style={styles.header} testID="draw-header">
             <View style={styles.deckTitleWrap}>
               <Text style={styles.deckEyebrow} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
-                REWARD PACK
+                {isOrderedDeck(ready.slug) ? 'COURSE PACK · UNLOCK IN ORDER' : 'REWARD PACK'}
               </Text>
               <Text style={styles.deckTitle} numberOfLines={1} maxFontSizeMultiplier={CHROME_MAX_FONT_SCALE}>
                 {ready.deckTitle}

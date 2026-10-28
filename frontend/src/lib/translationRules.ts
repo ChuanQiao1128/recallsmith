@@ -11,6 +11,8 @@
 // the shuffle flag and the code all come from the English card, and every rule
 // below is a parity check against it.
 
+import { parseFrontHelp, normalizeFrontHelpForCompare } from './frontHelp';
+import type { FrontHelpEntry } from './frontHelp';
 import type { McqBlob } from '../types/mcq';
 
 export const TRANSLATION_LOCALES = ['zh-CN'] as const;
@@ -42,6 +44,8 @@ const ZH_THREE = '\u4E09';
 
 /** Contract §2 codes, in the contract's order. */
 export const TRANSLATION_ISSUE_CODES = [
+  'FRONT_HELP_BAD_SHAPE',
+  'TRANSLATION_FRONT_HELP_MISMATCH',
   'TRANSLATION_BAD_SHAPE',
   'TRANSLATION_BAD_LOCALE',
   'TRANSLATION_QUESTION_EMPTY',
@@ -71,13 +75,14 @@ export interface TranslationIssue {
 
 /** The effective English card a translation is checked against. */
 export interface TranslationEnglish {
+  frontHelp?: FrontHelpEntry[] | null;
   question: string;
   explanation: string;
   realWorldUsage: string | null;
   mcq: McqBlob | null;
 }
 
-const ENTRY_KEYS = new Set(['v', 'question', 'explanation', 'realWorldUsage', 'mcq']);
+const ENTRY_KEYS = new Set(['v', 'question', 'explanation', 'realWorldUsage', 'mcq', 'frontHelp']);
 const MCQ_KEYS = new Set(['qualifier', 'options']);
 const OPTION_KEYS = new Set(['text', 'why']);
 
@@ -206,6 +211,12 @@ function validateEntry(locale: string, raw: unknown, english: TranslationEnglish
     push('TRANSLATION_FIELD_MISSING', `The English card has a realWorldUsage, but the ${locale} translation has none.`);
   } else if (englishUsage === null && usage !== null) {
     push('TRANSLATION_FIELD_EXTRA', `The ${locale} translation has a realWorldUsage, but the English card has none.`);
+  }
+
+  const frontHelp = parseFrontHelp(raw.frontHelp);
+  if (frontHelp === undefined) push('FRONT_HELP_BAD_SHAPE', `The ${locale} frontHelp must contain up to two valid term and definition entries.`);
+  if ((frontHelp?.length ?? 0) !== (english.frontHelp?.length ?? 0)) {
+    push('TRANSLATION_FRONT_HELP_MISMATCH', `The ${locale} frontHelp must match the English help entry count.`);
   }
 
   const hasMcq = raw.mcq !== undefined && raw.mcq !== null;
@@ -362,6 +373,7 @@ function canonicalEntry(raw: unknown): unknown {
     explanation: canonicalText(raw.explanation),
     realWorldUsage: presentText(raw.realWorldUsage),
     mcq: canonicalMcq(raw.mcq),
+    ...(parseFrontHelp(raw.frontHelp)?.length ? { frontHelp: normalizeFrontHelpForCompare(raw.frontHelp) } : {}),
   };
 }
 

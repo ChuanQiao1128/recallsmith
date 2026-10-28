@@ -129,6 +129,7 @@ vi.mock('../../src/content/deckRepository', () => ({
 }));
 
 vi.mock('../../src/review/storage', () => ({
+  captureProgressUserSub: vi.fn(async () => 'anon'),
   getUserScopedKey: vi.fn(async (baseKey: string) => `${SCOPE}${baseKey}`),
   loadDeckProgress: vi.fn(async () => []),
 }));
@@ -184,6 +185,11 @@ describe('DrawScreen · per-pack wallet', () => {
     invalidateDrawStateCache();
     failNavigate = false;
     seedWallets({ aws: { availablePulls: 5, reservePulls: 0 }, csharp: { availablePulls: 2, reservePulls: 0 } });
+    // The mocked repository represents installed packs; retain its local eligibility contract.
+    store.set('devcards:content:manifest:v2', JSON.stringify({ decks: Object.keys(DECKS).map(slug => ({ slug, availability: 'live' })) }));
+    for (const [slug, deck] of Object.entries(DECKS)) {
+      store.set(`devcards:content:deckmeta:v2:anon:${slug}`, JSON.stringify({ buildId: deck.Version, fileUri: `file:///docs/${slug}.json` }));
+    }
     // Both packs have unopened cards so a draw returns something.
     await saveDrawState('aws', { owned: [], pity: { draws: 0, threshold: 10 } });
     await saveDrawState('csharp', { owned: [], pity: { draws: 0, threshold: 10 } });

@@ -172,6 +172,7 @@ public static class QaRuns
   private static async Task<StartResult> StartRunAsync(NpgsqlConnection conn, StartBody body, string deckSlug, string deckTitle,
     string requestedBySub, string queueUrl, string? profile = null)
   {
+    if (deckSlug == Authoring.ContentRelease.DeckSlug) throw new ValidationError("CODEX_REVIEW_REQUIRED: this deck uses the Codex release policy", "deckId");
     var reaped = await DbUtil.ExecuteAsync(conn, null,
       $"""
       update ai_qa_runs
@@ -323,6 +324,7 @@ public static class QaRuns
   /// </summary>
   public static async Task<ChainedRun?> StartChangedRunAsync(NpgsqlConnection conn, long deckId, string? requestedBySub, string trigger)
   {
+    if (await Authoring.ContentRelease.Applies(conn, deckId)) return new ChainedRun("not_started", null, "CODEX_REVIEW_REQUIRED", "This deck uses the Codex release policy");
     if (!Env.Flag(QaGate.EnabledEnv)) return null;
 
     ChainedRun result;
@@ -375,6 +377,7 @@ public static class QaRuns
   /// </summary>
   public static async Task<ChainedRun?> StartCardsRunAsync(NpgsqlConnection conn, long deckId, long[] cardIds /* 1..200 */, string requestedBySub, string trigger, string? profile)
   {
+    if (await Authoring.ContentRelease.Applies(conn, deckId)) return new ChainedRun("not_started", null, "CODEX_REVIEW_REQUIRED", "This deck uses the Codex release policy");
     if (!Env.Flag(QaGate.EnabledEnv)) return null;
 
     ChainedRun result;

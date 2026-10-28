@@ -5,21 +5,30 @@ namespace RecallSmith.Lambda.Vpc.Db;
 
 public static class Pg
 {
+  private static readonly object Gate = new();
   private static NpgsqlDataSource? _dataSource;
   private static Exception? _initError;
 
   // Used by SnapStart runtime hooks to ensure we don't reuse pre-snapshot network state.
   public static void Reset()
   {
-    var ds = _dataSource;
-    _dataSource = null;
-    _initError = null;
+    lock (Gate)
+    {
+      var ds = _dataSource;
+      _dataSource = null;
+      _initError = null;
 
-    if (ds is null) return;
-    try { ds.Dispose(); } catch { /* best-effort */ }
+      if (ds is null) return;
+      try { ds.Dispose(); } catch { /* best-effort */ }
+    }
   }
 
   public static NpgsqlDataSource? DataSource()
+  {
+    lock (Gate) return GetOrCreateDataSource();
+  }
+
+  private static NpgsqlDataSource? GetOrCreateDataSource()
   {
     if (_dataSource is not null) return _dataSource;
     if (_initError is not null) throw _initError;

@@ -290,6 +290,7 @@ export function CardListPage() {
         </div>
 
         <div className="flex items-center gap-3">
+          {deck.id === 15 && deck.slug === 'aws-saa-fundamentals' && user?.groups.some(group => group === 'editor' || group === 'super_admin') && <Link className="text-sm text-indigo-700 underline" to="/decks/release?deckId=15">Reviewed release</Link>}
           <Link to="/" className="text-sm text-slate-600 hover:text-slate-800">
             ← Back to Decks
           </Link>

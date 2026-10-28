@@ -1,0 +1,1 @@
+This is a harmless subscription executor capability canary. Use only this frozen stdin input. Return exactly {"ok":true}. Do not invoke tools or access files, applications, URLs, or other data.

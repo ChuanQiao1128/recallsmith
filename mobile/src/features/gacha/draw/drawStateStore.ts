@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getUserScopedKey } from '../../../review/storage';
 import { getCachedDrawState, setCachedDrawState, invalidateDrawStateCache } from './drawStateCache';
 import type { PityState } from './pity';
+import { withDrawStateLock } from './drawStateLock';
 
 // One deck's whole draw-mutable state lives under one key, and a draw
 // writes it exactly once. AsyncStorage has no BEGIN/COMMIT, so the only
@@ -88,6 +89,9 @@ export type DrawHistoryEntry = {
   pityBefore: PityState;
   drawnUids: string[];
   ts: number;
+  selectionPolicy?: 'ordered-v1' | 'random-v1';
+  deckVersion?: string;
+  sortingHash?: string;
 };
 
 // On-disk shape. `ownedBefore` is stored in full only on the first retained
@@ -106,8 +110,8 @@ function stateKey(slug: string, userSub?: string): Promise<string> {
   return getUserScopedKey(`${DRAW_STATE_PREFIX}${slug}`, userSub);
 }
 
-function historyKey(slug: string): Promise<string> {
-  return getUserScopedKey(`${DRAW_HISTORY_PREFIX}${slug}`);
+function historyKey(slug: string, userSub?: string): Promise<string> {
+  return getUserScopedKey(`${DRAW_HISTORY_PREFIX}${slug}`, userSub);
 }
 
 // Unscoped keys: migration sources only, never written after the claim.
@@ -139,8 +143,9 @@ function toPityState(value: unknown): PityState | null {
   };
 }
 
-function parseDrawStateRecord(raw: string): DrawStateRecord {
+function parseDrawStateRecord(raw: string, strict = false): DrawStateRecord {
   const parsed = JSON.parse(raw) as { owned?: unknown; pity?: unknown };
+  if (strict && (!parsed || !Array.isArray(parsed.owned) || parsed.owned.some((uid: unknown) => typeof uid !== 'string' || !uid))) throw new Error('Invalid ownership record');
   return { owned: toStringArray(parsed?.owned), pity: toPityState(parsed?.pity) };
 }
 
@@ -152,7 +157,7 @@ function parseDrawStateRecord(raw: string): DrawStateRecord {
  * every future load re-reads the same garbage.
  */
 async function readGlobalDrawState(
-  slug: string,
+  slug: string, strict = false,
 ): Promise<{ record: DrawStateRecord; found: boolean }> {
   const [mergedRaw, ownedRaw, pityRaw] = await Promise.all([
     AsyncStorage.getItem(globalStateKey(slug)),
@@ -162,10 +167,11 @@ async function readGlobalDrawState(
 
   const found = mergedRaw != null || ownedRaw != null || pityRaw != null;
 
-  if (mergedRaw) {
+  if (mergedRaw != null) {
     try {
-      return { record: parseDrawStateRecord(mergedRaw), found };
+      return { record: parseDrawStateRecord(mergedRaw, strict), found };
     } catch {
+      if (strict) throw new Error('Draw state is corrupt; retry after recovery');
       // A corrupt merged key falls through to the split layout rather
       // than to empty: an old collection is a better answer than none.
     }
@@ -174,10 +180,13 @@ async function readGlobalDrawState(
   let owned: string[] = [];
   let pity: PityState | null = null;
 
-  if (ownedRaw) {
+  if (ownedRaw != null) {
     try {
-      owned = toStringArray(JSON.parse(ownedRaw));
+      const parsed = JSON.parse(ownedRaw);
+      if (strict && (!Array.isArray(parsed) || parsed.some(uid => typeof uid !== 'string' || !uid))) throw new Error('Invalid legacy ownership');
+      owned = toStringArray(parsed);
     } catch {
+      if (strict) throw new Error('Legacy ownership is corrupt');
       owned = [];
     }
   }
@@ -198,19 +207,20 @@ async function readGlobalDrawState(
  * Returns null when there was nothing left over, so the caller can tell
  * "migrated an empty collection" from "no legacy data at all".
  */
-async function claimGlobalDrawState(slug: string, userSub?: string): Promise<DrawStateRecord | null> {
-  const { record, found } = await readGlobalDrawState(slug);
+async function claimGlobalDrawState(slug: string, userSub?: string, strict = false): Promise<DrawStateRecord | null> {
+  const { record, found } = await readGlobalDrawState(slug, strict);
   if (!found) return null;
 
   try {
     // Copy before delete. A kill in between leaves the legacy keys in
     // place for the next load to claim again, which is a repeat of work
     // already done; deleting first would lose the collection outright.
-    await saveDrawState(slug, record, userSub);
+    await saveDrawStateUnderLock(slug, record, userSub);
     await AsyncStorage.removeItem(globalStateKey(slug));
     await AsyncStorage.removeItem(`${LEGACY_OWNED_PREFIX}${slug}`);
     await AsyncStorage.removeItem(`${LEGACY_PITY_PREFIX}${slug}`);
   } catch {
+    if (strict) throw new Error('Draw migration has not completed; retry');
     // The value we already read is still the right answer for this
     // load; the claim retries on the next one.
   }
@@ -236,38 +246,46 @@ async function claimGlobalDrawState(slug: string, userSub?: string): Promise<Dra
  * `devcards:draw-state:` key has to do the same, or its deletion will be
  * undone by the next read-modify-write.
  */
-export function loadDrawState(slug: string): Promise<DrawStateRecord> {
-  return loadDrawStateForUser(slug);
+export async function loadDrawState(slug: string): Promise<DrawStateRecord> {
+  try {
+    const prefix = await getUserScopedKey('');
+    const sub = prefix.slice('devcards:u:'.length, -1);
+    return await withDrawStateLock(() => loadDrawStateUnderLock(slug, sub));
+  } catch {
+    return { owned: [], pity: null };
+  }
 }
 
-async function loadDrawStateForUser(slug: string, userSub?: string): Promise<DrawStateRecord> {
+export async function loadDrawStateUnderLock(slug: string, userSub?: string, strict = false): Promise<DrawStateRecord> {
   let key: string;
   let raw: string | null = null;
   try {
     key = await stateKey(slug, userSub);
     const cached = getCachedDrawState(key);
-    if (cached) return cached;
+    if (cached && !strict) return cached;
     raw = await AsyncStorage.getItem(key);
-  } catch {
+  } catch (error) {
+    if (strict) throw error;
     // Deliberately not cached. A transient read failure must not pin an empty
     // collection in memory for the rest of the session -- that would turn one
     // bad read into "your cards are gone until you restart the app".
     return { owned: [], pity: null };
   }
 
-  if (raw) {
+  if (raw != null) {
     try {
-      const record = parseDrawStateRecord(raw);
+      const record = parseDrawStateRecord(raw, strict);
       setCachedDrawState(key, record);
       return record;
-    } catch {
+    } catch (error) {
+      if (strict) throw error;
       // A corrupt scoped key falls through to the legacy claim rather
       // than to empty: an old collection is a better answer than none.
     }
   }
 
   try {
-    const claimed = await claimGlobalDrawState(slug, userSub);
+    const claimed = await claimGlobalDrawState(slug, userSub, strict);
     // A successful claim is cached by the saveDrawState inside it, and a
     // failed one is deliberately left uncached so the next load retries the
     // migration -- the write-through *is* the signal that the copy is
@@ -278,7 +296,8 @@ async function loadDrawStateForUser(slug: string, userSub?: string): Promise<Dra
     const empty: DrawStateRecord = { owned: [], pity: null };
     setCachedDrawState(key, empty);
     return empty;
-  } catch {
+  } catch (error) {
+    if (strict) throw error;
     return { owned: [], pity: null };
   }
 }
@@ -314,6 +333,13 @@ export async function listDrawStateSlugs(): Promise<string[]> {
  * setItem next to this call.
  */
 export async function saveDrawState(slug: string, record: DrawStateRecord, userSub?: string): Promise<void> {
+  const prefix = await getUserScopedKey('', userSub);
+  const sub = prefix.slice('devcards:u:'.length, -1);
+  return withDrawStateLock(() => saveDrawStateUnderLock(slug, record, sub));
+}
+
+/** Caller owns withDrawStateLock for the whole read/modify/write. */
+export async function saveDrawStateUnderLock(slug: string, record: DrawStateRecord, userSub?: string): Promise<void> {
   const key = await stateKey(slug, userSub);
   await AsyncStorage.setItem(key, JSON.stringify({ owned: record.owned, pity: record.pity }));
   // After the write, never before. A cache primed ahead of a setItem that
@@ -346,6 +372,12 @@ export type AnonDrawStateAdoption = { decks: number; ownedAdded: number; pityRai
  * during adoption must not fail sign-in, so it returns the counts so far.
  */
 export async function adoptAnonDrawState(userSub?: string): Promise<AnonDrawStateAdoption> {
+  const prefix = await getUserScopedKey('', userSub);
+  const sub = prefix.slice('devcards:u:'.length, -1);
+  return withDrawStateLock(() => adoptAnonDrawStateUnderLock(sub));
+}
+
+async function adoptAnonDrawStateUnderLock(userSub?: string): Promise<AnonDrawStateAdoption> {
   const result: AnonDrawStateAdoption = { decks: 0, ownedAdded: 0, pityRaised: 0 };
   try {
     const userPrefix = await stateKey('', userSub);
@@ -364,20 +396,18 @@ export async function adoptAnonDrawState(userSub?: string): Promise<AnonDrawStat
     for (const slug of slugs) {
       const anonKey = `${anonPrefix}${slug}`;
 
-      // A corrupt anon value adopts nothing but its key is still removed, the
-      // same reasoning as the legacy claim: a corrupt key left behind is
-      // re-scanned on every future adoption forever.
+      // Keep corrupt anonymous ownership for recovery rather than erasing it.
       let anon: DrawStateRecord = { owned: [], pity: null };
       const raw = await AsyncStorage.getItem(anonKey);
       if (raw) {
         try {
-          anon = parseDrawStateRecord(raw);
+          anon = parseDrawStateRecord(raw, true);
         } catch {
-          anon = { owned: [], pity: null };
+          throw new Error('Anonymous ownership is corrupt; keep it for recovery');
         }
       }
 
-      const current = await loadDrawStateForUser(slug, capturedSub);
+      const current = await loadDrawStateUnderLock(slug, capturedSub, true);
 
       // Union: user order first, anon uids appended in anon order, no dupes,
       // empty strings skipped. Same semantics as unionOwned in
@@ -404,7 +434,7 @@ export async function adoptAnonDrawState(userSub?: string): Promise<AnonDrawStat
       const drawsRose = (mergedPity?.draws ?? 0) > (current.pity?.draws ?? 0);
 
       if (grew > 0 || !samePityState(current.pity, mergedPity)) {
-        await saveDrawState(slug, { owned: mergedOwned, pity: mergedPity }, capturedSub);
+        await saveDrawStateUnderLock(slug, { owned: mergedOwned, pity: mergedPity }, capturedSub);
         result.ownedAdded += grew;
         if (drawsRose) result.pityRaised += 1;
       }
@@ -503,9 +533,9 @@ function parseDrawHistory(raw: string): DrawHistoryEntry[] {
   return out;
 }
 
-export async function loadDrawHistory(slug: string): Promise<DrawHistoryEntry[]> {
+export async function loadDrawHistory(slug: string, userSub?: string): Promise<DrawHistoryEntry[]> {
   try {
-    const raw = await AsyncStorage.getItem(await historyKey(slug));
+    const raw = await AsyncStorage.getItem(await historyKey(slug, userSub));
     if (raw) return parseDrawHistory(raw);
 
     // Same claim-then-delete migration as the state key, kept separate
@@ -515,7 +545,7 @@ export async function loadDrawHistory(slug: string): Promise<DrawHistoryEntry[]>
 
     const entries = parseDrawHistory(globalRaw);
     try {
-      await AsyncStorage.setItem(await historyKey(slug), JSON.stringify(encodeDrawHistory(entries)));
+      await AsyncStorage.setItem(await historyKey(slug, userSub), JSON.stringify(encodeDrawHistory(entries)));
       await AsyncStorage.removeItem(globalHistoryKey(slug));
     } catch {
       // Diagnostics are best-effort; the claim retries next load.
@@ -533,13 +563,13 @@ export async function loadDrawHistory(slug: string): Promise<DrawHistoryEntry[]>
  * happened, which is worse than having nothing. Failures are swallowed
  * for the same reason: history must never be able to fail a draw.
  */
-export async function appendDrawHistory(slug: string, entry: DrawHistoryEntry): Promise<void> {
+export async function appendDrawHistory(slug: string, entry: DrawHistoryEntry, userSub?: string): Promise<void> {
   try {
-    const existing = await loadDrawHistory(slug);
+    const existing = await loadDrawHistory(slug, userSub);
     // Trimming happens on materialized (full) entries, so the oldest retained
     // entry becomes index 0 and is re-encoded as a full `ownedBefore`.
     const next = [...existing, entry].slice(-DRAW_HISTORY_LIMIT);
-    await AsyncStorage.setItem(await historyKey(slug), JSON.stringify(encodeDrawHistory(next)));
+    await AsyncStorage.setItem(await historyKey(slug, userSub), JSON.stringify(encodeDrawHistory(next)));
   } catch {
     // Diagnostics are best-effort by design.
   }

@@ -1,3 +1,6 @@
+import { MANIFEST_CACHE_KEY, DECK_META_PREFIX, sanitizeUserKey, readDeckEligibilityUnderLock } from './deckEligibility';
+import { withDrawStateLock, invalidateDrawStateOperations, drawStateGeneration } from '../features/gacha/draw/drawStateLock';
+import { parseFrontHelp } from './frontHelp';
 // mobile/src/content/deckRepository.ts
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -33,11 +36,9 @@ const API_BASE_URL =
   'https://ktbq1sie2c.execute-api.ap-southeast-2.amazonaws.com';
 
 const MANIFEST_URL = joinUrl(CONTENT_BASE_URL, 'content', 'manifest.json');
-const MANIFEST_CACHE_KEY = 'devcards:content:manifest:v2';
 // ✅ Conditional GET: ETag stored in a SIBLING key — MANIFEST_CACHE_KEY must keep
 // holding the raw RawManifest JSON (other code/tests seed & read it directly).
 const MANIFEST_ETAG_KEY = 'devcards:content:manifestEtag:v1';
-const DECK_META_PREFIX = 'devcards:content:deckmeta:v2:'; // + userKey + ":" + slug
 
 // Runtime-safe "utf8" encoding without relying on FileSystem.EncodingType types
 const UTF8_ENCODING: any = (FileSystem as any)?.EncodingType?.UTF8 ?? 'utf8';
@@ -250,12 +251,6 @@ async function getIsPremiumUserWithServerFallback(): Promise<boolean> {
  * - deck files stored under: <docDir>/devcards-decks-v2/<userKey>/<slug>.json
  * - meta stored under: devcards:content:deckmeta:v2:<userKey>:<slug>
  */
-function sanitizeUserKey(s: string): string {
-  const x = String(s || 'anon').trim();
-  if (!x) return 'anon';
-  return x.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 80) || 'anon';
-}
-
 async function getCurrentUserKey(): Promise<string> {
   try {
     const session: any = await fetchAuthSession();
@@ -371,12 +366,32 @@ export type UpdateInfo = {
 };
 
 type DeckInstallMeta = {
+  installId?: string;
   slug: string;
   buildId: string;
   installedAtMs: number;
   fileUri: string;
   cardCount: number;
 };
+
+let installSequence = 0;
+
+/** Network preparation is finished; publish one local file/metadata instance under the draw lock. */
+async function publishDeckInstall(meta: DeckInstallMeta, userKey: string, preparedPath: string, generation: number): Promise<void> {
+  await withDrawStateLock(async () => {
+    if (generation !== drawStateGeneration() || await readDeckEligibilityUnderLock(meta.slug) === 'retired') {
+      throw new Error('Deck changed during installation');
+    }
+    const installId = `${Date.now()}-${++installSequence}-${Math.random().toString(16).slice(2)}`;
+    const published = { ...meta, installId };
+    const key = deckMetaKey(meta.slug, userKey);
+    // Invalidate old receipts before touching bytes; failed final writes leave a non-drawable install.
+    await AsyncStorage.setItem(key, JSON.stringify({ ...published, fileUri: '' }));
+    await FileSystem.deleteAsync(meta.fileUri, { idempotent: true });
+    await FileSystem.moveAsync({ from: preparedPath, to: meta.fileUri });
+    await AsyncStorage.setItem(key, JSON.stringify(published));
+  });
+}
 
 // Old deck-json format (v1-ish): { buildId, deck:{}, cards:[] }
 type RawDeckJsonV1 = {
@@ -396,6 +411,7 @@ type RawDeckJsonV1 = {
   cards: Array<{
     stableUid: string;
     question: string;
+    frontHelp?: unknown;
     explanation?: string | null;
     codeSnippet?: string | null;
     codeLanguage?: string | null;
@@ -419,6 +435,7 @@ type RawDeckJsonFlat = {
   cards: Array<{
     stableUid: string;
     question: string;
+    frontHelp?: unknown;
     explanation?: string | null;
     codeSnippet?: string | null;
     codeLanguage?: string | null;
@@ -714,6 +731,7 @@ export async function installDeckFromUrl(
   if (!safeSlug || !safeUrl) return fail('missing_slug_or_url');
 
   const userKey = await getCurrentUserKey();
+  const generation = drawStateGeneration();
   const inKey = makeInstallKey(userKey, safeSlug, remoteVersion, safeUrl);
 
   const existingInFlight = _installInFlight.get(inKey);
@@ -786,6 +804,7 @@ export async function installDeckFromUrl(
           prefix: String(manifest.prefix || 'content'),
           edges: patchEdges,
           userKey,
+          generation,
         });
 
         if (patchRes.ok) {
@@ -818,12 +837,13 @@ export async function installDeckFromUrl(
         ? packagePath
         : joinUrl(CONTENT_BASE_URL, prefix, packagePath);
 
+      const preparedPath = makeTmpPath(dir, safeSlug, remoteVersion, 'full');
       const chunkRes = await installDeckFromChunkedPackage({
         slug: safeSlug,
         packageUrl,
         remoteVersion,
         deckDir: dir,
-        finalPath,
+        finalPath: preparedPath,
         resolveRelativeUrl: (relativePath) => joinUrl(CONTENT_BASE_URL, prefix, relativePath),
       });
 
@@ -838,7 +858,7 @@ export async function installDeckFromUrl(
             fileUri: finalPath,
             cardCount: chunkRes.cardCount,
           };
-          await AsyncStorage.setItem(deckMetaKey(safeSlug, userKey), JSON.stringify(meta));
+          await publishDeckInstall(meta, userKey, preparedPath, generation);
 
           console.log('[installDeckFromUrl] chunked_applied', {
             slug: safeSlug,
@@ -860,6 +880,7 @@ export async function installDeckFromUrl(
           reason: chunkRes.reason,
         });
       }
+      try { await FileSystem.deleteAsync(preparedPath, { idempotent: true }); } catch {}
     }
 
     // ====== Full download (with unique tmp) ======
@@ -966,10 +987,6 @@ export async function installDeckFromUrl(
         }
       }
 
-      // atomic-ish replace
-      await FileSystem.deleteAsync(finalPath, { idempotent: true });
-      await FileSystem.moveAsync({ from: tmpPath, to: finalPath });
-
       const meta: DeckInstallMeta = {
         slug: safeSlug,
         buildId: finalBuildId,
@@ -978,7 +995,7 @@ export async function installDeckFromUrl(
         cardCount,
       };
 
-      await AsyncStorage.setItem(deckMetaKey(safeSlug, userKey), JSON.stringify(meta));
+      await publishDeckInstall(meta, userKey, tmpPath, generation);
 
       console.log('[installDeckFromUrl] success', { slug: safeSlug, buildId: finalBuildId, cardCount });
       return true;
@@ -1017,8 +1034,9 @@ async function tryPatchUpdate(args: {
   prefix: string;
   edges: PatchEdge[];
   userKey: string;
+  generation: number;
 }): Promise<{ ok: boolean; hops: number }> {
-  const { slug, fromVersion, toVersion, fileUri, outFileUri, prefix, edges, userKey } = args;
+  const { slug, fromVersion, toVersion, fileUri, outFileUri, prefix, edges, userKey, generation } = args;
 
   if (!slug || !fromVersion || !toVersion) return { ok: false, hops: 0 };
   if (fromVersion === toVersion) return { ok: true, hops: 0 };
@@ -1104,9 +1122,6 @@ async function tryPatchUpdate(args: {
       encoding: UTF8_ENCODING,
     });
 
-    await FileSystem.deleteAsync(outFileUri, { idempotent: true });
-    await FileSystem.moveAsync({ from: patchTmp, to: outFileUri });
-
     const meta: DeckInstallMeta = {
       slug,
       buildId: String(toVersion),
@@ -1114,7 +1129,7 @@ async function tryPatchUpdate(args: {
       fileUri: outFileUri,
       cardCount: Array.isArray(deck.cards) ? deck.cards.length : 0,
     };
-    await AsyncStorage.setItem(deckMetaKey(slug, userKey), JSON.stringify(meta));
+    await publishDeckInstall(meta, userKey, patchTmp, generation);
     return { ok: true, hops: chain.length };
   } catch {
     return { ok: false, hops: 0 };
@@ -1287,7 +1302,11 @@ async function reconcileRetiredDecks(manifest: RawManifest): Promise<void> {
   } catch {}
 }
 
-async function purgeLocalDeckForRetired(
+function purgeLocalDeckForRetired(slug: string, userKey: string, retiredAtMs: number | null): Promise<void> {
+  return withDrawStateLock(() => purgeLocalDeckForRetiredUnderDrawLock(slug, userKey, retiredAtMs));
+}
+
+async function purgeLocalDeckForRetiredUnderDrawLock(
   slug: string,
   userKey: string,
   retiredAtMs: number | null,
@@ -1312,6 +1331,7 @@ async function purgeLocalDeckForRetired(
     return;
   }
 
+  invalidateDrawStateOperations();
   const retiredAt = Number(retiredAtMs);
   try {
     const meta = await getDeckMeta(slug, userKey);
@@ -1699,6 +1719,7 @@ function mapRawDeckV1ToDeckExport(raw: RawDeckJsonV1): DeckExport {
       typeof c.version === 'number' && Number.isFinite(c.version) && c.version > 0 ? c.version : 1;
 
     return {
+      ...(parseFrontHelp(c.frontHelp)?.length ? { FrontHelp: parseFrontHelp(c.frontHelp) } : {}),
       StableUid: c.stableUid,
       Question: c.question,
       Explanation: c.explanation ?? null,
@@ -1760,6 +1781,7 @@ function mapRawDeckFlatToDeckExport(raw: RawDeckJsonFlat): DeckExport {
       typeof c.version === 'number' && Number.isFinite(c.version) && c.version > 0 ? c.version : 1;
 
     return {
+      ...(parseFrontHelp(c.frontHelp)?.length ? { FrontHelp: parseFrontHelp(c.frontHelp) } : {}),
       StableUid: c.stableUid,
       Question: c.question,
       Explanation: c.explanation ?? null,

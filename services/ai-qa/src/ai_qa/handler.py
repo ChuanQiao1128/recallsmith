@@ -397,6 +397,18 @@ def _process(record: Mapping[str, Any], context: Any, env: Mapping[str, str]) ->
     if msg is None:
         log("warn", "ai-qa", event="bad_message", messageId=message_id)
         return True
+    # Delayed SQS deliveries must not revive the retired cloud reviewer for this deck.
+    if msg["deck"]["slug"] == "aws-saa-fundamentals":
+        log(
+            "info",
+            "ai-qa",
+            event="cloud_qa_retired",
+            messageId=message_id,
+            runId=msg["runId"],
+            chunk=msg["chunk"],
+            code="CLOUD_QA_RETIRED",
+        )
+        return True
     cards: list[dict[str, Any]] = msg["cards"]
     profile: str = msg.get("profile", profiles.DEFAULT_PROFILE)
     target: str = msg.get("target", profiles.DEFAULT_TARGET)

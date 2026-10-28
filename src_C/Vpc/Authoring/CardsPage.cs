@@ -155,6 +155,7 @@ public static class CardsPage
         c.topic,
         c.mcq,
         c.source,
+        nullif(to_jsonb(c) -> 'front_help', 'null'::jsonb) as "frontHelp",
         nullif(to_jsonb(c) -> 'translations', 'null'::jsonb) as translations,
         nullif(to_jsonb(c) -> 'translation_basis', 'null'::jsonb) as "translationBasis"
       from cards c

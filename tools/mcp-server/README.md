@@ -181,3 +181,74 @@ server through its per-run MCP config, with `DC_AUTOMATION_SOURCE_HOSTS`, `DC_AU
   redirect on the `console-dev` client and the API authorizer accepting that client) and J10
   (similarity) and J11 (drafts routes) are deployed. Until then `login` or the API answers with an
   error; `lint_card` and `read_source` work without a login.
+
+## Opt-in local public evidence tools (1.9.0)
+
+`search_evidence`, `get_evidence`, and `get_content_review_status` are listed in the
+persistently hashed tool surface. They stay disabled until the administrator explicitly
+sets `DC_EVIDENCE_ENABLED=1` and all of these settings in a local server invocation:
+
+| Setting | Required value or meaning |
+| --- | --- |
+| `DC_EVIDENCE_CONTROL_ROOT` | Absolute trusted local control directory |
+| `DC_EVIDENCE_CORPUS_ROOT` | That directory's `retrieval-v3` subdirectory |
+| `DC_EVIDENCE_MODEL_CACHE` | Absolute existing BGE model cache; no downloads |
+| `DC_EVIDENCE_LOCAL_PYTHON` | Absolute Python executable with the existing retrieval dependencies |
+| `DC_EVIDENCE_CONTAINER` | `recallsmith-aws-basics-rag-20261028`, network `none`, no published ports |
+| `DC_EVIDENCE_CORPUS_VERSION` | `ca1729f26aee90931ae7571749816dbebbb0ccf2e2810f56d70f900d6ac855c9` |
+| `DC_EVIDENCE_STRATEGY` | Optional `bm25`, `vector`, or `rrf`; default `rrf` |
+
+Only the frozen 327-page, 4668-chunk public AWS corpus is supported. Configuration
+paths are administrator input; no tool accepts a root, filesystem path, source URL,
+answer, or arbitrary index. No global MCP configuration, watch process, container,
+server or production permission is installed or activated by this feature.
+
+`search_evidence({learningGoal, strategy?})` accepts one English learning goal of
+1..800 printable ASCII characters without URLs or answer fields. It invokes the
+existing `EvidenceIndex` in `tools/content-pipeline/pipeline.py`: BM25, cached
+BGE-small-en-v1.5 (384 dimensions), exact pgvector cosine search, and RRF. The
+strategy chooses ranking from those real candidates. Every strategy currently
+loads the cached embedding model and queries local PostgreSQL. At most 8 chunks
+and 12000 text characters are returned. Query text is omitted from results and
+errors. There is no generated answer or semantic validation claim.
+
+`get_evidence({evidenceId, corpusVersion})` accepts `ev-` plus 32 lowercase hex
+characters and exactly the version above. It returns the original chunk after
+checking the pinned corpus, original source text hash, exact offsets, text hash
+and approved AWS HTTPS URL. Stale versions and altered artifacts are refused.
+
+`get_content_review_status({stableUid})` accepts the existing UID pattern
+`^[a-z0-9]+(?:[-_][a-z0-9]+)*$`, maximum 128 characters. It reads only that UID's
+local `authoring` folder and returns `unknown`, `not_verified`, or `model_reviewed`.
+A `modelReview: "PASS"` requires valid completed execution receipts, current
+packet/candidate/review hashes, the current official evidence, and a review prompt
+bound to the current candidate. It always returns `humanPerCardReview: false`,
+`approvalGranted: false` and `publishPermission: false`. This local status grants
+no API or publishing permission; invalid or incomplete bindings return a generic
+tool error. It does not report curriculum-only reviews as card reviews.
+
+These three tools need no API login. Their Python child receives an explicit
+minimal environment without parent AWS, Cognito, OpenAI or API credentials;
+subprocesses use argument arrays. The cached embedding runtime is offline, Python
+network connections are disabled, and model/source downloads are never attempted.
+The existing login and write-tool credential guard is unchanged. Source text is
+untrusted data, never instructions. The .NET generator continues to receive only
+its frozen evidence packet and is given no MCP tools.
+
+Validation is explicit and local:
+
+```bash
+npm run build
+npm test
+/path/to/retrieval/.venv/bin/python -B -m unittest discover -s tests -p evidence_python_test.py -v
+node tests/evidence.integration.mjs /absolute/admin-config.json
+```
+
+The integration config is a JSON object with `corpusRoot`, `controlRoot`,
+`modelCache`, `localPython`, `container`, `corpusVersion`, and `strategy` using the
+same settings above. The integration launches a bounded test stdio server, checks
+its actual tool surface against the built persistent surface and bundle hash,
+then performs one real RRF query, exact `get_evidence`, and unknown-UID status
+request. It does not authenticate, generate content or publish. Changes to this
+surface still require the existing author-runner gate; this feature grants no
+production gate approval.

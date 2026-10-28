@@ -407,6 +407,32 @@ describe('SessionCardScreen card translations', () => {
     warnSpy.mockRestore();
   });
 
+  it('opens vocabulary below the question, keeps the answer hidden, and switches the help language', async () => {
+    const enHelp = [{ term: 'latency', definition: 'Time until a response arrives.' }];
+    const zhHelp = [{ term: '延迟', definition: '收到响应所需的时间。' }];
+    const card = { ...QA_EN, FrontHelp: enHelp };
+    serve(deckOf([card]), card, DUE_PROGRESS(card.StableUid), { [card.StableUid]: { ...QA_ZH, frontHelp: zhHelp } });
+    const { tree } = await mount();
+    const helpButton = (label: string) => tree.root.find(node => (node.type as any) === 'Pressable' && node.props.accessibilityLabel === label);
+    expect(helpButton('Show word help').props.accessibilityState).toEqual({ expanded: false });
+    expect(JSON.stringify(tree.toJSON())).not.toContain(enHelp[0].definition);
+    await act(async () => helpButton('Show word help').props.onPress());
+    expect(helpButton('Hide word help').props.accessibilityState).toEqual({ expanded: true });
+    expect(JSON.stringify(tree.toJSON())).toContain(enHelp[0].definition);
+    expect(JSON.stringify(tree.toJSON())).not.toContain(QA_EN.Explanation);
+    expect(byTestID(tree, 'review-question')[0].props.numberOfLines).toBeUndefined();
+    await press(tree, 'card-lang-toggle');
+    expect(helpButton('展开词语帮助').props.accessibilityState).toEqual({ expanded: false });
+    await act(async () => helpButton('展开词语帮助').props.onPress());
+    expect(JSON.stringify(tree.toJSON())).toContain(zhHelp[0].definition);
+    expect(JSON.stringify(tree.toJSON())).not.toContain(enHelp[0].definition);
+    expect(helpButton('收起词语帮助').props.accessibilityLanguage).toBe('zh-CN');
+    await act(async () => helpButton('收起词语帮助').props.onPress());
+    expect(JSON.stringify(tree.toJSON())).not.toContain(zhHelp[0].definition);
+    expect((await import('../../src/review/storage')).saveDeckProgress).not.toHaveBeenCalled();
+    await act(async () => tree.unmount());
+  });
+
   it('switches an MCQ card to Chinese and back without touching the order, the picks or the verdict', async () => {
     serve(deckOf([MCQ_EN]), MCQ_EN, NEW_PROGRESS(MCQ_EN.StableUid), { [MCQ_EN.StableUid]: MCQ_ZH });
     const { tree, navigation } = await mount();
