@@ -117,6 +117,36 @@ def _execution(execution, calls, workspaces):
         _hash(execution[field]['sha256'], f'{field} hash')
 
 
+def _decision_batch(decisions, assigned, atoms, expected, packet, sources, observed):
+    _require(isinstance(decisions, list) and decisions, 'Check has no subsets')
+    _require([d.get('chunkIds') if isinstance(d, dict) else None for d in decisions] ==
+             [list(ids) for ids in assigned], 'Check subsets differ from exact host batch assignment')
+    for decision in decisions:
+        _shape(decision, DECISION, 'subset decision')
+        ids = decision['chunkIds']
+        _require(isinstance(ids, list) and ids and all(isinstance(cid, str) for cid in ids),
+                 'Invalid subset IDs')
+        membership = tuple(ids)
+        _require(membership in expected and membership not in observed, 'Unknown, unordered or duplicate subset')
+        _require(decision['verdict'] in ('PASS', 'FAIL', 'UNKNOWN') and
+                 decision['deploymentConsistent'] in ('YES', 'NO', 'UNKNOWN'), 'Invalid decision enum')
+        _text(decision['reason'], 'subset reason', nonempty=False)
+        _require(isinstance(decision['coverage'], list), 'Coverage must be a list')
+        covered = set()
+        for coverage in decision['coverage']:
+            _shape(coverage, {'atomId', 'quotes', 'reason'}, 'Coverage')
+            atom = coverage['atomId']
+            _require(isinstance(atom, str) and atom in atoms and atom not in covered,
+                     'Duplicate or unknown coverage atom')
+            covered.add(atom)
+            _text(coverage['reason'], 'coverage reason')
+            _require(isinstance(coverage['quotes'], list) and coverage['quotes'], 'Coverage needs nonempty quotes')
+            for quote in coverage['quotes']:
+                _quote(quote, membership, packet, sources)
+        _require(decision['verdict'] != 'PASS' or covered == atoms, 'PASS is missing required/scope atoms')
+        observed[membership] = (decision['verdict'], decision['deploymentConsistent'])
+
+
 def _checks(records, role, case_id, group_id, atoms, expected, bindings, batches, packet,
             sources, calls, workspaces):
     _require(isinstance(records, list), 'Checks must be a list of original r4 Check objects')
@@ -131,33 +161,7 @@ def _checks(records, role, case_id, group_id, atoms, expected, bindings, batches
         _require(all(record[name] == bindings[name] for name in BINDINGS - {'projectionHash'}) and
                  record['projectionHash'] == projection_hash, 'Stale or mismatched binding')
         _execution(record['execution'], calls, workspaces)
-        _require(isinstance(record['subsets'], list) and record['subsets'], 'Check has no subsets')
-        _require([d.get('chunkIds') if isinstance(d, dict) else None for d in record['subsets']] ==
-                 [list(ids) for ids in assigned], 'Check subsets differ from exact host batch assignment')
-        for decision in record['subsets']:
-            _shape(decision, DECISION, 'subset decision')
-            ids = decision['chunkIds']
-            _require(isinstance(ids, list) and ids and all(isinstance(cid, str) for cid in ids),
-                     'Invalid subset IDs')
-            membership = tuple(ids)
-            _require(membership in expected and membership not in observed, 'Unknown, unordered or duplicate subset')
-            _require(decision['verdict'] in ('PASS', 'FAIL', 'UNKNOWN') and
-                     decision['deploymentConsistent'] in ('YES', 'NO', 'UNKNOWN'), 'Invalid decision enum')
-            _text(decision['reason'], 'subset reason', nonempty=False)
-            _require(isinstance(decision['coverage'], list), 'Coverage must be a list')
-            covered = set()
-            for coverage in decision['coverage']:
-                _shape(coverage, {'atomId', 'quotes', 'reason'}, 'Coverage')
-                atom = coverage['atomId']
-                _require(isinstance(atom, str) and atom in atoms and atom not in covered,
-                         'Duplicate or unknown coverage atom')
-                covered.add(atom)
-                _text(coverage['reason'], 'coverage reason')
-                _require(isinstance(coverage['quotes'], list) and coverage['quotes'], 'Coverage needs nonempty quotes')
-                for quote in coverage['quotes']:
-                    _quote(quote, membership, packet, sources)
-            _require(decision['verdict'] != 'PASS' or covered == atoms, 'PASS is missing required/scope atoms')
-            observed[membership] = (decision['verdict'], decision['deploymentConsistent'])
+        _decision_batch(record['subsets'], assigned, atoms, expected, packet, sources, observed)
     _require(set(observed) == expected, f'Missing subsets for checker {role}; no diagnostic credit')
     return observed
 
@@ -214,6 +218,10 @@ def inspect_group(case_id, group, evidence, originals, sources, checks_one, chec
     args = (case_id, group['id'], atoms, expected, bindings, batches, packet, sources, calls, workspaces)
     one = _checks(checks_one, 'one', *args)
     two = _checks(checks_two, 'two', *args)
+    return _completion(group['id'], expected, ranks, one, two)
+
+
+def _completion(group_id, expected, ranks, one, two):
     diagnostics, candidates = [], []
     for membership in sorted(expected):
         credit = one[membership] == two[membership] == ('PASS', 'YES')
@@ -224,9 +232,37 @@ def inspect_group(case_id, group, evidence, originals, sources, checks_one, chec
         if credit:
             candidates.append((completion, membership))
     rank, witness = min(candidates) if candidates else (None, ())
-    return {'groupId': group['id'], 'completionRank': rank, 'witness': list(witness),
+    return {'groupId': group_id, 'completionRank': rank, 'witness': list(witness),
             'subsetCount': len(expected), 'creditedSubsetCount': len(candidates),
             'diagnosticCredit': bool(candidates), 'subsets': diagnostics,
             'authority': 'NON-AUTHORITATIVE', 'releaseAuthorized': False,
             'rawExecutionVerified': False, 'semanticTruth': 'UNVERIFIED',
             'sourceBoundaryReview': 'UNVERIFIED', 'denialAndAuthorityPins': 'UNVERIFIED'}
+
+
+def inspect_decisions_v4(case_id, group, evidence, originals, sources, decisions_one, decisions_two, bindings):
+    """Pure content diagnostics; execution verification belongs to the caller.
+
+    Each role supplies an ordered list of decision batches. This deliberately
+    makes no execution/review claim and never manufactures legacy Check metadata.
+    ``inspect_group`` retains its original, stricter execution metadata contract.
+    """
+    _id(case_id, r'[a-z][a-z0-9-]{0,63}', 'case ID')
+    _require(isinstance(group, dict) and {'id', 'requiredFacts', 'mandatoryScope'} <= set(group),
+             'Missing group fields')
+    _id(group['id'], r'[a-z][a-z0-9-]{0,63}', 'group ID')
+    projected = _atoms(group)
+    atoms = {a['id'] for field in ('requiredFacts', 'mandatoryScope') for a in projected[field]}
+    packet, ranks = _packet(evidence, originals, sources)
+    expected = set(subsets(packet))
+    batches = _plan(bindings, expected)
+    observations = []
+    for role, records in (('one', decisions_one), ('two', decisions_two)):
+        _require(isinstance(records, list) and len(records) == len(batches),
+                 f'Missing or extra decision batches for {role}')
+        observed = {}
+        for decisions, (_, assigned) in zip(records, batches):
+            _decision_batch(decisions, assigned, atoms, expected, packet, sources, observed)
+        _require(set(observed) == expected, f'Missing subsets for checker {role}; no diagnostic credit')
+        observations.append(observed)
+    return _completion(group['id'], expected, ranks, *observations)

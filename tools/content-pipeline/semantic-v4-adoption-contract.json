@@ -1,0 +1,1198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:recallsmith:dev80-adoption-contract:1",
+  "title": "Normative DEV80 representation and immutable historical packet adoption contract",
+  "description": "Schema plus mandatory semantic predicates. This document is not an adoption/authority receipt. Structural validation alone grants nothing.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/ReferenceMapping"
+    },
+    {
+      "$ref": "#/$defs/PacketAdoption"
+    },
+    {
+      "$ref": "#/$defs/Authority"
+    },
+    {
+      "$ref": "#/$defs/AdaptedReferences"
+    },
+    {
+      "$ref": "#/$defs/EquivalenceOutput"
+    }
+  ],
+  "x-contract": {
+    "contractVersion": "dev80-adoption-v1",
+    "status": "NORMATIVE_CONTRACT_NOT_EXECUTED",
+    "controlRoot": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028",
+    "parentContracts": [
+      {
+        "path": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/design/rag-v2-bounded/r4/contracts.md",
+        "sha256": "b08ba3215227da7dcab5a9efca6c09fb1e3fa734c7551aa31c6c432e0e181507"
+      },
+      {
+        "path": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/design/rag-v2-bounded/r4/semantic-protocol.md",
+        "sha256": "e633b4c8df42843c3b5cb252259c469e7d6dde52a8e6ae3cdd6e5738dd8a3121"
+      },
+      {
+        "path": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/design/rag-v2-bounded/r4/contracts.schema.json",
+        "sha256": "72905b6fd6994ba8f3f27fa202b60c18a3affe6d694f442e8e0d5e28f07aa4e0"
+      },
+      {
+        "path": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/design/rag-v2-bounded/r4/access-protocol.md",
+        "sha256": "a116e56ee3192670b630b3ff81eae361672efee2ea7e46fa0d2e8faed1cc7e68"
+      }
+    ],
+    "historicalReferences": {
+      "path": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evaluation/references.json",
+      "sha256": "4b97d31214f5634917c82b22d50d1b6f6c004b9a1e78f88ccb18c221e394be24"
+    },
+    "historicalProvenance": [
+      {
+        "path": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evidence/r4-observed80-diagnostic/frozen-plan.json",
+        "sha256": "3dc6e45d59ab7b1b80878fb28e849dd2d9b1204164f84ba8e21c98f63d023b0c"
+      },
+      {
+        "path": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evidence/r4-observed80-diagnostic/run.py",
+        "sha256": "b4789ad953dc276e757b817819634c4d13f57e2e9f3f333cefe3e29865d20169"
+      },
+      {
+        "path": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evidence/r4-observed80-diagnostic/execution.json",
+        "sha256": "b76b225e64544f37041ed796e5f90a8d74901cb1934c8ea856657b17f3a81a91"
+      },
+      {
+        "path": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evidence/r4-observed80-diagnostic/results.json",
+        "sha256": "5b89fd0e4d2c39977ec4cc38cfedaf099984a6f2519d60c62fb1124579207ace"
+      },
+      {
+        "path": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evidence/r4-observed80-diagnostic/A/started.json",
+        "sha256": "05c096a08f8ce7d64e34b421511fb10695e7edd5e900db7cf9104bfa77a02486"
+      },
+      {
+        "path": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evidence/r4-observed80-diagnostic/A/results.json",
+        "sha256": "a4e47e7a12bc2e31bead40b93cf0edcd850ba4dde4bec97caaf1bcd3548ee891"
+      },
+      {
+        "path": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evidence/r4-observed80-diagnostic/B/started.json",
+        "sha256": "116bc6f29d744878930a443bcbb608a31897d36531d6399f4d9b16b95a887dc8"
+      },
+      {
+        "path": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evidence/r4-observed80-diagnostic/B/results.json",
+        "sha256": "7e863e871b9a11d07702085f1aa50f2cf9db12b7f769fa7b426a28463140ac91"
+      },
+      {
+        "path": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evidence/r4-observed80-diagnostic/pgvector-proof.json",
+        "sha256": "53050858d7ccce9e03680d4901c5f9a250ce890e552bb3172c501f6a0e672f22"
+      }
+    ],
+    "savedPacketInventoryHash": "642cbfbff38134455dbd140d5048266f04e9055178ff91ead42e054c41361181",
+    "inventorySerialization": "pipeline.canonical of [{configuration,caseId,path,sha256}], A then B, each caseId lexicographic; exact 160 records; each path original historical directory/configuration/caseId.json",
+    "requiredGroupIds": [
+      "cloud-p1-g1",
+      "cloud-p2-g1",
+      "cloud-p2-g2",
+      "cloud-p2-g3",
+      "cloud-p3-g1",
+      "cloud-p3-g2",
+      "cloud-p4-g1",
+      "cloud-p4-g2",
+      "cloud-p5-g1",
+      "cloud-p5-g2",
+      "cloud-p5-g3",
+      "cloud-p6-g1",
+      "cloud-p7-g1",
+      "cloud-p7-g2",
+      "cloud-p8-g1",
+      "cloud-p8-g2",
+      "identity-p1-g1",
+      "identity-p1-g2",
+      "identity-p2-g1",
+      "identity-p2-g2",
+      "identity-p3-g1",
+      "identity-p3-g2",
+      "identity-p3-g3",
+      "identity-p4-g1",
+      "identity-p5-g1",
+      "identity-p5-g2",
+      "identity-p5-g3",
+      "identity-p5-g4",
+      "identity-p6-g1",
+      "identity-p7-g1",
+      "identity-p7-g2",
+      "identity-p7-g3",
+      "identity-p7-g4",
+      "identity-p7-g5",
+      "identity-p8-g1",
+      "identity-p8-g2",
+      "compute-p1-g1",
+      "compute-p2-g1",
+      "compute-p3-g1",
+      "compute-p4-g1",
+      "compute-p4-g2",
+      "compute-p5-g1",
+      "compute-p6-g1",
+      "compute-p6-g2",
+      "compute-p7-g1",
+      "compute-p7-g2",
+      "compute-p7-g3",
+      "compute-p7-g4",
+      "compute-p8-g1",
+      "compute-p8-g2",
+      "compute-p8-g3",
+      "storage-p1-g1",
+      "storage-p1-g2",
+      "storage-p2-g1",
+      "storage-p3-g1",
+      "storage-p3-g2",
+      "storage-p4-g1",
+      "storage-p4-g2",
+      "storage-p4-g3",
+      "storage-p4-g4",
+      "storage-p5-g1",
+      "storage-p6-g1",
+      "storage-p7-g1",
+      "storage-p7-g2",
+      "storage-p8-g1",
+      "storage-p8-g2",
+      "storage-p8-g3",
+      "storage-p8-g4",
+      "storage-p8-g5",
+      "storage-p8-g6",
+      "databases-p1-g1",
+      "databases-p1-g2",
+      "databases-p1-g3",
+      "databases-p2-g1",
+      "databases-p2-g2",
+      "databases-p3-g1",
+      "databases-p3-g2",
+      "databases-p4-g1",
+      "databases-p5-g1",
+      "databases-p5-g2",
+      "databases-p5-g3",
+      "databases-p6-g1",
+      "databases-p6-g2",
+      "databases-p6-g3",
+      "databases-p7-g1",
+      "databases-p7-g2",
+      "databases-p7-g3",
+      "databases-p8-g1",
+      "databases-p8-g2",
+      "networking-p1-g1",
+      "networking-p1-g2",
+      "networking-p2-g1",
+      "networking-p2-g2",
+      "networking-p3-g1",
+      "networking-p3-g2",
+      "networking-p3-g3",
+      "networking-p4-g1",
+      "networking-p4-g2",
+      "networking-p5-g1",
+      "networking-p5-g2",
+      "networking-p5-g3",
+      "networking-p6-g1",
+      "networking-p6-g2",
+      "networking-p7-g1",
+      "networking-p8-g1",
+      "messaging-p1-g1",
+      "messaging-p1-g2",
+      "messaging-p1-g3",
+      "messaging-p2-g1",
+      "messaging-p2-g2",
+      "messaging-p3-g1",
+      "messaging-p3-g2",
+      "messaging-p3-g3",
+      "messaging-p4-g1",
+      "messaging-p4-g2",
+      "messaging-p5-g1",
+      "messaging-p5-g2",
+      "messaging-p6-g1",
+      "messaging-p6-g2",
+      "messaging-p7-g1",
+      "messaging-p7-g2",
+      "messaging-p7-g3",
+      "messaging-p7-g4",
+      "messaging-p7-g5",
+      "messaging-p8-g1",
+      "operations-p1-g1",
+      "operations-p1-g2",
+      "operations-p2-g1",
+      "operations-p3-g1",
+      "operations-p3-g2",
+      "operations-p4-g1",
+      "operations-p4-g2",
+      "operations-p4-g3",
+      "operations-p5-g1",
+      "operations-p5-g2",
+      "operations-p5-g3",
+      "operations-p6-g1",
+      "operations-p6-g2",
+      "operations-p6-g3",
+      "operations-p6-g4",
+      "operations-p6-g5",
+      "operations-p7-g1",
+      "operations-p7-g2",
+      "operations-p7-g3",
+      "operations-p7-g4",
+      "operations-p8-g1",
+      "operations-p8-g2",
+      "operations-p8-g3"
+    ],
+    "fixedPaths": {
+      "adaptedReferences": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evaluation/rag-v2/dev/adoption-v1/references.json",
+      "referenceMapping": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evaluation/rag-v2/dev/adoption-v1/reference-mapping.json",
+      "packetAdoption": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evaluation/rag-v2/dev/adoption-v1/{A|B}/packets/{caseId}.json",
+      "packetInventory": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evaluation/rag-v2/dev/adoption-v1/packet-inventory.json",
+      "authority": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evaluation/rag-v2/dev/adoption-v1/authority.json",
+      "reviews": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evaluation/rag-v2/dev/adoption-v1/reviews/{equivalence-one|equivalence-two}/{execution|projection|output}.json"
+    },
+    "authorityNodes": [
+      "contract-review",
+      "reference-equivalence",
+      "adoption-implementation-review",
+      "current-source-review",
+      "isolation-denial",
+      "integration-canary",
+      "selection-freeze",
+      "label-seal",
+      "holdout-claim",
+      "unseal",
+      "semantic-gate"
+    ],
+    "rules": {
+      "R01_scope": "This contract defines future receipt shapes and mandatory predicates; it is not a receipt, adoption, review PASS, execution permission or release gate. Only existing observed DEV80 and exactly the saved A/B packet inputs qualify. Both configuration slots remain consumed. No retrieval, reranking, re-packing, configuration repair/reset or additional configuration is allowed by this exception.",
+      "R02_dispatch": "Use a distinct explicit dev80-adoption-v1 dispatcher only at fixedPaths. Never send these records through the parent Envelope validator, overwrite original identity, fill missing historical fields, or relocate old records into parent packet paths. Parent v4 and legacy dispatch rules remain unchanged for every other artifact.",
+      "R03_hashes": "Hashes are SHA256 exact file bytes. Object hashes use pipeline.canonical UTF-8 (ensure_ascii=false, sort_keys=true, separators comma/colon). Reject duplicate JSON keys, nonfinite numbers, bool-as-integer, duplicate IDs, unknown keys, missing keys, aliases/symlinks/traversal, and mismatched canonical paths. A receipt supplied path is never a trust anchor; resolve only supervisor-pinned fixed paths.",
+      "R04_freeze": "Require exact parent and historicalReferences pins. Reconstruct savedPacketInventory in configuration A,B then lexicographic caseId order using {configuration,caseId,path,sha256}; its canonical digest must equal savedPacketInventoryHash. All 160 originals must be present and unchanged. Pin originalProvenance to exactly historicalProvenance in listed order. Inspect historical frozen-plan/execution/run.py only as data; no replay execution is authorized.",
+      "R05_reference_invariants": "Require exact 80 case IDs, 64 positive/16 negative, eight named themes with 8 positive/2 negative each, and the exact 148 required group IDs with original case membership and ordering. Copy queryEn,module,id,answerable,negativeReason exactly (positive absent negativeReason becomes null only). Retain original split, classification/verdict, scopeExclusions, missingInputs, negativeDefinition, optionalEvidenceGroups, uncertainty and provenance through originalCasePointer and originalCaseHash; never label historical holdout blind again. Every adapted group id equals old groupId. Negative groups stay empty. No splitting/merging/dropping/reclassifying groups.",
+      "R06_atoms": "For each original required group, requiredFacts is one atom {id:fact,text:original.claim}; mandatoryScope starts {id:scope,text:original.necessaryScope}. Each mandatoryScopeEvidenceGroups[j] adds two separate mandatory atoms {id:mandatory-j-claim,text:claim} and {id:mandatory-j-scope,text:necessaryScope}, with j zero-based decimal. Preserve nested groupId and requirementStatus via the field map and original case; do not count nested scope groups as extra required groups. Empty/missing/ambiguous necessaryScope or claim blocks; no inferred fact or editorial correction. All texts are exact Unicode string copies. optionalFacts is empty; every original optional group stays in the historical case sidecar, is source-review-visible, and never enters scoring or proof projections. This placement cannot silently move optional material into mandatory atoms.",
+      "R07_mapping": "Cases follow original query order; each originalCasePointer is /queries/i and originalCaseHash hashes that whole object. FieldMap covers every required claim, necessaryScope, nested mandatory claim/scope, group identity, query/classification and preserved optional group pointer. Exact-copy or wrapping must preserve decoded value exactly; add-atom-id uses only R06 rules. All altered representation paths must be enumerated, with old/new value hashes. Original pointers resolve in originalReferences; adapted pointers resolve in adaptedReferences. For representation additions use the originating old claim/scope/alternative pointer and hash. Preserve all unmapped historical metadata via originalCasePointer; this is not permission to discard it. For metadata/optional groups, preserve-by-reference maps the original value to originalCasePointer: dereferencing that whole case must recover the exact originating pointer/value; never compare the pointer string itself with the preserved object. absent-positive-negativeReason-to-null is allowed only for absent negativeReason on an original positive, pointing from its original whole case to adapted negativeReason=null. Fixed empty containers and R06 atom identifiers are prescribed structural output, not discretionary label edits.",
+      "R08_anchors": "Only original alternatives may supply anchor quotes, including nested mandatory alternatives. Add scalar sourceStart/sourceEnd only when the original exact quote has a unique valid occurrence within its bound original chunk and source. Zero or multiple occurrences blocks; no normalization or quote rewriting. Source-only checker must show each anchor set jointly entails every required and mandatory atom. Enumerate source-only conjunctive alternatives without dropping an original alternative; list membership derivations as enumerate-conjunctive-anchor-set field maps. Unprovable or ambiguous sufficient combinations block instead of manufacturing anchor sets. Do not consult packet ranks, queues, scores or results to choose anchors.",
+      "R09_equivalence_reviews": "Both distinct equivalence-one/two roles independently review every case and group, including optional status and negative classification, after observation. Same input projection contains only original references, adapted references, mapping data excluding review pointers, frozen sources and protocol; no packets/ranks/scores/selection/configuration IDs/peer output. Projection byte hash identical across roles. Raw completed executions and per-case/per-group verdicts must be independently validated under current source/denial authority; reviewer must differ from adapter producer and each other in fresh workspace/call identities. Every verdict must be PASS; one UNKNOWN/FAIL blocks. A native contract review cannot substitute for these source-only content checks; historical label status is not promoted. Referenced execution must satisfy parent Execution and real raw-completion/source/denial validators; no self-attested receipt authority. Output bytes must validate EquivalenceOutput, with exact original case order and exact original required group order/membership in each case; negatives have no groups. All field verdicts including nestedScopeClaimAndNecessaryScope must be PASS (empty nested scope means verified absence, never an omitted check). A missing/dropped/changed original necessaryScope, including nested necessaryScope, forces FAIL. Both original and adapted exact texts must be present in the projection. Review receipt references are validated as actual evidence, not created by this contract.",
+      "R10_dual_identity": "originalRetrievalIdentityHash hashes exactly {packet:originalPacket,provenance:originalProvenance}; this is a commitment to retained historical artifacts, not a new assertion of parent Identity completeness. proofConsumer.identity binds actual fresh implementation/tests/prompts/protocol/schema/algorithm/model plus corpus/source/chunks/index/embedding hashes. Its dependencyManifest includes all consumer imports, runtime/dependency artifacts and document/schema amendment hashes; adoptionContract/adoptionDocument hash actual files. No original implementation or identity value is overwritten or asserted equal to new code. Exact same proofConsumer is required on mapping, wrappers, authority, new proofs and results.",
+      "R11_packet_predicates": "For each configuration/case, require originalPacket canonical path and pinned digest, original.query equal old queryEn, exact original configuration/radius and corpus/map provenance, original retrievalConfigVersion integer 4 and diagnostic status/releaseAuthorized unchanged. Validate evidence complete-object equality to immutable corpus, unique IDs, order/ranks, <=8 chunks and <=12000 scalar chars. originalEvidenceHash hashes original.evidence; originalPlanHash hashes original.plan; originalQueuesHash hashes original.candidateQueues; originalTraceHash hashes original.trace. Validate original plan and trace against frozen recorded provenance without reretrieval or current-code replay. Any unavailable evidence needed to establish original provenance is UNKNOWN/block, never a field synthesized from current code. New wrappers contain references only; no replacement evidence/plan/queues/trace.",
+      "R12_proofs": "Fresh DEV checks bind packetHash=originalPacket.sha256 and referenceHash=adaptedReferences.sha256; containing ledger/results also bind PacketAdoption path/hash, ReferenceMapping path/hash and full proofConsumer identity. Thus an old check cannot satisfy a new wrapper. Preserve S2 exact all-nonempty-subsets of actual packet, deterministic subset membership/batches, independent two roles one/two, gpt-6-sol/high through existing reviewed Workbench, tool-free identical rank-free projections, complete atom coverage and source/packet quote validation. Empty packet has no calls/no credit. Missing/malformed/timeout or either non-PASS or inconsistent deployment means no subset credit. No inferred supersets or third tie breaker. HOST_RECORDS_ONLY is not authenticated execution, sourceReview or denial authority.",
+      "R13_scores": "Retain complete-group-v1: completion(S)=max(original ranks); completion(g)=min(valid completions), infinity if none; tie witness lexicographically smallest sorted chunk-ID tuple. Query recall=finite groups/all original required groups; MRR=1/min finite group completion or 0. Macro includes all 64 DEV positives and per-theme 8, negative metrics null only. Missing cases reject. No numeric DEV floor; legacyAnchor fields remain diagnostics and never populate semantic fields. New40 alone retains recall>=0.90, MRR>=0.75, each-theme recall>=0.75, 8/8 negative refusals, <=1 false refusal, zero unsupported/wrong-deployment acceptances with no rounding.",
+      "R14_authority": "Authority pins must contain every node in authorityNodes exactly once. PENDING/UNKNOWN/FAIL never authorizes; PASS requires a nonnull genuinely produced current independently validated receipt whose exact boundInputs cover all dependencies. contract-review is actual independent review of both amendment files; reference-equivalence covers both source-only review executions and mapping; adoption-implementation-review covers current consumer source/tests/runtime/dependencies. current-source-review is the separately pending common source-boundary review, never replaced by these reviews. isolation-denial is actual same-launcher capability evidence, not prompt assertions or HOST_RECORDS_ONLY. Existing authority store remains supervisor-owned; receipt strings cannot self-grant.",
+      "R15_permissions": "BLOCKED if any integrity/mapping predicate fails or is unknown. ADOPT_INPUTS_ONLY requires R01-R11 and current PASS contract-review, reference-equivalence, adoption-implementation-review. DEV_PROOF_EXECUTION additionally requires current-source-review and isolation-denial PASS, reviewed frozen proof transport/model/prompt, and explicit supervisor execution authority bound to these inputs. Neither permission authorizes D2/D4/D5, holdout, authoring/cards or publishing. integration-canary, selection-freeze, label-seal, holdout-claim, unseal and semantic-gate remain separate mandatory lifecycle gates; this Authority always releaseAuthorized=false. supervisorAuthorization must reference the externally pinned supervisor authority event for any non-BLOCKED permission, with matching requested permission, proofConsumer, mapping and packetInventory hashes; null permits BLOCKED only. This event cannot be produced by the mapping/packet producer or accepted solely because the receipt names it.",
+      "R16_invalidation": "Any change to original source/corpus/map/profile/query/configuration/plan/queue/packet/trace or preserved label meaning invalidates adoption and all descendants with no remaining retrieval slot. Any change to adaptation, contract, consumer/code/test/dependencies/prompt/model/protocol/schema requires new applicable review and invalidates current mapping reviews/proofs/results/selection/gate as dependent; original bytes/history remain intact. Representation-only consumer changes can retain immutable inputs only after an explicit new current adoption review and complete revalidation; never inherit old proof PASS. Holdout observation/unseal forbids return to tuning and cannot be reset. Fail closed on unavailable provenance or ambiguous mapping; no repaired extra A/B run.",
+      "R17_pending": "At this increment contract review, reference equivalence, current source review, isolation, authority, selection/freeze, seal/claim/unseal and semantic gates are not supplied. No receipt instance or PASS is produced by this contract. The twice-blocked common review must not be retried through this adapter. No new holdout labels, evaluations, probes, model calls or cards are authorized by writing these files."
+    },
+    "textObligations": {
+      "requiredClaims": 148,
+      "requiredNecessaryScope": 148,
+      "nestedMandatoryClaims": 1,
+      "nestedMandatoryNecessaryScope": 1,
+      "total": 298,
+      "meaning": "Copied original text fields, not additional denominator groups or independently judged new labels."
+    }
+  },
+  "$defs": {
+    "ArtifactRef": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "additionalProperties": false
+    },
+    "ProofConsumerIdentity": {
+      "type": "object",
+      "properties": {
+        "identity": {
+          "type": "object",
+          "properties": {
+            "corpusVersion": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "sourceManifestHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "chunksHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "indexHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "embeddingModelHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "implementationManifestHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "testsHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "promptsHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "protocolHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "schemaHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "algorithmHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "modelIdentityHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          },
+          "required": [
+            "corpusVersion",
+            "sourceManifestHash",
+            "chunksHash",
+            "indexHash",
+            "embeddingModelHash",
+            "implementationManifestHash",
+            "testsHash",
+            "promptsHash",
+            "protocolHash",
+            "schemaHash",
+            "algorithmHash",
+            "modelIdentityHash"
+          ],
+          "additionalProperties": false
+        },
+        "dependencyManifest": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "adoptionContract": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "adoptionDocument": {
+          "$ref": "#/$defs/ArtifactRef"
+        }
+      },
+      "required": [
+        "identity",
+        "dependencyManifest",
+        "adoptionContract",
+        "adoptionDocument"
+      ],
+      "additionalProperties": false
+    },
+    "Pointer": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "FieldMap": {
+      "type": "object",
+      "properties": {
+        "originalPointer": {
+          "$ref": "#/$defs/Pointer"
+        },
+        "adaptedPointer": {
+          "$ref": "#/$defs/Pointer"
+        },
+        "operation": {
+          "enum": [
+            "exact-copy",
+            "wrap-text-as-atom",
+            "add-atom-id",
+            "resolve-quote-occurrence",
+            "enumerate-conjunctive-anchor-set",
+            "preserve-by-reference",
+            "absent-positive-negativeReason-to-null"
+          ]
+        },
+        "originalValueHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "adaptedValueHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "originalPointer",
+        "adaptedPointer",
+        "operation",
+        "originalValueHash",
+        "adaptedValueHash",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "CaseMap": {
+      "type": "object",
+      "properties": {
+        "caseId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "originalPointer": {
+          "$ref": "#/$defs/Pointer"
+        },
+        "originalCaseHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "adaptedCaseHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "requiredGroupIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          }
+        },
+        "optionalGroupIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          }
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FieldMap"
+          }
+        }
+      },
+      "required": [
+        "caseId",
+        "originalPointer",
+        "originalCaseHash",
+        "adaptedCaseHash",
+        "requiredGroupIds",
+        "optionalGroupIds",
+        "fields"
+      ],
+      "additionalProperties": false
+    },
+    "SourceOnlyReview": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "enum": [
+            "equivalence-one",
+            "equivalence-two"
+          ]
+        },
+        "execution": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "projection": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "output": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "callId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "role",
+        "execution",
+        "projection",
+        "output",
+        "workspaceId",
+        "callId"
+      ],
+      "additionalProperties": false
+    },
+    "ReferenceMapping": {
+      "type": "object",
+      "properties": {
+        "contractVersion": {
+          "const": "dev80-adoption-v1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "schemaVersion": {
+          "const": 4
+        },
+        "metricVersion": {
+          "const": "complete-group-v1"
+        },
+        "releaseAuthorized": {
+          "const": false
+        },
+        "kind": {
+          "const": "dev80-reference-mapping"
+        },
+        "originalReferences": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "adaptedReferences": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "proofConsumer": {
+          "$ref": "#/$defs/ProofConsumerIdentity"
+        },
+        "provenance": {
+          "const": "POST_OBSERVATION_REPRESENTATION_ONLY"
+        },
+        "cases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CaseMap"
+          },
+          "minItems": 80,
+          "maxItems": 80
+        },
+        "independentReviews": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SourceOnlyReview"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        }
+      },
+      "required": [
+        "contractVersion",
+        "cycleId",
+        "schemaVersion",
+        "metricVersion",
+        "releaseAuthorized",
+        "kind",
+        "originalReferences",
+        "adaptedReferences",
+        "proofConsumer",
+        "provenance",
+        "cases",
+        "independentReviews"
+      ],
+      "additionalProperties": false
+    },
+    "PacketAdoption": {
+      "type": "object",
+      "properties": {
+        "contractVersion": {
+          "const": "dev80-adoption-v1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "schemaVersion": {
+          "const": 4
+        },
+        "metricVersion": {
+          "const": "complete-group-v1"
+        },
+        "releaseAuthorized": {
+          "const": false
+        },
+        "kind": {
+          "const": "dev80-historical-packet-adoption"
+        },
+        "configuration": {
+          "enum": [
+            "A",
+            "B"
+          ]
+        },
+        "caseId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "originalPacket": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "originalProvenance": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ArtifactRef"
+          }
+        },
+        "originalRetrievalIdentityHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "proofConsumer": {
+          "$ref": "#/$defs/ProofConsumerIdentity"
+        },
+        "referenceMapping": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "originalEvidenceHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "originalPlanHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "originalQueuesHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "originalTraceHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "admission": {
+          "const": "IMMUTABLE_INPUT_ONLY"
+        }
+      },
+      "required": [
+        "contractVersion",
+        "cycleId",
+        "schemaVersion",
+        "metricVersion",
+        "releaseAuthorized",
+        "kind",
+        "configuration",
+        "caseId",
+        "originalPacket",
+        "originalProvenance",
+        "originalRetrievalIdentityHash",
+        "proofConsumer",
+        "referenceMapping",
+        "originalEvidenceHash",
+        "originalPlanHash",
+        "originalQueuesHash",
+        "originalTraceHash",
+        "admission"
+      ],
+      "additionalProperties": false
+    },
+    "AuthorityPin": {
+      "type": "object",
+      "properties": {
+        "node": {
+          "enum": [
+            "contract-review",
+            "reference-equivalence",
+            "adoption-implementation-review",
+            "current-source-review",
+            "isolation-denial",
+            "integration-canary",
+            "selection-freeze",
+            "label-seal",
+            "holdout-claim",
+            "unseal",
+            "semantic-gate"
+          ]
+        },
+        "state": {
+          "enum": [
+            "PENDING",
+            "UNKNOWN",
+            "FAIL",
+            "PASS"
+          ]
+        },
+        "receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "boundInputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ArtifactRef"
+          }
+        }
+      },
+      "required": [
+        "node",
+        "state",
+        "receipt",
+        "boundInputs"
+      ],
+      "additionalProperties": false
+    },
+    "Authority": {
+      "type": "object",
+      "properties": {
+        "contractVersion": {
+          "const": "dev80-adoption-v1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "schemaVersion": {
+          "const": 4
+        },
+        "metricVersion": {
+          "const": "complete-group-v1"
+        },
+        "releaseAuthorized": {
+          "const": false
+        },
+        "kind": {
+          "const": "dev80-adoption-authority"
+        },
+        "proofConsumer": {
+          "$ref": "#/$defs/ProofConsumerIdentity"
+        },
+        "referenceMapping": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "packetInventory": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "pins": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AuthorityPin"
+          },
+          "minItems": 11,
+          "maxItems": 11
+        },
+        "permission": {
+          "enum": [
+            "BLOCKED",
+            "ADOPT_INPUTS_ONLY",
+            "DEV_PROOF_EXECUTION"
+          ]
+        },
+        "supervisorAuthorization": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "contractVersion",
+        "cycleId",
+        "schemaVersion",
+        "metricVersion",
+        "releaseAuthorized",
+        "kind",
+        "proofConsumer",
+        "referenceMapping",
+        "packetInventory",
+        "pins",
+        "permission",
+        "supervisorAuthorization"
+      ],
+      "additionalProperties": false
+    },
+    "Quote": {
+      "type": "object",
+      "properties": {
+        "sourceId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "sourceVersion": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "chunkId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "evidenceId": {
+          "type": "string",
+          "pattern": "^ev-[0-9a-f]{32}$"
+        },
+        "sourceStart": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sourceEnd": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "quote": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "sourceId",
+        "sourceVersion",
+        "chunkId",
+        "evidenceId",
+        "sourceStart",
+        "sourceEnd",
+        "quote"
+      ],
+      "additionalProperties": false
+    },
+    "Atom": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "Coverage": {
+      "type": "object",
+      "properties": {
+        "atomId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "quotes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Quote"
+          },
+          "minItems": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "atomId",
+        "quotes",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "AnchorSet": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "coverage": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Coverage"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "id",
+        "coverage"
+      ],
+      "additionalProperties": false
+    },
+    "Group": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "requiredFacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Atom"
+          },
+          "minItems": 1
+        },
+        "mandatoryScope": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Atom"
+          },
+          "minItems": 0
+        },
+        "optionalFacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Atom"
+          },
+          "minItems": 0
+        },
+        "anchorSets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AnchorSet"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "id",
+        "requiredFacts",
+        "mandatoryScope",
+        "optionalFacts",
+        "anchorSets"
+      ],
+      "additionalProperties": false
+    },
+    "AdaptedCase": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "module": {
+          "enum": [
+            "cloud",
+            "identity",
+            "compute",
+            "storage",
+            "databases",
+            "networking",
+            "messaging",
+            "operations"
+          ]
+        },
+        "queryEn": {
+          "type": "string",
+          "minLength": 1
+        },
+        "answerable": {
+          "type": "boolean"
+        },
+        "originalCasePointer": {
+          "$ref": "#/$defs/Pointer"
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Group"
+          }
+        },
+        "negativeReason": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "module",
+        "queryEn",
+        "answerable",
+        "originalCasePointer",
+        "groups",
+        "negativeReason"
+      ],
+      "additionalProperties": false
+    },
+    "AdaptedReferences": {
+      "type": "object",
+      "properties": {
+        "contractVersion": {
+          "const": "dev80-adoption-v1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "schemaVersion": {
+          "const": 4
+        },
+        "metricVersion": {
+          "const": "complete-group-v1"
+        },
+        "releaseAuthorized": {
+          "const": false
+        },
+        "kind": {
+          "const": "dev80-equivalent-reference-view"
+        },
+        "originalReferences": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "provenance": {
+          "const": "POST_OBSERVATION_REPRESENTATION_ONLY"
+        },
+        "queries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AdaptedCase"
+          },
+          "minItems": 80,
+          "maxItems": 80
+        }
+      },
+      "required": [
+        "contractVersion",
+        "cycleId",
+        "schemaVersion",
+        "metricVersion",
+        "releaseAuthorized",
+        "kind",
+        "originalReferences",
+        "provenance",
+        "queries"
+      ],
+      "additionalProperties": false
+    },
+    "EquivalenceOutput": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "dev80-source-equivalence-review"
+        },
+        "role": {
+          "enum": [
+            "equivalence-one",
+            "equivalence-two"
+          ]
+        },
+        "projectionHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "cases": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "caseId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "classificationAndOptionalStatus": {
+                "enum": [
+                  "PASS",
+                  "FAIL",
+                  "UNKNOWN"
+                ]
+              },
+              "groups": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "groupId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "claim": {
+                      "enum": [
+                        "PASS",
+                        "FAIL",
+                        "UNKNOWN"
+                      ]
+                    },
+                    "necessaryScope": {
+                      "enum": [
+                        "PASS",
+                        "FAIL",
+                        "UNKNOWN"
+                      ]
+                    },
+                    "nestedScopeClaimAndNecessaryScope": {
+                      "enum": [
+                        "PASS",
+                        "FAIL",
+                        "UNKNOWN"
+                      ]
+                    },
+                    "anchorSets": {
+                      "enum": [
+                        "PASS",
+                        "FAIL",
+                        "UNKNOWN"
+                      ]
+                    },
+                    "representationOnly": {
+                      "enum": [
+                        "PASS",
+                        "FAIL",
+                        "UNKNOWN"
+                      ]
+                    },
+                    "reason": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "groupId",
+                    "claim",
+                    "necessaryScope",
+                    "nestedScopeClaimAndNecessaryScope",
+                    "anchorSets",
+                    "representationOnly",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "verdict": {
+                "enum": [
+                  "PASS",
+                  "FAIL",
+                  "UNKNOWN"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "caseId",
+              "classificationAndOptionalStatus",
+              "groups",
+              "verdict",
+              "reason"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 80,
+          "maxItems": 80
+        }
+      },
+      "required": [
+        "kind",
+        "role",
+        "projectionHash",
+        "cases"
+      ],
+      "additionalProperties": false
+    }
+  }
+}
