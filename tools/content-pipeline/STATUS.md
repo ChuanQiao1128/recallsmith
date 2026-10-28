@@ -21,4 +21,6 @@ The full-RAG gate is **FAIL**, and the actual generation gate rejects it. No pro
 
 Current local checks passed: backend **3,126**; frontend **1,784** plus lint/build; mobile typecheck, **2,278** unit, **730** integration and smoke; MCP **97** TypeScript tests, build and **6** Python boundary tests. These are scoped software checks, not proof that 337 reviewed cards exist or that the release is live.
 
+The final shared corpus-path validation repair is committed and has passed the author/batch and MCP regression suites. Its independent re-review is still unavailable, so that mandatory review remains **UNKNOWN** and does not authorize merge or release. The next RAG design also requires a targeted independent re-review of its deterministic retrieval, semantic-scoring, version-binding and label-isolation contracts before implementation.
+
 A separately versioned next-revision design proposes neutral question facets and structural packing of unchanged official chunks. It requires independent plan review, bounded DEV selection and a genuinely new holdout before another release verdict. No threshold reduction or API/Bedrock fallback is proposed. Full generation, per-card bilingual/evidence review, user simulations, main CI/deployment and CDN/client acceptance remain outstanding.
