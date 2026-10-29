@@ -108,6 +108,8 @@ class SyntheticReceiptTests(unittest.TestCase):
             self.assertIs(receipt[key], False)
         self.assertNotIn('sourceReview', receipt)
         self.assertNotIn('denialReceipt', receipt)
+        self.assertTrue({'finishedUtc', 'completedUtc'}.isdisjoint(self.execution))
+        self.assertTrue({'finishedUtc', 'completedUtc'}.isdisjoint(self.invocation))
 
     def test_all_six_external_pins_precede_parsing(self):
         for name in LIMITS:

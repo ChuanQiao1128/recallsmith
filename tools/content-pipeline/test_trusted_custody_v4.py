@@ -44,6 +44,7 @@ class Fixture:
         self.root['runtimeManifest'] = self.put(core.T + '/runtime-manifest.json', self.manifest)
         self.access = self.put(parent + 'access-protocol.md', b'SYNTHETIC parent access protocol')
         self.observations = []
+        self.observation_times = {}
         self.freeze = None
         self.policy = 'c' * 64
         self.run = 'synthetic-custodian-run'
@@ -88,7 +89,7 @@ class Fixture:
         shared = dict(supervisorTask=self.root['supervisorTask'], custodianRunId=self.run,
                       custodianPrincipal='synthetic-protected-principal', sequence=seq,
                       runtimeManifest=self.root['runtimeManifest'], policyHash=self.policy,
-                      observedUtc=f'2026-10-29T00:00:{seq:02d}Z')
+                      observedUtc=self.observation_times.get(seq, f'2026-10-29T00:00:{seq:02d}Z'))
         values = []
         for operation, target, result, *rest in outcomes:
             values.append({'operation': operation, 'target': target, 'result': result,
@@ -269,6 +270,19 @@ class Fixture:
 
 
 class CustodyTests(unittest.TestCase):
+    def test_lossless_seventh_digit_custody_chronology(self):
+        for second in ('0000002', '0000001', '0000000'):
+            f = Fixture()
+            f.observation_times = {0: '2026-10-29T00:00:00.0000001Z',
+                                   1: '2026-10-29T00:00:00.' + second + '+00:00'}
+            f.denial()
+            f.observe({'event': 'INVALIDATED', 'reason': 'SYNTHETIC invalidation'},
+                      [('invalidate', 'holdout', 'INVALID')])
+            with self.subTest(second=second):
+                if second == '0000002': self.assertEqual(len(f.verify()), 2)
+                else:
+                    with self.assertRaisesRegex(ValueError, 'chronological'): f.verify()
+
     def test_all_pre_unseal_legal_edges_and_pure_repeated_snapshot(self):
         f = Fixture()
         self.assertEqual(f.verify(), ())
@@ -384,6 +398,14 @@ class ExactActionRepairTests(unittest.TestCase):
         f.put(core.T + '/custodian/0.json', obs)
         with self.assertRaisesRegex(ValueError, 'Unexpected or missing external action effect'): f.verify()
 
+    def test_lossless_seventh_digit_label_permission_prefix(self):
+        f = Fixture(); f.through_seal()
+        self.assertTrue(custody._validate_label_authorization_prefix_v4(
+            f.root, f.manifest, f.artifacts, '2026-10-29T00:00:02.0000001+00:00'))
+        with self.assertRaisesRegex(ValueError, 'must predate label permission'):
+            custody._validate_label_authorization_prefix_v4(
+                f.root, f.manifest, f.artifacts, '2026-10-29T00:00:02.0000000Z')
+
     def test_label_permission_requires_completed_prior_stop_prefix_without_recursion(self):
         f = Fixture(); f.through_seal()
         refs = custody._validate_label_authorization_prefix_v4(f.root, f.manifest, f.artifacts,
@@ -469,6 +491,13 @@ class ReleasedActionRepairTests(unittest.TestCase):
         binding['custodianReplayAction'] = execution['custodianReplayAction'] = ref
         f.put(folder + '/release-binding.json', binding)
         f.put(core.E + '/holdout/released-seal.json', release)
+
+    def test_lossless_seventh_digit_replay_order(self):
+        self.repin(lambda action: action.update(observedUtc='2026-10-29T00:00:07.0000000Z'))
+        self.repin(lambda action: action.update(observedUtc='2026-10-29T00:00:07.0000001+00:00'), index=1)
+        self.assertEqual(len(self.f.verify()), 7)
+        self.repin(lambda action: action.update(observedUtc='2026-10-29T00:00:07.0000000+00:00'), index=1)
+        with self.assertRaisesRegex(ValueError, 'strictly increasing observed order'): self.f.verify()
 
     def test_valid_ordered_suffix_and_no_original_private_path_reads(self):
         with patch('execution_receipt_v4._read_files', side_effect=AssertionError('private path read')):
@@ -599,6 +628,7 @@ class RegistryTests(unittest.TestCase):
         synthetic.runtime = dict(f.manifest['runtime'])
         synthetic.invocation.update(synthetic.runtime)
         synthetic.invocation['cli'] = '/synthetic/cli-executable'
+        synthetic.invocation['startedUtc'] = '2026-10-29T00:01:01Z'
         synthetic.output = Path(output)  # Strings only; write_fixture below is never called.
         workspace = core.C + '/model-workspaces/synthetic-' + str(len(f.artifacts)) + '-' + role
         synthetic.invocation['args'][10] = workspace
@@ -622,7 +652,7 @@ class RegistryTests(unittest.TestCase):
                             'expectedFileHashes': {k: sha(v) for k, v in raw.items()}},
             'runtimeManifest': f.root['runtimeManifest'], 'supervisorTask': f.root['supervisorTask'],
             'observedRunId': 'synthetic-run-' + role, 'observedTask': 'synthetic-task-' + role,
-            'observedUtc': '2026-10-29T00:00:00Z', 'callId': synthetic.events[0]['thread_id'],
+            'observedUtc': '2026-10-29T00:02:00Z', 'callId': synthetic.events[0]['thread_id'],
             'workspaceId': workspace, 'promptRef': f.put(output + '/prompt.txt', prompt.encode()), **refs}
 
     def verify(self):

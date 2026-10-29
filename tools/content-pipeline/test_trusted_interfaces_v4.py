@@ -1028,5 +1028,351 @@ class TrustedCoreTests(unittest.TestCase):
         trusted._snapshot_from_test_bytes(f.root, f.manifest, registry, f.artifacts)
 
 
+
+class PublicExecutionTimeTests(unittest.TestCase):
+    """Real fixed-path constructor/consumer; only reads redirect to Temp bytes."""
+    def setUp(self):
+        self.f, self.registry = _complete_proof_snapshot_fixture(self)
+
+    def public_consume(self):
+        f, registry = self.f, self.registry
+        f.root['executionRegistry'] = f.put(trusted.T + '/execution-registry.json', registry)
+        for index, slot in enumerate(f.root['artifacts']): slot['slot'] = 'time-' + str(index)
+        corpus = trusted._parse(f.artifacts[trusted.CORPUS + '/manifest.json'])
+        files = dict(f.artifacts)
+        files[trusted.C + '/run.json'] = raw({'nodes': {'A3V4-trusted-root': f.root,
+            'A2R-corpus': {'status': 'produced', 'corpusVersion': corpus['corpusVersion'],
+                          'sourceCount': 1, 'chunkCount': 1}}})
+        with tempfile.TemporaryDirectory(prefix='synthetic-public-time-') as folder:
+            physical = {}
+            for index, (logical, data) in enumerate(files.items()):
+                target = Path(folder).resolve() / str(index); target.write_bytes(data)
+                physical[logical] = str(target)
+            physical[trusted.SCHEMA_PATH] = physical[trusted.P + '/semantic-v4-trusted-interfaces.schema.json']
+            physical[str(trusted.CONTRACT_PATH)] = physical[trusted.P + '/semantic-v4-adoption-contract.json']
+            actual_read = trusted._read_stable
+            def read(logical, limit=2_000_000, identities=None):
+                return actual_read(physical[logical], limit, identities)
+            with patch.object(trusted, '_read_stable', side_effect=read):
+                snapshot = trusted.load_trusted_snapshot_v4()
+                consumed = set()
+                for entry in registry['entries']:
+                    scope = entry['scope']
+                    key = entry['purpose']  # The loader has already validated every registered role/batch.
+                    if key in consumed: continue
+                    consumed.add(key)
+                    executions = trusted.registered_executions_v4(snapshot, entry['purpose'],
+                        scope['configuration'], scope['caseIds'], scope['groupId'])
+                    self.assertTrue(executions)
+                return snapshot
+
+    def authorization_time(self, value):
+        path = self.registry['entries'][0]['authorization']['path']
+        auth = trusted._parse(self.f.artifacts[path]); auth['observedUtc'] = value
+        reference = self.f.put(path, auth)
+        for entry in self.registry['entries']: entry['authorization'] = reference
+
+    def set_time(self, field, value, *, index=0, missing=False):
+        entry = self.registry['entries'][index]
+        if field == 'A':
+            path = entry['authorization']['path']; record = trusted._parse(self.f.artifacts[path])
+            if missing: record.pop('observedUtc')
+            else: record['observedUtc'] = value
+            reference = self.f.put(path, record)
+            for other in self.registry['entries']:
+                if other['authorization']['path'] == path: other['authorization'] = reference
+        elif field == 'S':
+            path = entry['invocation']['path']; invocation = trusted._parse(self.f.artifacts[path])
+            if missing: invocation.pop('startedUtc')
+            else: invocation['startedUtc'] = value
+            entry['invocation'] = self.f.put(path, invocation)
+            entry['trustedPins']['expectedFileHashes']['invocation.json'] = entry['invocation']['sha256']
+        else:
+            if missing: entry.pop('observedUtc')
+            else: entry['observedUtc'] = value
+
+    def test_public_time_order_boundaries_and_cache_each_entry_both_orders(self):
+        baseline = copy.deepcopy((self.f, self.registry))
+        for field, value in [('A', '2026-10-29T00:01:30Z'), ('A', '2026-10-29T00:01:01Z'),
+                             ('O', '2026-10-29T00:01:00Z'), ('S', '2026-10-29T00:00:59Z')]:
+            for reverse in (False, True):
+                self.f, self.registry = copy.deepcopy(baseline)
+                self.set_time(field, value, index=1)
+                if reverse: self.registry['entries'].reverse()
+                with self.subTest(field=field, value=value, reverse=reverse), self.assertRaisesRegex(
+                        ValueError, 'authorization must predate start'):
+                    self.public_consume()
+        self.f, self.registry = copy.deepcopy(baseline)
+        for entry in self.registry['entries']: entry['observedUtc'] = '2026-10-29T00:01:01+00:00'
+        self.public_consume()
+
+    def test_public_required_time_types_syntax_and_precision(self):
+        baseline = copy.deepcopy((self.f, self.registry))
+        invalid = [None, True, False, 0, 1.25, '', '2026-02-30T00:01:01Z',
+            '2026-10-29T00:01:01', '2026-10-29T01:01:01+01:00', '2026-10-29T00:01:01-00:00',
+            '2026-10-29T00:01:01.00000001Z', '2026-10-29T00:01:01.Z',
+            '2026-10-29 00:01:01Z', '2026-10-29T00:01:01z', ' 2026-10-29T00:01:01Z',
+            '2026-10-29T00:01:01Z\n', '2026-10-29T24:00:00Z', '2026-10-29T00:01:60Z',
+            '2026-10-29T00:01:01+00:00:00', '２０２６-10-29T00:01:01Z', '0000-10-29T00:01:01Z']
+        for field in ('A', 'S', 'O'):
+            for missing, value in [(True, None), *[(False, value) for value in invalid]]:
+                self.f, self.registry = copy.deepcopy(baseline)
+                self.set_time(field, value, missing=missing)
+                with self.subTest(field=field, value=value, missing=missing), self.assertRaises(ValueError):
+                    self.public_consume()
+
+    def test_public_lossless_seventh_digit_equivalent_utc_and_equal_observation(self):
+        baseline = copy.deepcopy((self.f, self.registry))
+        for suffix in ('Z', '+00:00'):
+            for precision in range(8):
+                self.f, self.registry = copy.deepcopy(baseline)
+                fraction = '.' + '1' * precision if precision else ''
+                self.authorization_time('2026-10-29T00:01:00' + fraction + suffix)
+                for index, entry in enumerate(self.registry['entries']):
+                    self.set_time('S', '2026-10-29T00:01:01' + fraction + suffix, index=index)
+                    entry['observedUtc'] = '2026-10-29T00:01:01' + fraction + ('+00:00' if suffix == 'Z' else 'Z')
+                self.public_consume()
+        self.f, self.registry = copy.deepcopy(baseline)
+        self.authorization_time('2026-10-29T00:01:01.1234566+00:00')
+        for index, entry in enumerate(self.registry['entries']):
+            self.set_time('S', '2026-10-29T00:01:01.1234567Z', index=index)
+            entry['observedUtc'] = '2026-10-29T00:01:01.1234567+00:00'
+        self.public_consume()
+        # O is earlier only at the seventh digit: datetime microsecond truncation would accept it.
+        self.set_time('O', '2026-10-29T00:01:01.1234566Z', index=1)
+        with self.assertRaisesRegex(ValueError, 'observation must not precede start'): self.public_consume()
+        # Equivalent spellings of the same instant still cannot satisfy strict A < S.
+        self.set_time('O', '2026-10-29T00:01:01.1234567Z', index=1)
+        self.authorization_time('2026-10-29T00:01:01.1234567+00:00')
+        with self.assertRaisesRegex(ValueError, 'authorization must predate start'): self.public_consume()
+
+    def prepare_other_purpose(self, purpose):
+        """Build all actual Stage B predicates; semantic adoption is outside this fixture."""
+        from test_trusted_custody_v4 import RegistryTests
+        import trusted_custody_v4 as custody
+        from proof_transport_v4 import compact_schedule
+        from semantic_readiness_v4 import _cases, _judge_cases
+        from readiness import READER, JUDGE, reader_schema, judge_schema
+        f = self.f
+        builder = RegistryTests(); builder.f = f; builder.registry = self.registry
+        self.addCleanup(builder.doCleanups)
+        builder.originals, builder.sources = custody._corpus_maps(f.manifest, f.artifacts)
+        builder.evidence = list(builder.originals.values())
+        builder.case = trusted._parse(f.artifacts[trusted.D + '/references.json'])['queries'][0]
+        builder.group = builder.case['groups'][0]
+        builder.packet = next(entry['scope']['packets'][0] for entry in self.registry['entries'])
+        builder.proof_schema = Path(__file__).with_name('semantic-v4-proof-output.schema.json').read_bytes()
+        # Rebuild each purpose's own permission, without retaining a stale proof permission.
+        def remove(paths):
+            f.root['artifacts'][:] = [slot for slot in f.root['artifacts'] if slot['artifact']['path'] not in paths]
+            for path in paths: f.artifacts.pop(path, None)
+        remove({trusted.T + '/authorizations/DEV_PROOF_EXECUTION.json'})
+        self.registry['entries'] = []
+
+        def authorize(permission, inputs=()):
+            prereqs = [item for item in f.root['authorities'] if item['node'] in trusted.PERMISSION_PREREQUISITES[permission]]
+            needed = {f.root['runtimeManifest']['path'], f.protocol['path']}
+            if permission == 'DEV_EQUIVALENCE_EXECUTION':
+                needed |= {trusted.D + '/candidate-mapping.json', trusted.D + '/references.json', trusted.D + '/reviews/schedule.json'}
+                schedule = trusted._parse(f.artifacts[trusted.D + '/reviews/schedule.json'])
+                needed |= {trusted.D + '/reviews/projections/' + str(row['batchOrdinal']) + '.json' for row in schedule['batches']}
+            elif permission == 'INTEGRATION_CANARY': needed.add(trusted.E + '/canary-plan.json')
+            else:
+                needed.add(trusted.E + '/freeze.json')
+                if permission == 'HOLDOUT_EXECUTION':
+                    needed |= {trusted.E + '/seal-receipt.json', trusted.E + '/claim.json', trusted.E + '/unseal.json'}
+            for binding in prereqs:
+                needed |= {ref['path'] for ref in binding['boundInputs']}
+                needed |= {ref['path'] for ref in (binding['acceptedReview'], binding['observation']) if ref}
+            if permission in ('DEV_EQUIVALENCE_EXECUTION', 'INTEGRATION_CANARY'):
+                needed |= {entry['artifact']['path'] for entry in f.manifest['entries'] if entry['category'] in ('prompt', 'schema')}
+            observed = '2026-10-29T00:00:02.5000000Z' if permission == 'LABEL_EXECUTION' else '2026-10-29T00:01:00Z'
+            if permission == 'LABEL_EXECUTION':
+                needed |= {ref['path'] for ref in custody._validate_label_authorization_prefix_v4(
+                    f.root, f.manifest, f.artifacts, observed)}
+            auth = {**common('trusted-v4-authorization'), 'permission': permission,
+                'supervisorTask': f.root['supervisorTask'], 'observedUtc': observed,
+                'runtimeManifest': f.root['runtimeManifest'], 'identity': f.manifest['identity'],
+                'boundInputs': [ref(path, f.artifacts[path]) for path in sorted(needed)], 'prerequisites': prereqs}
+            trusted._validate_authorization(f.root, f.manifest, auth, f.artifacts)
+            return f.put(trusted.T + '/authorizations/' + permission + '.json', auth)
+
+        if purpose == 'dev-equivalence':
+            builder.equivalence()
+            # The helper builds a fresh corpus/schedule and runtime; bind complete native review records afterward.
+            _rehash_runtime(f.root, f.manifest, f.artifacts)
+            f.put(f.root['runtimeManifest']['path'], f.artifacts[f.root['runtimeManifest']['path']])
+            candidate_path = trusted.D + '/candidate-mapping.json'
+            candidate = trusted._parse(f.artifacts[candidate_path])
+            candidate['proofConsumer']['dependencyManifest'] = f.root['runtimeManifest']
+            candidate['proofConsumer']['identity'] = f.manifest['identity']
+            candidate_ref = f.put(candidate_path, candidate)
+            schedule_path = trusted.D + '/reviews/schedule.json'
+            schedule = trusted._parse(f.artifacts[schedule_path]); schedule['candidateMapping'] = candidate_ref
+            f.put(schedule_path, schedule)
+            for node in ('contract-review', 'reference-equivalence', 'adoption-implementation-review', 'current-source-review'):
+                _install_review(f, node)
+            remove({slot['artifact']['path'] for slot in f.root['artifacts']
+                    if slot['artifact']['path'].startswith((trusted.T + '/custodian/', trusted.T + '/synthetic-actions/'))})
+            f.observations = []; f.denial()
+            binding = next(item for item in f.root['authorities'] if item['node'] == 'isolation-denial')
+            obs = f.observations[0]
+            binding.update(state='PASS', acceptedReview=None, observation=ref(trusted.T + '/custodian/0.json',
+                f.artifacts[trusted.T + '/custodian/0.json']), boundInputs=[f.root['runtimeManifest'], obs['actionRecord'], f.access])
+            auth = authorize('DEV_EQUIVALENCE_EXECUTION')
+            for entry in self.registry['entries']:
+                entry.update(authorization=auth, runtimeManifest=f.root['runtimeManifest'])
+            return
+
+        # Dynamic output schemas do not become new runtime inputs; only emitted bytes are registered.
+        frozen_entries = copy.deepcopy(f.manifest['entries'])
+        original_raw_entry = builder.raw_entry
+        def raw_entry(*args, **kwargs):
+            entry = original_raw_entry(*args, **kwargs)
+            f.manifest['entries'][:] = copy.deepcopy(frozen_entries)
+            return entry
+        builder.raw_entry = raw_entry
+        if purpose.startswith('holdout-'):
+            _install_review(f, 'integration-canary')
+            remove({slot['artifact']['path'] for slot in f.root['artifacts']
+                    if slot['artifact']['path'].startswith((trusted.T + '/custodian/', trusted.T + '/synthetic-actions/'))})
+            f.observations = []
+            f.auth = authorize
+            original_observe = f.observe
+            nodes = {'DENIAL_OBSERVED': 'isolation-denial', 'FREEZE_ACCEPTED': 'selection-freeze',
+                     'SEALED': 'label-seal', 'CLAIM_CREATED': 'holdout-claim', 'UNSEALED': 'unseal'}
+            def observe(detail, outcomes, inputs=()):
+                obs = original_observe(detail, outcomes, inputs)
+                if detail['event'] in nodes:
+                    binding = next(item for item in f.root['authorities'] if item['node'] == nodes[detail['event']])
+                    binding.update(state='PASS', acceptedReview=None, observation=ref(
+                        trusted.T + '/custodian/' + str(obs['sequence']) + '.json',
+                        f.artifacts[trusted.T + '/custodian/' + str(obs['sequence']) + '.json']),
+                        boundInputs=[f.root['runtimeManifest'], obs['actionRecord']])
+                return obs
+            f.observe = observe
+            f.through_seal(); f.claim(); f.released(self)
+            unseal_binding = next(item for item in f.root['authorities'] if item['node'] == 'unseal')
+            unseal_binding['observation'] = ref(trusted.T + '/custodian/6.json', f.artifacts[trusted.T + '/custodian/6.json'])
+            # The shared fixture's raw CLI must match this complete runtime's actual registered CLI.
+            for role in ('author', 'checker', 'novelty'):
+                folder = trusted.E + '/holdout/seal-evidence/raw/' + role + '/0'
+                invocation_path = folder + '/invocation.json'
+                invocation = trusted._parse(f.artifacts[invocation_path])
+                invocation['cli'] = '/synthetic/cli-executable'
+                new_ref = f.put(invocation_path, invocation)
+                binding_path = folder + '/release-binding.json'; binding = trusted._parse(f.artifacts[binding_path])
+                action_path = folder + '/custodian-replay.json'; action = trusted._parse(f.artifacts[action_path])
+                binding['releasedFiles']['invocation.json'] = new_ref
+                binding['expectedFileHashes']['invocation.json'] = new_ref['sha256']
+                action['inputs'] = [new_ref if item['path'] == invocation_path else item for item in action['inputs']]
+                action_ref = f.put(action_path, action); binding['custodianReplayAction'] = action_ref
+                f.put(binding_path, binding)
+                released_path = trusted.E + '/holdout/released-seal.json'; released = trusted._parse(f.artifacts[released_path])
+                execution = next(row for row in released['executions'] if row['role'] == role)
+                execution.update(releasedFiles=binding['releasedFiles'], expectedFileHashes=binding['expectedFileHashes'],
+                                 custodianReplayAction=action_ref)
+                f.put(released_path, released)
+            reference = ref(trusted.E + '/holdout/references.json', f.artifacts[trusted.E + '/holdout/references.json'])
+            rows = trusted._parse(f.artifacts[reference['path']])['payload']['queries']
+        else:
+            rows = [builder.case]
+            reference = f.put(trusted.E + '/canary-plan.json', {'queries': rows})
+
+        packets = {row['id']: f.put(trusted.E + '/synthetic-public-packets/' + row['id'] + '.json',
+            {'queryEn': row['queryEn'], 'evidence': builder.evidence, 'reference': reference}) for row in rows}
+        if purpose in ('holdout-proof', 'holdout-both'):
+            row = rows[0]; group = row['groups'][0]
+            plan = compact_schedule(row['id'], row['queryEn'], group, builder.evidence, builder.originals)
+            for call in plan['calls']:
+                role, ordinal = call['checkerId'], 0
+                output = f"{trusted.E}/holdout/raw/proof/{row['id']}/{group['id']}/{role}/{ordinal}"
+                entry = builder.raw_entry(output, call['prompt'], role, call['projectionHash'], schema=builder.proof_schema,
+                    result=builder.proof_output(call), ordinal=ordinal)
+                entry.update(purpose='holdout-proof', scope={'configuration': 'selected', 'caseIds': [row['id']],
+                    'groupId': group['id'], 'packets': [packets[row['id']]], 'reference': reference,
+                    'protocol': f.protocol, 'projectionHash': call['projectionHash'],
+                    'prompt': entry.pop('promptRef'), 'schema': entry['emittedSchema']})
+                self.registry['entries'].append(entry)
+        if purpose != 'holdout-proof':
+            readiness_purpose = 'holdout-readiness' if purpose == 'holdout-both' else purpose
+            for ordinal, start in enumerate(range(0, len(rows), 3)):
+                batch = rows[start:start + 3]
+                packet_refs = [packets[row['id']] for row in batch]
+                packet_values = [{'caseId': row['id'], 'queryEn': row['queryEn'], 'evidence': builder.evidence} for row in batch]
+                cases = _cases(batch, packet_values, builder.originals, builder.sources, reference['sha256'])
+                ids = [row['id'] for row in cases]
+                answers = [{'id': opaque, 'verdict': 'needs_evidence', 'answer': '', 'scope': '',
+                    'supportingEvidenceIds': [], 'refusalReason': 'Synthetic refusal'} for opaque in ids]
+                for role in ('reader', 'judge'):
+                    projection = cases if role == 'reader' else _judge_cases(batch, cases, dict(zip(ids, answers)))
+                    body = {'cases': projection}; digest = trusted._digest(body)
+                    prompt = (READER if role == 'reader' else JUDGE) + canonical(body)
+                    schema = json.dumps((reader_schema if role == 'reader' else judge_schema)(ids), ensure_ascii=False, indent=2).encode()
+                    result = {'cases': answers if role == 'reader' else [{'id': opaque,
+                        'verdict': 'unnecessary_refusal', 'reason': 'Synthetic only'} for opaque in ids]}
+                    prefix = trusted.T + '/canary/raw' if purpose == 'integration-canary' else trusted.E + '/holdout/raw/readiness'
+                    entry = builder.raw_entry(f'{prefix}/{role}/{ordinal}', prompt, role, digest, schema=schema, result=result, ordinal=ordinal)
+                    entry.update(purpose=readiness_purpose, scope={'configuration': 'selected', 'caseIds': [row['id'] for row in batch],
+                        'groupId': None, 'packets': packet_refs, 'reference': reference, 'protocol': f.protocol,
+                        'projectionHash': digest, 'prompt': entry.pop('promptRef'), 'schema': entry['emittedSchema']})
+                    self.registry['entries'].append(entry)
+        if purpose == 'integration-canary':
+            binding = next(item for item in f.root['authorities'] if item['node'] == 'isolation-denial')
+        else:
+            binding = next(item for item in f.root['authorities'] if item['node'] == 'unseal')
+        binding['boundInputs'] += list(packets.values())
+        auth = authorize('HOLDOUT_EXECUTION' if purpose == 'holdout-both' else custody.PERMISSIONS[purpose])
+        for entry in self.registry['entries']: entry['authorization'] = auth
+
+    def test_all_five_public_purposes_full_loader_consumer_and_time_rejection(self):
+        baseline = copy.deepcopy((self.f, self.registry))
+        for purpose in ('dev-proof', 'dev-equivalence', 'integration-canary', 'holdout-proof', 'holdout-readiness'):
+            self.f, self.registry = copy.deepcopy(baseline)
+            with self.subTest(purpose=purpose):
+                if purpose != 'dev-proof': self.prepare_other_purpose(purpose)
+                self.public_consume()
+                import trusted_custody_v4 as custody
+                # Each role and batch is checked through the shared registry predicate used by the public loader.
+                for entry in self.registry['entries']:
+                    original = entry['observedUtc']; entry['observedUtc'] = '2026-10-29T00:01:00Z'
+                    self.f.root['executionRegistry'] = self.f.put(trusted.T + '/execution-registry.json', self.registry)
+                    with self.subTest(role=entry['role'], ordinal=entry['batchOrdinal']), self.assertRaisesRegex(
+                            ValueError, 'observation must not precede start'):
+                        custody.validate_execution_registry_v4(self.f.root, self.f.manifest, self.registry, self.f.artifacts)
+                    entry['observedUtc'] = original
+                self.set_time('O', '2026-10-29T00:01:00Z', index=-1)
+                with self.assertRaisesRegex(ValueError, 'observation must not precede start'): self.public_consume()
+                self.set_time('O', '2026-10-29T00:02:00Z', index=-1)
+                self.authorization_time('2026-10-30T00:00:00Z')
+                with self.assertRaisesRegex(ValueError, 'authorization must predate start'): self.public_consume()
+
+    def test_both_holdout_purposes_share_authorization_but_check_every_entry_in_both_orders(self):
+        self.prepare_other_purpose('holdout-both')
+        self.public_consume()
+        self.assertEqual({'holdout-proof', 'holdout-readiness'}, {row['purpose'] for row in self.registry['entries']})
+        self.assertEqual(1, len({canonical(row['authorization']) for row in self.registry['entries']}))
+        for purpose in ('holdout-proof', 'holdout-readiness'):
+            for reverse in (False, True):
+                row = next(entry for entry in reversed(self.registry['entries']) if entry['purpose'] == purpose)
+                original = row['observedUtc']; row['observedUtc'] = '2026-10-29T00:01:00Z'
+                if reverse: self.registry['entries'].reverse()
+                with self.subTest(purpose=purpose, reverse=reverse), self.assertRaisesRegex(
+                        ValueError, 'observation must not precede start'):
+                    self.public_consume()
+                row['observedUtc'] = original
+                if reverse: self.registry['entries'].reverse()
+
+    def test_original_future_authorization_rejects_after_consistent_rehash(self):
+        self.public_consume()
+        raw_before = {entry[field]['path']: self.f.artifacts[entry[field]['path']]
+                      for entry in self.registry['entries'] for field in
+                      ('execution', 'invocation', 'result', 'events', 'stderr', 'emittedSchema')}
+        self.authorization_time('2026-10-30T00:00:00Z')
+        self.assertTrue(all(self.f.artifacts[path] == data for path, data in raw_before.items()))
+        with self.assertRaisesRegex(ValueError, 'authorization.*start|Authorization.*start'):
+            self.public_consume()
+
+
 if __name__ == '__main__':
     unittest.main()

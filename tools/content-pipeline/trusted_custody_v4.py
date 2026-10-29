@@ -6,7 +6,7 @@ private paths are strings compared against independent release bindings only.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 import hashlib
 import json
 from pathlib import Path
@@ -351,6 +351,8 @@ def validate_execution_registry_v4(root, runtime_manifest, registry, artifacts):
         receipt = _verify_execution_bytes_v4(raw, output, frozen_prompt=prompt,
             frozen_schema_bytes=raw['schema.json'], trusted_pins=entry['trustedPins'])
         invocation = c._parse(raw['invocation.json'])
+        _require(_utc(auth['observedUtc']) < _utc(invocation.get('startedUtc')) <= _utc(entry['observedUtc']),
+                 'Public execution authorization must predate start; observation must not precede start')
         _cli(runtime_manifest, invocation)
         _require(receipt['callId'] == entry['callId'] and receipt['workspaceId'] == entry['workspaceId'] and
                  receipt['callId'] not in calls and receipt['workspaceId'] not in workspaces,
@@ -506,14 +508,16 @@ def _validate_readiness_scopes(root, manifest, registry, artifacts):
 
 
 def _utc(value):
-    _require(type(value) is str and value == value.strip(), 'Observed UTC timestamp required')
+    """Lossless UTC ticks, including the producer's seventh fractional digit."""
+    match = re.fullmatch(r'([0-9]{4}-[0-9]{2}-[0-9]{2})T([0-9]{2}:[0-9]{2}:[0-9]{2})'
+                         r'(?:\.([0-9]{1,7}))?(?:Z|\+00:00)', value) if type(value) is str else None
+    _require(match is not None, 'Observed UTC timestamp required (0-7 fractional digits)')
     try:
-        parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        whole = datetime.fromisoformat(match[1] + 'T' + match[2])
     except ValueError as exc:
         raise ValueError('Observed UTC timestamp required') from exc
-    _require(parsed.tzinfo is not None and parsed.utcoffset() == timezone.utc.utcoffset(parsed),
-             'Observed UTC timestamp required')
-    return parsed
+    seconds = ((whole.toordinal() - 1) * 86400 + whole.hour * 3600 + whole.minute * 60 + whole.second)
+    return seconds * 10_000_000 + int((match[3] or '').ljust(7, '0'))
 
 
 def _external_action(root, ref, artifacts, event, expected, required_inputs):
