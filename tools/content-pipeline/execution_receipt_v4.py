@@ -218,8 +218,7 @@ def _events(data, result, reported_model):
     return thread
 
 
-def verify_execution_v4(output_dir, *, frozen_prompt, frozen_schema_bytes, trusted_pins):
-    """Return pinned raw record evidence; raise ValueError/OSError on any rejection."""
+def _validated_pins(trusted_pins):
     _require(type(trusted_pins) is dict and set(trusted_pins) ==
              {'controlRoot', 'expectedFileHashes', 'runtime'}, 'Externally frozen pins required')
     pins, runtime = trusted_pins['expectedFileHashes'], trusted_pins['runtime']
@@ -229,8 +228,30 @@ def verify_execution_v4(output_dir, *, frozen_prompt, frozen_schema_bytes, trust
              and all(isinstance(runtime[k], str) and HASH.fullmatch(runtime[k])
                      for k in ('runnerAssemblyHash', 'processHostHash')) and
              isinstance(runtime['cliVersion'], str) and bool(runtime['cliVersion']), 'Runtime pins required')
+    return pins, runtime
+
+
+def verify_execution_v4(output_dir, *, frozen_prompt, frozen_schema_bytes, trusted_pins):
+    """Read original canonical files; no receipt paths or relocation exceptions."""
+    _validated_pins(trusted_pins)
     root, output = _path(trusted_pins['controlRoot']), _path(os.fspath(output_dir))
     raw = _read_files(root, output)
+    return _verify_execution_bytes_v4(raw, str(output), frozen_prompt=frozen_prompt,
+        frozen_schema_bytes=frozen_schema_bytes, trusted_pins=trusted_pins)
+
+
+def _verify_execution_bytes_v4(raw, output_dir, *, frozen_prompt, frozen_schema_bytes, trusted_pins):
+    """Pure internal predicates over separately registered exact original bytes.
+
+    Original path strings must come from supervisor registration. This helper does
+    not read paths, establish registration, isolation, or authorize execution.
+    """
+    pins, runtime = _validated_pins(trusted_pins)
+    root, output = _path(trusted_pins['controlRoot']), _path(os.fspath(output_dir))
+    _require(root in output.parents, 'Attempt must be below controlRoot')
+    _require(type(raw) is dict and set(raw) == set(LIMITS) and
+             all(type(raw[n]) is bytes and len(raw[n]) <= LIMITS[n] for n in LIMITS),
+             'Exact bounded six raw byte files required')
     _require(all(_hash(raw[name]) == pins[name] for name in LIMITS), 'Externally pinned raw hash mismatch')
     _require(type(frozen_prompt) is str and 0 < len(frozen_prompt) <= 60_000 and
              type(frozen_schema_bytes) is bytes and 0 < len(frozen_schema_bytes) <= LIMITS['schema.json'],

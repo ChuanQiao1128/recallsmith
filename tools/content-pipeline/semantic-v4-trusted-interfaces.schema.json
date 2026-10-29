@@ -1,0 +1,2238 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:recallsmith:trusted-v4-interfaces:1",
+  "title": "Closed trusted v4 interface records; not receipts or authority",
+  "description": "Validate these closed shapes and ALL normative predicates in TRUSTED_V4_INTERFACES.md. No shape, hash, PASS string or self-registration establishes authority. Fixed C/run.json.nodes is the supervisor trust root.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/RootNode"
+    },
+    {
+      "$ref": "#/$defs/RuntimeManifest"
+    },
+    {
+      "$ref": "#/$defs/AcceptedReview"
+    },
+    {
+      "$ref": "#/$defs/ExecutionRegistry"
+    },
+    {
+      "$ref": "#/$defs/Authorization"
+    },
+    {
+      "$ref": "#/$defs/CustodianObservation"
+    },
+    {
+      "$ref": "#/$defs/ClaimDescriptor"
+    },
+    {
+      "$ref": "#/$defs/ReleasedSeal"
+    },
+    {
+      "$ref": "#/$defs/GoalPacket"
+    }
+  ],
+  "$defs": {
+    "Hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "Text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048
+    },
+    "Ref": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^/[^\\u0000]*$",
+          "maxLength": 4096
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "additionalProperties": false
+    },
+    "Identity": {
+      "type": "object",
+      "properties": {
+        "corpusVersion": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "sourceManifestHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "chunksHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "indexHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "embeddingModelHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "implementationManifestHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "testsHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "promptsHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "protocolHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "schemaHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "algorithmHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "modelIdentityHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "corpusVersion",
+        "sourceManifestHash",
+        "chunksHash",
+        "indexHash",
+        "embeddingModelHash",
+        "implementationManifestHash",
+        "testsHash",
+        "promptsHash",
+        "protocolHash",
+        "schemaHash",
+        "algorithmHash",
+        "modelIdentityHash"
+      ],
+      "additionalProperties": false
+    },
+    "Runtime": {
+      "type": "object",
+      "properties": {
+        "runnerAssemblyHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "processHostHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "cliVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "runnerAssemblyHash",
+        "processHostHash",
+        "cliVersion"
+      ],
+      "additionalProperties": false
+    },
+    "SixHashes": {
+      "type": "object",
+      "properties": {
+        "execution.json": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "invocation.json": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "result.json": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "events.jsonl": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "stderr.log": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "schema.json": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "execution.json",
+        "invocation.json",
+        "result.json",
+        "events.jsonl",
+        "stderr.log",
+        "schema.json"
+      ],
+      "additionalProperties": false
+    },
+    "TrustedPins": {
+      "type": "object",
+      "properties": {
+        "controlRoot": {
+          "const": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028"
+        },
+        "expectedFileHashes": {
+          "$ref": "#/$defs/SixHashes"
+        },
+        "runtime": {
+          "$ref": "#/$defs/Runtime"
+        }
+      },
+      "required": [
+        "controlRoot",
+        "expectedFileHashes",
+        "runtime"
+      ],
+      "additionalProperties": false
+    },
+    "AuthorityNode": {
+      "enum": [
+        "contract-review",
+        "reference-equivalence",
+        "adoption-implementation-review",
+        "current-source-review",
+        "isolation-denial",
+        "integration-canary",
+        "selection-freeze",
+        "label-seal",
+        "holdout-claim",
+        "unseal",
+        "semantic-gate"
+      ]
+    },
+    "AuthorityBinding": {
+      "type": "object",
+      "properties": {
+        "node": {
+          "$ref": "#/$defs/AuthorityNode"
+        },
+        "state": {
+          "enum": [
+            "PENDING",
+            "UNKNOWN",
+            "FAIL",
+            "PASS"
+          ]
+        },
+        "acceptedReview": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "boundInputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Ref"
+          },
+          "minItems": 0,
+          "maxItems": 100000
+        }
+      },
+      "required": [
+        "node",
+        "state",
+        "acceptedReview",
+        "observation",
+        "boundInputs"
+      ],
+      "additionalProperties": false
+    },
+    "ArtifactSlot": {
+      "type": "object",
+      "properties": {
+        "slot": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "artifact": {
+          "$ref": "#/$defs/Ref"
+        },
+        "category": {
+          "enum": [
+            "input",
+            "review-request",
+            "review-report",
+            "accepted-review",
+            "authorization",
+            "custodian-observation",
+            "raw-execution",
+            "protocol",
+            "prompt",
+            "schema",
+            "result",
+            "selection",
+            "freeze",
+            "seal",
+            "claim",
+            "unseal"
+          ]
+        }
+      },
+      "required": [
+        "slot",
+        "artifact",
+        "category"
+      ],
+      "additionalProperties": false
+    },
+    "RootNode": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "trusted-v4-root"
+        },
+        "interfaceVersion": {
+          "const": "trusted-v4-1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "state": {
+          "enum": [
+            "PENDING",
+            "UNKNOWN",
+            "FAIL",
+            "PASS"
+          ]
+        },
+        "supervisorTask": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "registeredUtc": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "runtimeManifest": {
+          "$ref": "#/$defs/Ref"
+        },
+        "executionRegistry": {
+          "$ref": "#/$defs/Ref"
+        },
+        "authorities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AuthorityBinding"
+          },
+          "minItems": 11,
+          "maxItems": 11
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ArtifactSlot"
+          },
+          "minItems": 0,
+          "maxItems": 100000
+        },
+        "releaseAuthorized": {
+          "const": false
+        }
+      },
+      "required": [
+        "kind",
+        "interfaceVersion",
+        "cycleId",
+        "state",
+        "supervisorTask",
+        "registeredUtc",
+        "runtimeManifest",
+        "executionRegistry",
+        "authorities",
+        "artifacts",
+        "releaseAuthorized"
+      ],
+      "additionalProperties": false
+    },
+    "RuntimeEntry": {
+      "type": "object",
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/Ref"
+        },
+        "category": {
+          "enum": [
+            "source",
+            "dependency",
+            "binary",
+            "test",
+            "prompt",
+            "schema",
+            "protocol",
+            "algorithm",
+            "model"
+          ]
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Ref"
+          },
+          "minItems": 0,
+          "maxItems": 100000
+        },
+        "role": {
+          "enum": [
+            "consumer",
+            "runner-assembly",
+            "process-host",
+            "cli-executable",
+            "other",
+            "embedding-model",
+            "equivalence-instructions",
+            "equivalence-output-schema",
+            "model-contract"
+          ]
+        }
+      },
+      "required": [
+        "artifact",
+        "category",
+        "dependencies",
+        "role"
+      ],
+      "additionalProperties": false
+    },
+    "RuntimeManifest": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "trusted-v4-runtime-manifest"
+        },
+        "interfaceVersion": {
+          "const": "trusted-v4-1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RuntimeEntry"
+          },
+          "minItems": 1,
+          "maxItems": 100000
+        },
+        "entrypoints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Ref"
+          },
+          "minItems": 1,
+          "maxItems": 100000
+        },
+        "runtime": {
+          "$ref": "#/$defs/Runtime"
+        },
+        "identity": {
+          "$ref": "#/$defs/Identity"
+        },
+        "releaseAuthorized": {
+          "const": false
+        }
+      },
+      "required": [
+        "kind",
+        "interfaceVersion",
+        "cycleId",
+        "entries",
+        "entrypoints",
+        "runtime",
+        "identity",
+        "releaseAuthorized"
+      ],
+      "additionalProperties": false
+    },
+    "RuleOutcome": {
+      "type": "object",
+      "properties": {
+        "ruleId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "outcome": {
+          "enum": [
+            "PASS",
+            "FAIL",
+            "UNKNOWN"
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Ref"
+          },
+          "minItems": 1,
+          "maxItems": 100000
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "ruleId",
+        "outcome",
+        "evidence",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "AcceptedReview": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "trusted-v4-accepted-review"
+        },
+        "interfaceVersion": {
+          "const": "trusted-v4-1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "node": {
+          "$ref": "#/$defs/AuthorityNode"
+        },
+        "rawRequest": {
+          "$ref": "#/$defs/Ref"
+        },
+        "rawReport": {
+          "$ref": "#/$defs/Ref"
+        },
+        "supervisorTask": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "observedTask": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "observedModel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "observedEffort": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "observedUtc": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "context": {
+          "enum": [
+            "fresh-native",
+            "restricted-workbench",
+            "deterministic"
+          ]
+        },
+        "boundInputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Ref"
+          },
+          "minItems": 1,
+          "maxItems": 100000
+        },
+        "runtimeManifest": {
+          "$ref": "#/$defs/Ref"
+        },
+        "identity": {
+          "$ref": "#/$defs/Identity"
+        },
+        "ruleOutcomes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RuleOutcome"
+          },
+          "minItems": 1,
+          "maxItems": 100000
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "minItems": 0,
+          "maxItems": 100000
+        },
+        "accepted": {
+          "enum": [
+            "PASS",
+            "FAIL",
+            "UNKNOWN"
+          ]
+        },
+        "releaseAuthorized": {
+          "const": false
+        }
+      },
+      "required": [
+        "kind",
+        "interfaceVersion",
+        "cycleId",
+        "node",
+        "rawRequest",
+        "rawReport",
+        "supervisorTask",
+        "observedTask",
+        "observedModel",
+        "observedEffort",
+        "observedUtc",
+        "context",
+        "boundInputs",
+        "runtimeManifest",
+        "identity",
+        "ruleOutcomes",
+        "limitations",
+        "accepted",
+        "releaseAuthorized"
+      ],
+      "additionalProperties": false
+    },
+    "Scope": {
+      "type": "object",
+      "properties": {
+        "configuration": {
+          "enum": [
+            "A",
+            "B",
+            "selected",
+            "none"
+          ]
+        },
+        "caseIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          },
+          "minItems": 0,
+          "maxItems": 100000
+        },
+        "groupId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,63}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "packets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Ref"
+          },
+          "minItems": 0,
+          "maxItems": 100000
+        },
+        "reference": {
+          "$ref": "#/$defs/Ref"
+        },
+        "protocol": {
+          "$ref": "#/$defs/Ref"
+        },
+        "projectionHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "prompt": {
+          "$ref": "#/$defs/Ref"
+        },
+        "schema": {
+          "$ref": "#/$defs/Ref"
+        }
+      },
+      "required": [
+        "configuration",
+        "caseIds",
+        "groupId",
+        "packets",
+        "reference",
+        "protocol",
+        "projectionHash",
+        "prompt",
+        "schema"
+      ],
+      "additionalProperties": false
+    },
+    "ExecutionEntry": {
+      "type": "object",
+      "properties": {
+        "purpose": {
+          "enum": [
+            "dev-equivalence",
+            "dev-proof",
+            "integration-canary",
+            "holdout-proof",
+            "holdout-readiness",
+            "label-author",
+            "label-check",
+            "novelty-check"
+          ]
+        },
+        "role": {
+          "enum": [
+            "equivalence-one",
+            "equivalence-two",
+            "one",
+            "two",
+            "reader",
+            "judge",
+            "author",
+            "checker",
+            "novelty"
+          ]
+        },
+        "batchOrdinal": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "outputDirectory": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "trustedPins": {
+          "$ref": "#/$defs/TrustedPins"
+        },
+        "runtimeManifest": {
+          "$ref": "#/$defs/Ref"
+        },
+        "authorization": {
+          "$ref": "#/$defs/Ref"
+        },
+        "supervisorTask": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "observedRunId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "observedTask": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "observedUtc": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "callId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "execution": {
+          "$ref": "#/$defs/Ref"
+        },
+        "invocation": {
+          "$ref": "#/$defs/Ref"
+        },
+        "result": {
+          "$ref": "#/$defs/Ref"
+        },
+        "events": {
+          "$ref": "#/$defs/Ref"
+        },
+        "stderr": {
+          "$ref": "#/$defs/Ref"
+        },
+        "emittedSchema": {
+          "$ref": "#/$defs/Ref"
+        }
+      },
+      "required": [
+        "purpose",
+        "role",
+        "batchOrdinal",
+        "scope",
+        "outputDirectory",
+        "trustedPins",
+        "runtimeManifest",
+        "authorization",
+        "supervisorTask",
+        "observedRunId",
+        "observedTask",
+        "observedUtc",
+        "callId",
+        "workspaceId",
+        "execution",
+        "invocation",
+        "result",
+        "events",
+        "stderr",
+        "emittedSchema"
+      ],
+      "additionalProperties": false
+    },
+    "ExecutionRegistry": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "trusted-v4-execution-registry"
+        },
+        "interfaceVersion": {
+          "const": "trusted-v4-1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ExecutionEntry"
+          },
+          "minItems": 0,
+          "maxItems": 100000
+        },
+        "releaseAuthorized": {
+          "const": false
+        }
+      },
+      "required": [
+        "kind",
+        "interfaceVersion",
+        "cycleId",
+        "entries",
+        "releaseAuthorized"
+      ],
+      "additionalProperties": false
+    },
+    "Authorization": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "trusted-v4-authorization"
+        },
+        "interfaceVersion": {
+          "const": "trusted-v4-1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "permission": {
+          "enum": [
+            "ADOPT_INPUTS_ONLY",
+            "DEV_EQUIVALENCE_EXECUTION",
+            "DEV_PROOF_EXECUTION",
+            "INTEGRATION_CANARY",
+            "LABEL_EXECUTION",
+            "HOLDOUT_EXECUTION"
+          ]
+        },
+        "supervisorTask": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "observedUtc": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "runtimeManifest": {
+          "$ref": "#/$defs/Ref"
+        },
+        "identity": {
+          "$ref": "#/$defs/Identity"
+        },
+        "boundInputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Ref"
+          },
+          "minItems": 1,
+          "maxItems": 100000
+        },
+        "prerequisites": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AuthorityBinding"
+          },
+          "minItems": 1,
+          "maxItems": 11
+        },
+        "releaseAuthorized": {
+          "const": false
+        }
+      },
+      "required": [
+        "kind",
+        "interfaceVersion",
+        "cycleId",
+        "permission",
+        "supervisorTask",
+        "observedUtc",
+        "runtimeManifest",
+        "identity",
+        "boundInputs",
+        "prerequisites",
+        "releaseAuthorized"
+      ],
+      "additionalProperties": false
+    },
+    "DenialAttempt": {
+      "type": "object",
+      "properties": {
+        "capability": {
+          "enum": [
+            "absolute-read",
+            "relative-read",
+            "symlink-read",
+            "hardlink-read",
+            "uri-read",
+            "directory-list",
+            "process-inspection",
+            "environment-read",
+            "parent-stdin-read",
+            "child-spawn",
+            "mcp-call",
+            "network",
+            "write-back",
+            "public-log-leak"
+          ]
+        },
+        "targetClass": {
+          "enum": [
+            "home",
+            "repository",
+            "control",
+            "private-pdf",
+            "private-labels",
+            "outside-projection",
+            "process",
+            "environment",
+            "parent-stdin",
+            "child",
+            "mcp",
+            "network",
+            "public-output"
+          ]
+        },
+        "result": {
+          "enum": [
+            "DENIED",
+            "ALLOWED",
+            "UNKNOWN"
+          ]
+        },
+        "exitCode": {
+          "type": "integer"
+        },
+        "launcherRecord": {
+          "$ref": "#/$defs/Ref"
+        }
+      },
+      "required": [
+        "capability",
+        "targetClass",
+        "result",
+        "exitCode",
+        "launcherRecord"
+      ],
+      "additionalProperties": false
+    },
+    "WorkerTermination": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "processIdentity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "startedUtc": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "stoppedUtc": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "exitObserved": {
+          "type": "boolean"
+        },
+        "launcherRecord": {
+          "$ref": "#/$defs/Ref"
+        }
+      },
+      "required": [
+        "taskId",
+        "processIdentity",
+        "startedUtc",
+        "stoppedUtc",
+        "exitObserved",
+        "launcherRecord"
+      ],
+      "additionalProperties": false
+    },
+    "CustodianDetail": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "event": {
+              "const": "DENIAL_OBSERVED"
+            },
+            "launcherIdentity": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "policyHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "projectionHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "attempts": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/DenialAttempt"
+              },
+              "minItems": 1,
+              "maxItems": 100000
+            },
+            "toolsDisabledObserved": {
+              "type": "boolean"
+            },
+            "noPublicLeakObserved": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "event",
+            "launcherIdentity",
+            "policyHash",
+            "projectionHash",
+            "attempts",
+            "toolsDisabledObserved",
+            "noPublicLeakObserved"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "event": {
+              "const": "FREEZE_ACCEPTED"
+            },
+            "freeze": {
+              "$ref": "#/$defs/Ref"
+            },
+            "selection": {
+              "$ref": "#/$defs/Ref"
+            }
+          },
+          "required": [
+            "event",
+            "freeze",
+            "selection"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "event": {
+              "const": "BUILDERS_STOPPED"
+            },
+            "workers": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/WorkerTermination"
+              },
+              "minItems": 1,
+              "maxItems": 100000
+            },
+            "completeWorkerSet": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "minItems": 1,
+              "maxItems": 100000
+            },
+            "restartBlockedObserved": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "event",
+            "workers",
+            "completeWorkerSet",
+            "restartBlockedObserved"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "event": {
+              "const": "LABELS_STARTED"
+            },
+            "authorization": {
+              "$ref": "#/$defs/Ref"
+            },
+            "privateStoreId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            }
+          },
+          "required": [
+            "event",
+            "authorization",
+            "privateStoreId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "event": {
+              "const": "SEALED"
+            },
+            "sealReceipt": {
+              "$ref": "#/$defs/Ref"
+            },
+            "commitment": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "privateStoreId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "privateManifestCommitment": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "privateChecksVerified": {
+              "type": "boolean"
+            },
+            "quotaVerified": {
+              "type": "boolean"
+            },
+            "nonceBits": {
+              "type": "integer",
+              "minimum": 256
+            }
+          },
+          "required": [
+            "event",
+            "sealReceipt",
+            "commitment",
+            "privateStoreId",
+            "privateManifestCommitment",
+            "privateChecksVerified",
+            "quotaVerified",
+            "nonceBits"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "event": {
+              "const": "CLAIM_CREATED"
+            },
+            "sealReceipt": {
+              "$ref": "#/$defs/Ref"
+            },
+            "exclusiveCreateObserved": {
+              "type": "boolean"
+            },
+            "fsyncObserved": {
+              "type": "boolean"
+            },
+            "priorClaimAbsentObserved": {
+              "type": "boolean"
+            },
+            "claimDescriptor": {
+              "$ref": "#/$defs/Ref"
+            }
+          },
+          "required": [
+            "event",
+            "claimDescriptor",
+            "sealReceipt",
+            "exclusiveCreateObserved",
+            "fsyncObserved",
+            "priorClaimAbsentObserved"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "event": {
+              "const": "UNSEALED"
+            },
+            "claim": {
+              "$ref": "#/$defs/Ref"
+            },
+            "unseal": {
+              "$ref": "#/$defs/Ref"
+            },
+            "sealReceipt": {
+              "$ref": "#/$defs/Ref"
+            },
+            "privateManifestHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "queriesOnlyProjectionObserved": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "event",
+            "claim",
+            "unseal",
+            "sealReceipt",
+            "privateManifestHash",
+            "queriesOnlyProjectionObserved"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "event": {
+              "const": "INVALIDATED"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            }
+          },
+          "required": [
+            "event",
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "event": {
+              "const": "BURNED"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "claim": {
+              "$ref": "#/$defs/Ref"
+            }
+          },
+          "required": [
+            "event",
+            "reason",
+            "claim"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "CustodianObservation": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "trusted-v4-custodian-observation"
+        },
+        "interfaceVersion": {
+          "const": "trusted-v4-1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "custodianRunId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "custodianPrincipal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "supervisorTask": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "observedUtc": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "previous": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runtimeManifest": {
+          "$ref": "#/$defs/Ref"
+        },
+        "freeze": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "policyHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "actionRecord": {
+          "$ref": "#/$defs/Ref"
+        },
+        "detail": {
+          "$ref": "#/$defs/CustodianDetail"
+        },
+        "releaseAuthorized": {
+          "const": false
+        }
+      },
+      "required": [
+        "kind",
+        "interfaceVersion",
+        "cycleId",
+        "custodianRunId",
+        "custodianPrincipal",
+        "supervisorTask",
+        "observedUtc",
+        "sequence",
+        "previous",
+        "runtimeManifest",
+        "freeze",
+        "policyHash",
+        "actionRecord",
+        "detail",
+        "releaseAuthorized"
+      ],
+      "additionalProperties": false
+    },
+    "ClaimDescriptor": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "trusted-v4-claim-descriptor"
+        },
+        "interfaceVersion": {
+          "const": "trusted-v4-1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "custodianRunId": {
+          "$ref": "#/$defs/Text"
+        },
+        "freeze": {
+          "$ref": "#/$defs/Ref"
+        },
+        "sealReceipt": {
+          "$ref": "#/$defs/Ref"
+        },
+        "policyHash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "runtimeManifest": {
+          "$ref": "#/$defs/Ref"
+        }
+      },
+      "required": [
+        "kind",
+        "interfaceVersion",
+        "cycleId",
+        "custodianRunId",
+        "freeze",
+        "sealReceipt",
+        "policyHash",
+        "runtimeManifest"
+      ],
+      "additionalProperties": false
+    },
+    "ReleasedSeal": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "trusted-v4-released-seal"
+        },
+        "interfaceVersion": {
+          "const": "trusted-v4-1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "privateManifest": {
+          "$ref": "#/$defs/Ref"
+        },
+        "nonceHex": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "labels": {
+          "$ref": "#/$defs/Ref"
+        },
+        "author": {
+          "$ref": "#/$defs/Ref"
+        },
+        "checker": {
+          "$ref": "#/$defs/Ref"
+        },
+        "novelty": {
+          "$ref": "#/$defs/Ref"
+        },
+        "freeze": {
+          "$ref": "#/$defs/Ref"
+        },
+        "sealReceipt": {
+          "$ref": "#/$defs/Ref"
+        },
+        "claim": {
+          "$ref": "#/$defs/Ref"
+        },
+        "unseal": {
+          "$ref": "#/$defs/Ref"
+        },
+        "protocolHash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "sourceManifestHash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "denialReceipt": {
+          "$ref": "#/$defs/Ref"
+        },
+        "releaseAuthorized": {
+          "const": false
+        },
+        "executions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReleasedExecution"
+          },
+          "minItems": 3
+        }
+      },
+      "required": [
+        "kind",
+        "interfaceVersion",
+        "cycleId",
+        "privateManifest",
+        "nonceHex",
+        "labels",
+        "author",
+        "checker",
+        "novelty",
+        "freeze",
+        "sealReceipt",
+        "claim",
+        "unseal",
+        "protocolHash",
+        "sourceManifestHash",
+        "denialReceipt",
+        "releaseAuthorized",
+        "executions"
+      ],
+      "additionalProperties": false
+    },
+    "GoalPacket": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "trusted-v4-goal-packet"
+        },
+        "interfaceVersion": {
+          "const": "trusted-v4-1"
+        },
+        "schemaVersion": {
+          "const": 4
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "identity": {
+          "$ref": "#/$defs/Identity"
+        },
+        "goalUid": {
+          "$ref": "#/$defs/Text"
+        },
+        "goalHash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "curriculum": {
+          "$ref": "#/$defs/Ref"
+        },
+        "curriculumHash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "query": {
+          "$ref": "#/$defs/Text"
+        },
+        "retrieval": {
+          "$ref": "#/$defs/Ref"
+        },
+        "registration": {
+          "$ref": "#/$defs/Ref"
+        },
+        "gate": {
+          "$ref": "#/$defs/Ref"
+        },
+        "releaseAuthorized": {
+          "const": false
+        }
+      },
+      "required": [
+        "kind",
+        "interfaceVersion",
+        "schemaVersion",
+        "cycleId",
+        "identity",
+        "goalUid",
+        "goalHash",
+        "curriculum",
+        "curriculumHash",
+        "query",
+        "retrieval",
+        "registration",
+        "gate",
+        "releaseAuthorized"
+      ],
+      "additionalProperties": false
+    },
+    "SixRefs": {
+      "type": "object",
+      "properties": {
+        "execution.json": {
+          "$ref": "#/$defs/Ref"
+        },
+        "invocation.json": {
+          "$ref": "#/$defs/Ref"
+        },
+        "result.json": {
+          "$ref": "#/$defs/Ref"
+        },
+        "events.jsonl": {
+          "$ref": "#/$defs/Ref"
+        },
+        "stderr.log": {
+          "$ref": "#/$defs/Ref"
+        },
+        "schema.json": {
+          "$ref": "#/$defs/Ref"
+        }
+      },
+      "required": [
+        "execution.json",
+        "invocation.json",
+        "result.json",
+        "events.jsonl",
+        "stderr.log",
+        "schema.json"
+      ],
+      "additionalProperties": false
+    },
+    "ReleasedExecution": {
+      "type": "object",
+      "properties": {
+        "purpose": {
+          "enum": [
+            "label-author",
+            "label-check",
+            "novelty-check"
+          ]
+        },
+        "role": {
+          "enum": [
+            "author",
+            "checker",
+            "novelty"
+          ]
+        },
+        "batchOrdinal": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "originalOutputDirectory": {
+          "$ref": "#/$defs/Text"
+        },
+        "originalControlRoot": {
+          "$ref": "#/$defs/Text"
+        },
+        "originalWorkspaceId": {
+          "$ref": "#/$defs/Text"
+        },
+        "callId": {
+          "$ref": "#/$defs/Text"
+        },
+        "expectedFileHashes": {
+          "$ref": "#/$defs/SixHashes"
+        },
+        "runtime": {
+          "$ref": "#/$defs/Runtime"
+        },
+        "prompt": {
+          "$ref": "#/$defs/Ref"
+        },
+        "projectionHash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "releasedFiles": {
+          "$ref": "#/$defs/SixRefs"
+        },
+        "custodianReplayAction": {
+          "$ref": "#/$defs/Ref"
+        },
+        "checks": {
+          "type": "object",
+          "properties": {
+            "sixFileBytes": {
+              "const": true
+            },
+            "runtimeBinary": {
+              "const": true
+            },
+            "inputSchema": {
+              "const": true
+            },
+            "completedEvents": {
+              "const": true
+            },
+            "distinctCallWorkspace": {
+              "const": true
+            },
+            "toolFreeRoute": {
+              "const": true
+            },
+            "exactCaseCoverage": {
+              "const": true
+            }
+          },
+          "required": [
+            "sixFileBytes",
+            "runtimeBinary",
+            "inputSchema",
+            "completedEvents",
+            "distinctCallWorkspace",
+            "toolFreeRoute",
+            "exactCaseCoverage"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "purpose",
+        "role",
+        "batchOrdinal",
+        "originalOutputDirectory",
+        "originalControlRoot",
+        "originalWorkspaceId",
+        "callId",
+        "expectedFileHashes",
+        "runtime",
+        "prompt",
+        "projectionHash",
+        "releasedFiles",
+        "custodianReplayAction",
+        "checks"
+      ],
+      "additionalProperties": false
+    },
+    "ReviewRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "interfaceVersion",
+        "cycleId",
+        "node",
+        "producerTask",
+        "ruleIds",
+        "boundInputs",
+        "requestText"
+      ],
+      "properties": {
+        "kind": {
+          "const": "trusted-review-request"
+        },
+        "interfaceVersion": {
+          "const": "trusted-v4-1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "node": {
+          "$ref": "#/$defs/AuthorityNode"
+        },
+        "producerTask": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ruleIds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "boundInputs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/Ref"
+          }
+        },
+        "requestText": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "ExternalAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "interfaceVersion",
+        "cycleId",
+        "event",
+        "source",
+        "supervisorTask",
+        "custodianRunId",
+        "custodianPrincipal",
+        "processIdentity",
+        "sequence",
+        "runtimeManifest",
+        "policyHash",
+        "inputs",
+        "outcomes",
+        "observedUtc",
+        "releaseAuthorized"
+      ],
+      "properties": {
+        "kind": {
+          "const": "trusted-v4-external-action"
+        },
+        "interfaceVersion": {
+          "const": "trusted-v4-1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "event": {
+          "enum": [
+            "DENIAL_OBSERVED",
+            "FREEZE_ACCEPTED",
+            "BUILDERS_STOPPED",
+            "LABELS_STARTED",
+            "SEALED",
+            "CLAIM_CREATED",
+            "UNSEALED",
+            "INVALIDATED",
+            "BURNED",
+            "PRIVATE_REPLAY"
+          ]
+        },
+        "source": {
+          "enum": [
+            "launcher",
+            "syscall",
+            "custodian"
+          ]
+        },
+        "supervisorTask": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "custodianRunId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "custodianPrincipal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "processIdentity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "runtimeManifest": {
+          "$ref": "#/$defs/Ref"
+        },
+        "policyHash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Ref"
+          },
+          "minItems": 1,
+          "maxItems": 100000,
+          "uniqueItems": true
+        },
+        "outcomes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "operation",
+              "target",
+              "result",
+              "exitCode",
+              "evidence"
+            ],
+            "properties": {
+              "operation": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "target": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "result": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "exitCode": {
+                "type": "integer"
+              },
+              "evidence": {
+                "$ref": "#/$defs/Ref"
+              }
+            }
+          },
+          "minItems": 1,
+          "maxItems": 100000,
+          "uniqueItems": true
+        },
+        "observedUtc": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "releaseAuthorized": {
+          "const": false
+        }
+      }
+    },
+    "DenialPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "interfaceVersion",
+        "cycleId",
+        "parentAccessProtocol",
+        "launcherIdentity",
+        "policyHash",
+        "required",
+        "releaseAuthorized"
+      ],
+      "properties": {
+        "kind": {
+          "const": "trusted-v4-denial-plan"
+        },
+        "interfaceVersion": {
+          "const": "trusted-v4-1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "parentAccessProtocol": {
+          "$ref": "#/$defs/Ref"
+        },
+        "launcherIdentity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "policyHash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "required": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "capability",
+              "targetClass"
+            ],
+            "properties": {
+              "capability": {
+                "enum": [
+                  "absolute-read",
+                  "relative-read",
+                  "symlink-read",
+                  "hardlink-read",
+                  "uri-read",
+                  "directory-list",
+                  "process-inspection",
+                  "environment-read",
+                  "parent-stdin-read",
+                  "child-spawn",
+                  "mcp-call",
+                  "network",
+                  "write-back",
+                  "public-log-leak"
+                ]
+              },
+              "targetClass": {
+                "enum": [
+                  "home",
+                  "repository",
+                  "control",
+                  "private-pdf",
+                  "private-labels",
+                  "outside-projection",
+                  "process",
+                  "environment",
+                  "parent-stdin",
+                  "child",
+                  "mcp",
+                  "network",
+                  "public-output"
+                ]
+              }
+            }
+          },
+          "minItems": 1,
+          "maxItems": 100000,
+          "uniqueItems": true
+        },
+        "releaseAuthorized": {
+          "const": false
+        }
+      }
+    },
+    "WorkerInventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "interfaceVersion",
+        "cycleId",
+        "supervisorTask",
+        "workers",
+        "releaseAuthorized"
+      ],
+      "properties": {
+        "kind": {
+          "const": "trusted-v4-worker-inventory"
+        },
+        "interfaceVersion": {
+          "const": "trusted-v4-1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "supervisorTask": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "workers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "taskId",
+              "processIdentity",
+              "startedUtc"
+            ],
+            "properties": {
+              "taskId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "processIdentity": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "startedUtc": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              }
+            }
+          },
+          "minItems": 1,
+          "maxItems": 100000,
+          "uniqueItems": true
+        },
+        "releaseAuthorized": {
+          "const": false
+        }
+      }
+    },
+    "ReleaseBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "interfaceVersion",
+        "cycleId",
+        "role",
+        "batchOrdinal",
+        "originalControlRoot",
+        "originalOutputDirectory",
+        "originalWorkspaceId",
+        "callId",
+        "expectedFileHashes",
+        "runtime",
+        "prompt",
+        "projectionHash",
+        "custodianReplayAction",
+        "checksEvidence",
+        "releaseAuthorized"
+      ],
+      "properties": {
+        "kind": {
+          "const": "trusted-v4-release-binding"
+        },
+        "interfaceVersion": {
+          "const": "trusted-v4-1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "role": {
+          "enum": [
+            "author",
+            "checker",
+            "novelty"
+          ]
+        },
+        "batchOrdinal": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "originalControlRoot": {
+          "$ref": "#/$defs/Text"
+        },
+        "originalOutputDirectory": {
+          "$ref": "#/$defs/Text"
+        },
+        "originalWorkspaceId": {
+          "$ref": "#/$defs/Text"
+        },
+        "callId": {
+          "$ref": "#/$defs/Text"
+        },
+        "expectedFileHashes": {
+          "$ref": "#/$defs/SixHashes"
+        },
+        "runtime": {
+          "$ref": "#/$defs/Runtime"
+        },
+        "prompt": {
+          "$ref": "#/$defs/Ref"
+        },
+        "projectionHash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "custodianReplayAction": {
+          "$ref": "#/$defs/Ref"
+        },
+        "checksEvidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sixFileBytes",
+            "runtimeBinary",
+            "inputSchema",
+            "completedEvents",
+            "distinctCallWorkspace",
+            "toolFreeRoute",
+            "exactCaseCoverage"
+          ],
+          "properties": {
+            "sixFileBytes": {
+              "$ref": "#/$defs/Ref"
+            },
+            "runtimeBinary": {
+              "$ref": "#/$defs/Ref"
+            },
+            "inputSchema": {
+              "$ref": "#/$defs/Ref"
+            },
+            "completedEvents": {
+              "$ref": "#/$defs/Ref"
+            },
+            "distinctCallWorkspace": {
+              "$ref": "#/$defs/Ref"
+            },
+            "toolFreeRoute": {
+              "$ref": "#/$defs/Ref"
+            },
+            "exactCaseCoverage": {
+              "$ref": "#/$defs/Ref"
+            }
+          }
+        },
+        "releaseAuthorized": {
+          "const": false
+        }
+      }
+    },
+    "RequestedModelRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "interfaceVersion",
+        "cycleId",
+        "model",
+        "effort",
+        "auth",
+        "reportedModel",
+        "releaseAuthorized"
+      ],
+      "properties": {
+        "kind": {
+          "const": "trusted-requested-model-route"
+        },
+        "interfaceVersion": {
+          "const": "trusted-v4-1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "model": {
+          "const": "gpt-6-sol"
+        },
+        "effort": {
+          "const": "high"
+        },
+        "auth": {
+          "const": "chatgpt"
+        },
+        "reportedModel": {
+          "type": "null"
+        },
+        "releaseAuthorized": {
+          "const": false
+        }
+      }
+    }
+  }
+}
