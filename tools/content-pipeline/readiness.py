@@ -9,7 +9,7 @@ import re
 
 import jsonschema
 
-from author import invoke, validate_execution
+from author_execution import invoke, validate_execution
 from curate import object_schema, require_workbench_review
 from evaluate import (references, verify_selection, verify_ranking_binding, retrieval_binding,
                       pinned_reference_review)

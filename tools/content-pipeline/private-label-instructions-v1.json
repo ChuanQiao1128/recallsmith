@@ -1,0 +1,8 @@
+{
+  "version": "private-label-input-v1",
+  "instructions": {
+    "author": "Create the scheduled original AWS questions and complete source-grounded Reference labels. Use only the complete supplied frozen sources and assigned slots. Preserve every necessary scope and exact quote. Do not use tools, rankings, prior questions, peer outputs or repair.\n",
+    "checker": "Independently check every supplied Reference against only the complete supplied frozen sources. Verify facts, necessary scope, every anchor and negative justification. Return PASS only for complete support. Do not modify labels, omit cases, use tools or repair.\n",
+    "novelty": "Independently compare each new Reference principal fact and deployment with every original observed question. Reject paraphrases and repeated fact/deployment meaning. Check all old80 IDs in original order. Do not use tools, rankings, peer decisions or repair.\n"
+  }
+}

@@ -1,0 +1,2243 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:recallsmith:dev80-adoption-contract:1",
+  "title": "Normative DEV80 representation and immutable historical packet adoption contract",
+  "description": "Schema plus mandatory semantic predicates. This document is not an adoption/authority receipt. Structural validation alone grants nothing.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/ReferenceMapping"
+    },
+    {
+      "$ref": "#/$defs/PacketAdoption"
+    },
+    {
+      "$ref": "#/$defs/Authority"
+    },
+    {
+      "$ref": "#/$defs/AdaptedReferences"
+    },
+    {
+      "$ref": "#/$defs/CandidateMapping"
+    },
+    {
+      "$ref": "#/$defs/EquivalenceSchedule"
+    },
+    {
+      "$ref": "#/$defs/EquivalenceProjection"
+    },
+    {
+      "$ref": "#/$defs/EquivalenceBatchOutput"
+    },
+    {
+      "$ref": "#/$defs/EquivalenceReviewManifest"
+    },
+    {
+      "$ref": "#/$defs/PacketInventory"
+    },
+    {
+      "$ref": "#/$defs/DevProofLedger"
+    },
+    {
+      "$ref": "#/$defs/DevResults"
+    },
+    {
+      "$ref": "#/$defs/Check"
+    }
+  ],
+  "x-contract": {
+    "contractVersion": "dev80-adoption-v1",
+    "status": "NORMATIVE_CONTRACT_NOT_EXECUTED",
+    "controlRoot": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028",
+    "parentContracts": [
+      {
+        "path": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/design/rag-v2-bounded/r4/contracts.md",
+        "sha256": "b08ba3215227da7dcab5a9efca6c09fb1e3fa734c7551aa31c6c432e0e181507"
+      },
+      {
+        "path": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/design/rag-v2-bounded/r4/semantic-protocol.md",
+        "sha256": "e633b4c8df42843c3b5cb252259c469e7d6dde52a8e6ae3cdd6e5738dd8a3121"
+      },
+      {
+        "path": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/design/rag-v2-bounded/r4/contracts.schema.json",
+        "sha256": "72905b6fd6994ba8f3f27fa202b60c18a3affe6d694f442e8e0d5e28f07aa4e0"
+      },
+      {
+        "path": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/design/rag-v2-bounded/r4/access-protocol.md",
+        "sha256": "a116e56ee3192670b630b3ff81eae361672efee2ea7e46fa0d2e8faed1cc7e68"
+      }
+    ],
+    "historicalReferences": {
+      "path": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evaluation/references.json",
+      "sha256": "4b97d31214f5634917c82b22d50d1b6f6c004b9a1e78f88ccb18c221e394be24"
+    },
+    "historicalProvenance": [
+      {
+        "path": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evidence/r4-observed80-diagnostic/frozen-plan.json",
+        "sha256": "3dc6e45d59ab7b1b80878fb28e849dd2d9b1204164f84ba8e21c98f63d023b0c"
+      },
+      {
+        "path": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evidence/r4-observed80-diagnostic/run.py",
+        "sha256": "b4789ad953dc276e757b817819634c4d13f57e2e9f3f333cefe3e29865d20169"
+      },
+      {
+        "path": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evidence/r4-observed80-diagnostic/execution.json",
+        "sha256": "b76b225e64544f37041ed796e5f90a8d74901cb1934c8ea856657b17f3a81a91"
+      },
+      {
+        "path": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evidence/r4-observed80-diagnostic/results.json",
+        "sha256": "5b89fd0e4d2c39977ec4cc38cfedaf099984a6f2519d60c62fb1124579207ace"
+      },
+      {
+        "path": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evidence/r4-observed80-diagnostic/A/started.json",
+        "sha256": "05c096a08f8ce7d64e34b421511fb10695e7edd5e900db7cf9104bfa77a02486"
+      },
+      {
+        "path": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evidence/r4-observed80-diagnostic/A/results.json",
+        "sha256": "a4e47e7a12bc2e31bead40b93cf0edcd850ba4dde4bec97caaf1bcd3548ee891"
+      },
+      {
+        "path": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evidence/r4-observed80-diagnostic/B/started.json",
+        "sha256": "116bc6f29d744878930a443bcbb608a31897d36531d6399f4d9b16b95a887dc8"
+      },
+      {
+        "path": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evidence/r4-observed80-diagnostic/B/results.json",
+        "sha256": "7e863e871b9a11d07702085f1aa50f2cf9db12b7f769fa7b426a28463140ac91"
+      },
+      {
+        "path": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evidence/r4-observed80-diagnostic/pgvector-proof.json",
+        "sha256": "53050858d7ccce9e03680d4901c5f9a250ce890e552bb3172c501f6a0e672f22"
+      }
+    ],
+    "savedPacketInventoryHash": "642cbfbff38134455dbd140d5048266f04e9055178ff91ead42e054c41361181",
+    "inventorySerialization": "pipeline.canonical of [{configuration,caseId,path,sha256}], A then B, each caseId lexicographic; exact 160 records; each path original historical directory/configuration/caseId.json",
+    "requiredGroupIds": [
+      "cloud-p1-g1",
+      "cloud-p2-g1",
+      "cloud-p2-g2",
+      "cloud-p2-g3",
+      "cloud-p3-g1",
+      "cloud-p3-g2",
+      "cloud-p4-g1",
+      "cloud-p4-g2",
+      "cloud-p5-g1",
+      "cloud-p5-g2",
+      "cloud-p5-g3",
+      "cloud-p6-g1",
+      "cloud-p7-g1",
+      "cloud-p7-g2",
+      "cloud-p8-g1",
+      "cloud-p8-g2",
+      "identity-p1-g1",
+      "identity-p1-g2",
+      "identity-p2-g1",
+      "identity-p2-g2",
+      "identity-p3-g1",
+      "identity-p3-g2",
+      "identity-p3-g3",
+      "identity-p4-g1",
+      "identity-p5-g1",
+      "identity-p5-g2",
+      "identity-p5-g3",
+      "identity-p5-g4",
+      "identity-p6-g1",
+      "identity-p7-g1",
+      "identity-p7-g2",
+      "identity-p7-g3",
+      "identity-p7-g4",
+      "identity-p7-g5",
+      "identity-p8-g1",
+      "identity-p8-g2",
+      "compute-p1-g1",
+      "compute-p2-g1",
+      "compute-p3-g1",
+      "compute-p4-g1",
+      "compute-p4-g2",
+      "compute-p5-g1",
+      "compute-p6-g1",
+      "compute-p6-g2",
+      "compute-p7-g1",
+      "compute-p7-g2",
+      "compute-p7-g3",
+      "compute-p7-g4",
+      "compute-p8-g1",
+      "compute-p8-g2",
+      "compute-p8-g3",
+      "storage-p1-g1",
+      "storage-p1-g2",
+      "storage-p2-g1",
+      "storage-p3-g1",
+      "storage-p3-g2",
+      "storage-p4-g1",
+      "storage-p4-g2",
+      "storage-p4-g3",
+      "storage-p4-g4",
+      "storage-p5-g1",
+      "storage-p6-g1",
+      "storage-p7-g1",
+      "storage-p7-g2",
+      "storage-p8-g1",
+      "storage-p8-g2",
+      "storage-p8-g3",
+      "storage-p8-g4",
+      "storage-p8-g5",
+      "storage-p8-g6",
+      "databases-p1-g1",
+      "databases-p1-g2",
+      "databases-p1-g3",
+      "databases-p2-g1",
+      "databases-p2-g2",
+      "databases-p3-g1",
+      "databases-p3-g2",
+      "databases-p4-g1",
+      "databases-p5-g1",
+      "databases-p5-g2",
+      "databases-p5-g3",
+      "databases-p6-g1",
+      "databases-p6-g2",
+      "databases-p6-g3",
+      "databases-p7-g1",
+      "databases-p7-g2",
+      "databases-p7-g3",
+      "databases-p8-g1",
+      "databases-p8-g2",
+      "networking-p1-g1",
+      "networking-p1-g2",
+      "networking-p2-g1",
+      "networking-p2-g2",
+      "networking-p3-g1",
+      "networking-p3-g2",
+      "networking-p3-g3",
+      "networking-p4-g1",
+      "networking-p4-g2",
+      "networking-p5-g1",
+      "networking-p5-g2",
+      "networking-p5-g3",
+      "networking-p6-g1",
+      "networking-p6-g2",
+      "networking-p7-g1",
+      "networking-p8-g1",
+      "messaging-p1-g1",
+      "messaging-p1-g2",
+      "messaging-p1-g3",
+      "messaging-p2-g1",
+      "messaging-p2-g2",
+      "messaging-p3-g1",
+      "messaging-p3-g2",
+      "messaging-p3-g3",
+      "messaging-p4-g1",
+      "messaging-p4-g2",
+      "messaging-p5-g1",
+      "messaging-p5-g2",
+      "messaging-p6-g1",
+      "messaging-p6-g2",
+      "messaging-p7-g1",
+      "messaging-p7-g2",
+      "messaging-p7-g3",
+      "messaging-p7-g4",
+      "messaging-p7-g5",
+      "messaging-p8-g1",
+      "operations-p1-g1",
+      "operations-p1-g2",
+      "operations-p2-g1",
+      "operations-p3-g1",
+      "operations-p3-g2",
+      "operations-p4-g1",
+      "operations-p4-g2",
+      "operations-p4-g3",
+      "operations-p5-g1",
+      "operations-p5-g2",
+      "operations-p5-g3",
+      "operations-p6-g1",
+      "operations-p6-g2",
+      "operations-p6-g3",
+      "operations-p6-g4",
+      "operations-p6-g5",
+      "operations-p7-g1",
+      "operations-p7-g2",
+      "operations-p7-g3",
+      "operations-p7-g4",
+      "operations-p8-g1",
+      "operations-p8-g2",
+      "operations-p8-g3"
+    ],
+    "fixedPaths": {
+      "adaptedReferences": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evaluation/rag-v2/dev/adoption-v1/references.json",
+      "referenceMapping": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evaluation/rag-v2/dev/adoption-v1/reference-mapping.json",
+      "packetAdoption": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evaluation/rag-v2/dev/adoption-v1/{A|B}/packets/{caseId}.json",
+      "packetInventory": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evaluation/rag-v2/dev/adoption-v1/packet-inventory.json",
+      "authority": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evaluation/rag-v2/dev/adoption-v1/authority.json",
+      "candidateMapping": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evaluation/rag-v2/dev/adoption-v1/candidate-mapping.json",
+      "equivalenceSchedule": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evaluation/rag-v2/dev/adoption-v1/reviews/schedule.json",
+      "equivalenceProjection": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evaluation/rag-v2/dev/adoption-v1/reviews/projections/{batchOrdinal}.json",
+      "equivalenceExecution": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evaluation/rag-v2/dev/adoption-v1/reviews/{equivalence-one|equivalence-two}/{batchOrdinal}/execution.json",
+      "equivalenceOutput": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evaluation/rag-v2/dev/adoption-v1/reviews/{equivalence-one|equivalence-two}/{batchOrdinal}/output.json",
+      "equivalenceManifest": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evaluation/rag-v2/dev/adoption-v1/reviews/{equivalence-one|equivalence-two}/manifest.json",
+      "proofCheck": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evaluation/rag-v2/dev/adoption-v1/{A|B}/checks/{caseId}/{groupId}/{one|two}-{batchOrdinal}.json",
+      "proofLedger": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evaluation/rag-v2/dev/adoption-v1/{A|B}/proofs/{caseId}.json",
+      "results": "/Users/qc/.local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evaluation/rag-v2/dev/adoption-v1/{A|B}/results.json"
+    },
+    "authorityNodes": [
+      "contract-review",
+      "reference-equivalence",
+      "adoption-implementation-review",
+      "current-source-review",
+      "isolation-denial",
+      "integration-canary",
+      "selection-freeze",
+      "label-seal",
+      "holdout-claim",
+      "unseal",
+      "semantic-gate"
+    ],
+    "rules": {
+      "R01_scope": "This contract defines future receipt shapes and mandatory predicates; it is not a receipt, adoption, review PASS, execution permission or release gate. Only existing observed DEV80 and exactly the saved A/B packet inputs qualify. Both configuration slots remain consumed. No retrieval, reranking, re-packing, configuration repair/reset or additional configuration is allowed by this exception.",
+      "R02_dispatch": "Use a distinct explicit dev80-adoption-v1 dispatcher only at fixedPaths. Never send these records through the parent Envelope validator, overwrite original identity, fill missing historical fields, or relocate old records into parent packet paths. Parent v4 and legacy dispatch rules remain unchanged for every other artifact. Root schema dispatch is exact kind equality for the named fixedPaths records; Check is the sole kind-less shape, admitted only at proofCheck with exact parent Check fields. No generic path override. Decimal ordinals are zero-based unpadded decimal. Dispatch of DevProofLedger/DevResults validates local copied payload schemas plus R12 contextual bindings; it does not invoke or relax the parent Envelope/path dispatcher. Representation-only third exception: new DevResults and future parent-path Results/Selection/Gate use explicit metricWireVersion=rational-pair-v1 and the complete closed variants in metricWireSupplement; frozen parent files and other kind dispatch stay unchanged. There is no numeric-wire fallback, auto-upgrade or authority/selection-path exception.",
+      "R03_hashes": "Hashes are SHA256 exact file bytes. Object hashes use pipeline.canonical UTF-8 (ensure_ascii=false, sort_keys=true, separators comma/colon). Reject duplicate JSON keys, nonfinite numbers, bool-as-integer, duplicate IDs, unknown keys, missing keys, aliases/symlinks/traversal, and mismatched canonical paths. A receipt supplied path is never a trust anchor; resolve only supervisor-pinned fixed paths.",
+      "R04_freeze": "Require exact parent and historicalReferences pins. Reconstruct savedPacketInventory in configuration A,B then lexicographic caseId order using {configuration,caseId,path,sha256}; its canonical digest must equal savedPacketInventoryHash. All 160 originals must be present and unchanged. Pin originalProvenance to exactly historicalProvenance in listed order. Inspect historical frozen-plan/execution/run.py only as data; no replay execution is authorized.",
+      "R05_reference_invariants": "Require exact 80 case IDs, 64 positive/16 negative, eight named themes with 8 positive/2 negative each, and the exact 148 required group IDs with original case membership and ordering. Copy queryEn,module,id,answerable,negativeReason exactly (positive absent negativeReason becomes null only). Retain original split, classification/verdict, scopeExclusions, missingInputs, negativeDefinition, optionalEvidenceGroups, uncertainty and provenance through originalCasePointer and originalCaseHash; never label historical holdout blind again. Every adapted group id equals old groupId. Negative groups stay empty. No splitting/merging/dropping/reclassifying groups.",
+      "R06_atoms": "For each original required group, requiredFacts is one atom {id:fact,text:original.claim}; mandatoryScope starts {id:scope,text:original.necessaryScope}. Each mandatoryScopeEvidenceGroups[j] adds two separate mandatory atoms {id:mandatory-j-claim,text:claim} and {id:mandatory-j-scope,text:necessaryScope}, with j zero-based decimal. Preserve nested groupId and requirementStatus via the field map and original case; do not count nested scope groups as extra required groups. Empty/missing/ambiguous necessaryScope or claim blocks; no inferred fact or editorial correction. All texts are exact Unicode string copies. optionalFacts is empty; every original optional group stays in the historical case sidecar, is source-review-visible, and never enters scoring or proof projections. This placement cannot silently move optional material into mandatory atoms.",
+      "R07_mapping": "Cases follow original query order; each originalCasePointer is /queries/i and originalCaseHash hashes that whole object. FieldMap covers every required claim, necessaryScope, nested mandatory claim/scope, group identity, query/classification and preserved optional group pointer. Exact-copy or wrapping must preserve decoded value exactly; add-atom-id uses only R06 rules. All altered representation paths must be enumerated, with old/new value hashes. Original pointers resolve in originalReferences; adapted pointers resolve in adaptedReferences. For representation additions use the originating old claim/scope/alternative pointer and hash. Preserve all unmapped historical metadata via originalCasePointer; this is not permission to discard it. For metadata/optional groups, preserve-by-reference maps the original value to originalCasePointer: dereferencing that whole case must recover the exact originating pointer/value; never compare the pointer string itself with the preserved object. absent-positive-negativeReason-to-null is allowed only for absent negativeReason on an original positive, pointing from its original whole case to adapted negativeReason=null. Fixed empty containers and R06 atom identifiers are prescribed structural output, not discretionary label edits.",
+      "R08_anchors": "Only original alternatives may supply anchor quotes, including nested mandatory alternatives. Add scalar sourceStart/sourceEnd only when the original exact quote has a unique valid occurrence within its bound original chunk and source. Zero or multiple occurrences blocks; no normalization or quote rewriting. Source-only checker must show each anchor set jointly entails every required and mandatory atom. Enumerate source-only conjunctive alternatives without dropping an original alternative; list membership derivations as enumerate-conjunctive-anchor-set field maps. Unprovable or ambiguous sufficient combinations block instead of manufacturing anchor sets. Do not consult packet ranks, queues, scores or results to choose anchors.",
+      "R09_equivalence_reviews": "Two independent role streams equivalence-one/equivalence-two review all80 cases, not merely two calls. First persist CandidateMapping without review/authority/output fields. Build each EquivalenceProjection using exactly the batch original full case objects, matching adapted case objects and CaseMap rows, in original query order; include complete frozen source text for the union of source IDs in those original cases sourceHashes/required/mandatory/optional alternatives and adapted anchor quotes, sorted sourceId and deduplicated. No other sources or mapping envelope fields are allowed. originalCases objects must equal corresponding original whole cases including unknown/provenance metadata; their open structural schema is constrained by that exact equality, not arbitrary properties. Projection excludes independentReviews, review/manifest/execution/output refs, candidateMapping refs/hashes, authority, peer results, ranks, packets, queues, configuration outcomes, and all later-produced fields. Immutable review instructions, output schema and protocol are pinned in proofConsumer; full submitted prompt is those frozen instructions plus canonical projection and deterministic host metadata containing its already-computed projectionHash and batchOrdinal, with no additional case/source input. Hash the projection bytes first, then render/count the prompt; neither projection nor candidate contains its own hash. Count actual full submitted prompt scalars, including protocol/schema text if present. Deterministically partition original case order by greedy maximal contiguous batches of at most3 whole cases whose full prompt has <60000 scalars; examine lengths without calls, never split/drop a case/group/source to fit. If any one-case projection exceeds limit, block entire schedule before any review call; do not increase caps or fetch sources through tools. Persist EquivalenceSchedule and all projections before calls. Both streams use identical schedule, exact projection bytes/hash and full model-input bytes per ordinal; role identity is host metadata, not an extra model input. Each ordinal has one fresh actual completed call/workspace per role with actual execution/projection/output path and raw-byte hashes, and all workspaceId/callId identities are globally distinct across both streams and later proof executions; execution/output artifact references cannot be reused. Identical verdict text alone does not establish execution reuse; distinct genuine raw execution evidence remains mandatory. Each output validates EquivalenceBatchOutput with exact ordinal/projection hash, ordered scheduled cases and exact original ordered required groups; negatives have no groups. Every field verdict including nested claim AND necessaryScope must PASS (empty nested scope means verified absence). Missing/dropped/changed outer or nested necessaryScope forces FAIL. Both streams must be independent of producer/peers, fresh tool-free Workbench executions with no peer/rank inputs and actual current source/denial authority. Each role manifest references its genuine per-batch executions and outputs in ordinal order; exact schedule coverage and ordered concatenation must equal all80 original cases/groups once per role. Manifest is deterministic assembly, not a raw execution or invented whole80 output. Raw executions satisfy parent Execution and genuine completion/source/denial validators. Any absent/extra/reordered/duplicate/oversized batch, non-PASS or unknown authority blocks; no native review or historical status substitutes for these content checks.",
+      "R10_dual_identity": "originalRetrievalIdentityHash hashes exactly {packet:originalPacket,provenance:originalProvenance}; this is a commitment to retained historical artifacts, not a new assertion of parent Identity completeness. proofConsumer.identity binds actual fresh implementation/tests/prompts/protocol/schema/algorithm/model plus corpus/source/chunks/index/embedding hashes. Its dependencyManifest includes all consumer imports, runtime/dependency artifacts and document/schema amendment hashes; adoptionContract/adoptionDocument hash actual files. No original implementation or identity value is overwritten or asserted equal to new code. Exact same proofConsumer is required on mapping, wrappers, authority, new proofs and results. CandidateMapping, both manifests through their candidate ref, finalized mapping, inventory, DevProofLedger and DevResults all bind the same actual proofConsumer. No review projection contains the manifest/final mapping hash or its own hash.",
+      "R11_packet_predicates": "For each configuration/case, require originalPacket canonical path and pinned digest, original.query equal old queryEn, exact original configuration/radius and corpus/map provenance, original retrievalConfigVersion integer 4 and diagnostic status/releaseAuthorized unchanged. Validate evidence complete-object equality to immutable corpus, unique IDs, order/ranks, <=8 chunks and <=12000 scalar chars. originalEvidenceHash hashes original.evidence; originalPlanHash hashes original.plan; originalQueuesHash hashes original.candidateQueues; originalTraceHash hashes original.trace. Validate original plan and trace against frozen recorded provenance without reretrieval or current-code replay. Any unavailable evidence needed to establish original provenance is UNKNOWN/block, never a field synthesized from current code. New wrappers contain references only; no replacement evidence/plan/queues/trace.",
+      "R12_proofs": "Fresh DEV checks bind packetHash=originalPacket.sha256 and referenceHash=adaptedReferences.sha256; containing ledger/results also bind PacketAdoption path/hash, ReferenceMapping path/hash and full proofConsumer identity. Thus an old check cannot satisfy a new wrapper. Preserve S2 exact all-nonempty-subsets of actual packet, deterministic subset membership/batches, independent two roles one/two, gpt-6-sol/high through existing reviewed Workbench, tool-free identical rank-free projections, complete atom coverage and source/packet quote validation. Empty packet has no calls/no credit. Missing/malformed/timeout or either non-PASS or inconsistent deployment means no subset credit. No inferred supersets or third tie breaker. HOST_RECORDS_ONLY is not authenticated execution, sourceReview or denial authority. DevProofLedger and DevResults are the only new containing schemas. Inventory rows are exactly A then B, each lexicographic original caseId, one original packet plus wrapper per row; recompute original saved inventory digest from these rows and require R04 equality. Every wrapper/mapping/consumer/reference link must agree. Ledger payload.caseId/configuration determines its unique inventory row; payload.packet equals originalPacket, payload.reference equals adaptedReferences, payload.protocol equals the bound semantic protocol artifact. payload.groups is the exact ordered original group set, with every nonempty subset and genuine check refs; no ledger for negative cases. Each Check is the unchanged locally copied parent shape at proofCheck: hash fields bind originalPacket/adaptedReferences/protocol, execution validates actual raw events, and checkerId/caseId/groupId/batch membership match path and ledger. Ledger authorization equals the external supervisor authorization event, not this contract or a self-attested permission. Results payload.references equals adaptedReferences; configuration agrees; cases follow original reference order with packet=inventory originalPacket, proof=matching DevProofLedger ref for positives and null for negatives. Positive metrics/completions are recomputed from those ledgers/checks; negatives require metrics=null, proof=null, completions=[]. Results macro/theme/legacy fields derive only from verified exact full input sets and retain original semantics; no caller summary grants credit. Full new proofConsumer, mapping, inventory, authorization and adaptedReferences bindings live on the new closed containers, not added fields in parent Envelope. Source/denial/execution and all downstream gate checks still apply. Semantic Metrics now contains exactly two canonical Rational fields; preserve legacy numeric values separately in the closed sibling legacyDiagnosticMetrics with originalArtifacts references and HISTORICAL_DIAGNOSTIC_ONLY. The metricWireSupplement canonical/equality predicates apply to every case, macro, theme and later gate, including future holdout records. Null metrics require reference-negative case, proof=null and completions=[]; positive, macro, theme and gate metrics must be nonnull. Every decoded semantic Fraction must equal independently recomputed verified-proof Fraction exactly; legacy diagnostics are excluded from that equality and never promoted. The separate legacyDiagnosticMetrics contains references only: numeric diagnostics remain exclusively in their original historical artifact bytes, with no copied numeric semantic substitutes.",
+      "R13_scores": "Retain complete-group-v1: completion(S)=max(original ranks); completion(g)=min(valid completions), infinity if none; tie witness lexicographically smallest sorted chunk-ID tuple. Query recall=finite groups/all original required groups; MRR=1/min finite group completion or 0. Macro includes all 64 DEV positives and per-theme 8, negative metrics null only. Missing cases reject. No numeric DEV floor; legacyAnchor fields remain diagnostics and never populate semantic fields. New40 alone retains recall>=0.90, MRR>=0.75, each-theme recall>=0.75, 8/8 negative refusals, <=1 false refusal, zero unsupported/wrong-deployment acceptances with no rounding. Exact wire is rational-pair-v1, unchanged algorithm complete-group-v1. Apply the supplement to selection linked-result version checks and future holdout Results/Gate.recomputed; exact thresholds are Fraction(9,10) and Fraction(3,4). No decimal tolerance or historical float rationalization. UI display decimals are derived only and not stored as authoritative fields.",
+      "R14_authority": "Authority pins must contain every node in authorityNodes exactly once. PENDING/UNKNOWN/FAIL never authorizes; PASS requires a nonnull genuinely produced current independently validated receipt whose exact boundInputs cover all dependencies. contract-review is actual independent review of both amendment files; reference-equivalence covers both source-only review executions and mapping; adoption-implementation-review covers current consumer source/tests/runtime/dependencies. current-source-review is the separately pending common source-boundary review, never replaced by these reviews. isolation-denial is actual same-launcher capability evidence, not prompt assertions or HOST_RECORDS_ONLY. Existing authority store remains supervisor-owned; receipt strings cannot self-grant. A review-execution authorization must be independently supplied before equivalence calls under existing current source/denial gates; it is not the later DEV proof authorization and cannot be derived from the not-yet-produced finalized mapping.",
+      "R15_permissions": "BLOCKED if any integrity/mapping predicate fails or is unknown. ADOPT_INPUTS_ONLY requires R01-R11 and current PASS contract-review, reference-equivalence, adoption-implementation-review. DEV_PROOF_EXECUTION additionally requires current-source-review and isolation-denial PASS, reviewed frozen proof transport/model/prompt, and explicit supervisor execution authority bound to these inputs. Neither permission authorizes D2/D4/D5, holdout, authoring/cards or publishing. integration-canary, selection-freeze, label-seal, holdout-claim, unseal and semantic-gate remain separate mandatory lifecycle gates; this Authority always releaseAuthorized=false. supervisorAuthorization must reference the externally pinned supervisor authority event for any non-BLOCKED permission, with matching requested permission, proofConsumer, mapping and packetInventory hashes; null permits BLOCKED only. This event cannot be produced by the mapping/packet producer or accepted solely because the receipt names it. Acyclic write/hash order: adaptedReferences and CandidateMapping data -> preflight schedule/projections -> independently authorized actual equivalence batch executions/outputs -> two assembled manifests -> finalized ReferenceMapping (same candidate cases, with candidate ref and manifest refs) -> per-packet wrappers -> PacketInventory -> externally pinned DEV proof authorization -> Authority receipt -> fresh Checks -> DevProofLedger -> DevResults. External DEV authorization pins consumer/mapping/inventory and permission but never hashes Authority or later outputs; Authority references that event, avoiding a cycle. Checks reference raw input hashes, not their containing ledger. Manifests reference earlier batch outputs and candidate only, never finalized mapping. CandidateMapping and all manifests/reference maps must agree on full cases/consumer/ref identity. Existing authority before review calls remains required; this ordering does not grant it.",
+      "R16_invalidation": "Any change to original source/corpus/map/profile/query/configuration/plan/queue/packet/trace or preserved label meaning invalidates adoption and all descendants with no remaining retrieval slot. Any change to adaptation, contract, consumer/code/test/dependencies/prompt/model/protocol/schema requires new applicable review and invalidates current mapping reviews/proofs/results/selection/gate as dependent; original bytes/history remain intact. Representation-only consumer changes can retain immutable inputs only after an explicit new current adoption review and complete revalidation; never inherit old proof PASS. Holdout observation/unseal forbids return to tuning and cannot be reset. Fail closed on unavailable provenance or ambiguous mapping; no repaired extra A/B run.",
+      "R17_pending": "At this increment contract review, reference equivalence, current source review, isolation, authority, selection/freeze, seal/claim/unseal and semantic gates are not supplied. No receipt instance or PASS is produced by this contract. The twice-blocked common review must not be retried through this adapter. No new holdout labels, evaluations, probes, model calls or cards are authorized by writing these files."
+    },
+    "textObligations": {
+      "requiredClaims": 148,
+      "requiredNecessaryScope": 148,
+      "nestedMandatoryClaims": 1,
+      "nestedMandatoryNecessaryScope": 1,
+      "total": 298,
+      "meaning": "Copied original text fields, not additional denominator groups or independently judged new labels."
+    },
+    "metricWireSupplement": {
+      "path": "tools/content-pipeline/semantic-v4-rational-metric-wire-v1.schema.json",
+      "sha256": "334fbf03956270e6921d563e37094d5015a427df549a6a5e5512cd4f83a9f898",
+      "metricWireVersion": "rational-pair-v1"
+    }
+  },
+  "$defs": {
+    "ArtifactRef": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "additionalProperties": false
+    },
+    "ProofConsumerIdentity": {
+      "type": "object",
+      "properties": {
+        "identity": {
+          "type": "object",
+          "properties": {
+            "corpusVersion": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "sourceManifestHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "chunksHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "indexHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "embeddingModelHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "implementationManifestHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "testsHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "promptsHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "protocolHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "schemaHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "algorithmHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "modelIdentityHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          },
+          "required": [
+            "corpusVersion",
+            "sourceManifestHash",
+            "chunksHash",
+            "indexHash",
+            "embeddingModelHash",
+            "implementationManifestHash",
+            "testsHash",
+            "promptsHash",
+            "protocolHash",
+            "schemaHash",
+            "algorithmHash",
+            "modelIdentityHash"
+          ],
+          "additionalProperties": false
+        },
+        "dependencyManifest": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "adoptionContract": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "adoptionDocument": {
+          "$ref": "#/$defs/ArtifactRef"
+        }
+      },
+      "required": [
+        "identity",
+        "dependencyManifest",
+        "adoptionContract",
+        "adoptionDocument"
+      ],
+      "additionalProperties": false
+    },
+    "Pointer": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "FieldMap": {
+      "type": "object",
+      "properties": {
+        "originalPointer": {
+          "$ref": "#/$defs/Pointer"
+        },
+        "adaptedPointer": {
+          "$ref": "#/$defs/Pointer"
+        },
+        "operation": {
+          "enum": [
+            "exact-copy",
+            "wrap-text-as-atom",
+            "add-atom-id",
+            "resolve-quote-occurrence",
+            "enumerate-conjunctive-anchor-set",
+            "preserve-by-reference",
+            "absent-positive-negativeReason-to-null"
+          ]
+        },
+        "originalValueHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "adaptedValueHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "originalPointer",
+        "adaptedPointer",
+        "operation",
+        "originalValueHash",
+        "adaptedValueHash",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "CaseMap": {
+      "type": "object",
+      "properties": {
+        "caseId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "originalPointer": {
+          "$ref": "#/$defs/Pointer"
+        },
+        "originalCaseHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "adaptedCaseHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "requiredGroupIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          }
+        },
+        "optionalGroupIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          }
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FieldMap"
+          }
+        }
+      },
+      "required": [
+        "caseId",
+        "originalPointer",
+        "originalCaseHash",
+        "adaptedCaseHash",
+        "requiredGroupIds",
+        "optionalGroupIds",
+        "fields"
+      ],
+      "additionalProperties": false
+    },
+    "SourceOnlyReview": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "enum": [
+            "equivalence-one",
+            "equivalence-two"
+          ]
+        },
+        "manifest": {
+          "$ref": "#/$defs/ArtifactRef"
+        }
+      },
+      "required": [
+        "role",
+        "manifest"
+      ],
+      "additionalProperties": false
+    },
+    "ReferenceMapping": {
+      "type": "object",
+      "properties": {
+        "contractVersion": {
+          "const": "dev80-adoption-v1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "schemaVersion": {
+          "const": 4
+        },
+        "metricVersion": {
+          "const": "complete-group-v1"
+        },
+        "releaseAuthorized": {
+          "const": false
+        },
+        "kind": {
+          "const": "dev80-reference-mapping"
+        },
+        "originalReferences": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "adaptedReferences": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "proofConsumer": {
+          "$ref": "#/$defs/ProofConsumerIdentity"
+        },
+        "provenance": {
+          "const": "POST_OBSERVATION_REPRESENTATION_ONLY"
+        },
+        "cases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CaseMap"
+          },
+          "minItems": 80,
+          "maxItems": 80
+        },
+        "independentReviews": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SourceOnlyReview"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "candidateMapping": {
+          "$ref": "#/$defs/ArtifactRef"
+        }
+      },
+      "required": [
+        "contractVersion",
+        "cycleId",
+        "schemaVersion",
+        "metricVersion",
+        "releaseAuthorized",
+        "kind",
+        "originalReferences",
+        "adaptedReferences",
+        "proofConsumer",
+        "provenance",
+        "cases",
+        "independentReviews",
+        "candidateMapping"
+      ],
+      "additionalProperties": false
+    },
+    "PacketAdoption": {
+      "type": "object",
+      "properties": {
+        "contractVersion": {
+          "const": "dev80-adoption-v1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "schemaVersion": {
+          "const": 4
+        },
+        "metricVersion": {
+          "const": "complete-group-v1"
+        },
+        "releaseAuthorized": {
+          "const": false
+        },
+        "kind": {
+          "const": "dev80-historical-packet-adoption"
+        },
+        "configuration": {
+          "enum": [
+            "A",
+            "B"
+          ]
+        },
+        "caseId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "originalPacket": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "originalProvenance": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ArtifactRef"
+          }
+        },
+        "originalRetrievalIdentityHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "proofConsumer": {
+          "$ref": "#/$defs/ProofConsumerIdentity"
+        },
+        "referenceMapping": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "originalEvidenceHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "originalPlanHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "originalQueuesHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "originalTraceHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "admission": {
+          "const": "IMMUTABLE_INPUT_ONLY"
+        }
+      },
+      "required": [
+        "contractVersion",
+        "cycleId",
+        "schemaVersion",
+        "metricVersion",
+        "releaseAuthorized",
+        "kind",
+        "configuration",
+        "caseId",
+        "originalPacket",
+        "originalProvenance",
+        "originalRetrievalIdentityHash",
+        "proofConsumer",
+        "referenceMapping",
+        "originalEvidenceHash",
+        "originalPlanHash",
+        "originalQueuesHash",
+        "originalTraceHash",
+        "admission"
+      ],
+      "additionalProperties": false
+    },
+    "AuthorityPin": {
+      "type": "object",
+      "properties": {
+        "node": {
+          "enum": [
+            "contract-review",
+            "reference-equivalence",
+            "adoption-implementation-review",
+            "current-source-review",
+            "isolation-denial",
+            "integration-canary",
+            "selection-freeze",
+            "label-seal",
+            "holdout-claim",
+            "unseal",
+            "semantic-gate"
+          ]
+        },
+        "state": {
+          "enum": [
+            "PENDING",
+            "UNKNOWN",
+            "FAIL",
+            "PASS"
+          ]
+        },
+        "receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "boundInputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ArtifactRef"
+          }
+        }
+      },
+      "required": [
+        "node",
+        "state",
+        "receipt",
+        "boundInputs"
+      ],
+      "additionalProperties": false
+    },
+    "Authority": {
+      "type": "object",
+      "properties": {
+        "contractVersion": {
+          "const": "dev80-adoption-v1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "schemaVersion": {
+          "const": 4
+        },
+        "metricVersion": {
+          "const": "complete-group-v1"
+        },
+        "releaseAuthorized": {
+          "const": false
+        },
+        "kind": {
+          "const": "dev80-adoption-authority"
+        },
+        "proofConsumer": {
+          "$ref": "#/$defs/ProofConsumerIdentity"
+        },
+        "referenceMapping": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "packetInventory": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "pins": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AuthorityPin"
+          },
+          "minItems": 11,
+          "maxItems": 11
+        },
+        "permission": {
+          "enum": [
+            "BLOCKED",
+            "ADOPT_INPUTS_ONLY",
+            "DEV_PROOF_EXECUTION"
+          ]
+        },
+        "supervisorAuthorization": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "contractVersion",
+        "cycleId",
+        "schemaVersion",
+        "metricVersion",
+        "releaseAuthorized",
+        "kind",
+        "proofConsumer",
+        "referenceMapping",
+        "packetInventory",
+        "pins",
+        "permission",
+        "supervisorAuthorization"
+      ],
+      "additionalProperties": false
+    },
+    "Quote": {
+      "type": "object",
+      "properties": {
+        "sourceId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "sourceVersion": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "chunkId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "evidenceId": {
+          "type": "string",
+          "pattern": "^ev-[0-9a-f]{32}$"
+        },
+        "sourceStart": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sourceEnd": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "quote": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "sourceId",
+        "sourceVersion",
+        "chunkId",
+        "evidenceId",
+        "sourceStart",
+        "sourceEnd",
+        "quote"
+      ],
+      "additionalProperties": false
+    },
+    "Atom": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "Coverage": {
+      "type": "object",
+      "properties": {
+        "atomId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "quotes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Quote"
+          },
+          "minItems": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "atomId",
+        "quotes",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "AnchorSet": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "coverage": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Coverage"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "id",
+        "coverage"
+      ],
+      "additionalProperties": false
+    },
+    "Group": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "requiredFacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Atom"
+          },
+          "minItems": 1
+        },
+        "mandatoryScope": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Atom"
+          },
+          "minItems": 0
+        },
+        "optionalFacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Atom"
+          },
+          "minItems": 0
+        },
+        "anchorSets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AnchorSet"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "id",
+        "requiredFacts",
+        "mandatoryScope",
+        "optionalFacts",
+        "anchorSets"
+      ],
+      "additionalProperties": false
+    },
+    "AdaptedCase": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "module": {
+          "enum": [
+            "cloud",
+            "identity",
+            "compute",
+            "storage",
+            "databases",
+            "networking",
+            "messaging",
+            "operations"
+          ]
+        },
+        "queryEn": {
+          "type": "string",
+          "minLength": 1
+        },
+        "answerable": {
+          "type": "boolean"
+        },
+        "originalCasePointer": {
+          "$ref": "#/$defs/Pointer"
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Group"
+          }
+        },
+        "negativeReason": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "module",
+        "queryEn",
+        "answerable",
+        "originalCasePointer",
+        "groups",
+        "negativeReason"
+      ],
+      "additionalProperties": false
+    },
+    "AdaptedReferences": {
+      "type": "object",
+      "properties": {
+        "contractVersion": {
+          "const": "dev80-adoption-v1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "schemaVersion": {
+          "const": 4
+        },
+        "metricVersion": {
+          "const": "complete-group-v1"
+        },
+        "releaseAuthorized": {
+          "const": false
+        },
+        "kind": {
+          "const": "dev80-equivalent-reference-view"
+        },
+        "originalReferences": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "provenance": {
+          "const": "POST_OBSERVATION_REPRESENTATION_ONLY"
+        },
+        "queries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AdaptedCase"
+          },
+          "minItems": 80,
+          "maxItems": 80
+        }
+      },
+      "required": [
+        "contractVersion",
+        "cycleId",
+        "schemaVersion",
+        "metricVersion",
+        "releaseAuthorized",
+        "kind",
+        "originalReferences",
+        "provenance",
+        "queries"
+      ],
+      "additionalProperties": false
+    },
+    "CandidateMapping": {
+      "type": "object",
+      "properties": {
+        "contractVersion": {
+          "const": "dev80-adoption-v1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "schemaVersion": {
+          "const": 4
+        },
+        "metricVersion": {
+          "const": "complete-group-v1"
+        },
+        "releaseAuthorized": {
+          "const": false
+        },
+        "kind": {
+          "const": "dev80-candidate-mapping"
+        },
+        "proofConsumer": {
+          "$ref": "#/$defs/ProofConsumerIdentity"
+        },
+        "originalReferences": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "adaptedReferences": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "provenance": {
+          "const": "POST_OBSERVATION_REPRESENTATION_ONLY"
+        },
+        "cases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CaseMap"
+          },
+          "minItems": 80,
+          "maxItems": 80
+        }
+      },
+      "required": [
+        "contractVersion",
+        "cycleId",
+        "schemaVersion",
+        "metricVersion",
+        "releaseAuthorized",
+        "kind",
+        "proofConsumer",
+        "originalReferences",
+        "adaptedReferences",
+        "provenance",
+        "cases"
+      ],
+      "additionalProperties": false
+    },
+    "ReviewBatch": {
+      "type": "object",
+      "properties": {
+        "batchOrdinal": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "caseIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          },
+          "minItems": 1,
+          "maxItems": 3
+        },
+        "execution": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "projection": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "output": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "callId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "batchOrdinal",
+        "caseIds",
+        "execution",
+        "projection",
+        "output",
+        "workspaceId",
+        "callId"
+      ],
+      "additionalProperties": false
+    },
+    "EquivalenceReviewManifest": {
+      "type": "object",
+      "properties": {
+        "contractVersion": {
+          "const": "dev80-adoption-v1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "schemaVersion": {
+          "const": 4
+        },
+        "metricVersion": {
+          "const": "complete-group-v1"
+        },
+        "releaseAuthorized": {
+          "const": false
+        },
+        "kind": {
+          "const": "dev80-equivalence-review-manifest"
+        },
+        "role": {
+          "enum": [
+            "equivalence-one",
+            "equivalence-two"
+          ]
+        },
+        "candidateMapping": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "schedule": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "batches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReviewBatch"
+          },
+          "minItems": 1,
+          "maxItems": 80
+        }
+      },
+      "required": [
+        "contractVersion",
+        "cycleId",
+        "schemaVersion",
+        "metricVersion",
+        "releaseAuthorized",
+        "kind",
+        "role",
+        "candidateMapping",
+        "schedule",
+        "batches"
+      ],
+      "additionalProperties": false
+    },
+    "EquivalenceSchedule": {
+      "type": "object",
+      "properties": {
+        "contractVersion": {
+          "const": "dev80-adoption-v1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "schemaVersion": {
+          "const": 4
+        },
+        "metricVersion": {
+          "const": "complete-group-v1"
+        },
+        "releaseAuthorized": {
+          "const": false
+        },
+        "kind": {
+          "const": "dev80-equivalence-schedule"
+        },
+        "candidateMapping": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "batches": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "batchOrdinal": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "caseIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                },
+                "minItems": 1,
+                "maxItems": 3
+              },
+              "projectionHash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "promptScalarCount": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 59999
+              }
+            },
+            "required": [
+              "batchOrdinal",
+              "caseIds",
+              "projectionHash",
+              "promptScalarCount"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 80
+        }
+      },
+      "required": [
+        "contractVersion",
+        "cycleId",
+        "schemaVersion",
+        "metricVersion",
+        "releaseAuthorized",
+        "kind",
+        "candidateMapping",
+        "batches"
+      ],
+      "additionalProperties": false
+    },
+    "EquivalenceBatchOutput": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "dev80-source-equivalence-batch"
+        },
+        "batchOrdinal": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "projectionHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "cases": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "caseId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "classificationAndOptionalStatus": {
+                "enum": [
+                  "PASS",
+                  "FAIL",
+                  "UNKNOWN"
+                ]
+              },
+              "groups": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "groupId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "claim": {
+                      "enum": [
+                        "PASS",
+                        "FAIL",
+                        "UNKNOWN"
+                      ]
+                    },
+                    "necessaryScope": {
+                      "enum": [
+                        "PASS",
+                        "FAIL",
+                        "UNKNOWN"
+                      ]
+                    },
+                    "nestedScopeClaimAndNecessaryScope": {
+                      "enum": [
+                        "PASS",
+                        "FAIL",
+                        "UNKNOWN"
+                      ]
+                    },
+                    "anchorSets": {
+                      "enum": [
+                        "PASS",
+                        "FAIL",
+                        "UNKNOWN"
+                      ]
+                    },
+                    "representationOnly": {
+                      "enum": [
+                        "PASS",
+                        "FAIL",
+                        "UNKNOWN"
+                      ]
+                    },
+                    "reason": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "groupId",
+                    "claim",
+                    "necessaryScope",
+                    "nestedScopeClaimAndNecessaryScope",
+                    "anchorSets",
+                    "representationOnly",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "verdict": {
+                "enum": [
+                  "PASS",
+                  "FAIL",
+                  "UNKNOWN"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "caseId",
+              "classificationAndOptionalStatus",
+              "groups",
+              "verdict",
+              "reason"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 3
+        }
+      },
+      "required": [
+        "kind",
+        "batchOrdinal",
+        "projectionHash",
+        "cases"
+      ],
+      "additionalProperties": false
+    },
+    "SourceBody": {
+      "type": "object",
+      "properties": {
+        "sourceId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "sourceVersion": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sourceId",
+        "sourceVersion",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "EquivalenceProjection": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "dev80-source-equivalence-projection"
+        },
+        "batchOrdinal": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "caseIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          },
+          "minItems": 1,
+          "maxItems": 3
+        },
+        "originalCases": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "minItems": 1,
+          "maxItems": 3
+        },
+        "adaptedCases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AdaptedCase"
+          },
+          "minItems": 1,
+          "maxItems": 3
+        },
+        "caseMappings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CaseMap"
+          },
+          "minItems": 1,
+          "maxItems": 3
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SourceBody"
+          },
+          "minItems": 0
+        }
+      },
+      "required": [
+        "kind",
+        "batchOrdinal",
+        "caseIds",
+        "originalCases",
+        "adaptedCases",
+        "caseMappings",
+        "sources"
+      ],
+      "additionalProperties": false
+    },
+    "Proof": {
+      "type": "object",
+      "properties": {
+        "groupId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "subsets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "chunkIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1
+              },
+              "checkOne": {
+                "$ref": "#/$defs/ArtifactRef"
+              },
+              "checkTwo": {
+                "$ref": "#/$defs/ArtifactRef"
+              }
+            },
+            "required": [
+              "chunkIds",
+              "checkOne",
+              "checkTwo"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 0
+        }
+      },
+      "required": [
+        "groupId",
+        "subsets"
+      ],
+      "additionalProperties": false
+    },
+    "Metrics": {
+      "type": "object",
+      "properties": {
+        "semanticCompleteGroupRecallAt8": {
+          "$ref": "#/$defs/Rational"
+        },
+        "semanticCompleteGroupMrrAt8": {
+          "$ref": "#/$defs/Rational"
+        }
+      },
+      "required": [
+        "semanticCompleteGroupRecallAt8",
+        "semanticCompleteGroupMrrAt8"
+      ],
+      "additionalProperties": false
+    },
+    "Execution": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "workbench"
+        },
+        "workspaceId": {
+          "type": "string"
+        },
+        "callId": {
+          "type": "string"
+        },
+        "model": {
+          "const": "gpt-6-sol"
+        },
+        "effort": {
+          "const": "high"
+        },
+        "auth": {
+          "const": "codex-subscription"
+        },
+        "requestHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "responseHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "rawEvents": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "sourceReview": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "denialReceipt": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "completed": {
+          "const": true
+        },
+        "toolEvents": {
+          "const": 0
+        }
+      },
+      "required": [
+        "kind",
+        "workspaceId",
+        "callId",
+        "model",
+        "effort",
+        "auth",
+        "requestHash",
+        "responseHash",
+        "rawEvents",
+        "sourceReview",
+        "denialReceipt",
+        "completed",
+        "toolEvents"
+      ],
+      "additionalProperties": false
+    },
+    "Check": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "const": 4
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "caseId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "groupId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "packetHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "referenceHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "protocolHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "projectionHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "checkerId": {
+          "enum": [
+            "one",
+            "two"
+          ]
+        },
+        "execution": {
+          "$ref": "#/$defs/Execution"
+        },
+        "subsets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "chunkIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1
+              },
+              "verdict": {
+                "enum": [
+                  "PASS",
+                  "FAIL",
+                  "UNKNOWN"
+                ]
+              },
+              "coverage": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Coverage"
+                },
+                "minItems": 0
+              },
+              "deploymentConsistent": {
+                "enum": [
+                  "YES",
+                  "NO",
+                  "UNKNOWN"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "chunkIds",
+              "verdict",
+              "coverage",
+              "deploymentConsistent",
+              "reason"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "cycleId",
+        "caseId",
+        "groupId",
+        "packetHash",
+        "referenceHash",
+        "protocolHash",
+        "projectionHash",
+        "checkerId",
+        "execution",
+        "subsets"
+      ],
+      "additionalProperties": false
+    },
+    "DevProofPayload": {
+      "type": "object",
+      "properties": {
+        "caseId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "reference": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "packet": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "protocol": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Proof"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "caseId",
+        "reference",
+        "packet",
+        "protocol",
+        "groups"
+      ],
+      "additionalProperties": false
+    },
+    "DevResultsPayload": {
+      "type": "object",
+      "properties": {
+        "split": {
+          "const": "dev"
+        },
+        "configuration": {
+          "enum": [
+            "A",
+            "B"
+          ]
+        },
+        "references": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "cases": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "caseId": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]{0,63}$"
+              },
+              "packet": {
+                "$ref": "#/$defs/ArtifactRef"
+              },
+              "proof": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ArtifactRef"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "metrics": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Metrics"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "completions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "groupId": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                    },
+                    "rank": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 8
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "witness": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "minItems": 0
+                    }
+                  },
+                  "required": [
+                    "groupId",
+                    "rank",
+                    "witness"
+                  ],
+                  "additionalProperties": false
+                },
+                "minItems": 0
+              },
+              "legacyDiagnosticMetrics": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/LegacyDiagnosticMetrics"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "caseId",
+              "packet",
+              "proof",
+              "metrics",
+              "completions",
+              "legacyDiagnosticMetrics"
+            ],
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "metrics": {
+                      "type": "null"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "proof": {
+                      "type": "null"
+                    },
+                    "completions": {
+                      "maxItems": 0
+                    },
+                    "legacyDiagnosticMetrics": {
+                      "type": "null"
+                    }
+                  }
+                },
+                "else": {
+                  "properties": {
+                    "proof": {
+                      "$ref": "#/$defs/ArtifactRef"
+                    },
+                    "completions": {
+                      "minItems": 1
+                    },
+                    "legacyDiagnosticMetrics": {
+                      "$ref": "#/$defs/LegacyDiagnosticMetrics"
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "minItems": 80,
+          "maxItems": 80
+        },
+        "macro": {
+          "$ref": "#/$defs/Metrics"
+        },
+        "perThemeRecall": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "theme": {
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/$defs/Rational"
+              }
+            },
+            "required": [
+              "theme",
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 8,
+          "maxItems": 8
+        },
+        "legacyDiagnosticMetrics": {
+          "$ref": "#/$defs/LegacyDiagnosticMetrics"
+        }
+      },
+      "required": [
+        "split",
+        "configuration",
+        "references",
+        "cases",
+        "macro",
+        "perThemeRecall",
+        "legacyDiagnosticMetrics"
+      ],
+      "additionalProperties": false
+    },
+    "PacketInventoryRow": {
+      "type": "object",
+      "properties": {
+        "configuration": {
+          "enum": [
+            "A",
+            "B"
+          ]
+        },
+        "caseId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "originalPacket": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "packetAdoption": {
+          "$ref": "#/$defs/ArtifactRef"
+        }
+      },
+      "required": [
+        "configuration",
+        "caseId",
+        "originalPacket",
+        "packetAdoption"
+      ],
+      "additionalProperties": false
+    },
+    "PacketInventory": {
+      "type": "object",
+      "properties": {
+        "contractVersion": {
+          "const": "dev80-adoption-v1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "schemaVersion": {
+          "const": 4
+        },
+        "metricVersion": {
+          "const": "complete-group-v1"
+        },
+        "releaseAuthorized": {
+          "const": false
+        },
+        "kind": {
+          "const": "dev80-adopted-packet-inventory"
+        },
+        "proofConsumer": {
+          "$ref": "#/$defs/ProofConsumerIdentity"
+        },
+        "referenceMapping": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "adaptedReferences": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PacketInventoryRow"
+          },
+          "minItems": 160,
+          "maxItems": 160
+        }
+      },
+      "required": [
+        "contractVersion",
+        "cycleId",
+        "schemaVersion",
+        "metricVersion",
+        "releaseAuthorized",
+        "kind",
+        "proofConsumer",
+        "referenceMapping",
+        "adaptedReferences",
+        "rows"
+      ],
+      "additionalProperties": false
+    },
+    "DevProofLedger": {
+      "type": "object",
+      "properties": {
+        "contractVersion": {
+          "const": "dev80-adoption-v1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "schemaVersion": {
+          "const": 4
+        },
+        "metricVersion": {
+          "const": "complete-group-v1"
+        },
+        "releaseAuthorized": {
+          "const": false
+        },
+        "kind": {
+          "const": "dev80-adoption-proof-ledger"
+        },
+        "proofConsumer": {
+          "$ref": "#/$defs/ProofConsumerIdentity"
+        },
+        "referenceMapping": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "adaptedReferences": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "packetInventory": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "authorization": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "configuration": {
+          "enum": [
+            "A",
+            "B"
+          ]
+        },
+        "originalPacket": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "packetAdoption": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "payload": {
+          "$ref": "#/$defs/DevProofPayload"
+        }
+      },
+      "required": [
+        "contractVersion",
+        "cycleId",
+        "schemaVersion",
+        "metricVersion",
+        "releaseAuthorized",
+        "kind",
+        "proofConsumer",
+        "referenceMapping",
+        "adaptedReferences",
+        "packetInventory",
+        "authorization",
+        "configuration",
+        "originalPacket",
+        "packetAdoption",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    "DevResults": {
+      "type": "object",
+      "properties": {
+        "contractVersion": {
+          "const": "dev80-adoption-v1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "schemaVersion": {
+          "const": 4
+        },
+        "metricVersion": {
+          "const": "complete-group-v1"
+        },
+        "releaseAuthorized": {
+          "const": false
+        },
+        "kind": {
+          "const": "dev80-adoption-results"
+        },
+        "proofConsumer": {
+          "$ref": "#/$defs/ProofConsumerIdentity"
+        },
+        "referenceMapping": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "adaptedReferences": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "packetInventory": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "authorization": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "configuration": {
+          "enum": [
+            "A",
+            "B"
+          ]
+        },
+        "payload": {
+          "$ref": "#/$defs/DevResultsPayload"
+        },
+        "metricWireVersion": {
+          "const": "rational-pair-v1"
+        }
+      },
+      "required": [
+        "contractVersion",
+        "cycleId",
+        "schemaVersion",
+        "metricVersion",
+        "releaseAuthorized",
+        "kind",
+        "proofConsumer",
+        "referenceMapping",
+        "adaptedReferences",
+        "packetInventory",
+        "authorization",
+        "configuration",
+        "payload",
+        "metricWireVersion"
+      ],
+      "additionalProperties": false
+    },
+    "Rational": {
+      "type": "object",
+      "properties": {
+        "numerator": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "denominator": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "numerator",
+        "denominator"
+      ],
+      "additionalProperties": false,
+      "description": "Mandatory predicates: exact integer tokens (never bool, decimal/exponent, float), 0<=numerator<=denominator, gcd=1; zero is 0/1. JSON Schema alone is insufficient."
+    },
+    "LegacyDiagnosticMetrics": {
+      "type": "object",
+      "properties": {
+        "algorithmVersion": {
+          "const": "anchor-component-first-v1"
+        },
+        "authority": {
+          "const": "HISTORICAL_DIAGNOSTIC_ONLY"
+        },
+        "originalArtifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ArtifactRef"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "algorithmVersion",
+        "authority",
+        "originalArtifacts"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

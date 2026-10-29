@@ -10,6 +10,7 @@ public sealed class NodeRecord
 {
     public required string InputHash { get; set; }
     public required string SchemaHash { get; set; }
+    public string? InputPolicyVersion { get; set; }
     public NodeStatus Status { get; set; }
     public int Attempts { get; set; }
     public string? OutputHash { get; set; }
@@ -86,15 +87,16 @@ public sealed class RunLedger : IDisposable
         if (current.Generation != Owner.Generation || current.Token != Owner.Token) throw new InvalidOperationException("Stale owner generation fenced.");
     }
     public void Save() { AssertCurrent(); Wire.AtomicJson(statePath, State); }
-    public NodeRecord BindNode(string id, string inputHash, string schemaHash)
+    public NodeRecord BindNode(string id, string inputHash, string schemaHash, string? inputPolicyVersion = null)
     {
         AssertCurrent();
+        if (inputPolicyVersion is not (null or "dev-equivalence-input-v2")) throw new ArgumentException("Unknown frozen input policy.");
         if (State.Nodes.TryGetValue(id, out var node))
         {
-            if (node.InputHash != inputHash || node.SchemaHash != schemaHash) throw new InvalidOperationException("Frozen node inputs changed; use a new node/run.");
+            if (node.InputHash != inputHash || node.SchemaHash != schemaHash || node.InputPolicyVersion != inputPolicyVersion) throw new InvalidOperationException("Frozen node inputs or input policy changed; preserve this node/run.");
             return node;
         }
-        node = new NodeRecord { InputHash = inputHash, SchemaHash = schemaHash };
+        node = new NodeRecord { InputHash = inputHash, SchemaHash = schemaHash, InputPolicyVersion = inputPolicyVersion };
         State.Nodes.Add(id, node); Save(); return node;
     }
     public ActionRecord PrepareAction(string id, string kind, string payloadHash)

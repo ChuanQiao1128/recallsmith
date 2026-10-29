@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$ref": "#/$defs/EquivalenceSchedule",
+  "$defs": {
+    "ArtifactRef": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "additionalProperties": false
+    },
+    "EquivalenceSchedule": {
+      "type": "object",
+      "properties": {
+        "contractVersion": {
+          "const": "dev80-adoption-v1"
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "schemaVersion": {
+          "const": 4
+        },
+        "metricVersion": {
+          "const": "complete-group-v1"
+        },
+        "releaseAuthorized": {
+          "const": false
+        },
+        "kind": {
+          "const": "dev80-equivalence-schedule"
+        },
+        "candidateMapping": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "batches": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "batchOrdinal": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "caseIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                },
+                "minItems": 1,
+                "maxItems": 3
+              },
+              "projectionHash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "promptScalarCount": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 199999
+              }
+            },
+            "required": [
+              "batchOrdinal",
+              "caseIds",
+              "projectionHash",
+              "promptScalarCount"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 80
+        },
+        "inputPolicyVersion": {
+          "const": "dev-equivalence-input-v2"
+        },
+        "inputPolicy": {
+          "$ref": "#/$defs/ArtifactRef"
+        }
+      },
+      "required": [
+        "contractVersion",
+        "cycleId",
+        "schemaVersion",
+        "metricVersion",
+        "releaseAuthorized",
+        "kind",
+        "candidateMapping",
+        "batches",
+        "inputPolicyVersion",
+        "inputPolicy"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

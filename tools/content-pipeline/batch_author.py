@@ -53,9 +53,10 @@ def packet_for(root, corpus_root, catalogue, uid):
     goals = [g for g in catalogue['goals'] if g['stableUid'] == uid]
     if len(goals) != 1:
         raise ValueError('Missing or duplicate goal: ' + uid)
-    packet = load(uid_path(root, uid, 'packet.json'))
-    author.validate_packet(Path(root), Path(corpus_root), catalogue, goals[0], packet)
-    return packet
+    from semantic_gate_v4 import v4_required
+    packet = load(uid_path(root, uid, 'v4-packet.json' if v4_required(root) else 'packet.json'))
+    validated = author.validate_packet(Path(root), Path(corpus_root), catalogue, goals[0], packet)
+    return packet if validated is None else validated
 
 
 def make_plan(root, corpus_root, catalogue, config, validate_packets=True):
@@ -78,8 +79,19 @@ def make_plan(root, corpus_root, catalogue, config, validate_packets=True):
     existing = [c['stableUid'] for c in load(existing_path)['cards']]
     if len(existing) != 334 or len(set(existing)) != 334 or set(existing) != set(legacy):
         raise ValueError('Old334 config differs from the original existing-cards manifest')
+    from semantic_gate_v4 import v4_required, _fixed_author_roots, _authoring_operation_v4
+    if v4_required(root):
+        _fixed_author_roots(root, corpus_root)
+        with _authoring_operation_v4(catalogue) as validate:
+            packets = {goal['stableUid']: validate(goal, load(uid_path(root, goal['stableUid'], 'v4-packet.json')))
+                       for goal in catalogue['goals']}
+            return _plan_with_packets(root, catalogue, config, uids, first, existing_path, packets, 'v4-packet.json')
     packets = {uid: (packet_for(root, corpus_root, catalogue, uid) if validate_packets else
                      load(uid_path(root, uid, 'packet.json'))) for uid in uids}
+    return _plan_with_packets(root, catalogue, config, uids, first, existing_path, packets, 'packet.json')
+
+
+def _plan_with_packets(root, catalogue, config, uids, first, existing_path, packets, packet_filename):
     # Freeze greedy boundaries before any call, including the same first twelve canaries.
     groups = []
     for section in (first[:5], first[5:9], first[9:12], [uid for uid in uids if uid not in first]):
@@ -101,7 +113,8 @@ def make_plan(root, corpus_root, catalogue, config, validate_packets=True):
             'inputs': {uid: {'goalHash': object_hash(packets[uid]['goal']),
                             'packetHash': packets[uid]['packetHash'],
                             'packetObjectHash': object_hash(packets[uid]),
-                            'packetFileHash': digest(uid_path(root, uid, 'packet.json').read_bytes())} for uid in uids},
+                            'packetFileHash': packets[uid]['packetHash'] if packet_filename == 'v4-packet.json' else
+                                digest(uid_path(root, uid, packet_filename).read_bytes())} for uid in uids},
             'batches': [{'batchId': f'b{i + 1:03}', 'uids': group} for i, group in enumerate(groups)]}
     plan['planHash'] = object_hash(plan)
     return plan
@@ -140,11 +153,15 @@ def inventory(root, plan):
             if any(p.name not in allowed or p.is_symlink() for p in item.iterdir()):
                 raise ValueError('Unknown stage namespace in ' + item.name)
     per_card = path(root, 'authoring')
+    from semantic_gate_v4 import v4_required
+    allowed_inputs = {'packet.json', 'candidate.json', 'review.json', 'verified.json'}
+    if v4_required(root):
+        allowed_inputs |= {'v4-packet.json', 'v4-retrieval.json', 'request.json', 'report.json', 'accepted.json'}
     if per_card.exists():
         for folder in per_card.iterdir():
             if folder.name not in plan['inputs'] or not folder.is_dir() or folder.is_symlink():
                 raise ValueError('Unknown card namespace')
-            if any(p.name not in {'packet.json', 'candidate.json', 'review.json', 'verified.json'}
+            if any(p.name not in allowed_inputs
                    or p.is_symlink() for p in folder.iterdir()):
                 raise ValueError('Per-card execution namespace would bypass batch budget')
 
@@ -438,6 +455,14 @@ def summary(root, corpus_root, catalogue):
 
 def require_rag_gate(root, corpus_root, catalogue, gate_path):
     """Recheck real report bytes and holdout measurements, never accept PASS alone."""
+    from semantic_gate_v4 import v4_required, require_rag_gate_v4
+    if v4_required(root, gate_path=gate_path):
+        import trusted_custody_v4 as custody
+        if (Path(root).resolve() != Path(custody.C) or
+                Path(corpus_root).resolve() != Path(custody.C + '/retrieval-v3') or
+                Path(gate_path).resolve() != Path(custody.E + '/full-rag-gate.json')):
+            raise ValueError('Fixed v4 roots and full semantic gate path required')
+        return require_rag_gate_v4(catalogue)
     if Path(gate_path).resolve() != path(root, 'evaluation/full-rag-gate.json'):
         raise ValueError('Use the original full-RAG gate under this control root')
     gate = load(gate_path)

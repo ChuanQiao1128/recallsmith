@@ -2,6 +2,28 @@
 
 The authoring and release safeguards are implemented. The 337-card release remains blocked by the first actual RAG holdout and evidence-readiness evaluation. There are 337 reviewed learning objectives, including all 334 legacy StableUids; new card bodies and per-card semantic reviews are both **0/337**.
 
+## Continuation — 29 October 2026
+
+Offline v4 composition now checks frozen packet/reference/protocol bytes, raw
+execution records, both semantic checker streams, and exact rational group
+metrics. A separate offline reader/judge composer has passed its scoped
+functional review. Neither module authorizes model calls or card generation.
+
+The proposed DEV-only adoption amendment has not passed its final review. Its
+remaining finding, F05, requires an explicit exact metric serialization rule:
+finite JSON numbers cannot represent values such as 1/3 exactly. Supervisor
+authority, raw-execution registration and custodian evidence interfaces also
+need concrete definitions before a successful authoritative gate is implemented.
+The common source-boundary review and actual isolation evidence remain pending.
+
+A deterministic converter has prepared an **UNREVIEWED** view of the existing
+80 observed cases and 148 required groups. It preserves 298 mandatory text
+fields and all 38 optional groups, including the original interpretation/context
+metadata. This is candidate preparation, not completed source-only equivalence
+review, semantic acceptance, or a new blind test. Historical inputs remain
+unchanged; both A/B retrieval observation slots remain consumed. No new content
+evaluation call, blind case, card body, simulation or publication occurred.
+
 ## Actual RAG results — 28 October 2026
 
 The frozen vector profile was evaluated once on 32 positive and eight negative holdout cases. Required-group Recall@8 was **0.7078125** against 0.90; MRR@8 was **0.5911458333** against 0.75. Several themes also missed the 0.75 floor. This observed set is now development/diagnostic material for future revisions and cannot be reused as an unseen test.

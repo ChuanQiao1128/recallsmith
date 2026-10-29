@@ -1,0 +1,40 @@
+{
+  "status": "static_sizing_only",
+  "encoding": "subset-mask-v1",
+  "configurations": {
+    "A": {
+      "requiredGroups": 148,
+      "plannedCalls": 296,
+      "explicitIndependentDecisions": 63040,
+      "maxPromptScalars": 17076,
+      "maxSyntheticAllUnknownResponseBytes": 28477,
+      "modelExecuted": false
+    },
+    "B": {
+      "requiredGroups": 148,
+      "plannedCalls": 296,
+      "explicitIndependentDecisions": 70392,
+      "maxPromptScalars": 15935,
+      "maxSyntheticAllUnknownResponseBytes": 28477,
+      "modelExecuted": false
+    }
+  },
+  "totalPlannedCalls": 592,
+  "oldPlannedCalls": 33508,
+  "totalIndependentDecisions": 133432,
+  "promptScalarsExclusive": 60000,
+  "rawOutputByteCap": 48000,
+  "contentModelCalls": 0,
+  "actualOutputFit": "UNKNOWN",
+  "actualSemanticQuality": "UNKNOWN",
+  "actualRawExecutionVerification": "UNVERIFIED",
+  "sourceBoundaryReview": "UNKNOWN",
+  "releaseAuthorized": false,
+  "labelStatus": "Existing prose projection used for sizing only; no new validated atom labels or holdout created",
+  "schemaOrProtocolApproval": "Pending independent review and future real canary",
+  "inputs": {
+    "evaluation/references.json": "4b97d31214f5634917c82b22d50d1b6f6c004b9a1e78f88ccb18c221e394be24",
+    "retrieval-v3/corpus/chunks.json": "39ceae10af81b1a51bad07427b91fe6fda0f39443d50fef721071f9b6024c956",
+    "evidence/r4-observed80-diagnostic/results.json": "5b89fd0e4d2c39977ec4cc38cfedaf099984a6f2519d60c62fb1124579207ace"
+  }
+}

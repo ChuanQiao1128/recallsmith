@@ -21,7 +21,7 @@ public static class WorkbenchCli
         {
             if (args.Length == 0 || args[0] is not ("exec" or "resume" or "check")) throw new ArgumentException("Commands: exec --prompt FILE --schema FILE --output NEW_DIR; check --input JSON --schema FILE; resume --run ID. All require --control-root ABS_DIR.");
             var command = args[0]; var values = new Dictionary<string, string>(StringComparer.Ordinal);
-            var accepted = new HashSet<string> { "control-root", "prompt", "schema", "output", "input", "model", "workspace-root", "run", "node", "timeout-seconds", "otlp-endpoint", "stream" };
+            var accepted = new HashSet<string> { "control-root", "prompt", "schema", "output", "input", "model", "workspace-root", "run", "node", "timeout-seconds", "otlp-endpoint", "stream", "purpose", "input-policy-version" };
             for (var i = 1; i < args.Length; i += 2)
             {
                 if (!args[i].StartsWith("--", StringComparison.Ordinal) || i + 1 >= args.Length || !accepted.Contains(args[i][2..]) || !values.TryAdd(args[i][2..], args[i + 1])) throw new ArgumentException("Unknown, duplicate, or missing CLI option.");
@@ -34,6 +34,8 @@ public static class WorkbenchCli
             settings.Model = values.GetValueOrDefault("model", settings.Model);
             settings.AttemptDirectory = values.GetValueOrDefault("output");
             settings.WorkspaceRoot = values.GetValueOrDefault("workspace-root");
+            if (command != "exec" && (values.ContainsKey("purpose") || values.ContainsKey("input-policy-version"))) throw new ArgumentException("Input policy applies only to exec.");
+            settings.SelectInputPolicy(values.GetValueOrDefault("purpose"), values.GetValueOrDefault("input-policy-version"));
             if (values.TryGetValue("otlp-endpoint", out var otlp)) settings.OtlpEndpoint = otlp;
             if (values.TryGetValue("timeout-seconds", out var timeout)) settings.TimeoutSeconds = int.Parse(timeout, System.Globalization.CultureInfo.InvariantCulture);
             settings.Validate();
@@ -64,7 +66,8 @@ public static class WorkbenchCli
                 using var frozenSchema = JsonDocument.Parse(await File.ReadAllTextAsync(Required("schema"), cancel.Token));
                 var schemaText = frozenSchema.RootElement.GetRawText();
                 var input = await File.ReadAllTextAsync(Required(command == "exec" ? "prompt" : "input"), cancel.Token);
-                var node = ledger.BindNode(nodeId, Wire.Hash(input), Wire.Hash(schemaText));
+                var node = ledger.BindNode(nodeId, Wire.Hash(input), Wire.Hash(schemaText),
+                    settings.InputPolicy == WorkbenchInputPolicy.DevEquivalenceV2 ? "dev-equivalence-input-v2" : null);
                 if (node.Status == NodeStatus.Produced) { VerifyArtifact(node); Console.WriteLine("{\"status\":\"already_produced\"}"); return 0; }
                 if (command == "check")
                 {

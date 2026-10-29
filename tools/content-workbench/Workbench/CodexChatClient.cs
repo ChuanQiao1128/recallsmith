@@ -42,7 +42,7 @@ public sealed class CodexChatClient(ICodexExecutor executor, IOptions<WorkbenchO
         foreach (var property in typeof(ChatOptions).GetProperties())
             if (property.Name is not (nameof(ChatOptions.ModelId) or nameof(ChatOptions.ResponseFormat)) && property.GetValue(chatOptions) is not null)
                 throw new NotSupportedException($"Unsupported chat option: {property.Name}.");
-        return new FrozenRequest(text.Text, schema.GetRawText());
+        return new FrozenRequest(text.Text, schema.GetRawText(), options.Value.InputPolicy);
     }
     public object? GetService(Type serviceType, object? serviceKey = null)
     {

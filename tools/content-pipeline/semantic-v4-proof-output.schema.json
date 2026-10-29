@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "quotes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "sourceId": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "sourceVersion": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "chunkId": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "evidenceId": {
+            "type": "string",
+            "pattern": "^ev-[0-9a-f]{32}$"
+          },
+          "sourceStart": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sourceEnd": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "quote": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        },
+        "required": [
+          "sourceId",
+          "sourceVersion",
+          "chunkId",
+          "evidenceId",
+          "sourceStart",
+          "sourceEnd",
+          "quote"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "subsets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "mask": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 255
+          },
+          "verdict": {
+            "enum": [
+              "PASS",
+              "FAIL",
+              "UNKNOWN"
+            ]
+          },
+          "coverage": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "atomId": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                },
+                "quoteIndices": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "minItems": 1,
+                  "uniqueItems": true
+                },
+                "reason": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                }
+              },
+              "required": [
+                "atomId",
+                "quoteIndices",
+                "reason"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "deploymentConsistent": {
+            "enum": [
+              "YES",
+              "NO",
+              "UNKNOWN"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        },
+        "required": [
+          "mask",
+          "verdict",
+          "coverage",
+          "deploymentConsistent",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "maxItems": 255
+    }
+  },
+  "required": [
+    "quotes",
+    "subsets"
+  ],
+  "additionalProperties": false
+}
