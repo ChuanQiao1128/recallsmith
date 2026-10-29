@@ -18,6 +18,7 @@ but result/event equality preserves boolean/integer/decimal distinctions.
 """
 from decimal import Decimal, DecimalException
 from fractions import Fraction
+from functools import lru_cache
 import hashlib
 import json
 import math
@@ -231,16 +232,17 @@ def _validated_pins(trusted_pins):
     return pins, runtime
 
 
-def verify_execution_v4(output_dir, *, frozen_prompt, frozen_schema_bytes, trusted_pins):
+def verify_execution_v4(output_dir, *, frozen_prompt, frozen_schema_bytes, trusted_pins, input_policy=None):
     """Read original canonical files; no receipt paths or relocation exceptions."""
     _validated_pins(trusted_pins)
     root, output = _path(trusted_pins['controlRoot']), _path(os.fspath(output_dir))
     raw = _read_files(root, output)
     return _verify_execution_bytes_v4(raw, str(output), frozen_prompt=frozen_prompt,
-        frozen_schema_bytes=frozen_schema_bytes, trusted_pins=trusted_pins)
+                                      frozen_schema_bytes=frozen_schema_bytes, trusted_pins=trusted_pins,
+                                      input_policy=input_policy)
 
 
-def _verify_execution_bytes_v4(raw, output_dir, *, frozen_prompt, frozen_schema_bytes, trusted_pins):
+def _verify_execution_bytes_v4(raw, output_dir, *, frozen_prompt, frozen_schema_bytes, trusted_pins, input_policy=None):
     """Pure internal predicates over separately registered exact original bytes.
 
     Original path strings must come from supervisor registration. This helper does
@@ -253,18 +255,27 @@ def _verify_execution_bytes_v4(raw, output_dir, *, frozen_prompt, frozen_schema_
              all(type(raw[n]) is bytes and len(raw[n]) <= LIMITS[n] for n in LIMITS),
              'Exact bounded six raw byte files required')
     _require(all(_hash(raw[name]) == pins[name] for name in LIMITS), 'Externally pinned raw hash mismatch')
-    _require(type(frozen_prompt) is str and 0 < len(frozen_prompt) <= 60_000 and
+    _require(input_policy in (None, 'dev-equivalence-input-v2'), 'Unknown fixed input policy')
+    _require(type(frozen_prompt) is str and bool(frozen_prompt) and
              type(frozen_schema_bytes) is bytes and 0 < len(frozen_schema_bytes) <= LIMITS['schema.json'],
              'Frozen input bounds/type')
     prompt_bytes = frozen_prompt.encode('utf-8', errors='strict')
+    utf16_units = len(frozen_prompt.encode('utf-16-le', errors='strict')) // 2
+    _require((len(frozen_prompt) < 200_000 and utf16_units < 200_000) if input_policy else
+             (len(frozen_prompt) <= 60_000 and utf16_units <= 60_000), 'Frozen purpose/version input bound')
     _require(raw['schema.json'] == frozen_schema_bytes, 'Exact emitted schema bytes changed')
     _text(raw['stderr.log'])
     execution, invocation, result, schema = [_json(raw[n]) for n in
         ('execution.json', 'invocation.json', 'result.json', 'schema.json')]
     _require(all(type(v) is dict for v in (execution, invocation, result, schema)), 'JSON objects required')
-    _require(set(invocation) == {'requestedModel', 'requestedEffort', 'auth', 'inputHash', 'schemaHash',
+    invocation_fields = {'requestedModel', 'requestedEffort', 'auth', 'inputHash', 'schemaHash',
              'cli', 'cliVersion', 'runnerAssemblyHash', 'processHostHash', 'args', 'config', 'environmentNames',
-             'startedUtc'}, 'Unexpected invocation fields; environment values forbidden')
+             'startedUtc'}
+    if input_policy:
+        invocation_fields |= {'purpose', 'inputPolicyVersion'}
+        _require(invocation.get('purpose') == 'dev-equivalence' and invocation.get('inputPolicyVersion') == input_policy,
+                 'Purpose/version invocation marker mismatch')
+    _require(set(invocation) == invocation_fields, 'Unexpected invocation fields; environment values forbidden')
     _require(execution.get('success') is True and execution.get('failure') == 'none' and
              type(execution.get('exitCode')) is int and execution['exitCode'] == 0 and
              execution.get('phase') == 'execution' and 'output' in execution and execution['output'] is None,
@@ -303,6 +314,23 @@ def _verify_execution_bytes_v4(raw, output_dir, *, frozen_prompt, frozen_schema_
         _require(args[index] == '-c' and separator and key not in overrides, 'Duplicate/extra argument')
         overrides[key] = value
     _require(overrides == config, 'Config override mismatch')
+    try:
+        _compiled_schema(frozen_schema_bytes).validate(result)
+    except (ArithmeticError, TypeError) as exc:
+        raise ValueError('Unsupported exact schema arithmetic') from exc
+    call_id = _events(raw['events.jsonl'], result, execution['reportedModel'])
+    return {'rawReceiptIntegrityVerified': True, 'requestedModel': 'gpt-6-sol', 'requestedEffort': 'high',
+            'auth': 'chatgpt', 'reportedModel': execution['reportedModel'], 'callId': call_id,
+            'workspaceId': str(workspace), 'pinnedFileHashes': dict(pins), 'pinnedRuntime': dict(runtime),
+            'rawResultBytes': raw['result.json'], 'executionAuthenticity': 'HOST_RECORDS_ONLY',
+            'sourceReviewVerified': False, 'denialVerified': False, 'releaseAuthorized': False}
+
+
+@lru_cache(maxsize=64)
+def _compiled_schema(schema_bytes):
+    """Cache only schema compilation; every execution/result is still verified."""
+    schema = _json(schema_bytes)
+    _require(type(schema) is dict, 'Schema object required')
     # Follow schema-bearing positions, never property names or instance/annotation data.
     def schema_refs(value):
         if not isinstance(value, dict):
@@ -338,16 +366,6 @@ def _verify_execution_bytes_v4(raw, output_dir, *, frozen_prompt, frozen_schema_
         type(v) is int or isinstance(v, Decimal) and v == v.to_integral_value())
     exact_validator = jsonschema.validators.extend(validator,
         {k: exact_multiple for k in ('multipleOf', 'divisibleBy') if k in validator.VALIDATORS}, type_checker=types)
-    try:
-        exact_validator.check_schema(schema)
-        # Fix the selected dialect so recursive local refs cannot select the unextended class.
-        validation_schema = {k: v for k, v in schema.items() if k != '$schema'}
-        exact_validator(validation_schema, registry=Registry()).validate(result)
-    except (ArithmeticError, TypeError) as exc:
-        raise ValueError('Unsupported exact schema arithmetic') from exc
-    call_id = _events(raw['events.jsonl'], result, execution['reportedModel'])
-    return {'rawReceiptIntegrityVerified': True, 'requestedModel': 'gpt-6-sol', 'requestedEffort': 'high',
-            'auth': 'chatgpt', 'reportedModel': execution['reportedModel'], 'callId': call_id,
-            'workspaceId': str(workspace), 'pinnedFileHashes': dict(pins), 'pinnedRuntime': dict(runtime),
-            'rawResultBytes': raw['result.json'], 'executionAuthenticity': 'HOST_RECORDS_ONLY',
-            'sourceReviewVerified': False, 'denialVerified': False, 'releaseAuthorized': False}
+    exact_validator.check_schema(schema)
+    validation_schema = {k: v for k, v in schema.items() if k != '$schema'}
+    return exact_validator(validation_schema, registry=Registry())

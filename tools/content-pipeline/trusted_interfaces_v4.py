@@ -65,7 +65,18 @@ PERMISSION_PREREQUISITES = {
 CORE_MODULES = ('pipeline', 'evaluate', 'readiness', 'author', 'batch_author', 'model_dispatch',
     'curate', 'mcp_evidence', 'semantic_proof_v4', 'semantic_runtime_v4', 'semantic_readiness_v4',
     'dev_adoption_v4', 'proof_schedule_v4', 'proof_transport_v4', 'execution_receipt_v4',
-    'metric_wire_v4', 'trusted_interfaces_v4', 'trusted_custody_v4')
+    'metric_wire_v4', 'trusted_interfaces_v4', 'trusted_custody_v4', 'dev_gate_replay_v4',
+    'holdout_gate_replay_v4', 'semantic_gate_v4', 'author_execution', 'query_validation')
+C_ASSETS = ('SEMANTIC_V4_GATE_CONSUMERS.md', 'semantic-v4-equivalence-input-policy-v2.json',
+    'equivalence-instructions-v2.txt', 'semantic-v4-equivalence-output-v2.schema.json',
+    'semantic-v4-equivalence-schedule-v2.schema.json', 'test_dev_gate_replay_v4.py',
+    'test_dev_gate_fixtures_v4.py', 'test_full_gate_fixtures_v4.py', 'test_holdout_gate_fixtures_v4.py',
+    'test_semantic_gate_v4.py', 'private-label-instructions-v1.json',
+    'test_trusted_interfaces_v4.py', 'test_trusted_custody_v4.py', 'test_execution_receipt_v4.py',
+    'test_semantic_proof_v4.py', 'test_dev_adoption_v4.py')
+WORKBENCH_ASSETS = ('Workbench/Contracts.cs', 'Workbench/Program.cs', 'Workbench/CodexExecutor.cs',
+    'Workbench/CodexChatClient.cs', 'Workbench/Ledger.cs', 'Workbench/Telemetry.cs', 'Workbench/Workbench.csproj',
+    'Workbench.Tests/Program.cs', 'Workbench.Tests/Workbench.Tests.csproj', 'scripts/unix-process-host.py')
 
 
 def _require(condition, message):
@@ -245,9 +256,18 @@ def _validate_runtime_manifest(root, manifest, artifacts):
     required |= {R + '/tools/mcp-server/src/server.ts', R + '/tools/mcp-server/package-lock.json',
                  R + '/tools/content-workbench/Workbench/CodexExecutor.cs',
                  R + '/tools/content-workbench/Workbench/Workbench.csproj'}
+    required |= {P + '/' + name for name in C_ASSETS}
+    required |= {R + '/tools/content-workbench/' + name for name in WORKBENCH_ASSETS}
     _require(any('/tools/mcp-server/' in p and '/dist/' in p and p.endswith('.js')
                  for p in seen), 'Built MCP bundle missing')
     _require(required <= set(seen), 'Incomplete required consumer inventory')
+    required_tests = {P + '/' + name for name in C_ASSETS if name.startswith('test_')}
+    required_tests |= {R + '/tools/content-workbench/' + name for name in WORKBENCH_ASSETS
+                       if name.startswith('Workbench.Tests/')}
+    _require(all(seen[path]['category'] == 'test' for path in required_tests),
+             'Consumer regression/fixture sources must enter the test identity')
+    _require(seen[P + '/private-label-instructions-v1.json']['category'] == 'prompt',
+             'Private label instructions must enter the prompt identity')
     _require(any(e['category'] == 'dependency' for e in entries), 'Installed dependency inventory missing')
     _require(any(p.endswith(('.lock', 'lock.json', 'requirements.txt', 'requirements.lock.txt')) for p in seen), 'Dependency lockfile missing')
     route_entries = [entry for entry in entries if entry['role'] == 'model-contract']
@@ -353,7 +373,11 @@ def _validate_authorities(root, runtime, artifacts, node_names=None):
 def _validate_adoption_record(value, name):
     schema = _parse(_read_stable(str(CONTRACT_PATH)))
     try:
-        _VALIDATOR({'$ref': '#/$defs/' + name, '$defs': schema['$defs']}, registry=Registry()).validate(value)
+        if name == 'EquivalenceSchedule' and value.get('inputPolicyVersion') == 'dev-equivalence-input-v2':
+            schema = _parse(_read_stable(P + '/semantic-v4-equivalence-schedule-v2.schema.json'))
+            _VALIDATOR(schema, registry=Registry()).validate(value)
+        else:
+            _VALIDATOR({'$ref': '#/$defs/' + name, '$defs': schema['$defs']}, registry=Registry()).validate(value)
     except jsonschema.ValidationError as exc:
         raise ValueError('Invalid closed adoption ' + name) from exc
     return value
@@ -385,6 +409,28 @@ def _validate_authorization(root, runtime, authorization, artifacts):
         fixed |= {E + '/freeze.json'}
         if permission == 'HOLDOUT_EXECUTION':
             fixed |= {E + '/seal-receipt.json', E + '/claim.json', E + '/unseal.json'}
+            if authorization.get('contextVersion') == 'holdout-scope-inputs-v2':
+                from trusted_custody_v4 import _fixed, _registered
+                reference_ref, reference_raw = _fixed(root, E + '/holdout/references.json', artifacts)
+                released = _parse(_fixed(root, E + '/holdout/released-seal.json', artifacts)[1])
+                _require(reference_raw == _registered(root, released['labels'], artifacts),
+                         'Holdout scope references differ from verified released labels')
+                reference = _parse(reference_raw)
+                cases = reference.get('payload', reference).get('queries')
+                _require(type(cases) is list and len(cases) == 40 and
+                         len({c['id'] for c in cases}) == 40,
+                         'Holdout contextual authorization requires exact40 released cases')
+                fixed.add(reference_ref['path'])
+                for case in cases:
+                    cid = case['id']
+                    _require(type(cid) is str and re.fullmatch(r'[a-z][a-z0-9-]{0,63}', cid),
+                             'Invalid released holdout case ID')
+                    packet_ref, packet_raw = _fixed(root, E + '/holdout/packets/' + cid + '.json', artifacts)
+                    packet = _parse(packet_raw)
+                    _require(packet.get('identity') == runtime['identity'] and packet.get('kind') == 'packet' and
+                             packet.get('payload', {}).get('queryEn') == case['queryEn'],
+                             'Holdout contextual packet identity/case differs')
+                    fixed.add(packet_ref['path'])
     protocol = C + '/design/rag-v2-bounded/r4/semantic-protocol.md'
     fixed.add(protocol)
     # Prerequisite receipts and each of their exact current inputs are consumed.
@@ -499,7 +545,7 @@ def _snapshot_from_test_bytes(root, runtime_manifest, execution_registry, artifa
 
 
 def _read_root():
-    run = _parse(_read_stable(C + '/run.json'))
+    run = _parse(_read_stable(C + '/run.json', 16_000_000))
     _require(type(run) is dict and type(run.get('nodes')) is dict and
              'A3V4-trusted-root' in run['nodes'], 'Missing fixed supervisor trusted root')
     return _validate_record(run['nodes']['A3V4-trusted-root'], 'RootNode')
@@ -514,6 +560,16 @@ def _entry_limit(entry):
     if entry['artifact']['path'] == CORPUS + '/chunks.json':
         return 16_000_000
     return 512_000_000 if entry['category'] in ('binary', 'model', 'dependency') else 2_000_000
+
+
+def _registered_read_limit(ref, entries):
+    path = ref['path']
+    if path in entries:
+        _require(entries[path]['artifact'] == ref, 'Root/runtime duplicate reference differs')
+        return _entry_limit(entries[path])
+    if path in (T + '/runtime-manifest.json', T + '/execution-registry.json', E + '/structural-map.json'):
+        return 16_000_000
+    return LIMITS.get(Path(path).name, 2_000_000)
 
 
 def _prevalidate_registry_paths(root, registry):
@@ -555,6 +611,8 @@ def load_trusted_snapshot_v4():
         _ref(ref, artifacts)
     read(root['runtimeManifest'], 16_000_000)
     runtime = _validate_record(_parse(artifacts[root['runtimeManifest']['path']]), 'RuntimeManifest')
+    runtime_entries = {entry['artifact']['path']: entry for entry in runtime['entries']}
+    _require(len(runtime_entries) == len(runtime['entries']), 'Duplicate runtime path')
     read(root['executionRegistry'], 16_000_000)
     registry = _validate_record(_parse(artifacts[root['executionRegistry']['path']]), 'ExecutionRegistry')
     _prevalidate_registry_paths(root, registry)
@@ -563,7 +621,7 @@ def load_trusted_snapshot_v4():
     released_refs = [ref for ref in refs if _released_path(ref['path'])]
     for ref in refs:
         if not _released_path(ref['path']):
-            read(ref, LIMITS.get(Path(ref['path']).name, 2_000_000))
+            read(ref, _registered_read_limit(ref, runtime_entries))
     for entry in runtime['entries']:
         _require(not _released_path(entry['artifact']['path']), 'Released input cannot be runtime dependency')
         read(entry['artifact'], _entry_limit(entry))
@@ -585,7 +643,7 @@ def load_trusted_snapshot_v4():
 
 
 def _check_corpus_registration(runtime):
-    run = _parse(_read_stable(C + '/run.json'))
+    run = _parse(_read_stable(C + '/run.json', 16_000_000))
     registration = run.get('nodes', {}).get('A2R-corpus', {})
     _require(registration.get('status') == 'produced' and
              registration.get('corpusVersion') == runtime['identity']['corpusVersion'],
@@ -610,9 +668,7 @@ def _check_snapshot(snapshot):
     identities = set()
     entries = {entry['artifact']['path']: entry for entry in _thaw(snapshot.runtimeManifest)['entries']}
     for path, raw in artifacts.items():
-        limit = (_entry_limit(entries[path]) if path in entries else 16_000_000 if path in
-                 (T + '/runtime-manifest.json', T + '/execution-registry.json') else
-                 LIMITS.get(Path(path).name, 2_000_000))
+        limit = _registered_read_limit({'path': path, 'sha256': _hash(raw)}, entries)
         _require(_read_stable(path, limit, identities) == raw, 'Registered input changed; snapshot stale')
     _require(_digest(_read_root()) == snapshot.rootNodeHash, 'Supervisor root changed during consumption')
     return _thaw(snapshot.rootNode), _thaw(snapshot.runtimeManifest), artifacts
@@ -693,9 +749,23 @@ def _validate_selection_context(selection, results, verified_metrics, artifacts,
 
 
 def validate_selection_bridge_v4(snapshot):
-    """Refuse summary-only acceptance until Stage C supplies complete proof replay."""
+    """Compare A/B only after full immutable input and raw proof replay."""
+    root, runtime, artifacts = _check_snapshot(snapshot)
+    from dev_gate_replay_v4 import replay_dev_adoption_v4, replay_dev_results_v4
+    from trusted_custody_v4 import _fixed
+    registry = _thaw(snapshot.executionRegistry)
+    adoption = replay_dev_adoption_v4(root, runtime, artifacts, registry, 'DEV_PROOF_EXECUTION')
+    verified = {config: replay_dev_results_v4(root, runtime, artifacts, registry, config, adoption)
+                for config in ('A', 'B')}
+    selection = _parse(_fixed(root, E + '/selection.json', artifacts)[1])
+    review = next(binding for binding in root['authorities'] if binding['node'] == 'adoption-implementation-review')
+    _require(review['state'] == 'PASS' and review['acceptedReview'] is not None and all(
+        row['correctnessReview'] == review['acceptedReview'] for row in selection['payload']['evaluated']),
+        'Selection correctness reviews must match the current accepted implementation review')
+    winner = _validate_selection_context(selection, {c: v['record'] for c, v in verified.items()},
+               {c: v['metrics'] for c, v in verified.items()}, artifacts, runtime['identity'])
     _check_snapshot(snapshot)
-    raise ValueError('Full DEV semantic replay is required by Stage C; stored result summaries cannot authorize Selection')
+    return winner
 
 
 __all__ = ['load_trusted_snapshot_v4', 'require_authority_v4', 'registered_executions_v4',

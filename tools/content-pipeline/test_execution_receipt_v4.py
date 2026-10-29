@@ -138,6 +138,29 @@ class SyntheticReceiptTests(unittest.TestCase):
         self.reject(frozen_schema_bytes=self.schema.rstrip())
         self.reject(frozen_schema_bytes=self.schema.decode())
 
+    def test_versioned_equivalence_input_only_and_utf16_boundary(self):
+        from execution_receipt_v4 import _verify_execution_bytes_v4
+        self.prompt = 'SYNTHETIC large equivalence only ' + 'x' * 70000
+        self.execution['inputHash'] = self.invocation['inputHash'] = digest(self.prompt.encode())
+        self.invocation.update(purpose='dev-equivalence', inputPolicyVersion='dev-equivalence-input-v2')
+        self.write_fixture()
+        args = dict(frozen_prompt=self.prompt, frozen_schema_bytes=self.schema, trusted_pins=self.pins)
+        receipt = _verify_execution_bytes_v4(self.raw, str(self.output), input_policy='dev-equivalence-input-v2', **args)
+        self.assertEqual(receipt['rawResultBytes'], self.result)
+        with self.assertRaises(ValueError): _verify_execution_bytes_v4(self.raw, str(self.output), **args)
+        for marker in ('dev-proof', 'integration-canary', 'holdout-proof', 'holdout-readiness', None):
+            self.invocation['purpose'] = marker
+            self.write_fixture(); args['trusted_pins'] = self.pins
+            with self.assertRaises(ValueError):
+                _verify_execution_bytes_v4(self.raw, str(self.output), input_policy='dev-equivalence-input-v2', **args)
+        self.invocation['purpose'] = 'dev-equivalence'
+        for prompt in ('x' * 200000, '🦉' * 100000):
+            self.prompt = prompt
+            self.execution['inputHash'] = self.invocation['inputHash'] = digest(prompt.encode())
+            self.write_fixture(); args.update(frozen_prompt=prompt, trusted_pins=self.pins)
+            with self.assertRaises(ValueError):
+                _verify_execution_bytes_v4(self.raw, str(self.output), input_policy='dev-equivalence-input-v2', **args)
+
     def test_typed_execution_completion_and_bindings(self):
         original = copy.deepcopy(self.execution)
         mutations = [('success', 1), ('success', 'true'), ('failure', None), ('exitCode', False),

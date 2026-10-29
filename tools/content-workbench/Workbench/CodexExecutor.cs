@@ -17,7 +17,7 @@ public sealed class CodexExecutor(IOptions<WorkbenchOptions> options, ILogger<Co
     {
         settings.Validate();
         if (!OperatingSystem.IsMacOS()) throw new PlatformNotSupportedException("The bounded process host is currently validated for macOS only.");
-        if (string.IsNullOrWhiteSpace(request.Prompt) || request.Prompt.Length > 60_000) throw new ArgumentException("Frozen input must contain 1..60000 characters.");
+        Wire.ValidateInput(request);
         var schema = Wire.ParseSchema(request.Schema);
         var attempt = settings.AttemptDirectory ?? Path.Combine(settings.ControlRoot, "attempts", Guid.NewGuid().ToString("N"));
         RequireChildPath(settings.ControlRoot, attempt);
@@ -65,11 +65,17 @@ public sealed class CodexExecutor(IOptions<WorkbenchOptions> options, ILogger<Co
             foreach (var arg in new[] { "exec", "--ignore-user-config", "--ignore-rules", "--strict-config", "--skip-git-repo-check", "--ephemeral", "--json", "--color", "never", "-C", workspace, "-m", settings.Model, "--output-schema", schemaPath, "-o", Path.Combine(attempt, "result.pipe"), "-" }) info.ArgumentList.Add(arg);
             var config = RestrictedConfig(workspace);
             foreach (var (key, value) in config) { info.ArgumentList.Add("-c"); info.ArgumentList.Add(key + "=" + value); }
-            Wire.AtomicJson(Path.Combine(attempt, "invocation.json"), new
+            var invocation = JsonSerializer.SerializeToNode(new
             {
                 requestedModel = settings.Model, requestedEffort = "high", auth = "chatgpt", inputHash = Wire.Hash(request.Prompt), schemaHash = Wire.Hash(request.Schema),
                 cli = settings.CodexPath, cliVersion, runnerAssemblyHash = Wire.HashFile(typeof(CodexExecutor).Assembly.Location), processHostHash = Wire.HashFile(Path.Combine(AppContext.BaseDirectory, "unix-process-host.py")), args = info.ArgumentList.ToArray(), config, environmentNames = info.Environment.Keys.Order().ToArray(), startedUtc = DateTimeOffset.UtcNow
-            });
+            }, Wire.Json)!.AsObject();
+            if (request.InputPolicy == WorkbenchInputPolicy.DevEquivalenceV2)
+            {
+                invocation["purpose"] = "dev-equivalence";
+                invocation["inputPolicyVersion"] = "dev-equivalence-input-v2";
+            }
+            Wire.AtomicJson(Path.Combine(attempt, "invocation.json"), invocation);
             phase = "execution";
             var capture = await RunProcessAsync(info, request.Prompt, attempt, linked.Token, Remaining(), activityPath);
             exit = capture.ExitCode;

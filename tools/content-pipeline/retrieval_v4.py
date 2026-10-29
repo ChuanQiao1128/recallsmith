@@ -5,7 +5,7 @@ import hashlib
 import math
 import re
 
-from mcp_evidence import validate_goal
+from query_validation import validate_goal
 
 WS = ' \t\r\n\v\f'
 FLAGS = re.I | re.ASCII

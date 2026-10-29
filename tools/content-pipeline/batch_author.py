@@ -53,9 +53,10 @@ def packet_for(root, corpus_root, catalogue, uid):
     goals = [g for g in catalogue['goals'] if g['stableUid'] == uid]
     if len(goals) != 1:
         raise ValueError('Missing or duplicate goal: ' + uid)
-    packet = load(uid_path(root, uid, 'packet.json'))
-    author.validate_packet(Path(root), Path(corpus_root), catalogue, goals[0], packet)
-    return packet
+    from semantic_gate_v4 import v4_required
+    packet = load(uid_path(root, uid, 'v4-packet.json' if v4_required(root) else 'packet.json'))
+    validated = author.validate_packet(Path(root), Path(corpus_root), catalogue, goals[0], packet)
+    return packet if validated is None else validated
 
 
 def make_plan(root, corpus_root, catalogue, config, validate_packets=True):
@@ -438,6 +439,14 @@ def summary(root, corpus_root, catalogue):
 
 def require_rag_gate(root, corpus_root, catalogue, gate_path):
     """Recheck real report bytes and holdout measurements, never accept PASS alone."""
+    from semantic_gate_v4 import v4_required, require_rag_gate_v4
+    if v4_required(root, gate_path=gate_path):
+        import trusted_custody_v4 as custody
+        if (Path(root).resolve() != Path(custody.C) or
+                Path(corpus_root).resolve() != Path(custody.C + '/retrieval-v3') or
+                Path(gate_path).resolve() != Path(custody.E + '/full-rag-gate.json')):
+            raise ValueError('Fixed v4 roots and full semantic gate path required')
+        return require_rag_gate_v4(catalogue)
     if Path(gate_path).resolve() != path(root, 'evaluation/full-rag-gate.json'):
         raise ValueError('Use the original full-RAG gate under this control root')
     gate = load(gate_path)

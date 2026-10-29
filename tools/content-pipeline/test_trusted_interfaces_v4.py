@@ -376,6 +376,14 @@ def fixture():
                  'tools/content-workbench/Workbench/CodexExecutor.cs',
                  'tools/content-workbench/Workbench/Workbench.csproj'):
         add(trusted.R + '/' + path, b'future frozen fixture\n')
+    for name in trusted.C_ASSETS:
+        add(trusted.P + '/' + name, Path(trusted.P, name).read_bytes(),
+            'prompt' if name == 'private-label-instructions-v1.json' else
+            'test' if name.startswith('test_') else 'schema' if name.endswith('.json') else 'source')
+    for name in trusted.WORKBENCH_ASSETS:
+        path = trusted.R + '/tools/content-workbench/' + name
+        if not any(entry['artifact']['path'] == path for entry in entries):
+            add(path, Path(path).read_bytes(), 'test' if name.startswith('Workbench.Tests/') else 'source')
     add(trusted.R + '/tools/mcp-server/dist/index.js', b'future bundle\n', 'binary')
     add(trusted.P + '/semantic-v4-proof-output.schema.json',
         Path(__file__).with_name('semantic-v4-proof-output.schema.json').read_bytes(), 'schema', 'proof-output-schema')

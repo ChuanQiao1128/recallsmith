@@ -25,7 +25,7 @@ if (args.Length > 0 && args[0] == "controller-child")
     return await WorkbenchCli.RunAsync(["exec", "--control-root", args[1], "--prompt", args[3], "--schema", args[4], "--output", args[5], "--run", args[6], "--timeout-seconds", "5"]);
 }
 
-var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local/share/codex-workflows/recallsmith/aws-basics-bilingual-rag-release-20261028/evidence/workbench-canary", "tests-" + Guid.NewGuid().ToString("N"));
+var root = Path.Combine(OperatingSystem.IsMacOS() ? "/private/tmp" : Path.GetTempPath(), "recallsmith-workbench-tests-" + Guid.NewGuid().ToString("N"));
 Wire.PrivateDirectory(root);
 var fixture = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../fixtures/fake-codex.py"));
 if (!File.Exists(fixture)) fixture = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../fixtures/fake-codex.py"));
@@ -33,6 +33,42 @@ const string schema = "{\"type\":\"object\",\"properties\":{\"ok\":{\"const\":tr
 var tests = new List<(string Name, Func<Task> Run)>();
 var passed = 0;
 void Test(string name, Func<Task> body) => tests.Add((name, body));
+Test("fixed_equivalence_input_policy_and_legacy_bounds", () =>
+{
+    Wire.ValidateInput(new FrozenRequest(new string('x', 60_000), schema));
+    try { Wire.ValidateInput(new FrozenRequest(new string('x', 60_001), schema)); throw new Exception("Legacy bound bypassed"); }
+    catch (ArgumentException) { }
+    Wire.ValidateInput(new FrozenRequest(new string('x', 199_999), schema, WorkbenchInputPolicy.DevEquivalenceV2));
+    foreach (var prompt in new[] { new string('x', 200_000), string.Concat(Enumerable.Repeat("🦉", 100_000)) })
+    {
+        try { Wire.ValidateInput(new FrozenRequest(prompt, schema, WorkbenchInputPolicy.DevEquivalenceV2)); throw new Exception("Versioned bound bypassed"); }
+        catch (ArgumentException) { }
+    }
+    var policyOptions = new WorkbenchOptions();
+    policyOptions.SelectInputPolicy("dev-equivalence", "dev-equivalence-input-v2");
+    if (policyOptions.InputPolicy != WorkbenchInputPolicy.DevEquivalenceV2) throw new Exception("Exact policy unavailable");
+    foreach (var purpose in new[] { "dev-proof", "holdout-proof", "holdout-readiness", "integration-canary", "unknown" })
+    {
+        try { policyOptions.SelectInputPolicy(purpose, "dev-equivalence-input-v2"); throw new Exception("Cross-purpose policy bypassed"); }
+        catch (ArgumentException) { }
+    }
+    try { policyOptions.SelectInputPolicy("dev-equivalence", null); throw new Exception("Missing policy version accepted"); }
+    catch (ArgumentException) { }
+    try { Wire.ValidateInput(new FrozenRequest("\ud800", schema, WorkbenchInputPolicy.DevEquivalenceV2)); throw new Exception("Unpaired surrogate normalized"); }
+    catch (ArgumentException) { }
+    return Task.CompletedTask;
+});
+Test("node_resume_binds_exact_input_policy_without_reset", () =>
+{
+    using var ledger = RunLedger.Acquire(root, "synthetic-policy-freeze");
+    var node = ledger.BindNode("node", "input", "schema", "dev-equivalence-input-v2");
+    node.Attempts = 1; ledger.Save();
+    try { ledger.BindNode("node", "input", "schema"); throw new Exception("Policy downgrade accepted"); }
+    catch (InvalidOperationException) { }
+    if (ledger.BindNode("node", "input", "schema", "dev-equivalence-input-v2").Attempts != 1)
+        throw new Exception("Policy switch reset attempt count");
+    return Task.CompletedTask;
+});
 static void Check(bool condition, string message) { if (!condition) throw new Exception(message); }
 static T Throws<T>(Action action) where T : Exception
 {
@@ -78,6 +114,36 @@ Test("protocol_success_hashes_environment_and_unknown_usage", async () =>
         Check(unknown.Success && unknown.InputTokens is null && unknown.OutputTokens is null && unknown.ReportedModel is null, "Unknown values fabricated.");
     }
     finally { Environment.SetEnvironmentVariable("WORKBENCH_TEST_SECRET", null); }
+});
+Test("versioned_equivalence_producer_emits_explicit_marker", async () =>
+{
+    var prompt = JsonSerializer.Serialize(new { mode = "success", syntheticPadding = new string('x', 70_000) });
+    var result = await Executor().ExecuteAsync(new FrozenRequest(prompt, schema, WorkbenchInputPolicy.DevEquivalenceV2));
+    Check(result.Success, "Synthetic large-input producer failed.");
+    using var invocation = JsonDocument.Parse(File.ReadAllText(Path.Combine(result.AttemptDirectory, "invocation.json")));
+    Check(invocation.RootElement.GetProperty("purpose").GetString() == "dev-equivalence" &&
+          invocation.RootElement.GetProperty("inputPolicyVersion").GetString() == "dev-equivalence-input-v2", "Explicit producer policy marker missing.");
+    await ThrowsAsync<ArgumentException>(() => Executor().ExecuteAsync(new FrozenRequest(prompt, schema)));
+});
+Test("versioned_equivalence_cli_reaches_exact_producer_wire", async () =>
+{
+    var folder = Path.Combine(root, "synthetic-equivalence-cli"); Wire.PrivateDirectory(folder);
+    var promptPath = Path.Combine(folder, "prompt.txt"); var schemaPath = Path.Combine(folder, "schema.json");
+    var outputPath = Path.Combine(folder, "output");
+    await File.WriteAllTextAsync(promptPath, JsonSerializer.Serialize(new { mode = "success", syntheticPadding = new string('x', 70_000) }));
+    await File.WriteAllTextAsync(schemaPath, schema);
+    var previous = Environment.GetEnvironmentVariable("WORKBENCH_CodexPath");
+    Environment.SetEnvironmentVariable("WORKBENCH_CodexPath", fixture);
+    try
+    {
+        var code = await WorkbenchCli.RunAsync(["exec", "--control-root", root, "--prompt", promptPath,
+            "--schema", schemaPath, "--output", outputPath, "--purpose", "dev-equivalence",
+            "--input-policy-version", "dev-equivalence-input-v2"]);
+        Check(code == 0, "Synthetic versioned CLI request failed.");
+        using var invocation = JsonDocument.Parse(File.ReadAllText(Path.Combine(outputPath, "invocation.json")));
+        Check(invocation.RootElement.GetProperty("purpose").GetString() == "dev-equivalence", "CLI dropped purpose marker.");
+    }
+    finally { Environment.SetEnvironmentVariable("WORKBENCH_CodexPath", previous); }
 });
 Test("schema_protocol_tool_nonzero_and_quota_failures", async () =>
 {

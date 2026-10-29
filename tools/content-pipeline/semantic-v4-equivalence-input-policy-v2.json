@@ -1,0 +1,22 @@
+{
+  "kind": "dev-equivalence-input-policy",
+  "inputPolicyVersion": "dev-equivalence-input-v2",
+  "purpose": "dev-equivalence",
+  "maxPromptScalarsExclusive": 200000,
+  "maxPromptUtf16CodeUnitsExclusive": 200000,
+  "maxCasesPerBatch": 3,
+  "instructions": {
+    "path": "/Users/qc/src/recallsmith-aws-basics-delivery-20261028/tools/content-pipeline/equivalence-instructions-v2.txt",
+    "sha256": "cd9eb20d7f941dfe8be7c3f1e3f5b2c68a52fdf5d930e5703a5e5fd9668b242f"
+  },
+  "outputSchema": {
+    "path": "/Users/qc/src/recallsmith-aws-basics-delivery-20261028/tools/content-pipeline/semantic-v4-equivalence-output-v2.schema.json",
+    "sha256": "ec36f3c012df09117ca12f7acf7383b54ffec43aa7c5050dbdac45559635db3b"
+  },
+  "renderingVersion": "instructions-canonical-metadata-newline-canonical-projection-v1",
+  "releaseAuthorized": false,
+  "scheduleSchema": {
+    "path": "/Users/qc/src/recallsmith-aws-basics-delivery-20261028/tools/content-pipeline/semantic-v4-equivalence-schedule-v2.schema.json",
+    "sha256": "49d45675f82b8097c3455e5fe0bf04f25a7512c79f871a3a42c9abb696a3a3f3"
+  }
+}

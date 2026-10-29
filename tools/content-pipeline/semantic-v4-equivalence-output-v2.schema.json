@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$ref": "#/$defs/EquivalenceBatchOutput",
+  "$defs": {
+    "EquivalenceBatchOutput": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "dev80-source-equivalence-batch"
+        },
+        "batchOrdinal": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "projectionHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "cases": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "caseId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "classificationAndOptionalStatus": {
+                "enum": [
+                  "PASS",
+                  "FAIL",
+                  "UNKNOWN"
+                ]
+              },
+              "groups": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "groupId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "claim": {
+                      "enum": [
+                        "PASS",
+                        "FAIL",
+                        "UNKNOWN"
+                      ]
+                    },
+                    "necessaryScope": {
+                      "enum": [
+                        "PASS",
+                        "FAIL",
+                        "UNKNOWN"
+                      ]
+                    },
+                    "nestedScopeClaimAndNecessaryScope": {
+                      "enum": [
+                        "PASS",
+                        "FAIL",
+                        "UNKNOWN"
+                      ]
+                    },
+                    "anchorSets": {
+                      "enum": [
+                        "PASS",
+                        "FAIL",
+                        "UNKNOWN"
+                      ]
+                    },
+                    "representationOnly": {
+                      "enum": [
+                        "PASS",
+                        "FAIL",
+                        "UNKNOWN"
+                      ]
+                    },
+                    "reason": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "groupId",
+                    "claim",
+                    "necessaryScope",
+                    "nestedScopeClaimAndNecessaryScope",
+                    "anchorSets",
+                    "representationOnly",
+                    "reason"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "verdict": {
+                "enum": [
+                  "PASS",
+                  "FAIL",
+                  "UNKNOWN"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "caseId",
+              "classificationAndOptionalStatus",
+              "groups",
+              "verdict",
+              "reason"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 3
+        }
+      },
+      "required": [
+        "kind",
+        "batchOrdinal",
+        "projectionHash",
+        "cases"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

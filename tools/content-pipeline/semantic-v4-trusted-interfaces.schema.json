@@ -426,7 +426,9 @@
             "equivalence-instructions",
             "equivalence-output-schema",
             "model-contract",
-            "proof-output-schema"
+            "proof-output-schema",
+            "equivalence-input-policy",
+            "equivalence-schedule-schema"
           ]
         }
       },
@@ -952,6 +954,9 @@
         },
         "releaseAuthorized": {
           "const": false
+        },
+        "contextVersion": {
+          "const": "holdout-scope-inputs-v2"
         }
       },
       "required": [
@@ -967,7 +972,23 @@
         "prerequisites",
         "releaseAuthorized"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "contextVersion"
+            ]
+          },
+          "then": {
+            "properties": {
+              "permission": {
+                "const": "HOLDOUT_EXECUTION"
+              }
+            }
+          }
+        }
+      ]
     },
     "DenialAttempt": {
       "type": "object",

@@ -8,6 +8,16 @@ namespace ContentWorkbench;
 
 public sealed class WorkbenchOptions
 {
+    public WorkbenchInputPolicy InputPolicy { get; private set; } = WorkbenchInputPolicy.Legacy;
+    public void SelectInputPolicy(string? purpose, string? version)
+    {
+        InputPolicy = (purpose, version) switch
+        {
+            (null, null) => WorkbenchInputPolicy.Legacy,
+            ("dev-equivalence", "dev-equivalence-input-v2") => WorkbenchInputPolicy.DevEquivalenceV2,
+            _ => throw new ArgumentException("Unsupported purpose/input-policy pair.")
+        };
+    }
     public string ControlRoot { get; set; } = "";
     public string CodexPath { get; set; } = "/opt/homebrew/bin/codex";
     public string? AttemptDirectory { get; set; }
@@ -28,7 +38,8 @@ public sealed class WorkbenchOptions
 }
 
 public enum FailureKind { None, Cancelled, Timeout, PreflightTimeout, Authentication, Quota, Environment, ProcessExit, Protocol, Schema, ToolBoundary }
-public sealed record FrozenRequest(string Prompt, string Schema);
+public enum WorkbenchInputPolicy { Legacy, DevEquivalenceV2 }
+public sealed record FrozenRequest(string Prompt, string Schema, WorkbenchInputPolicy InputPolicy = WorkbenchInputPolicy.Legacy);
 public sealed record ExecutionResult(bool Success, FailureKind Failure, int? ExitCode, string AttemptDirectory,
     string InputHash, string SchemaHash, string? OutputHash, string RequestedModel, string? ReportedModel,
     long? InputTokens, long? OutputTokens, long ElapsedMs, string? Output, string? EventsHash = null, string? StderrHash = null, long? OutputBytes = null, string? Phase = null);
@@ -42,6 +53,19 @@ public sealed class ModelExecutionException(ExecutionResult result) : Exception(
 }
 public static class Wire
 {
+    public static void ValidateInput(FrozenRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Prompt)) throw new ArgumentException("Frozen input is empty.");
+        _ = new UTF8Encoding(false, true).GetByteCount(request.Prompt);
+        var scalars = request.Prompt.EnumerateRunes().Count();
+        var valid = request.InputPolicy switch
+        {
+            WorkbenchInputPolicy.Legacy => request.Prompt.Length <= 60_000 && scalars <= 60_000,
+            WorkbenchInputPolicy.DevEquivalenceV2 => request.Prompt.Length < 200_000 && scalars < 200_000,
+            _ => false
+        };
+        if (!valid) throw new ArgumentException("Frozen input exceeds its fixed purpose/version budget.");
+    }
     public static readonly JsonSerializerOptions Json = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase, Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower) } };
     public static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
     public static string HashFile(string path)

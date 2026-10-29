@@ -55,6 +55,32 @@ CORPUS = C + '/retrieval-v3/corpus'
 SCHEMA_PATH = Path(__file__).with_name('semantic-v4-trusted-interfaces.schema.json')
 # The distributed schema is a static runtime dependency, loaded once on import.
 _SCHEMA = _json(SCHEMA_PATH.read_bytes())
+EQUIVALENCE_POLICY_PATH = R + '/tools/content-pipeline/semantic-v4-equivalence-input-policy-v2.json'
+
+
+def _equivalence_policy(manifest, artifacts):
+    """Fixed versioned admission; callers cannot provide an arbitrary larger cap."""
+    entries = [e for e in manifest['entries'] if e['role'] == 'equivalence-input-policy']
+    if not entries:
+        return None
+    _require(len(entries) == 1 and entries[0]['category'] == 'protocol' and
+             entries[0]['artifact']['path'] == EQUIVALENCE_POLICY_PATH, 'Fixed equivalence policy required')
+    raw = _ref(entries[0]['artifact'], artifacts)
+    _require(raw == Path(EQUIVALENCE_POLICY_PATH).read_bytes(), 'Equivalence policy differs from actual fixed bytes')
+    policy = _parse(raw)
+    _require(policy['purpose'] == 'dev-equivalence' and policy['inputPolicyVersion'] == 'dev-equivalence-input-v2' and
+             type(policy['maxPromptScalarsExclusive']) is int and policy['maxPromptScalarsExclusive'] == 200000 and
+             type(policy['maxPromptUtf16CodeUnitsExclusive']) is int and policy['maxPromptUtf16CodeUnitsExclusive'] == 200000 and
+             policy['maxCasesPerBatch'] == 3, 'Unsupported equivalence policy')
+    for key, role, category in (('instructions', 'equivalence-instructions', 'prompt'),
+                                ('outputSchema', 'equivalence-output-schema', 'schema'),
+                                ('scheduleSchema', 'equivalence-schedule-schema', 'schema')):
+        found = [e for e in manifest['entries'] if e['role'] == role]
+        _require(len(found) == 1 and found[0]['category'] == category and
+                 found[0]['artifact'] == policy[key] and
+                 _ref(policy[key], artifacts) == Path(policy[key]['path']).read_bytes(),
+                 'Fixed versioned equivalence template/schema missing or changed')
+    return policy
 
 
 def _core():
@@ -262,7 +288,7 @@ def _cli(manifest, invocation):
     _require(len(paths) == 1 and invocation.get('cli') == paths[0], 'Actual registered CLI path required')
 
 
-def _proof_plan(root, manifest, entry, artifacts):
+def _proof_plan(root, manifest, entry, artifacts, corpus=None):
     """Rebuild compact proof calls from exact packet/reference input bytes."""
     from proof_transport_v4 import compact_schedule
     c, scope = _core(), entry['scope']
@@ -280,7 +306,7 @@ def _proof_plan(root, manifest, entry, artifacts):
     _require(query == case['queryEn'], 'Packet/reference query changed')
     evidence = packet['evidence']
     from semantic_proof_v4 import _packet
-    originals, sources = c._corpus_maps(manifest, artifacts)
+    originals, sources = c._corpus_maps(manifest, artifacts) if corpus is None else corpus
     _packet(evidence, originals, sources)
     plan = compact_schedule(case['id'], query, groups[0], evidence, originals)
     calls = [x for x in plan['calls'] if x['checkerId'] == entry['role']]
@@ -295,6 +321,7 @@ def validate_execution_registry_v4(root, runtime_manifest, registry, artifacts):
     c._validate_record(registry, 'ExecutionRegistry')
     keys, outputs, calls, workspaces, group_batches = set(), set(), set(), set(), {}
     authorizations = {}
+    corpus = None
     for entry in registry['entries']:
         purpose, scope, ordinal = entry['purpose'], entry['scope'], entry['batchOrdinal']
         _require(purpose in PERMISSIONS, 'Private label execution forbidden in public registry')
@@ -344,12 +371,16 @@ def validate_execution_registry_v4(root, runtime_manifest, registry, artifacts):
                      [scope['reference'], scope['protocol']]), 'Authorization does not bind exact scope inputs')
         batch_key = (purpose, scope['configuration'], tuple(scope['caseIds']), scope['groupId'])
         if purpose in ('dev-proof', 'holdout-proof'):
-            planned, count = _proof_plan(root, runtime_manifest, entry, artifacts)
+            if corpus is None:
+                corpus = c._corpus_maps(runtime_manifest, artifacts)
+            planned, count = _proof_plan(root, runtime_manifest, entry, artifacts, corpus)
             _require(prompt == planned['prompt'] and scope['projectionHash'] == planned['projectionHash'],
                      'Proof prompt/projection differs from rebuilt schedule')
             group_batches[batch_key] = count
+        policy = _equivalence_policy(runtime_manifest, artifacts) if purpose == 'dev-equivalence' else None
         receipt = _verify_execution_bytes_v4(raw, output, frozen_prompt=prompt,
-            frozen_schema_bytes=raw['schema.json'], trusted_pins=entry['trustedPins'])
+            frozen_schema_bytes=raw['schema.json'], trusted_pins=entry['trustedPins'],
+            input_policy=policy['inputPolicyVersion'] if policy else None)
         invocation = c._parse(raw['invocation.json'])
         _require(_utc(auth['observedUtc']) < _utc(invocation.get('startedUtc')) <= _utc(entry['observedUtc']),
                  'Public execution authorization must predate start; observation must not precede start')
@@ -371,9 +402,17 @@ def _validate_equivalence_scopes(root, manifest, registry, artifacts):
     entries = [x for x in registry['entries'] if x['purpose'] == 'dev-equivalence']
     if not entries:
         return
+    policy = _equivalence_policy(manifest, artifacts)
     _, contract_raw = _fixed(root, c.R + '/tools/content-pipeline/semantic-v4-adoption-contract.json', artifacts)
     contract = c._parse(contract_raw)
     def validate(value, name):
+        if name == 'EquivalenceSchedule' and policy:
+            schema = c._parse(c._ref(policy['scheduleSchema'], artifacts))
+            c._VALIDATOR(schema, registry=Registry()).validate(value)
+            _require(value['inputPolicyVersion'] == policy['inputPolicyVersion'] and
+                     value['inputPolicy'] == next(e['artifact'] for e in manifest['entries']
+                        if e['role'] == 'equivalence-input-policy'), 'Schedule policy binding differs')
+            return
         c._VALIDATOR({'$ref': '#/$defs/' + name, '$defs': contract['$defs']}, registry=Registry()).validate(value)
     _, schedule_raw = _fixed(root, c.D + '/reviews/schedule.json', artifacts)
     schedule = c._parse(schedule_raw)
@@ -435,7 +474,9 @@ def _validate_equivalence_scopes(root, manifest, registry, artifacts):
         chosen = None
         for size in range(1, min(3, len(original_cases) - start) + 1):
             built = build(start, size, ordinal)
-            if len(built[2]) < 60000:
+            if ((len(built[2]) < policy['maxPromptScalarsExclusive'] and
+                 len(built[2].encode('utf-16-le')) // 2 < policy['maxPromptUtf16CodeUnitsExclusive'])
+                    if policy else len(built[2]) < 60000):
                 chosen = built
         _require(chosen is not None, 'One-case equivalence prompt exceeds limit')
         expected.append(chosen)
