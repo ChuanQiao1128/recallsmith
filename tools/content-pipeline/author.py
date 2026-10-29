@@ -171,7 +171,9 @@ def validate_packet(root, corpus_root, catalogue, goal, packet):
 def one(args, goal, catalogue):
     folder = args.root / 'authoring' / goal['stableUid']
     from semantic_gate_v4 import v4_required
-    packet = load(folder / ('v4-packet.json' if v4_required(args.root) else 'packet.json'))
+    v4 = v4_required(args.root)
+    packet_path = folder / ('v4-packet.json' if v4 else 'packet.json')
+    packet = load(packet_path)
     validated = validate_packet(args.root, args.corpus_root, catalogue, goal, packet)
     if validated is not None:
         packet = validated
@@ -180,7 +182,7 @@ def one(args, goal, catalogue):
         prompt = GENERATE + canonical(packet)
         if repair:
             prompt += '\nREPAIR ONLY THESE ISSUES, RETURN THE COMPLETE REVISED CARD:\n' + canonical(repair)
-        candidate = invoke(args, folder, 'generate', attempt, prompt, load(SCHEMAS / 'card.json'))
+        candidate = invoke(args, folder, 'generate', attempt, prompt, load(SCHEMAS / 'card.json'), review_packet=packet)
         validation_error = None
         try:
             structural = validate_card(packet, candidate)
@@ -192,9 +194,9 @@ def one(args, goal, catalogue):
         else:
             save(folder / f'validation-{attempt}.json', structural)
             review_prompt = REVIEW + canonical({'packet': packet, 'candidate': candidate})
-            review = invoke(args, folder, 'review', attempt, review_prompt, load(SCHEMAS / 'review.json'))
+            review = invoke(args, folder, 'review', attempt, review_prompt, load(SCHEMAS / 'review.json'), review_packet=packet)
             if validate_review(packet, review):
-                verified = {'stableUid': goal['stableUid'], 'packetHash': digest((folder / 'packet.json').read_bytes()),
+                verified = {'stableUid': goal['stableUid'], 'packetHash': packet['packetHash'] if v4 else digest(packet_path.read_bytes()),
                             'candidateHash': digest((folder / f'generate-{attempt}/result.json').read_bytes()),
                             'reviewHash': digest((folder / f'review-{attempt}/result.json').read_bytes()),
                             'generationAttempt': f'generate-{attempt}', 'reviewAttempt': f'review-{attempt}',

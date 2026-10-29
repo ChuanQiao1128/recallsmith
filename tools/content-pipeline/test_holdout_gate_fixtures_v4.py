@@ -289,6 +289,15 @@ def populate_holdout(f, mutation=None):
             'objectiveEn': 'SYNTHETIC complete learning objective', 'objectiveZh': '合成测试目标', 'lessonOrdinal': 1}
     f.catalogue = {'goals': [goal]}; f.catalogue['curriculumHash'] = core._digest(f.catalogue)
     f.put(core.C + '/curriculum/catalogue.json', f.catalogue)
+    f.goal_wrapper = register_authoring_goal(f, goal)
+    f.finish()
+    return f
+
+
+def register_authoring_goal(f, goal):
+    base = core.C + '/authoring/' + goal['stableUid']
+    map_ref = f.ref(core.E + '/structural-map.json')
+    registration = f.ref(core.E + '/registration.json')
     # Capture the real pure A4 result from temporary in-memory queues; never persist them.
     goal_evidence, goal_trace = pack([[{'chunkId': f.seed['chunkId'], 'score': 1}]], f.structural, 1)
     assert goal_evidence == [f.seed] and goal_trace == [{'form': 0, 'seed': f.seed['chunkId'],
@@ -297,39 +306,124 @@ def populate_holdout(f, mutation=None):
         'plan': plan_query(goal['retrievalQueryEn'], f.ref(core.E + '/profiles/A.json')), 'profile': f.ref(core.E + '/profiles/A.json'),
         'map': map_ref, 'evidence': goal_evidence, 'trace': goal_trace}
     response['queryPlanHash'] = core._digest(response['plan'])
-    retrieval = f.put(core.C + '/authoring/synthetic-goal/v4-retrieval.json', response)
-    f.goal_wrapper = {**common('trusted-v4-goal-packet'), 'schemaVersion': 4, 'identity': f.manifest['identity'],
+    retrieval = f.put(base + '/v4-retrieval.json', response)
+    wrapper = {**common('trusted-v4-goal-packet'), 'schemaVersion': 4, 'identity': f.manifest['identity'],
         'goalUid': goal['stableUid'], 'goalHash': core._digest(goal), 'curriculum': f.ref(core.C + '/curriculum/catalogue.json'),
         'curriculumHash': f.catalogue['curriculumHash'], 'query': goal['retrievalQueryEn'], 'retrieval': retrieval,
         'registration': registration, 'gate': f.ref(core.E + '/full-rag-gate.json')}
-    wrapper_ref = f.put(core.C + '/authoring/synthetic-goal/v4-packet.json', f.goal_wrapper)
+    wrapper_ref = f.put(base + '/v4-packet.json', wrapper)
     from semantic_gate_v4 import GOAL_RULES
-    base = core.C + '/authoring/synthetic-goal'
     evidence = {
-        'goal-query-binding': [f.goal_wrapper['curriculum'], wrapper_ref, retrieval],
-        'selected-profile-map': [registration, retrieval, response['profile'], map_ref, f.goal_wrapper['gate']],
+        'goal-query-binding': [wrapper['curriculum'], wrapper_ref, retrieval],
+        'selected-profile-map': [registration, retrieval, response['profile'], map_ref, wrapper['gate']],
         'original-chunk-equality': [retrieval, f.root['runtimeManifest']],
         'a4-packet-trace': [retrieval, registration, f.root['runtimeManifest']]}
     outcomes = [{'ruleId': rule, 'outcome': 'PASS', 'evidence': evidence[rule],
                  'reason': 'SYNTHETIC supervisor-observed deterministic capture'} for rule in GOAL_RULES]
-    inputs = sorted([f.root['runtimeManifest'], wrapper_ref, f.goal_wrapper['curriculum'], retrieval,
-                     registration, f.goal_wrapper['gate'], response['profile'], map_ref], key=lambda r: r['path'])
+    inputs = sorted([f.root['runtimeManifest'], wrapper_ref, wrapper['curriculum'], retrieval,
+                     registration, wrapper['gate'], response['profile'], map_ref], key=lambda r: r['path'])
     request = {k: v for k, v in common('trusted-review-request').items() if k != 'releaseAuthorized'}
     request.update(node='semantic-gate', producerTask='synthetic-capture-producer', ruleIds=list(GOAL_RULES),
                    boundInputs=inputs, requestText='SYNTHETIC exact in-memory retrieval capture checks; no retrieval executed')
     request_ref = f.put(base + '/request.json', request)
     report_ref = f.put(base + '/report.json', {'kind': 'deterministic-goal-retrieval-v1', 'goalUid': goal['stableUid'],
-        'goalHash': f.goal_wrapper['goalHash'], 'response': retrieval, 'profile': response['profile'], 'map': map_ref,
-        'gate': f.goal_wrapper['gate'], 'runtimeManifest': f.root['runtimeManifest'], 'ruleOutcomes': outcomes})
+        'goalHash': wrapper['goalHash'], 'response': retrieval, 'profile': response['profile'], 'map': map_ref,
+        'gate': wrapper['gate'], 'runtimeManifest': f.root['runtimeManifest'], 'ruleOutcomes': outcomes})
     f.put(base + '/accepted.json', {**common('trusted-v4-accepted-review'), 'node': 'semantic-gate',
         'rawRequest': request_ref, 'rawReport': report_ref, 'supervisorTask': f.root['supervisorTask'],
         'observedTask': 'synthetic-independent-capture', 'observedModel': 'synthetic-deterministic-producer',
         'observedEffort': 'high', 'observedUtc': '2026-10-29T01:13:00Z', 'context': 'deterministic',
         'boundInputs': inputs, 'runtimeManifest': f.root['runtimeManifest'], 'identity': f.manifest['identity'],
         'ruleOutcomes': outcomes, 'limitations': [], 'accepted': 'PASS'})
-    f.finish()
-    return f
+    return wrapper
 
 
 def full_fixture(mutation=None):
     f = FullFixture(); f.sync_runtime(); f.install_reviews(); populate_dev(f); return populate_holdout(f, mutation)
+
+
+def authoring337_fixture(f):
+    original = f.catalogue['goals'][0]
+    goals = [dict(original, stableUid=original['stableUid'] if n == 0 else f'synthetic-goal-{n:03d}',
+                  lessonOrdinal=n + 1) for n in range(337)]
+    f.catalogue = {'goals': goals}; f.catalogue['curriculumHash'] = core._digest(f.catalogue)
+    f.put(core.C + '/curriculum/catalogue.json', f.catalogue)
+    f.goal_wrappers = {g['stableUid']: register_authoring_goal(f, g) for g in goals}
+    f.goal_wrapper = f.goal_wrappers[goals[0]['stableUid']]
+    uids = [g['stableUid'] for g in goals]
+    f.put(core.C + '/curriculum/existing-cards.json', {'cards': [{'stableUid': uid} for uid in uids[:334]]})
+    f.batch_config = {'starters': uids[:5],
+        'domainCanary': dict(zip(('cloud', 'networking', 'messaging', 'operations'), uids[5:9])),
+        'edgeCanary': dict(zip(('rdsStandby', 'rdsReadReplica', 's3Acceleration'), uids[9:12])),
+        'legacyUids': uids[:334]}
+    f.finish(); return f
+
+
+def synthetic_author_transport(f, mapping, packet, repair=False):
+    """Preseed actual six-file fixtures; a Temp CLI only checks/replays transport."""
+    from pathlib import Path
+    import author
+    from execution_receipt_v4 import _verify_execution_bytes_v4
+    uid = packet['goal']['stableUid']; source = packet['evidence'][0]
+    english = {'question': 'Which SYNTHETIC source applies?', 'answer': 'SYNTHETIC fixture fact.',
+        'reason': 'SYNTHETIC fixture reason.', 'examPurpose': 'SYNTHETIC fixture purpose.', 'boundary': '', 'frontHelp': []}
+    chinese = {'question': '哪个合成来源适用？', 'answer': '合成测试事实。', 'reason': '合成测试理由。',
+        'examPurpose': '合成测试目的。', 'boundary': '', 'frontHelp': []}
+    card = {'conceptId': uid, 'status': 'draft', 'en': english, 'zh': chinese,
+        'primaryEvidenceId': source['evidenceId'], 'warnings': [], 'claims': [
+            {'field': field, 'evidence': [{'evidenceId': source['evidenceId'], 'quote': source['text'][:64]}]
+             if field not in ('boundary', 'frontHelp') else []} for field in author.FIELDS]}
+    review = {'conceptId': uid, 'verdict': 'pass', 'checks': {field: True for field in author.CHECKS},
+        'claimChecks': [{'field': field, 'verdict': 'supported', 'reason': 'SYNTHETIC raw review only'} for field in author.FIELDS], 'findings': []}
+    first_review = copy.deepcopy(review)
+    if repair:
+        first_review['verdict'] = 'fail'; first_review['checks']['necessaryScope'] = False
+        first_review['findings'] = [{'severity': 'major', 'field': 'answer', 'message': 'SYNTHETIC targeted repair fixture'}]
+    folder = Path(core.C) / 'authoring' / uid
+    card_schema = json.loads((author.SCHEMAS / 'card.json').read_bytes())
+    review_schema = json.loads((author.SCHEMAS / 'review.json').read_bytes())
+    stages = [('generate', 1, author.GENERATE + canonical(packet), card_schema, card),
+              ('review', 1, author.REVIEW + canonical({'packet': packet, 'candidate': card}), review_schema, first_review)]
+    if repair:
+        f.synthetic_repair_prompt = author.GENERATE + canonical(packet) + '\nREPAIR ONLY THESE ISSUES, RETURN THE COMPLETE REVISED CARD:\n' + canonical({'candidate': card, 'independentReview': first_review})
+        f.synthetic_rereview_prompt = author.REVIEW + canonical({'packet': packet, 'candidate': card})
+        stages += [('generate', 2, f.synthetic_repair_prompt, card_schema, card),
+                   ('review', 2, f.synthetic_rereview_prompt, review_schema, review)]
+    for stage, attempt, prompt, schema, result in stages:
+        f._raw_counter += 1
+        output = folder / (stage + '-' + str(attempt))
+        files, _, _ = f.raw_files(str(output), prompt, schema, result, '2026-10-29T02:00:00Z')
+        schema_bytes = json.dumps(schema, ensure_ascii=False, indent=2).encode()
+        receipt = _verify_execution_bytes_v4(files, str(output), frozen_prompt=prompt, frozen_schema_bytes=schema_bytes,
+            trusted_pins={'controlRoot': core.C, 'expectedFileHashes': {n: core._hash(v) for n, v in files.items()}, 'runtime': f.manifest['runtime']})
+        assert receipt['rawReceiptIntegrityVerified'] and receipt['reportedModel'] is None
+        output.mkdir(parents=True, exist_ok=True)
+        for name, value in files.items(): (output / name).write_bytes(value)
+    physical_control = mapping[core.C + '/run.json'].parent
+    script = physical_control / 'SYNTHETIC-transport.py'
+    calls = physical_control / 'SYNTHETIC-transport-calls.jsonl'
+    script.write_text('''#!/usr/bin/env python3
+import hashlib,json,sys
+from pathlib import Path
+logical = ''' + repr(core.C) + '''
+physical = Path(''' + repr(str(physical_control)) + ''')
+argv=sys.argv[1:]
+assert argv[0].endswith('/Workbench.dll') and argv[1]=='exec' and len(argv[2:])%2==0
+options=dict(zip(argv[2::2],argv[3::2]))
+assert options['--control-root']==logical and options['--model']=='gpt-6-sol'
+assert options['--node'] in ('generate-1','review-1','generate-2','review-2')
+def path(value):
+    assert value.startswith(logical+'/')
+    return physical/value[len(logical)+1:]
+output=path(options['--output']); execution=json.loads((output/'execution.json').read_bytes())
+digest=lambda value:hashlib.sha256(value).hexdigest()
+assert execution['inputHash']==digest(path(options['--prompt']).read_bytes())
+assert execution['schemaHash']==digest(path(options['--schema']).read_text().strip().encode())
+for field,name in [('outputHash','result.json'),('eventsHash','events.jsonl'),('stderrHash','stderr.log')]:
+    assert execution[field]==digest((output/name).read_bytes())
+with (physical/'SYNTHETIC-transport-calls.jsonl').open('a') as log:
+    log.write(json.dumps({'stage':options['--node'],'synthetic':True,'modelCalled':False})+'\\n')
+print('SYNTHETIC completed raw transport replay; no model called')
+''')
+    script.chmod(0o700)
+    return script, calls

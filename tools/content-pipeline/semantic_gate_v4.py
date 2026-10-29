@@ -1,6 +1,8 @@
 """Fixed-supervisor v4 consumers. Offline acceptance never grants release."""
 from pathlib import Path
 import re
+from contextlib import contextmanager
+import copy
 
 import trusted_interfaces_v4 as trusted
 import trusted_custody_v4 as custody
@@ -169,7 +171,7 @@ def v4_required(root, packet=None, gate_path=None):
         packet.get('schemaVersion') == 4 or packet.get('retrievalVersion') == 4)
 
 
-def _goal_acceptance(root, runtime, artifacts, uid, wrapper_ref, wrapper, response):
+def _goal_acceptance(root, runtime, artifacts, uid, wrapper_ref, wrapper, response, gate_review_utc=None):
     """Consume the supervisor-observed capture; never persist or recreate queues."""
     base = trusted.C + '/authoring/' + uid
     request_ref, request_raw = custody._fixed(root, base + '/request.json', artifacts)
@@ -177,8 +179,10 @@ def _goal_acceptance(root, runtime, artifacts, uid, wrapper_ref, wrapper, respon
     _, accepted_raw = custody._fixed(root, base + '/accepted.json', artifacts)
     request = trusted._validate_record(trusted._parse(request_raw), 'ReviewRequest')
     accepted = trusted._validate_record(trusted._parse(accepted_raw), 'AcceptedReview')
-    gate_review = trusted._parse(artifacts[next(b['acceptedReview']['path'] for b in root['authorities'] if b['node'] == 'semantic-gate')])
-    trusted._require(custody._utc(accepted['observedUtc']) > custody._utc(gate_review['observedUtc']),
+    if gate_review_utc is None:
+        gate_review = trusted._parse(artifacts[next(b['acceptedReview']['path'] for b in root['authorities'] if b['node'] == 'semantic-gate')])
+        gate_review_utc = custody._utc(gate_review['observedUtc'])
+    trusted._require(custody._utc(accepted['observedUtc']) > gate_review_utc,
                      'Per-goal acceptance predates current full gate approval')
     expected_inputs = [root['runtimeManifest'], wrapper_ref, wrapper['curriculum'], wrapper['retrieval'],
                        wrapper['registration'], wrapper['gate'], response['profile'], response['map']]
@@ -212,17 +216,59 @@ def _goal_acceptance(root, runtime, artifacts, uid, wrapper_ref, wrapper, respon
     trusted._require(_same(report, expected), 'Raw deterministic retrieval report differs from accepted observed capture')
 
 
-def validate_goal_packet_v4(root, corpus_root, catalogue, goal, wrapper):
-    """Return unchanged full goal and original evidence for existing card validators."""
+def _fixed_author_roots(root, corpus_root):
     trusted._require(Path(root).resolve() == Path(trusted.C) and
                      Path(corpus_root).resolve() == Path(trusted.C + '/retrieval-v3'), 'Fixed v4 author roots required')
-    trusted._validate_record(wrapper, 'GoalPacket')
+
+
+def _author_schema_inputs_v4(runtime, artifacts):
+    refs = []
+    for name in ('card.json', 'review.json'):
+        path = trusted.P + '/schemas/' + name
+        entries = [e for e in runtime['entries'] if e['artifact']['path'] == path]
+        trusted._require(len(entries) == 1 and entries[0]['category'] == 'schema',
+                         'Missing fixed author schema runtime input: ' + name)
+        ref = entries[0]['artifact']
+        trusted._require(trusted._ref(ref, artifacts) == Path(path).read_bytes(),
+                         'Actual author schema bytes differ from frozen runtime input: ' + name)
+        refs.append(ref)
+    helpers = [e for e in runtime['entries'] if e['artifact']['path'] == trusted.P + '/author_execution.py']
+    trusted._require(len(helpers) == 1 and all(ref in helpers[0]['dependencies'] for ref in refs),
+                     'Author execution lacks declared schema dependencies')
+    return refs
+
+
+@contextmanager
+def _authoring_operation_v4(catalogue):
+    """One verified frozen operation, never a cross-call cache or public override."""
     snapshot, registered, runtime, artifacts, registry = _context()
+    _author_schema_inputs_v4(runtime, artifacts)
     curriculum = _catalogue(registered, artifacts, catalogue)
+    _verify_gate(snapshot, registered, runtime, artifacts, registry, catalogue)
+    fixed_catalogue = copy.deepcopy(catalogue)
+    registration_ref = custody._fixed(registered, trusted.E + '/registration.json', artifacts)[0]
+    registration = custody._parent(registered, registration_ref, artifacts, 'Envelope', kind='registration')['payload']
+    originals, sources = custody._corpus_maps(runtime, artifacts)
+    gate_review = trusted._parse(artifacts[next(b['acceptedReview']['path'] for b in registered['authorities'] if b['node'] == 'semantic-gate')])
+    state = (registered, runtime, artifacts, curriculum, fixed_catalogue, registration_ref,
+             registration, originals, sources, custody._utc(gate_review['observedUtc']))
+    active = True
+    def validate(goal, wrapper):
+        trusted._require(active, 'Authoring operation has ended')
+        return _goal_packet_in_operation(state, goal, wrapper)
+    try:
+        yield validate
+    finally:
+        active = False
+        trusted._check_snapshot(snapshot)
+
+
+def _goal_packet_in_operation(state, goal, wrapper):
+    registered, runtime, artifacts, curriculum, catalogue, registration_ref, registration, originals, sources, gate_review_utc = state
+    trusted._validate_record(wrapper, 'GoalPacket')
     matches = [g for g in catalogue['goals'] if g['stableUid'] == goal['stableUid']]
     trusted._require(len(matches) == 1 and _same(trusted._parse(canonical(matches[0]).encode()),
                      trusted._parse(canonical(goal).encode())), 'Full curriculum goal differs')
-    _verify_gate(snapshot, registered, runtime, artifacts, registry, catalogue)
     uid = goal['stableUid']
     trusted._require(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', uid) and '..' not in uid,
                      'Invalid current goal UID')
@@ -231,23 +277,27 @@ def validate_goal_packet_v4(root, corpus_root, catalogue, goal, wrapper):
         wrapper['goalHash'] == trusted._digest(goal) and wrapper['curriculum'] == curriculum and
         wrapper['curriculumHash'] == catalogue['curriculumHash'] and wrapper['query'] == goal['retrievalQueryEn'] and
         wrapper['identity'] == runtime['identity'], 'Goal wrapper full curriculum/query binding differs')
-    registration_ref = custody._fixed(registered, trusted.E + '/registration.json', artifacts)[0]
     gate_ref = custody._fixed(registered, trusted.E + '/full-rag-gate.json', artifacts)[0]
     trusted._require(wrapper['registration'] == registration_ref and wrapper['gate'] == gate_ref and
                      wrapper['retrieval']['path'] == trusted.C + '/authoring/' + uid + '/v4-retrieval.json', 'Goal wrapper gate/retrieval path differs')
     response = custody._parent(registered, wrapper['retrieval'], artifacts, 'McpResponse')
-    registration = custody._parent(registered, registration_ref, artifacts, 'Envelope', kind='registration')['payload']
     trusted._require(response['identity'] == runtime['identity'] and response['profile'] == registration['profile'] and
         response['map'] == registration['map'] and response['plan'] == plan_query(goal['retrievalQueryEn'], registration['profile']) and
         response['queryPlanHash'] == trusted._digest(response['plan']), 'Embedded original MCP plan differs')
-    originals, sources = custody._corpus_maps(runtime, artifacts)
     _packet(response['evidence'], originals, sources)
     trusted._require(bool(response['evidence']), 'Authoring requires original evidence')
-    _goal_acceptance(registered, runtime, artifacts, uid, ref, wrapper, response)
-    trusted._check_snapshot(snapshot)
-    return {'goal': goal, 'curriculumHash': catalogue['curriculumHash'], 'query': goal['retrievalQueryEn'],
+    _goal_acceptance(registered, runtime, artifacts, uid, ref, wrapper, response, gate_review_utc)
+    return {'goal': copy.deepcopy(goal), 'curriculumHash': catalogue['curriculumHash'], 'query': goal['retrievalQueryEn'],
             'evidence': response['evidence'], 'corpusVersion': runtime['identity']['corpusVersion'],
             'packetHash': ref['sha256']}
+
+
+def validate_goal_packet_v4(root, corpus_root, catalogue, goal, wrapper):
+    """Return unchanged full goal and original evidence for existing card validators."""
+    _fixed_author_roots(root, corpus_root)
+    trusted._validate_record(wrapper, 'GoalPacket')
+    with _authoring_operation_v4(catalogue) as validate:
+        return validate(goal, wrapper)
 
 
 __all__ = ['require_dev_adoption_v4', 'verify_dev_results_v4', 'require_rag_gate_v4']

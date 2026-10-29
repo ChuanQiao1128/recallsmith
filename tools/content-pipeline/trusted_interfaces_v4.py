@@ -218,6 +218,14 @@ def _validate_runtime_manifest(root, manifest, artifacts):
         _require(len({d['path'] for d in deps}) == len(deps) and all(
             d['path'] in seen and seen[d['path']]['artifact'] == d for d in deps),
             'Dependency must equal an earlier runtime entry')
+        if path == P + '/semantic-v4-equivalence-input-policy-v2.json':
+            policy = _parse(raw)
+            fixed_inputs = [P + '/' + name for name in ('equivalence-instructions-v2.txt',
+                'semantic-v4-equivalence-output-v2.schema.json', 'semantic-v4-equivalence-schedule-v2.schema.json')]
+            _require(type(policy) is dict and deps == [policy.get(key) for key in
+                     ('instructions', 'outputSchema', 'scheduleSchema')] and
+                     [dep['path'] for dep in deps] == fixed_inputs,
+                     'Equivalence policy dependencies must be exactly the three fixed input references in order')
         _require(entry['role'] not in ('runner-assembly', 'process-host', 'cli-executable') or
                  category == 'binary', 'Runtime executable role requires binary category')
         seen[path], dependencies[path] = entry, [d['path'] for d in deps]

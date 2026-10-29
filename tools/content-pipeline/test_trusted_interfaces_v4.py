@@ -376,10 +376,17 @@ def fixture():
                  'tools/content-workbench/Workbench/CodexExecutor.cs',
                  'tools/content-workbench/Workbench/Workbench.csproj'):
         add(trusted.R + '/' + path, b'future frozen fixture\n')
-    for name in trusted.C_ASSETS:
-        add(trusted.P + '/' + name, Path(trusted.P, name).read_bytes(),
+    policy_name = 'semantic-v4-equivalence-input-policy-v2.json'
+    for name in [n for n in trusted.C_ASSETS if n != policy_name] + [policy_name]:
+        data = Path(trusted.P, name).read_bytes()
+        dependencies = []
+        if name == policy_name:
+            policy = trusted._parse(data)
+            dependencies = [policy[key] for key in ('instructions', 'outputSchema', 'scheduleSchema')]
+        add(trusted.P + '/' + name, data,
             'prompt' if name == 'private-label-instructions-v1.json' else
-            'test' if name.startswith('test_') else 'schema' if name.endswith('.json') else 'source')
+            'test' if name.startswith('test_') else 'schema' if name.endswith('.json') else 'source',
+            dependencies=dependencies)
     for name in trusted.WORKBENCH_ASSETS:
         path = trusted.R + '/tools/content-workbench/' + name
         if not any(entry['artifact']['path'] == path for entry in entries):
@@ -603,6 +610,44 @@ def _complete_proof_snapshot_fixture(test):
 
 
 class TrustedCoreTests(unittest.TestCase):
+    def test_equivalence_policy_declares_exact_three_prior_dependencies(self):
+        root, runtime, _, artifacts = fixture()
+        path = trusted.P + '/semantic-v4-equivalence-input-policy-v2.json'
+        policy = trusted._parse(artifacts[path])
+        expected = [policy[key] for key in ('instructions', 'outputSchema', 'scheduleSchema')]
+        positions = {entry['artifact']['path']: n for n, entry in enumerate(runtime['entries'])}
+        entry = runtime['entries'][positions[path]]
+        self.assertEqual(entry['dependencies'], expected)
+        self.assertTrue(all(positions[ref['path']] < positions[path] for ref in expected))
+        self.assertIs(runtime, trusted._validate_runtime_manifest(root, runtime, artifacts))
+
+    def test_equivalence_policy_dag_mutations_reject_after_consistent_manifest_rehash(self):
+        for change in ('empty', 'missing-instructions', 'missing-outputSchema', 'missing-scheduleSchema',
+                       'wrong', 'duplicate', 'reordered', 'extra', 'later'):
+            with self.subTest(change=change):
+                root, runtime, _, artifacts = fixture()
+                path = trusted.P + '/semantic-v4-equivalence-input-policy-v2.json'
+                entry = next(e for e in runtime['entries'] if e['artifact']['path'] == path)
+                dependencies = entry['dependencies']
+                if change == 'empty': dependencies.clear()
+                elif change.startswith('missing-'):
+                    dependencies.pop(('instructions', 'outputSchema', 'scheduleSchema').index(change[8:]))
+                elif change == 'wrong': dependencies[0] = runtime['entries'][0]['artifact']
+                elif change == 'duplicate': dependencies[1] = dependencies[0]
+                elif change == 'reordered': dependencies[0], dependencies[1] = dependencies[1], dependencies[0]
+                elif change == 'extra': dependencies.append(runtime['entries'][0]['artifact'])
+                elif change == 'later':
+                    runtime['entries'].remove(entry)
+                    index = next(n for n, e in enumerate(runtime['entries']) if e['artifact'] == dependencies[-1])
+                    runtime['entries'].insert(index, entry)
+                _rehash_runtime(root, runtime, artifacts)
+                self.assertEqual(trusted._parse(trusted._ref(root['runtimeManifest'], artifacts)), runtime)
+                self.assertEqual(runtime['identity']['implementationManifestHash'], trusted._digest(runtime['entries']))
+                for runtime_entry in runtime['entries']:
+                    trusted._ref(runtime_entry['artifact'], artifacts)
+                with self.assertRaisesRegex(ValueError, 'policy.*dependencies|Dependency must equal an earlier'):
+                    trusted._validate_runtime_manifest(root, runtime, artifacts)
+
     def test_positive_runtime_complete_dag_and_native_varied_reports(self):
         root, runtime, _, artifacts = fixture()
         self.assertIs(runtime, trusted._validate_runtime_manifest(root, runtime, artifacts))

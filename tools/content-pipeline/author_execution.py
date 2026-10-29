@@ -21,7 +21,7 @@ def freeze(path: Path, value: str):
     path.write_text(value)
 
 
-def invoke(args, folder: Path, stage: str, attempt: int, prompt: str, schema: dict):
+def invoke(args, folder: Path, stage: str, attempt: int, prompt: str, schema: dict, *, review_packet=None):
     """Every attempt has a stable node; unknown outcomes are never resubmitted."""
     if attempt not in (1, 2):
         raise ValueError('Only initial generation and one targeted repair are permitted')
@@ -45,7 +45,7 @@ def invoke(args, folder: Path, stage: str, attempt: int, prompt: str, schema: di
                                (folder / 'review-1.schema.json').read_text())
             previous_review = load(review_folder / 'result.json')
             if (authorization['reviewHash'] != digest((review_folder / 'result.json').read_bytes()) or
-                    validate_review(load(folder / 'packet.json'), previous_review)):
+                    validate_review(load(folder / 'packet.json') if review_packet is None else review_packet, previous_review)):
                 raise ValueError('Repair must bind an actual failed independent review')
         elif not authorization.get('validationError'):
             raise ValueError('A known structural or independent-review failure is required')

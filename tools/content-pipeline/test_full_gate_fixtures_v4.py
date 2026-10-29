@@ -8,6 +8,7 @@ from pathlib import Path
 import tempfile
 import importlib.util
 import sys
+import os
 from unittest.mock import patch
 
 import trusted_interfaces_v4 as core
@@ -108,6 +109,8 @@ class FullFixture(Fixture):
         entries[:] = [e for e in entries if not (e['artifact']['path'].startswith(core.P + '/') and
                       e['artifact']['path'].endswith('.py')) and e['artifact']['path'] != '/synthetic/consumer.py']
         source_modules = set(core.CORE_MODULES)
+        author_schemas = [self.add_runtime(core.P + '/schemas/' + name,
+            Path(core.P + '/schemas/' + name).read_bytes(), 'schema') for name in ('card.json', 'review.json')]
         complete, visiting = {}, []
         packages = {}
         def installed(name):
@@ -141,6 +144,7 @@ class FullFixture(Fixture):
                     deps.append(add_module(dep))
                 else:
                     deps.append(installed(dep))
+            if name == 'author_execution': deps.extend(author_schemas)
             visiting.pop()
             complete[name] = self.add_runtime(str(path), data, dependencies=deps)
             return complete[name]
@@ -149,18 +153,22 @@ class FullFixture(Fixture):
             filename = getattr(module, '__file__', None)
             if filename and '/site-packages/' in filename and name.split('.')[0] not in packages:
                 installed(name.split('.')[0])
-        for name in ('SEMANTIC_V4_GATE_CONSUMERS.md', 'semantic-v4-equivalence-input-policy-v2.json',
-                     'equivalence-instructions-v2.txt', 'semantic-v4-equivalence-output-v2.schema.json',
-                     'semantic-v4-equivalence-schedule-v2.schema.json', 'private-label-instructions-v1.json'):
+        for name in ('SEMANTIC_V4_GATE_CONSUMERS.md', 'equivalence-instructions-v2.txt',
+                     'semantic-v4-equivalence-output-v2.schema.json', 'semantic-v4-equivalence-schedule-v2.schema.json',
+                     'semantic-v4-equivalence-input-policy-v2.json', 'private-label-instructions-v1.json'):
             path = Path(core.P) / name
             if path.exists():
                 role = {'semantic-v4-equivalence-input-policy-v2.json': 'equivalence-input-policy',
                     'equivalence-instructions-v2.txt': 'equivalence-instructions',
                     'semantic-v4-equivalence-output-v2.schema.json': 'equivalence-output-schema',
                     'semantic-v4-equivalence-schedule-v2.schema.json': 'equivalence-schedule-schema'}.get(name, 'other')
+                dependencies = []
+                if role == 'equivalence-input-policy':
+                    policy = json.loads(path.read_bytes())
+                    dependencies = [self.ref(policy[field]['path']) for field in ('instructions', 'outputSchema', 'scheduleSchema')]
                 self.add_runtime(str(path), path.read_bytes(), 'prompt' if role == 'equivalence-instructions' or name == 'private-label-instructions-v1.json' else
                                  'protocol' if role == 'equivalence-input-policy' else
-                                 'schema' if name.endswith('.json') else 'source', role)
+                                 'schema' if name.endswith('.json') else 'source', role, dependencies)
         for path in sorted(Path(core.P).glob('test_*v4.py')):
             self.add_runtime(str(path), path.read_bytes(), 'test')
         # The actual public reader is the conservative all-input closure root.
@@ -294,7 +302,7 @@ class FullFixture(Fixture):
         self.artifacts[core.C + '/run.json'] = raw(self.run)
 
     @contextmanager
-    def public_io(self):
+    def public_io(self, workflow=False):
         """Redirect only fixed-path reads to actual Temp files; every validator runs."""
         self.finish()
         with tempfile.TemporaryDirectory(prefix='SYNTHETIC-full-gate-') as folder, ExitStack() as stack:
@@ -314,4 +322,35 @@ class FullFixture(Fixture):
                 return original_files(temporary / str(control).removeprefix('/'), temporary / str(output).removeprefix('/'))
             stack.enter_context(patch.object(core, '_read_stable', side_effect=read))
             stack.enter_context(patch('execution_receipt_v4._read_files', side_effect=files))
+            if workflow:
+                def relocated(path):
+                    value = str(path)
+                    return temporary / value.removeprefix('/') if value == core.C or value.startswith(core.C + '/') else path
+                for method in ('open', 'stat', 'mkdir', 'unlink'):
+                    original = getattr(Path, method)
+                    def redirect(path, *args, _original=original, **kwargs):
+                        return _original(relocated(path), *args, **kwargs)
+                    stack.enter_context(patch.object(Path, method, redirect))
+                original_iterdir, original_glob, original_replace = Path.iterdir, Path.glob, os.replace
+                original_os_open = os.open
+                def guarded_open(path, flags, *args, **kwargs):
+                    value = os.fspath(path)
+                    if isinstance(value, str) and os.path.isabs(value) and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC):
+                        resolved = os.path.realpath(value)
+                        if resolved == core.C or resolved.startswith(core.C + '/'):
+                            raise AssertionError('Unmapped production control write in synthetic workflow')
+                    return original_os_open(path, flags, *args, **kwargs)
+                def iterdir(path):
+                    actual = relocated(path)
+                    for child in original_iterdir(actual):
+                        yield path / child.name if actual != path else child
+                def glob(path, pattern, **kwargs):
+                    actual = relocated(path)
+                    for child in original_glob(actual, pattern, **kwargs):
+                        yield path / child.relative_to(actual) if actual != path else child
+                stack.enter_context(patch.object(Path, 'iterdir', iterdir))
+                stack.enter_context(patch.object(Path, 'glob', glob))
+                stack.enter_context(patch.object(os, 'replace', lambda source, target, **kwargs:
+                    original_replace(relocated(source), relocated(target), **kwargs)))
+                stack.enter_context(patch.object(os, 'open', guarded_open))
             yield mapping
