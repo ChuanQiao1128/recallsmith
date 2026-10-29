@@ -47,9 +47,8 @@ def _hash(data):
 
 
 def _text(data):
-    text = data.decode('utf-8', errors='strict')
-    _require(not any(0xD800 <= ord(c) <= 0xDFFF for c in text), 'Unpaired surrogate')
-    return text
+    # The builtin strict decoder rejects surrogates without a Python scalar scan.
+    return bytes.decode(data, 'utf-8', errors='strict')
 
 
 def _json(data):

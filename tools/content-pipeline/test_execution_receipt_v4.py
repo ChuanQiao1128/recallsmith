@@ -584,5 +584,71 @@ class SyntheticReceiptTests(unittest.TestCase):
         self.assertIs(receipt['releaseAuthorized'], False)
 
 
+class StrictUnicodeParserTests(unittest.TestCase):
+    def test_duplicate_numeric_and_nesting_guards_remain_active(self):
+        from execution_receipt_v4 import _json
+        for raw in (b'{"x":1,"x":2}', b'{"x":NaN}', b'{"x":Infinity}', b'{"x":1e400}',
+                    b'[' * 65 + b'0' + b']' * 65):
+            with self.subTest(raw=raw), self.assertRaises(ValueError): _json(raw)
+        self.assertEqual(_json(b'[' * 64 + b'0' + b']' * 64), json.loads(b'[' * 64 + b'0' + b']' * 64))
+
+    def test_all_raw_surrogate_code_points_and_invalid_utf8_reject(self):
+        from execution_receipt_v4 import _json, _text
+        invalid = [b'\x80', b'\xc0\x80', b'\xc1\xbf', b'\xe0\x80\x80',
+                   b'\xf0\x80\x80\x80', b'\xf4\x90\x80\x80', b'\xf5\x80\x80\x80',
+                   b'\xff', b'\xc2', b'\xe2\x82', b'\xf0\x90\x80']
+        invalid += [chr(point).encode('utf-8', errors='surrogatepass') for point in range(0xD800, 0xE000)]
+        for raw in invalid:
+            with self.subTest(raw=raw), self.assertRaises(UnicodeDecodeError): _text(raw)
+            with self.assertRaises(ValueError): _json(b'{"value":"' + raw + b'"}')
+
+    def test_all_escaped_unpaired_surrogates_reject_in_keys_values_and_nesting(self):
+        from execution_receipt_v4 import _json
+        for point in range(0xD800, 0xE000):
+            escaped = ('\\u%04x' % point).encode('ascii')
+            documents = [b'{"value":"' + escaped + b'"}', b'{"' + escaped + b'":0}',
+                         b'{"outer":[{"nested":["' + escaped + b'"]}]}',
+                         b'{"outer":[{"' + escaped + b'":["valid"]}]}']
+            for raw in documents:
+                with self.subTest(point=point, raw=raw), self.assertRaises(ValueError): _json(raw)
+
+    def test_scalar_boundaries_and_paired_supplementary_characters_are_valid(self):
+        from execution_receipt_v4 import _json, _text
+        for point in (0, 1, 0x7F, 0x80, 0x7FF, 0x800, 0xD7FE, 0xD7FF,
+                      0xE000, 0xE001, 0xFFFF, 0x10000, 0x1F989, 0x10FFFE, 0x10FFFF):
+            char = chr(point)
+            self.assertEqual(_text(char.encode('utf-8')), char)
+            value = {char: [{'nested': char}]}
+            for ascii_only in (True, False):
+                self.assertEqual(_json(json.dumps(value, ensure_ascii=ascii_only).encode('utf-8')), value)
+        self.assertEqual(_json(b'{"\\ud800\\udc00":"\\udbff\\udfff"}'), {chr(0x10000): chr(0x10FFFF)})
+
+    def test_strict_builtin_decoder_does_not_dispatch_to_bytes_subclass_override(self):
+        from execution_receipt_v4 import _json, _text
+        class PretendDecoded(bytes):
+            def decode(self, *args, **kwargs):
+                return '{"forged":"\\ud800"}'
+        self.assertEqual(_text(PretendDecoded(b'{"actual":true}')), '{"actual":true}')
+        self.assertEqual(_json(PretendDecoded(b'{"actual":true}')), {'actual': True})
+        with self.assertRaises(UnicodeDecodeError): _text(PretendDecoded(b'\xff'))
+        with self.assertRaises(ValueError): _json(PretendDecoded(b'\xff'))
+
+    def test_exact_byte_decoder_acceptance_matches_prior_scan_at_unicode_boundaries(self):
+        from execution_receipt_v4 import _text
+        def prior(raw):
+            value = raw.decode('utf-8', errors='strict')
+            if any(0xD800 <= ord(char) <= 0xDFFF for char in value): raise ValueError('Unpaired surrogate')
+            return value
+        def outcome(reader, raw):
+            try: return True, reader(raw)
+            except (ValueError, UnicodeError): return False, None
+        raw_cases = [chr(point).encode('utf-8', errors='surrogatepass')
+                     for point in range(0xD7F0, 0xE010)]
+        raw_cases += [b'', b'ASCII', b'\xff', b'\xc0\x80', b'\xf4\x90\x80\x80',
+                      chr(0x10FFFF).encode('utf-8'), chr(0x10000).encode('utf-8')]
+        for raw in raw_cases:
+            self.assertEqual(outcome(_text, raw), outcome(prior, raw))
+
+
 if __name__ == '__main__':
     unittest.main()
