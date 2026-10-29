@@ -1,0 +1,655 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:recallsmith:semantic-v4-rational-metric-wire:1",
+  "title": "Representation-only rational metric wire supplement v1; no execution or authority",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/ResultsEnvelope"
+    },
+    {
+      "$ref": "#/$defs/SelectionEnvelope"
+    },
+    {
+      "$ref": "#/$defs/GateEnvelope"
+    }
+  ],
+  "$defs": {
+    "ArtifactRef": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "additionalProperties": false
+    },
+    "Identity": {
+      "type": "object",
+      "properties": {
+        "corpusVersion": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "sourceManifestHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "chunksHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "indexHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "embeddingModelHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "implementationManifestHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "testsHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "promptsHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "protocolHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "schemaHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "algorithmHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "modelIdentityHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "corpusVersion",
+        "sourceManifestHash",
+        "chunksHash",
+        "indexHash",
+        "embeddingModelHash",
+        "implementationManifestHash",
+        "testsHash",
+        "promptsHash",
+        "protocolHash",
+        "schemaHash",
+        "algorithmHash",
+        "modelIdentityHash"
+      ],
+      "additionalProperties": false
+    },
+    "Results": {
+      "type": "object",
+      "properties": {
+        "split": {
+          "enum": [
+            "dev",
+            "holdout"
+          ]
+        },
+        "configuration": {
+          "enum": [
+            "A",
+            "B"
+          ]
+        },
+        "references": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "cases": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "caseId": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]{0,63}$"
+              },
+              "packet": {
+                "$ref": "#/$defs/ArtifactRef"
+              },
+              "proof": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ArtifactRef"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "metrics": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Metrics"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "completions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "groupId": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                    },
+                    "rank": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 8
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "witness": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "minItems": 0
+                    }
+                  },
+                  "required": [
+                    "groupId",
+                    "rank",
+                    "witness"
+                  ],
+                  "additionalProperties": false
+                },
+                "minItems": 0
+              },
+              "legacyDiagnosticMetrics": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/LegacyDiagnosticMetrics"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "caseId",
+              "packet",
+              "proof",
+              "metrics",
+              "completions",
+              "legacyDiagnosticMetrics"
+            ],
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "metrics": {
+                      "type": "null"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "proof": {
+                      "type": "null"
+                    },
+                    "completions": {
+                      "maxItems": 0
+                    },
+                    "legacyDiagnosticMetrics": {
+                      "type": "null"
+                    }
+                  }
+                },
+                "else": {
+                  "properties": {
+                    "proof": {
+                      "$ref": "#/$defs/ArtifactRef"
+                    },
+                    "completions": {
+                      "minItems": 1
+                    },
+                    "legacyDiagnosticMetrics": {
+                      "$ref": "#/$defs/LegacyDiagnosticMetrics"
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "minItems": 1
+        },
+        "macro": {
+          "$ref": "#/$defs/Metrics"
+        },
+        "perThemeRecall": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "theme": {
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/$defs/Rational"
+              }
+            },
+            "required": [
+              "theme",
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 8,
+          "maxItems": 8
+        },
+        "legacyDiagnosticMetrics": {
+          "$ref": "#/$defs/LegacyDiagnosticMetrics"
+        }
+      },
+      "required": [
+        "split",
+        "configuration",
+        "references",
+        "cases",
+        "macro",
+        "perThemeRecall",
+        "legacyDiagnosticMetrics"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "split": {
+                "const": "dev"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "cases": {
+                "minItems": 80,
+                "maxItems": 80
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "cases": {
+                "minItems": 40,
+                "maxItems": 40
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Selection": {
+      "type": "object",
+      "properties": {
+        "evaluated": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "configuration": {
+                "enum": [
+                  "A",
+                  "B"
+                ]
+              },
+              "result": {
+                "$ref": "#/$defs/ArtifactRef"
+              },
+              "correctnessReview": {
+                "$ref": "#/$defs/ArtifactRef"
+              }
+            },
+            "required": [
+              "configuration",
+              "result",
+              "correctnessReview"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1
+        },
+        "selected": {
+          "enum": [
+            "A",
+            "B"
+          ]
+        },
+        "profile": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "canary": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "historicalAttempts": {
+          "const": 3
+        },
+        "newConfigurationCount": {
+          "enum": [
+            1,
+            2
+          ]
+        },
+        "numericDevGate": {
+          "const": null
+        }
+      },
+      "required": [
+        "evaluated",
+        "selected",
+        "profile",
+        "canary",
+        "historicalAttempts",
+        "newConfigurationCount",
+        "numericDevGate"
+      ],
+      "additionalProperties": false
+    },
+    "Gate": {
+      "type": "object",
+      "properties": {
+        "selection": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "freeze": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "claim": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "unseal": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "results": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "readiness": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "referenceReview": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "noveltyReview": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "verdict": {
+          "enum": [
+            "PASS",
+            "FAIL",
+            "UNKNOWN"
+          ]
+        },
+        "recomputed": {
+          "$ref": "#/$defs/Metrics"
+        },
+        "negativeRefused": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "falseRefusals": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "wrongDeploymentAccepted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unsupportedAccepted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "verifierImplementationHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "selection",
+        "freeze",
+        "claim",
+        "unseal",
+        "results",
+        "readiness",
+        "referenceReview",
+        "noveltyReview",
+        "verdict",
+        "recomputed",
+        "negativeRefused",
+        "falseRefusals",
+        "wrongDeploymentAccepted",
+        "unsupportedAccepted",
+        "verifierImplementationHash"
+      ],
+      "additionalProperties": false
+    },
+    "Rational": {
+      "type": "object",
+      "properties": {
+        "numerator": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "denominator": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "numerator",
+        "denominator"
+      ],
+      "additionalProperties": false,
+      "description": "Mandatory predicates: exact integer tokens (never bool, decimal/exponent, float), 0<=numerator<=denominator, gcd=1; zero is 0/1. JSON Schema alone is insufficient."
+    },
+    "Metrics": {
+      "type": "object",
+      "properties": {
+        "semanticCompleteGroupRecallAt8": {
+          "$ref": "#/$defs/Rational"
+        },
+        "semanticCompleteGroupMrrAt8": {
+          "$ref": "#/$defs/Rational"
+        }
+      },
+      "required": [
+        "semanticCompleteGroupRecallAt8",
+        "semanticCompleteGroupMrrAt8"
+      ],
+      "additionalProperties": false
+    },
+    "LegacyDiagnosticMetrics": {
+      "type": "object",
+      "properties": {
+        "algorithmVersion": {
+          "const": "anchor-component-first-v1"
+        },
+        "authority": {
+          "const": "HISTORICAL_DIAGNOSTIC_ONLY"
+        },
+        "originalArtifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ArtifactRef"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "algorithmVersion",
+        "authority",
+        "originalArtifacts"
+      ],
+      "additionalProperties": false
+    },
+    "ResultsEnvelope": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "const": 4
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "retrievalVersion": {
+          "const": 4
+        },
+        "metricVersion": {
+          "const": "complete-group-v1"
+        },
+        "kind": {
+          "const": "results"
+        },
+        "identity": {
+          "$ref": "#/$defs/Identity"
+        },
+        "payload": {
+          "$ref": "#/$defs/Results"
+        },
+        "metricWireVersion": {
+          "const": "rational-pair-v1"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "cycleId",
+        "retrievalVersion",
+        "metricVersion",
+        "kind",
+        "identity",
+        "payload",
+        "metricWireVersion"
+      ],
+      "additionalProperties": false
+    },
+    "SelectionEnvelope": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "const": 4
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "retrievalVersion": {
+          "const": 4
+        },
+        "metricVersion": {
+          "const": "complete-group-v1"
+        },
+        "kind": {
+          "const": "selection"
+        },
+        "identity": {
+          "$ref": "#/$defs/Identity"
+        },
+        "payload": {
+          "$ref": "#/$defs/Selection"
+        },
+        "metricWireVersion": {
+          "const": "rational-pair-v1"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "cycleId",
+        "retrievalVersion",
+        "metricVersion",
+        "kind",
+        "identity",
+        "payload",
+        "metricWireVersion"
+      ],
+      "additionalProperties": false
+    },
+    "GateEnvelope": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "const": 4
+        },
+        "cycleId": {
+          "const": "aws-basics-v4-1"
+        },
+        "retrievalVersion": {
+          "const": 4
+        },
+        "metricVersion": {
+          "const": "complete-group-v1"
+        },
+        "kind": {
+          "const": "gate"
+        },
+        "identity": {
+          "$ref": "#/$defs/Identity"
+        },
+        "payload": {
+          "$ref": "#/$defs/Gate"
+        },
+        "metricWireVersion": {
+          "const": "rational-pair-v1"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "cycleId",
+        "retrievalVersion",
+        "metricVersion",
+        "kind",
+        "identity",
+        "payload",
+        "metricWireVersion"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "x-contract": {
+    "metricWireVersion": "rational-pair-v1",
+    "metricVersion": "complete-group-v1",
+    "parentSchemaSha256": "72905b6fd6994ba8f3f27fa202b60c18a3affe6d694f442e8e0d5e28f07aa4e0",
+    "status": "NORMATIVE_REPRESENTATION_ONLY_NOT_EXECUTED",
+    "rules": {
+      "dispatch": "Only new results, selection and gate records at their existing canonical parent paths use these complete closed envelope variants, with metricWireVersion=rational-pair-v1. Never extend the closed frozen parent Envelope with allOf; never fall back to numeric Metrics. DEV adoption-results uses the same version at its fixed separate path. Other parent kinds/versions/paths remain unchanged. Selection result references must resolve to newly recomputed same-version DEV records under an independently approved selection-reference contract; this supplement supplies no such exception or authority.",
+      "canonical": "Rational numerator/denominator must be actual integer JSON tokens, not bool, float, decimal/exponent tokens, nonnegative numerator<=positive denominator, gcd=1, 0/1 only zero. All unknown/missing fields and duplicate JSON keys reject. JSON Schema integer is insufficient; mandatory runtime predicate rejects 1.0 and 1e0.",
+      "exactEquality": "Every positive case, macro, per-theme recall and gate.recomputed semantic metric must decode to the exact independently recomputed Fraction from verified complete ledgers/checks. No tolerance, rounding, float conversion, Fraction(float), inferred ratio or limit_denominator; a rounded historical diagnostic is never semantic input. Null Metrics only for negative cases identified from bound references; negative proof=null/completions=[]; macros/theme/gate never null. Keep full original case/group/theme membership and denominators.",
+      "legacy": "Metrics contains semantic fields only. The closed sibling legacyDiagnosticMetrics preserves anchor-component-first-v1 diagnostics exclusively by originalArtifacts exact path/hash references and HISTORICAL_DIAGNOSTIC_ONLY; numeric values remain in their separate immutable historical records. Existing historical files stay byte-identical and are not migrated, rounded into ratios, compared for semantic equality or used for comparisons/gates.",
+      "selection": "Selection stores references, not invented score fields. Recompute each referenced DEV result exactly before comparing semantic Fractions; preserve the separately frozen comparator/tie rules, no numeric DEV floor, numericDevGate=null. Every evaluated result must have this exact wire version; missing/mixed/legacy version rejects. This change supplies only representation and cannot authorize alternative result paths.",
+      "gate": "Recompute from verified ledgers/checks and compare exact Fraction recall>=9/10, MRR>=3/4, every exact eight-theme recall>=3/4. Readiness integer counts, source/denial/current reviews, selection/freeze/seal/claim/unseal and all parent authority rules remain mandatory and unchanged. Pure arithmetic is non-authoritative and cannot grant PASS.",
+      "display": "Any decimal display is derived from decoded exact ratio at UI rendering only, non-authoritative and never persisted in these closed metric fields, hashed as a substitute for ratios, compared for equality, used to rank or gate.",
+      "identity": "All full parent Identity, ArtifactRef exact-byte pins, canonical fixed paths and invalidation predicates remain mandatory. Hash this supplement and codec/tests in the fresh reviewed consumer dependencies; no inherited PASS. No dispatcher or authority bridge is activated by this supplement."
+    }
+  }
+}

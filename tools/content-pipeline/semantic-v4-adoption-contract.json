@@ -291,7 +291,7 @@
     ],
     "rules": {
       "R01_scope": "This contract defines future receipt shapes and mandatory predicates; it is not a receipt, adoption, review PASS, execution permission or release gate. Only existing observed DEV80 and exactly the saved A/B packet inputs qualify. Both configuration slots remain consumed. No retrieval, reranking, re-packing, configuration repair/reset or additional configuration is allowed by this exception.",
-      "R02_dispatch": "Use a distinct explicit dev80-adoption-v1 dispatcher only at fixedPaths. Never send these records through the parent Envelope validator, overwrite original identity, fill missing historical fields, or relocate old records into parent packet paths. Parent v4 and legacy dispatch rules remain unchanged for every other artifact. Root schema dispatch is exact kind equality for the named fixedPaths records; Check is the sole kind-less shape, admitted only at proofCheck with exact parent Check fields. No generic path override. Decimal ordinals are zero-based unpadded decimal. Dispatch of DevProofLedger/DevResults validates local copied payload schemas plus R12 contextual bindings; it does not invoke or relax the parent Envelope/path dispatcher.",
+      "R02_dispatch": "Use a distinct explicit dev80-adoption-v1 dispatcher only at fixedPaths. Never send these records through the parent Envelope validator, overwrite original identity, fill missing historical fields, or relocate old records into parent packet paths. Parent v4 and legacy dispatch rules remain unchanged for every other artifact. Root schema dispatch is exact kind equality for the named fixedPaths records; Check is the sole kind-less shape, admitted only at proofCheck with exact parent Check fields. No generic path override. Decimal ordinals are zero-based unpadded decimal. Dispatch of DevProofLedger/DevResults validates local copied payload schemas plus R12 contextual bindings; it does not invoke or relax the parent Envelope/path dispatcher. Representation-only third exception: new DevResults and future parent-path Results/Selection/Gate use explicit metricWireVersion=rational-pair-v1 and the complete closed variants in metricWireSupplement; frozen parent files and other kind dispatch stay unchanged. There is no numeric-wire fallback, auto-upgrade or authority/selection-path exception.",
       "R03_hashes": "Hashes are SHA256 exact file bytes. Object hashes use pipeline.canonical UTF-8 (ensure_ascii=false, sort_keys=true, separators comma/colon). Reject duplicate JSON keys, nonfinite numbers, bool-as-integer, duplicate IDs, unknown keys, missing keys, aliases/symlinks/traversal, and mismatched canonical paths. A receipt supplied path is never a trust anchor; resolve only supervisor-pinned fixed paths.",
       "R04_freeze": "Require exact parent and historicalReferences pins. Reconstruct savedPacketInventory in configuration A,B then lexicographic caseId order using {configuration,caseId,path,sha256}; its canonical digest must equal savedPacketInventoryHash. All 160 originals must be present and unchanged. Pin originalProvenance to exactly historicalProvenance in listed order. Inspect historical frozen-plan/execution/run.py only as data; no replay execution is authorized.",
       "R05_reference_invariants": "Require exact 80 case IDs, 64 positive/16 negative, eight named themes with 8 positive/2 negative each, and the exact 148 required group IDs with original case membership and ordering. Copy queryEn,module,id,answerable,negativeReason exactly (positive absent negativeReason becomes null only). Retain original split, classification/verdict, scopeExclusions, missingInputs, negativeDefinition, optionalEvidenceGroups, uncertainty and provenance through originalCasePointer and originalCaseHash; never label historical holdout blind again. Every adapted group id equals old groupId. Negative groups stay empty. No splitting/merging/dropping/reclassifying groups.",
@@ -301,8 +301,8 @@
       "R09_equivalence_reviews": "Two independent role streams equivalence-one/equivalence-two review all80 cases, not merely two calls. First persist CandidateMapping without review/authority/output fields. Build each EquivalenceProjection using exactly the batch original full case objects, matching adapted case objects and CaseMap rows, in original query order; include complete frozen source text for the union of source IDs in those original cases sourceHashes/required/mandatory/optional alternatives and adapted anchor quotes, sorted sourceId and deduplicated. No other sources or mapping envelope fields are allowed. originalCases objects must equal corresponding original whole cases including unknown/provenance metadata; their open structural schema is constrained by that exact equality, not arbitrary properties. Projection excludes independentReviews, review/manifest/execution/output refs, candidateMapping refs/hashes, authority, peer results, ranks, packets, queues, configuration outcomes, and all later-produced fields. Immutable review instructions, output schema and protocol are pinned in proofConsumer; full submitted prompt is those frozen instructions plus canonical projection and deterministic host metadata containing its already-computed projectionHash and batchOrdinal, with no additional case/source input. Hash the projection bytes first, then render/count the prompt; neither projection nor candidate contains its own hash. Count actual full submitted prompt scalars, including protocol/schema text if present. Deterministically partition original case order by greedy maximal contiguous batches of at most3 whole cases whose full prompt has <60000 scalars; examine lengths without calls, never split/drop a case/group/source to fit. If any one-case projection exceeds limit, block entire schedule before any review call; do not increase caps or fetch sources through tools. Persist EquivalenceSchedule and all projections before calls. Both streams use identical schedule, exact projection bytes/hash and full model-input bytes per ordinal; role identity is host metadata, not an extra model input. Each ordinal has one fresh actual completed call/workspace per role with actual execution/projection/output path and raw-byte hashes, and all workspaceId/callId identities are globally distinct across both streams and later proof executions; execution/output artifact references cannot be reused. Identical verdict text alone does not establish execution reuse; distinct genuine raw execution evidence remains mandatory. Each output validates EquivalenceBatchOutput with exact ordinal/projection hash, ordered scheduled cases and exact original ordered required groups; negatives have no groups. Every field verdict including nested claim AND necessaryScope must PASS (empty nested scope means verified absence). Missing/dropped/changed outer or nested necessaryScope forces FAIL. Both streams must be independent of producer/peers, fresh tool-free Workbench executions with no peer/rank inputs and actual current source/denial authority. Each role manifest references its genuine per-batch executions and outputs in ordinal order; exact schedule coverage and ordered concatenation must equal all80 original cases/groups once per role. Manifest is deterministic assembly, not a raw execution or invented whole80 output. Raw executions satisfy parent Execution and genuine completion/source/denial validators. Any absent/extra/reordered/duplicate/oversized batch, non-PASS or unknown authority blocks; no native review or historical status substitutes for these content checks.",
       "R10_dual_identity": "originalRetrievalIdentityHash hashes exactly {packet:originalPacket,provenance:originalProvenance}; this is a commitment to retained historical artifacts, not a new assertion of parent Identity completeness. proofConsumer.identity binds actual fresh implementation/tests/prompts/protocol/schema/algorithm/model plus corpus/source/chunks/index/embedding hashes. Its dependencyManifest includes all consumer imports, runtime/dependency artifacts and document/schema amendment hashes; adoptionContract/adoptionDocument hash actual files. No original implementation or identity value is overwritten or asserted equal to new code. Exact same proofConsumer is required on mapping, wrappers, authority, new proofs and results. CandidateMapping, both manifests through their candidate ref, finalized mapping, inventory, DevProofLedger and DevResults all bind the same actual proofConsumer. No review projection contains the manifest/final mapping hash or its own hash.",
       "R11_packet_predicates": "For each configuration/case, require originalPacket canonical path and pinned digest, original.query equal old queryEn, exact original configuration/radius and corpus/map provenance, original retrievalConfigVersion integer 4 and diagnostic status/releaseAuthorized unchanged. Validate evidence complete-object equality to immutable corpus, unique IDs, order/ranks, <=8 chunks and <=12000 scalar chars. originalEvidenceHash hashes original.evidence; originalPlanHash hashes original.plan; originalQueuesHash hashes original.candidateQueues; originalTraceHash hashes original.trace. Validate original plan and trace against frozen recorded provenance without reretrieval or current-code replay. Any unavailable evidence needed to establish original provenance is UNKNOWN/block, never a field synthesized from current code. New wrappers contain references only; no replacement evidence/plan/queues/trace.",
-      "R12_proofs": "Fresh DEV checks bind packetHash=originalPacket.sha256 and referenceHash=adaptedReferences.sha256; containing ledger/results also bind PacketAdoption path/hash, ReferenceMapping path/hash and full proofConsumer identity. Thus an old check cannot satisfy a new wrapper. Preserve S2 exact all-nonempty-subsets of actual packet, deterministic subset membership/batches, independent two roles one/two, gpt-6-sol/high through existing reviewed Workbench, tool-free identical rank-free projections, complete atom coverage and source/packet quote validation. Empty packet has no calls/no credit. Missing/malformed/timeout or either non-PASS or inconsistent deployment means no subset credit. No inferred supersets or third tie breaker. HOST_RECORDS_ONLY is not authenticated execution, sourceReview or denial authority. DevProofLedger and DevResults are the only new containing schemas. Inventory rows are exactly A then B, each lexicographic original caseId, one original packet plus wrapper per row; recompute original saved inventory digest from these rows and require R04 equality. Every wrapper/mapping/consumer/reference link must agree. Ledger payload.caseId/configuration determines its unique inventory row; payload.packet equals originalPacket, payload.reference equals adaptedReferences, payload.protocol equals the bound semantic protocol artifact. payload.groups is the exact ordered original group set, with every nonempty subset and genuine check refs; no ledger for negative cases. Each Check is the unchanged locally copied parent shape at proofCheck: hash fields bind originalPacket/adaptedReferences/protocol, execution validates actual raw events, and checkerId/caseId/groupId/batch membership match path and ledger. Ledger authorization equals the external supervisor authorization event, not this contract or a self-attested permission. Results payload.references equals adaptedReferences; configuration agrees; cases follow original reference order with packet=inventory originalPacket, proof=matching DevProofLedger ref for positives and null for negatives. Positive metrics/completions are recomputed from those ledgers/checks; negatives require metrics=null, proof=null, completions=[]. Results macro/theme/legacy fields derive only from verified exact full input sets and retain original semantics; no caller summary grants credit. Full new proofConsumer, mapping, inventory, authorization and adaptedReferences bindings live on the new closed containers, not added fields in parent Envelope. Source/denial/execution and all downstream gate checks still apply.",
-      "R13_scores": "Retain complete-group-v1: completion(S)=max(original ranks); completion(g)=min(valid completions), infinity if none; tie witness lexicographically smallest sorted chunk-ID tuple. Query recall=finite groups/all original required groups; MRR=1/min finite group completion or 0. Macro includes all 64 DEV positives and per-theme 8, negative metrics null only. Missing cases reject. No numeric DEV floor; legacyAnchor fields remain diagnostics and never populate semantic fields. New40 alone retains recall>=0.90, MRR>=0.75, each-theme recall>=0.75, 8/8 negative refusals, <=1 false refusal, zero unsupported/wrong-deployment acceptances with no rounding.",
+      "R12_proofs": "Fresh DEV checks bind packetHash=originalPacket.sha256 and referenceHash=adaptedReferences.sha256; containing ledger/results also bind PacketAdoption path/hash, ReferenceMapping path/hash and full proofConsumer identity. Thus an old check cannot satisfy a new wrapper. Preserve S2 exact all-nonempty-subsets of actual packet, deterministic subset membership/batches, independent two roles one/two, gpt-6-sol/high through existing reviewed Workbench, tool-free identical rank-free projections, complete atom coverage and source/packet quote validation. Empty packet has no calls/no credit. Missing/malformed/timeout or either non-PASS or inconsistent deployment means no subset credit. No inferred supersets or third tie breaker. HOST_RECORDS_ONLY is not authenticated execution, sourceReview or denial authority. DevProofLedger and DevResults are the only new containing schemas. Inventory rows are exactly A then B, each lexicographic original caseId, one original packet plus wrapper per row; recompute original saved inventory digest from these rows and require R04 equality. Every wrapper/mapping/consumer/reference link must agree. Ledger payload.caseId/configuration determines its unique inventory row; payload.packet equals originalPacket, payload.reference equals adaptedReferences, payload.protocol equals the bound semantic protocol artifact. payload.groups is the exact ordered original group set, with every nonempty subset and genuine check refs; no ledger for negative cases. Each Check is the unchanged locally copied parent shape at proofCheck: hash fields bind originalPacket/adaptedReferences/protocol, execution validates actual raw events, and checkerId/caseId/groupId/batch membership match path and ledger. Ledger authorization equals the external supervisor authorization event, not this contract or a self-attested permission. Results payload.references equals adaptedReferences; configuration agrees; cases follow original reference order with packet=inventory originalPacket, proof=matching DevProofLedger ref for positives and null for negatives. Positive metrics/completions are recomputed from those ledgers/checks; negatives require metrics=null, proof=null, completions=[]. Results macro/theme/legacy fields derive only from verified exact full input sets and retain original semantics; no caller summary grants credit. Full new proofConsumer, mapping, inventory, authorization and adaptedReferences bindings live on the new closed containers, not added fields in parent Envelope. Source/denial/execution and all downstream gate checks still apply. Semantic Metrics now contains exactly two canonical Rational fields; preserve legacy numeric values separately in the closed sibling legacyDiagnosticMetrics with originalArtifacts references and HISTORICAL_DIAGNOSTIC_ONLY. The metricWireSupplement canonical/equality predicates apply to every case, macro, theme and later gate, including future holdout records. Null metrics require reference-negative case, proof=null and completions=[]; positive, macro, theme and gate metrics must be nonnull. Every decoded semantic Fraction must equal independently recomputed verified-proof Fraction exactly; legacy diagnostics are excluded from that equality and never promoted. The separate legacyDiagnosticMetrics contains references only: numeric diagnostics remain exclusively in their original historical artifact bytes, with no copied numeric semantic substitutes.",
+      "R13_scores": "Retain complete-group-v1: completion(S)=max(original ranks); completion(g)=min(valid completions), infinity if none; tie witness lexicographically smallest sorted chunk-ID tuple. Query recall=finite groups/all original required groups; MRR=1/min finite group completion or 0. Macro includes all 64 DEV positives and per-theme 8, negative metrics null only. Missing cases reject. No numeric DEV floor; legacyAnchor fields remain diagnostics and never populate semantic fields. New40 alone retains recall>=0.90, MRR>=0.75, each-theme recall>=0.75, 8/8 negative refusals, <=1 false refusal, zero unsupported/wrong-deployment acceptances with no rounding. Exact wire is rational-pair-v1, unchanged algorithm complete-group-v1. Apply the supplement to selection linked-result version checks and future holdout Results/Gate.recomputed; exact thresholds are Fraction(9,10) and Fraction(3,4). No decimal tolerance or historical float rationalization. UI display decimals are derived only and not stored as authoritative fields.",
       "R14_authority": "Authority pins must contain every node in authorityNodes exactly once. PENDING/UNKNOWN/FAIL never authorizes; PASS requires a nonnull genuinely produced current independently validated receipt whose exact boundInputs cover all dependencies. contract-review is actual independent review of both amendment files; reference-equivalence covers both source-only review executions and mapping; adoption-implementation-review covers current consumer source/tests/runtime/dependencies. current-source-review is the separately pending common source-boundary review, never replaced by these reviews. isolation-denial is actual same-launcher capability evidence, not prompt assertions or HOST_RECORDS_ONLY. Existing authority store remains supervisor-owned; receipt strings cannot self-grant. A review-execution authorization must be independently supplied before equivalence calls under existing current source/denial gates; it is not the later DEV proof authorization and cannot be derived from the not-yet-produced finalized mapping.",
       "R15_permissions": "BLOCKED if any integrity/mapping predicate fails or is unknown. ADOPT_INPUTS_ONLY requires R01-R11 and current PASS contract-review, reference-equivalence, adoption-implementation-review. DEV_PROOF_EXECUTION additionally requires current-source-review and isolation-denial PASS, reviewed frozen proof transport/model/prompt, and explicit supervisor execution authority bound to these inputs. Neither permission authorizes D2/D4/D5, holdout, authoring/cards or publishing. integration-canary, selection-freeze, label-seal, holdout-claim, unseal and semantic-gate remain separate mandatory lifecycle gates; this Authority always releaseAuthorized=false. supervisorAuthorization must reference the externally pinned supervisor authority event for any non-BLOCKED permission, with matching requested permission, proofConsumer, mapping and packetInventory hashes; null permits BLOCKED only. This event cannot be produced by the mapping/packet producer or accepted solely because the receipt names it. Acyclic write/hash order: adaptedReferences and CandidateMapping data -> preflight schedule/projections -> independently authorized actual equivalence batch executions/outputs -> two assembled manifests -> finalized ReferenceMapping (same candidate cases, with candidate ref and manifest refs) -> per-packet wrappers -> PacketInventory -> externally pinned DEV proof authorization -> Authority receipt -> fresh Checks -> DevProofLedger -> DevResults. External DEV authorization pins consumer/mapping/inventory and permission but never hashes Authority or later outputs; Authority references that event, avoiding a cycle. Checks reference raw input hashes, not their containing ledger. Manifests reference earlier batch outputs and candidate only, never finalized mapping. CandidateMapping and all manifests/reference maps must agree on full cases/consumer/ref identity. Existing authority before review calls remains required; this ordering does not grant it.",
       "R16_invalidation": "Any change to original source/corpus/map/profile/query/configuration/plan/queue/packet/trace or preserved label meaning invalidates adoption and all descendants with no remaining retrieval slot. Any change to adaptation, contract, consumer/code/test/dependencies/prompt/model/protocol/schema requires new applicable review and invalidates current mapping reviews/proofs/results/selection/gate as dependent; original bytes/history remain intact. Representation-only consumer changes can retain immutable inputs only after an explicit new current adoption review and complete revalidation; never inherit old proof PASS. Holdout observation/unseal forbids return to tuning and cannot be reset. Fail closed on unavailable provenance or ambiguous mapping; no repaired extra A/B run.",
@@ -315,6 +315,11 @@
       "nestedMandatoryNecessaryScope": 1,
       "total": 298,
       "meaning": "Copied original text fields, not additional denominator groups or independently judged new labels."
+    },
+    "metricWireSupplement": {
+      "path": "tools/content-pipeline/semantic-v4-rational-metric-wire-v1.schema.json",
+      "sha256": "334fbf03956270e6921d563e37094d5015a427df549a6a5e5512cd4f83a9f898",
+      "metricWireVersion": "rational-pair-v1"
     }
   },
   "$defs": {
@@ -1574,31 +1579,15 @@
       "type": "object",
       "properties": {
         "semanticCompleteGroupRecallAt8": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1
+          "$ref": "#/$defs/Rational"
         },
         "semanticCompleteGroupMrrAt8": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1
-        },
-        "legacyAnchorRecallAt8": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1
-        },
-        "legacyAnchorMrrAt8": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1
+          "$ref": "#/$defs/Rational"
         }
       },
       "required": [
         "semanticCompleteGroupRecallAt8",
-        "semanticCompleteGroupMrrAt8",
-        "legacyAnchorRecallAt8",
-        "legacyAnchorMrrAt8"
+        "semanticCompleteGroupMrrAt8"
       ],
       "additionalProperties": false
     },
@@ -1887,6 +1876,16 @@
                   "additionalProperties": false
                 },
                 "minItems": 0
+              },
+              "legacyDiagnosticMetrics": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/LegacyDiagnosticMetrics"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             },
             "required": [
@@ -1894,9 +1893,47 @@
               "packet",
               "proof",
               "metrics",
-              "completions"
+              "completions",
+              "legacyDiagnosticMetrics"
             ],
-            "additionalProperties": false
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "metrics": {
+                      "type": "null"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "proof": {
+                      "type": "null"
+                    },
+                    "completions": {
+                      "maxItems": 0
+                    },
+                    "legacyDiagnosticMetrics": {
+                      "type": "null"
+                    }
+                  }
+                },
+                "else": {
+                  "properties": {
+                    "proof": {
+                      "$ref": "#/$defs/ArtifactRef"
+                    },
+                    "completions": {
+                      "minItems": 1
+                    },
+                    "legacyDiagnosticMetrics": {
+                      "$ref": "#/$defs/LegacyDiagnosticMetrics"
+                    }
+                  }
+                }
+              }
+            ]
           },
           "minItems": 80,
           "maxItems": 80
@@ -1913,9 +1950,7 @@
                 "type": "string"
               },
               "value": {
-                "type": "number",
-                "minimum": 0,
-                "maximum": 1
+                "$ref": "#/$defs/Rational"
               }
             },
             "required": [
@@ -1926,6 +1961,9 @@
           },
           "minItems": 8,
           "maxItems": 8
+        },
+        "legacyDiagnosticMetrics": {
+          "$ref": "#/$defs/LegacyDiagnosticMetrics"
         }
       },
       "required": [
@@ -1934,7 +1972,8 @@
         "references",
         "cases",
         "macro",
-        "perThemeRecall"
+        "perThemeRecall",
+        "legacyDiagnosticMetrics"
       ],
       "additionalProperties": false
     },
@@ -2134,6 +2173,9 @@
         },
         "payload": {
           "$ref": "#/$defs/DevResultsPayload"
+        },
+        "metricWireVersion": {
+          "const": "rational-pair-v1"
         }
       },
       "required": [
@@ -2149,7 +2191,51 @@
         "packetInventory",
         "authorization",
         "configuration",
-        "payload"
+        "payload",
+        "metricWireVersion"
+      ],
+      "additionalProperties": false
+    },
+    "Rational": {
+      "type": "object",
+      "properties": {
+        "numerator": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "denominator": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "numerator",
+        "denominator"
+      ],
+      "additionalProperties": false,
+      "description": "Mandatory predicates: exact integer tokens (never bool, decimal/exponent, float), 0<=numerator<=denominator, gcd=1; zero is 0/1. JSON Schema alone is insufficient."
+    },
+    "LegacyDiagnosticMetrics": {
+      "type": "object",
+      "properties": {
+        "algorithmVersion": {
+          "const": "anchor-component-first-v1"
+        },
+        "authority": {
+          "const": "HISTORICAL_DIAGNOSTIC_ONLY"
+        },
+        "originalArtifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ArtifactRef"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "algorithmVersion",
+        "authority",
+        "originalArtifacts"
       ],
       "additionalProperties": false
     }
