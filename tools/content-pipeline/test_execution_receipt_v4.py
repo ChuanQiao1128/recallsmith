@@ -154,6 +154,15 @@ class SyntheticReceiptTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 _verify_execution_bytes_v4(self.raw, str(self.output), input_policy='dev-equivalence-input-v2', **args)
         self.invocation['purpose'] = 'dev-equivalence'
+        self.invocation['inputPolicyVersion'] = 'private-source-input-v1'
+        self.write_fixture(); args['trusted_pins'] = self.pins
+        with self.assertRaises(ValueError):
+            _verify_execution_bytes_v4(self.raw, str(self.output), input_policy='private-source-input-v1', **args)
+        self.invocation.update(purpose='private-author', inputPolicyVersion='private-source-input-v1')
+        self.write_fixture(); args['trusted_pins'] = self.pins
+        receipt = _verify_execution_bytes_v4(self.raw, str(self.output), input_policy='private-source-input-v1', **args)
+        self.assertEqual(receipt['rawResultBytes'], self.result)
+        self.invocation.update(purpose='dev-equivalence', inputPolicyVersion='dev-equivalence-input-v2')
         for prompt in ('x' * 200000, '🦉' * 100000):
             self.prompt = prompt
             self.execution['inputHash'] = self.invocation['inputHash'] = digest(prompt.encode())

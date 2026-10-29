@@ -79,7 +79,8 @@ def private_output_schema(role, parent_schema):
 
 
 def private_schedule(plan, cases, old80, sources):
-    """Deterministic full-input schedule; all private prompts retain the 60k bound."""
+    """Schedule private calls. One oversized complete source may use private-source-input-v1."""
+    from private_source_policy_v1 import admit_private_projection
     calls, cursor, novelty_ordinal = [], 0, 0
     for n, batch in enumerate(plan['batches']):
         selected = cases[cursor:cursor + len(batch['slots'])]
@@ -89,6 +90,7 @@ def private_schedule(plan, cases, old80, sources):
             projection = {'version': PRIVATE_VERSION, 'role': role, 'batchOrdinal': n}
             projection.update({'slots': batch['slots'], 'sources': projected_sources} if role == 'author'
                               else {'cases': selected, 'sources': projected_sources})
+            projection = admit_private_projection(PRIVATE_INSTRUCTIONS, role, projection)
             calls.append((role, n, projection, cursor, len(selected)))
         start = 0
         while start < len(old80['queries']):
@@ -108,11 +110,11 @@ def private_schedule(plan, cases, old80, sources):
 
 
 def _private_execution(root, runtime, artifacts, entry, projection, schema):
+    from private_source_policy_v1 import private_prompt
     role = entry['role']
-    prompt = PRIVATE_INSTRUCTIONS[role] + canonical(projection)
+    prompt, policy = private_prompt(PRIVATE_INSTRUCTIONS, role, projection)
     schema_bytes = json.dumps(schema, ensure_ascii=False, indent=2).encode('utf-8')
-    _require(len(prompt) < 60000 and len(prompt.encode('utf-16-le')) // 2 < 60000,
-             'Private prompt exceeds unchanged purpose bound')
+    _require(policy in (None, 'private-source-input-v1'), 'Unexpected private source policy')
     directory = f'{E}/holdout/seal-evidence/raw/{role}/{entry["batchOrdinal"]}'
     _require(entry['prompt']['path'] == directory + '/prompt.txt' and
              custody._registered(root, entry['prompt'], artifacts) == prompt.encode('utf-8') and
@@ -120,7 +122,8 @@ def _private_execution(root, runtime, artifacts, entry, projection, schema):
     raw = {name: custody._registered(root, ref, artifacts) for name, ref in entry['releasedFiles'].items()}
     receipt = _verify_execution_bytes_v4(raw, entry['originalOutputDirectory'], frozen_prompt=prompt,
               frozen_schema_bytes=schema_bytes, trusted_pins={'controlRoot': entry['originalControlRoot'],
-              'expectedFileHashes': entry['expectedFileHashes'], 'runtime': entry['runtime']})
+              'expectedFileHashes': entry['expectedFileHashes'], 'runtime': entry['runtime']},
+              input_policy=policy)
     _require(receipt['callId'] == entry['callId'] and receipt['workspaceId'] == entry['originalWorkspaceId'] and
              entry['runtime'] == runtime['runtime'], 'Private actual execution identity changed')
     # Original private paths remain opaque; only released registered copies are read.

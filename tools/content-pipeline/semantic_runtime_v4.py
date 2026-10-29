@@ -29,7 +29,7 @@ from fractions import Fraction
 import hashlib
 
 from execution_receipt_v4 import _json, _same, _text as _utf8, verify_execution_v4
-from proof_transport_v4 import compact_schedule, expand_response
+from proof_transport_v4 import PROOF_SUBSET_BATCH, compact_schedule, expand_response
 from semantic_proof_v4 import (_hash, _id, _packet, _plan, _require, _shape,
                                _text, inspect_decisions_v4)
 from proof_schedule_v4 import subsets
@@ -44,7 +44,7 @@ THEMES = {'cloud', 'identity', 'compute', 'storage', 'databases', 'networking',
 
 
 def replay_group_v4(case_id, query, group, evidence, originals, sources, *, bindings,
-                    frozen_schema_bytes, execution_pins, frozen_inputs, per_call=255):
+                    frozen_schema_bytes, execution_pins, frozen_inputs, per_call=PROOF_SUBSET_BATCH):
     """Replay exactly both roles/all batches, reporting diagnostics without trust upgrades.
 
     Calls/workspaces must be distinct across this group. ``executionProvenance``

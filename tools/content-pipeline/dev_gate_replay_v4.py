@@ -310,7 +310,7 @@ def _replay_proof_case_v4(root, runtime, artifacts, registry, configuration, cas
         result = inspect_decisions_v4(case['id'], group, evidence, originals, sources,
                                      decisions['one'], decisions['two'], bindings)
         group_runs = provenance[-len(planned['calls']):] if planned['calls'] else []
-        groups.append({**result, 'caseId': case['id'], 'cycleId': 'aws-basics-v4-1', 'perCallSubsetLimit': 255,
+        groups.append({**result, 'caseId': case['id'], 'cycleId': 'aws-basics-v4-1', 'perCallSubsetLimit': planned['perCallSubsetLimit'],
                        'executionProvenance': group_runs, 'executionAuthenticity': 'HOST_RECORDS_ONLY'})
     return groups, provenance
 

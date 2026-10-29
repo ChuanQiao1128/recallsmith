@@ -10,6 +10,7 @@ from proof_schedule_v4 import _atoms, canonical, sha256, subsets
 
 PROMPT_LIMIT = 60000  # Exclusive Unicode scalar limit.
 OUTPUT_LIMIT = 48000
+PROOF_SUBSET_BATCH = 96  # Frozen after the 96-subset probe stayed under OUTPUT_LIMIT.
 INSTRUCTIONS = '''Use only this case's original evidence and required fact/scope atoms.
 For EACH subsetMasks entry, independently judge whether its members jointly entail
 ALL atoms with consistent deployment conditions. Bit i selects evidence[i], sorted
@@ -47,7 +48,7 @@ def _id(value, pattern=r'[a-z][a-z0-9-]{0,63}'):
         raise ValueError('Invalid identifier')
 
 
-def compact_schedule(case_id, query, group, evidence, originals, *, per_call=255):
+def compact_schedule(case_id, query, group, evidence, originals, *, per_call=PROOF_SUBSET_BATCH):
     """Freeze all subset batches without executing; originals must be source-verified.
 
     Checker identity/expectations are host metadata, never part of the projection.

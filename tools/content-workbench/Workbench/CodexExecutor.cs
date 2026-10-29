@@ -27,6 +27,8 @@ public sealed class CodexExecutor(IOptions<WorkbenchOptions> options, ILogger<Co
         RequireChildPath(settings.ControlRoot, workspace); Wire.PrivateDirectory(workspace);
         var schemaPath = Path.Combine(attempt, "schema.json");
         await File.WriteAllTextAsync(schemaPath, request.Schema, cancellationToken); Wire.PrivateFile(schemaPath);
+        var strictSchemaPath = Path.Combine(attempt, "schema.strict.json");
+        await File.WriteAllTextAsync(strictSchemaPath, Wire.ForStrictResponse(request.Schema), cancellationToken); Wire.PrivateFile(strictSchemaPath);
         using var activity = WorkbenchTelemetry.Activities.StartActivity("codex.execute");
         var watch = Stopwatch.StartNew();
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(settings.TimeoutSeconds));
@@ -62,7 +64,7 @@ public sealed class CodexExecutor(IOptions<WorkbenchOptions> options, ILogger<Co
             if (login.ExitCode != 0 || !(login.Stdout + login.Stderr).Contains("ChatGPT", StringComparison.OrdinalIgnoreCase) || (login.Stdout + login.Stderr).Contains("API key", StringComparison.OrdinalIgnoreCase))
                 throw new ExecutionFailure(FailureKind.Authentication);
             var info = StartInfo(workspace);
-            foreach (var arg in new[] { "exec", "--ignore-user-config", "--ignore-rules", "--strict-config", "--skip-git-repo-check", "--ephemeral", "--json", "--color", "never", "-C", workspace, "-m", settings.Model, "--output-schema", schemaPath, "-o", Path.Combine(attempt, "result.pipe"), "-" }) info.ArgumentList.Add(arg);
+            foreach (var arg in new[] { "exec", "--ignore-user-config", "--ignore-rules", "--strict-config", "--skip-git-repo-check", "--ephemeral", "--json", "--color", "never", "-C", workspace, "-m", settings.Model, "--output-schema", strictSchemaPath, "-o", Path.Combine(attempt, "result.pipe"), "-" }) info.ArgumentList.Add(arg);
             var config = RestrictedConfig(workspace);
             foreach (var (key, value) in config) { info.ArgumentList.Add("-c"); info.ArgumentList.Add(key + "=" + value); }
             var invocation = JsonSerializer.SerializeToNode(new
@@ -74,6 +76,11 @@ public sealed class CodexExecutor(IOptions<WorkbenchOptions> options, ILogger<Co
             {
                 invocation["purpose"] = "dev-equivalence";
                 invocation["inputPolicyVersion"] = "dev-equivalence-input-v2";
+            }
+            else if (request.InputPolicy is WorkbenchInputPolicy.PrivateAuthorSourceV1 or WorkbenchInputPolicy.PrivateCheckerSourceV1)
+            {
+                invocation["purpose"] = request.InputPolicy == WorkbenchInputPolicy.PrivateAuthorSourceV1 ? "private-author" : "private-checker";
+                invocation["inputPolicyVersion"] = "private-source-input-v1";
             }
             Wire.AtomicJson(Path.Combine(attempt, "invocation.json"), invocation);
             phase = "execution";

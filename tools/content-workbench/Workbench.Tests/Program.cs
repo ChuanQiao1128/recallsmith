@@ -52,6 +52,17 @@ Test("fixed_equivalence_input_policy_and_legacy_bounds", () =>
         try { policyOptions.SelectInputPolicy(purpose, "dev-equivalence-input-v2"); throw new Exception("Cross-purpose policy bypassed"); }
         catch (ArgumentException) { }
     }
+    policyOptions.SelectInputPolicy("private-author", "private-source-input-v1");
+    if (policyOptions.InputPolicy != WorkbenchInputPolicy.PrivateAuthorSourceV1) throw new Exception("Private author policy unavailable");
+    policyOptions.SelectInputPolicy("private-checker", "private-source-input-v1");
+    if (policyOptions.InputPolicy != WorkbenchInputPolicy.PrivateCheckerSourceV1) throw new Exception("Private checker policy unavailable");
+    Wire.ValidateInput(new FrozenRequest(new string('x', 60_001), schema, WorkbenchInputPolicy.PrivateAuthorSourceV1));
+    try { Wire.ValidateInput(new FrozenRequest(new string('x', 200_000), schema, WorkbenchInputPolicy.PrivateCheckerSourceV1)); throw new Exception("Private source bound bypassed"); }
+    catch (ArgumentException) { }
+    try { policyOptions.SelectInputPolicy("private-author", "dev-equivalence-input-v2"); throw new Exception("Cross-purpose private policy bypassed"); }
+    catch (ArgumentException) { }
+    try { policyOptions.SelectInputPolicy("novelty-check", "private-source-input-v1"); throw new Exception("Novelty source policy bypassed"); }
+    catch (ArgumentException) { }
     try { policyOptions.SelectInputPolicy("dev-equivalence", null); throw new Exception("Missing policy version accepted"); }
     catch (ArgumentException) { }
     try { Wire.ValidateInput(new FrozenRequest("\ud800", schema, WorkbenchInputPolicy.DevEquivalenceV2)); throw new Exception("Unpaired surrogate normalized"); }
@@ -91,6 +102,15 @@ Process Child(params string[] childArgs)
     return Process.Start(info)!;
 }
 
+Test("strict_response_schema_inlines_root_and_drops_unique_items", () =>
+{
+    var adapted = Wire.ForStrictResponse("{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"$ref\":\"#/$defs/Out\",\"$defs\":{\"Out\":{\"type\":\"object\",\"properties\":{\"ids\":{\"type\":\"array\",\"items\":{\"type\":\"integer\"},\"uniqueItems\":true}},\"required\":[\"ids\"],\"additionalProperties\":false}}}");
+    using var doc = JsonDocument.Parse(adapted);
+    if (doc.RootElement.GetProperty("type").GetString() != "object") throw new Exception("Strict schema root is not an object");
+    if (adapted.Contains("uniqueItems", StringComparison.Ordinal) || adapted.Contains("$schema", StringComparison.Ordinal)) throw new Exception("Unsupported response keyword retained");
+    if (!doc.RootElement.GetProperty("properties").GetProperty("ids").EnumerateObject().Any()) throw new Exception("Inlined properties missing");
+    return Task.CompletedTask;
+});
 Test("schema_remote_refs_and_bounds_fail_closed", () =>
 {
     Throws<ArgumentException>(() => Wire.ParseSchema("{\"$ref\":\"https://example.com/schema\"}"));
