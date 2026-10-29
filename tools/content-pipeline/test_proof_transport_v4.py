@@ -51,9 +51,9 @@ class CompactTransportTests(unittest.TestCase):
     def test_full_255_schedule_and_blind_rank_invariance(self):
         evidence, originals, group = self.fixture()
         before = copy.deepcopy((evidence, originals, group))
-        report = compact_schedule('case-one', 'Which facts apply?', group, evidence, originals)
+        report = compact_schedule('case-one', 'Which facts apply?', group, evidence, originals, per_call=255)
         self.assertEqual(report, compact_schedule('case-one', 'Which facts apply?', group,
-                                                 list(reversed(evidence)), originals))
+                                                 list(reversed(evidence)), originals, per_call=255))
         self.assertEqual(before, (evidence, originals, group))
         self.assertEqual((255, 510, 2), tuple(report[k] for k in ('subsetCount', 'decisionCount', 'callCount')))
         one, two = report['calls']
@@ -76,6 +76,14 @@ class CompactTransportTests(unittest.TestCase):
         self.assertFalse(expanded['releaseAuthorized'])
         self.assertEqual({'promptScalarsExclusive': 60000, 'rawOutputBytes': 48000,
                           'chunks': 8, 'evidenceScalars': 12000}, report['limits'])
+
+    def test_frozen_production_batch_is_96(self):
+        from proof_transport_v4 import PROOF_SUBSET_BATCH
+        report = self.planned(8)
+        self.assertEqual(96, PROOF_SUBSET_BATCH)
+        self.assertEqual(96, report['perCallSubsetLimit'])
+        self.assertEqual(255, report['subsetCount'])
+        self.assertEqual(6, report['callCount'])
 
     def test_roundtrip_every_subset_zero_through_eight(self):
         for count in range(9):
@@ -162,7 +170,7 @@ class CompactTransportTests(unittest.TestCase):
         for chunk in evidence:
             chunk['text'] = '文' * 1500
         originals = {c['chunkId']: copy.deepcopy(c) for c in evidence}
-        self.assertEqual(2, compact_schedule('case-one', 'Question?', group, evidence, originals)['callCount'])
+        self.assertEqual(2, compact_schedule('case-one', 'Question?', group, evidence, originals, per_call=255)['callCount'])
         evidence[0]['text'] += 'x'
         originals[evidence[0]['chunkId']]['text'] += 'x'
         with self.assertRaisesRegex(ValueError, '12000'):

@@ -67,7 +67,12 @@ public static class WorkbenchCli
                 var schemaText = frozenSchema.RootElement.GetRawText();
                 var input = await File.ReadAllTextAsync(Required(command == "exec" ? "prompt" : "input"), cancel.Token);
                 var node = ledger.BindNode(nodeId, Wire.Hash(input), Wire.Hash(schemaText),
-                    settings.InputPolicy == WorkbenchInputPolicy.DevEquivalenceV2 ? "dev-equivalence-input-v2" : null);
+                    settings.InputPolicy switch
+                    {
+                        WorkbenchInputPolicy.DevEquivalenceV2 => "dev-equivalence-input-v2",
+                        WorkbenchInputPolicy.PrivateAuthorSourceV1 or WorkbenchInputPolicy.PrivateCheckerSourceV1 => "private-source-input-v1",
+                        _ => null
+                    });
                 if (node.Status == NodeStatus.Produced) { VerifyArtifact(node); Console.WriteLine("{\"status\":\"already_produced\"}"); return 0; }
                 if (command == "check")
                 {

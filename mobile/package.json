@@ -31,6 +31,7 @@
     "expo-asset": "~12.0.12",
     "expo-audio": "~1.1.1",
     "expo-constants": "~18.0.11",
+    "decode-uri-component": "file:vendor/decode-uri-component",
     "expo-crypto": "~15.0.8",
     "expo-dev-client": "~6.0.20",
     "expo-file-system": "~19.0.21",
@@ -70,5 +71,9 @@
     "vite": "7.3.6",
     "vitest": "^4.1.11"
   },
-  "private": true
+  "private": true,
+  "overrides": {
+    "decode-uri-component": "$decode-uri-component"
+  }
 }
+

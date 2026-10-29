@@ -254,13 +254,15 @@ def _verify_execution_bytes_v4(raw, output_dir, *, frozen_prompt, frozen_schema_
              all(type(raw[n]) is bytes and len(raw[n]) <= LIMITS[n] for n in LIMITS),
              'Exact bounded six raw byte files required')
     _require(all(_hash(raw[name]) == pins[name] for name in LIMITS), 'Externally pinned raw hash mismatch')
-    _require(input_policy in (None, 'dev-equivalence-input-v2'), 'Unknown fixed input policy')
+    _require(input_policy in (None, 'dev-equivalence-input-v2', 'private-source-input-v1'),
+             'Unknown fixed input policy')
     _require(type(frozen_prompt) is str and bool(frozen_prompt) and
              type(frozen_schema_bytes) is bytes and 0 < len(frozen_schema_bytes) <= LIMITS['schema.json'],
              'Frozen input bounds/type')
     prompt_bytes = frozen_prompt.encode('utf-8', errors='strict')
     utf16_units = len(frozen_prompt.encode('utf-16-le', errors='strict')) // 2
-    _require((len(frozen_prompt) < 200_000 and utf16_units < 200_000) if input_policy else
+    versioned = input_policy in ('dev-equivalence-input-v2', 'private-source-input-v1')
+    _require((len(frozen_prompt) < 200_000 and utf16_units < 200_000) if versioned else
              (len(frozen_prompt) <= 60_000 and utf16_units <= 60_000), 'Frozen purpose/version input bound')
     _require(raw['schema.json'] == frozen_schema_bytes, 'Exact emitted schema bytes changed')
     _text(raw['stderr.log'])
@@ -272,7 +274,9 @@ def _verify_execution_bytes_v4(raw, output_dir, *, frozen_prompt, frozen_schema_
              'startedUtc'}
     if input_policy:
         invocation_fields |= {'purpose', 'inputPolicyVersion'}
-        _require(invocation.get('purpose') == 'dev-equivalence' and invocation.get('inputPolicyVersion') == input_policy,
+        expected_purpose = ('dev-equivalence',) if input_policy == 'dev-equivalence-input-v2' else (
+            'private-author', 'private-checker')
+        _require(invocation.get('purpose') in expected_purpose and invocation.get('inputPolicyVersion') == input_policy,
                  'Purpose/version invocation marker mismatch')
     _require(set(invocation) == invocation_fields, 'Unexpected invocation fields; environment values forbidden')
     _require(execution.get('success') is True and execution.get('failure') == 'none' and

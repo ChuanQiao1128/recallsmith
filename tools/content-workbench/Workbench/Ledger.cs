@@ -90,7 +90,7 @@ public sealed class RunLedger : IDisposable
     public NodeRecord BindNode(string id, string inputHash, string schemaHash, string? inputPolicyVersion = null)
     {
         AssertCurrent();
-        if (inputPolicyVersion is not (null or "dev-equivalence-input-v2")) throw new ArgumentException("Unknown frozen input policy.");
+        if (inputPolicyVersion is not (null or "dev-equivalence-input-v2" or "private-source-input-v1")) throw new ArgumentException("Unknown frozen input policy.");
         if (State.Nodes.TryGetValue(id, out var node))
         {
             if (node.InputHash != inputHash || node.SchemaHash != schemaHash || node.InputPolicyVersion != inputPolicyVersion) throw new InvalidOperationException("Frozen node inputs or input policy changed; preserve this node/run.");

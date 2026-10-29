@@ -1,0 +1,7 @@
+{
+  "name": "decode-uri-component",
+  "version": "0.5.1-cjs",
+  "description": "CommonJS build of the decode-uri-component 0.5.1 decoder, keeping the plus-to-space behavior from 0.2.2.",
+  "license": "MIT",
+  "main": "index.js"
+}

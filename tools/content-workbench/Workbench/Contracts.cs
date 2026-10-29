@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Json.Schema;
 
@@ -15,6 +16,8 @@ public sealed class WorkbenchOptions
         {
             (null, null) => WorkbenchInputPolicy.Legacy,
             ("dev-equivalence", "dev-equivalence-input-v2") => WorkbenchInputPolicy.DevEquivalenceV2,
+            ("private-author", "private-source-input-v1") => WorkbenchInputPolicy.PrivateAuthorSourceV1,
+            ("private-checker", "private-source-input-v1") => WorkbenchInputPolicy.PrivateCheckerSourceV1,
             _ => throw new ArgumentException("Unsupported purpose/input-policy pair.")
         };
     }
@@ -38,7 +41,7 @@ public sealed class WorkbenchOptions
 }
 
 public enum FailureKind { None, Cancelled, Timeout, PreflightTimeout, Authentication, Quota, Environment, ProcessExit, Protocol, Schema, ToolBoundary }
-public enum WorkbenchInputPolicy { Legacy, DevEquivalenceV2 }
+public enum WorkbenchInputPolicy { Legacy, DevEquivalenceV2, PrivateAuthorSourceV1, PrivateCheckerSourceV1 }
 public sealed record FrozenRequest(string Prompt, string Schema, WorkbenchInputPolicy InputPolicy = WorkbenchInputPolicy.Legacy);
 public sealed record ExecutionResult(bool Success, FailureKind Failure, int? ExitCode, string AttemptDirectory,
     string InputHash, string SchemaHash, string? OutputHash, string RequestedModel, string? ReportedModel,
@@ -61,7 +64,8 @@ public static class Wire
         var valid = request.InputPolicy switch
         {
             WorkbenchInputPolicy.Legacy => request.Prompt.Length <= 60_000 && scalars <= 60_000,
-            WorkbenchInputPolicy.DevEquivalenceV2 => request.Prompt.Length < 200_000 && scalars < 200_000,
+            WorkbenchInputPolicy.DevEquivalenceV2 or WorkbenchInputPolicy.PrivateAuthorSourceV1
+                or WorkbenchInputPolicy.PrivateCheckerSourceV1 => request.Prompt.Length < 200_000 && scalars < 200_000,
             _ => false
         };
         if (!valid) throw new ArgumentException("Frozen input exceeds its fixed purpose/version budget.");
@@ -109,6 +113,34 @@ public static class Wire
             File.Move(temp, path, overwrite: true);
         }
         finally { if (File.Exists(temp)) File.Delete(temp); }
+    }
+    public static string ForStrictResponse(string schemaText)
+    {
+        var root = JsonNode.Parse(schemaText) as JsonObject ?? throw new ArgumentException("Schema must be an object.");
+        if (root["$ref"] is JsonValue reference && root["$defs"] is JsonObject definitions)
+        {
+            var pointer = reference.GetValue<string>();
+            const string prefix = "#/$defs/";
+            if (pointer.StartsWith(prefix, StringComparison.Ordinal) && definitions[pointer[prefix.Length..]] is JsonObject target && target["type"] is JsonValue type && type.GetValue<string>() == "object")
+            {
+                var rewritten = (JsonObject)target.DeepClone();
+                rewritten["$defs"] = definitions.DeepClone();
+                root = rewritten;
+            }
+        }
+        RemoveKeyword(root, "uniqueItems");
+        root.Remove("$schema");
+        return root.ToJsonString();
+    }
+    private static void RemoveKeyword(JsonNode node, string keyword)
+    {
+        if (node is JsonObject obj)
+        {
+            obj.Remove(keyword);
+            foreach (var child in obj.ToArray()) if (child.Value is { } value) RemoveKeyword(value, keyword);
+        }
+        else if (node is JsonArray array)
+            foreach (var child in array) if (child is { } value) RemoveKeyword(value, keyword);
     }
     public static JsonSchema ParseSchema(string text)
     {
