@@ -425,7 +425,8 @@
             "embedding-model",
             "equivalence-instructions",
             "equivalence-output-schema",
-            "model-contract"
+            "model-contract",
+            "proof-output-schema"
           ]
         }
       },
@@ -435,7 +436,35 @@
         "dependencies",
         "role"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "role": {
+                "const": "proof-output-schema"
+              }
+            },
+            "required": [
+              "role"
+            ]
+          },
+          "then": {
+            "properties": {
+              "category": {
+                "const": "schema"
+              },
+              "artifact": {
+                "properties": {
+                  "path": {
+                    "const": "/Users/qc/src/recallsmith-aws-basics-delivery-20261028/tools/content-pipeline/semantic-v4-proof-output.schema.json"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "RuntimeManifest": {
       "type": "object",
@@ -1860,7 +1889,15 @@
         "processIdentity": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 2048
+          "maxLength": 2048,
+          "pattern": "\\S",
+          "not": {
+            "enum": [
+              "unknown",
+              "self",
+              "none"
+            ]
+          }
         },
         "sequence": {
           "type": "integer",
@@ -2103,7 +2140,10 @@
         "projectionHash",
         "custodianReplayAction",
         "checksEvidence",
-        "releaseAuthorized"
+        "releaseAuthorized",
+        "claim",
+        "unseal",
+        "releasedFiles"
       ],
       "properties": {
         "kind": {
@@ -2191,6 +2231,15 @@
         },
         "releaseAuthorized": {
           "const": false
+        },
+        "claim": {
+          "$ref": "#/$defs/Ref"
+        },
+        "unseal": {
+          "$ref": "#/$defs/Ref"
+        },
+        "releasedFiles": {
+          "$ref": "#/$defs/SixRefs"
         }
       }
     },

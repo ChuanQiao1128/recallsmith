@@ -377,6 +377,8 @@ def fixture():
                  'tools/content-workbench/Workbench/Workbench.csproj'):
         add(trusted.R + '/' + path, b'future frozen fixture\n')
     add(trusted.R + '/tools/mcp-server/dist/index.js', b'future bundle\n', 'binary')
+    add(trusted.P + '/semantic-v4-proof-output.schema.json',
+        Path(__file__).with_name('semantic-v4-proof-output.schema.json').read_bytes(), 'schema', 'proof-output-schema')
     add('/synthetic/site-packages/package/__init__.py', b'\n', 'dependency')
     add(trusted.P + '/requirements.lock.txt', b'fixture==1\n', 'dependency')
     for category in ('test', 'prompt', 'algorithm'):
@@ -454,6 +456,142 @@ def review_fixture(node='current-source-review', report=b'# Native review\nPASS 
         artifacts[path] = data
         root['artifacts'].append({'slot': suffix, 'artifact': ref(path, data), 'category': category})
     return root, runtime, registry, artifacts, binding, envelope, request
+
+
+def _rehash_runtime(root, runtime, artifacts):
+    consumer = next(entry for entry in runtime['entries'] if entry['role'] == 'consumer')
+    runtime['entries'] = [entry for entry in runtime['entries'] if entry is not consumer]
+    consumer['dependencies'] = [entry['artifact'] for entry in runtime['entries']]
+    runtime['entries'].append(consumer)
+    runtime['identity']['implementationManifestHash'] = trusted._digest(runtime['entries'])
+    for category, field in (('schema', 'schemaHash'), ('prompt', 'promptsHash'), ('test', 'testsHash'),
+                            ('algorithm', 'algorithmHash'), ('model', 'modelIdentityHash')):
+        runtime['identity'][field] = trusted._digest([entry['artifact'] for entry in runtime['entries'] if entry['category'] == category])
+    path = trusted.T + '/runtime-manifest.json'
+    artifacts[path] = raw(runtime)
+    root['runtimeManifest'] = ref(path, artifacts[path])
+
+
+def _install_review(f, node):
+    """Future observed review shape, not a claim of actual review or equivalence."""
+    inputs = list(trusted._runtime_required_inputs(f.root, f.manifest).values())
+    rules = sorted(trusted.SOURCE_RULES) if node == 'current-source-review' else ['synthetic-interface-rule']
+    base = trusted.T + '/reviews/' + node
+    request = {k: v for k, v in common('trusted-review-request').items() if k != 'releaseAuthorized'}
+    request.update(node=node, producerTask='synthetic-producer', ruleIds=rules, boundInputs=inputs,
+                   requestText='Synthetic interface fixture: verify the exact attached bytes.')
+    request_ref = f.put(base + '/request.json', request)
+    report_ref = f.put(base + '/report.json', b'# Synthetic observed independent review\n')
+    envelope = {**common('trusted-v4-accepted-review'), 'node': node, 'rawRequest': request_ref,
+        'rawReport': report_ref, 'supervisorTask': f.root['supervisorTask'],
+        'observedTask': 'synthetic-independent-' + node, 'observedModel': 'synthetic-native-model',
+        'observedEffort': 'high', 'observedUtc': '2026-10-28T23:00:00Z', 'context': 'fresh-native',
+        'boundInputs': inputs, 'runtimeManifest': f.root['runtimeManifest'], 'identity': f.manifest['identity'],
+        'ruleOutcomes': [{'ruleId': rule, 'outcome': 'PASS', 'evidence': [f.root['runtimeManifest']],
+                          'reason': 'Synthetic observed interface check.'} for rule in rules],
+        'limitations': [], 'accepted': 'PASS'}
+    accepted = f.put(base + '/accepted.json', envelope)
+    binding = next(item for item in f.root['authorities'] if item['node'] == node)
+    binding.update(state='PASS', acceptedReview=accepted, observation=None, boundInputs=inputs)
+
+
+def _complete_proof_snapshot_fixture(test):
+    """Complete Stage B snapshot; synthetic adopted inputs do not prove R01-R17."""
+    from test_trusted_custody_v4 import Fixture, RegistryTests
+    from proof_transport_v4 import compact_schedule
+    f = Fixture()
+    f.root, f.manifest, registry, f.artifacts = fixture()
+    f.protocol = next(slot['artifact'] for slot in f.root['artifacts'] if slot['artifact']['path'].endswith('/semantic-protocol.md'))
+    f.access = next(slot['artifact'] for slot in f.root['artifacts'] if slot['artifact']['path'].endswith('/access-protocol.md'))
+    original, sources = trusted._corpus_maps(f.manifest, f.artifacts)
+    evidence = list(original.values())
+    group = {'id': 'group-one', 'requiredFacts': [{'id': 'fact-one', 'text': 'Synthetic fact'}], 'mandatoryScope': []}
+    case = {'id': 'case-one', 'module': 'cloud', 'queryEn': 'Synthetic question?',
+            'answerable': True, 'groups': [group], 'negativeReason': None}
+    references = f.put(trusted.D + '/references.json', {'queries': [case]})
+    packet = f.put(trusted.E + '/dev/A/packets/case-one.json', {'query': case['queryEn'], 'evidence': evidence})
+    raw_builder = RegistryTests(); raw_builder.f = f
+    test.addCleanup(raw_builder.doCleanups)
+    planned = compact_schedule(case['id'], case['queryEn'], group, evidence, original)
+    proof_schema = Path(__file__).with_name('semantic-v4-proof-output.schema.json').read_bytes()
+    result = {'quotes': [], 'subsets': [{'mask': 1, 'verdict': 'UNKNOWN', 'coverage': [],
+                                      'deploymentConsistent': 'UNKNOWN', 'reason': 'Synthetic no semantic credit'}]}
+    for role in ('one', 'two'):
+        call = next(call for call in planned['calls'] if call['checkerId'] == role)
+        output = f"{trusted.D}/A/raw/case-one/group-one/{role}/0"
+        entry = raw_builder.raw_entry(output, call['prompt'], role, call['projectionHash'], schema=proof_schema, result=result)
+        entry.update(purpose='dev-proof', scope={'configuration': 'A', 'caseIds': ['case-one'],
+            'groupId': 'group-one', 'packets': [packet], 'reference': references, 'protocol': f.protocol,
+            'projectionHash': call['projectionHash'], 'prompt': entry.pop('promptRef'), 'schema': entry['emittedSchema']})
+        invocation = trusted._parse(f.artifacts[entry['invocation']['path']])
+        invocation['startedUtc'] = '2026-10-29T00:01:01Z'
+        entry['invocation'] = f.put(entry['invocation']['path'], invocation)
+        entry['trustedPins']['expectedFileHashes']['invocation.json'] = entry['invocation']['sha256']
+        entry['observedUtc'] = '2026-10-29T00:02:00Z'
+        registry['entries'].append(entry)
+    _rehash_runtime(f.root, f.manifest, f.artifacts)
+    # Four independently registered current review records and a genuine-shaped
+    # complete denial event make the nonempty public-loader success branch real.
+    for node in ('contract-review', 'reference-equivalence', 'adoption-implementation-review', 'current-source-review'):
+        _install_review(f, node)
+    denial = f.denial()
+    binding = next(item for item in f.root['authorities'] if item['node'] == 'isolation-denial')
+    binding.update(state='PASS', acceptedReview=None,
+        observation=ref(trusted.T + '/custodian/0.json', f.artifacts[trusted.T + '/custodian/0.json']),
+        boundInputs=[f.root['runtimeManifest'], denial['actionRecord'], f.access])
+    schema = trusted._parse(Path(__file__).with_name('semantic-v4-adoption-contract.json').read_bytes())
+    consumer = {'identity': f.manifest['identity'], 'dependencyManifest': f.root['runtimeManifest'],
+        'adoptionContract': ref(trusted.P + '/semantic-v4-adoption-contract.json', f.artifacts[trusted.P + '/semantic-v4-adoption-contract.json']),
+        'adoptionDocument': ref(trusted.P + '/SEMANTIC_V4_ADOPTION.md', f.artifacts[trusted.P + '/SEMANTIC_V4_ADOPTION.md'])}
+    seed = f.put(trusted.T + '/synthetic-upstream.json', b'{}')
+    def registered_refs(value):
+        if type(value) is dict:
+            if set(value) == {'path', 'sha256'}: return seed
+            return {key: '/synthetic' if key.endswith('Pointer') and type(child) is str else registered_refs(child) for key, child in value.items()}
+        if type(value) is list: return [registered_refs(child) for child in value]
+        return value
+    mapping = registered_refs(sample(schema, 'ReferenceMapping'))
+    mapping.update(proofConsumer=consumer, adaptedReferences=references)
+    for index, row in enumerate(mapping['cases']): row['caseId'] = 'case-one' if index == 0 else 'case-' + str(index)
+    mapping_ref = f.put(trusted.D + '/reference-mapping.json', mapping)
+    trusted._validate_adoption_record(mapping, 'ReferenceMapping')
+    inventory = sample(schema, 'PacketInventory')
+    inventory.update(proofConsumer=consumer, referenceMapping=mapping_ref, adaptedReferences=references, rows=[])
+    for config in ('A', 'B'):
+        for index in range(80):
+            cid = 'case-one' if index == 0 else 'case-' + str(index)
+            original_packet = packet if config == 'A' and index == 0 else f.put(
+                f'{trusted.E}/dev/{config}/packets/{cid}.json', {'query': case['queryEn'], 'evidence': evidence})
+            wrapper = sample(schema, 'PacketAdoption')
+            wrapper.update(configuration=config, caseId=cid, originalPacket=original_packet, originalProvenance=[],
+                originalRetrievalIdentityHash=trusted._digest({'packet': original_packet, 'provenance': []}),
+                proofConsumer=consumer, referenceMapping=mapping_ref)
+            trusted._validate_adoption_record(wrapper, 'PacketAdoption')
+            wrapper_ref = f.put(f'{trusted.D}/{config}/packets/{cid}.json', wrapper)
+            inventory['rows'].append({'configuration': config, 'caseId': cid,
+                                     'originalPacket': original_packet, 'packetAdoption': wrapper_ref})
+    inventory_ref = f.put(trusted.D + '/packet-inventory.json', inventory)
+    prerequisites = [binding for binding in f.root['authorities'] if binding['node'] in
+                     trusted.PERMISSION_PREREQUISITES['DEV_PROOF_EXECUTION']]
+    required = {f.root['runtimeManifest']['path'], mapping_ref['path'], inventory_ref['path'], references['path'], f.protocol['path']}
+    for binding in prerequisites:
+        required |= {item['path'] for item in binding['boundInputs']}
+        required |= {item['path'] for item in (binding['acceptedReview'], binding['observation']) if item}
+    required |= {entry['artifact']['path'] for entry in f.manifest['entries'] if entry['category'] in ('prompt', 'schema')}
+    required |= {row[key]['path'] for row in inventory['rows'] for key in ('originalPacket', 'packetAdoption')}
+    required |= {consumer[key]['path'] for key in ('dependencyManifest', 'adoptionContract', 'adoptionDocument')}
+    authorization = {**common('trusted-v4-authorization'), 'permission': 'DEV_PROOF_EXECUTION',
+        'supervisorTask': f.root['supervisorTask'], 'observedUtc': '2026-10-29T00:01:00Z',
+        'runtimeManifest': f.root['runtimeManifest'], 'identity': f.manifest['identity'],
+        'boundInputs': [ref(path, f.artifacts[path]) for path in sorted(required)], 'prerequisites': prerequisites}
+    auth_ref = f.put(trusted.T + '/authorizations/DEV_PROOF_EXECUTION.json', authorization)
+    for entry in registry['entries']:
+        entry.update(authorization=auth_ref, runtimeManifest=f.root['runtimeManifest'])
+    f.root['executionRegistry'] = f.put(trusted.T + '/execution-registry.json', registry)
+    # Replacing input slots during fixture assembly must not duplicate slot IDs.
+    for ordinal, slot in enumerate(f.root['artifacts']): slot['slot'] = 'complete-' + str(ordinal)
+    trusted._validate_authorization(f.root, f.manifest, authorization, f.artifacts)
+    return f, registry
 
 
 class TrustedCoreTests(unittest.TestCase):
@@ -600,7 +738,10 @@ class TrustedCoreTests(unittest.TestCase):
         files[trusted.C + '/run.json'] = raw(run)
         real_schema = Path(trusted.SCHEMA_PATH).read_bytes()
         def read(path, limit=2_000_000, identities=None):
-            value = real_schema if path == trusted.SCHEMA_PATH else files[path]
+            value = (real_schema if path == trusted.SCHEMA_PATH else
+                     Path(__file__).with_name('semantic-v4-proof-output.schema.json').read_bytes()
+                     if path == str(Path(trusted.SCHEMA_PATH).with_name('semantic-v4-proof-output.schema.json'))
+                     else files[path])
             if len(value) > limit: raise ValueError('Fixture exceeds reviewed bound')
             return value
         with patch.object(trusted, '_read_stable', side_effect=read), patch.object(
@@ -743,6 +884,148 @@ class TrustedCoreTests(unittest.TestCase):
             'artifact': ref(trusted.D + '/A/raw/invented/result.json', b'secret must not open')})
         with self.assertRaisesRegex(ValueError, 'not derived'):
             trusted._prevalidate_registry_paths(root, registry)
+
+
+    def test_nonempty_fixed_public_loader_complete_registered_proof_snapshot(self):
+        f, registry = _complete_proof_snapshot_fixture(self)
+        trusted._prevalidate_registry_paths(f.root, registry)
+        trusted._snapshot_from_test_bytes(f.root, f.manifest, registry, f.artifacts)
+        corpus = trusted._parse(f.artifacts[trusted.CORPUS + '/manifest.json'])
+        run = {'nodes': {'A3V4-trusted-root': f.root, 'A2R-corpus': {'status': 'produced',
+            'corpusVersion': corpus['corpusVersion'], 'sourceCount': 1, 'chunkCount': 1}}}
+        files = dict(f.artifacts); files[trusted.C + '/run.json'] = raw(run)
+        with tempfile.TemporaryDirectory() as directory:
+            physical = {}
+            for ordinal, (logical, data) in enumerate(files.items()):
+                path = Path(directory).resolve() / str(ordinal); path.write_bytes(data)
+                physical[logical] = str(path)
+            physical[trusted.SCHEMA_PATH] = physical[trusted.P + '/semantic-v4-trusted-interfaces.schema.json']
+            physical[str(trusted.CONTRACT_PATH)] = physical[trusted.P + '/semantic-v4-adoption-contract.json']
+            actual_read = trusted._read_stable
+            reads = []
+            def read(logical, limit=2_000_000, identities=None):
+                reads.append(logical)
+                return actual_read(physical[logical], limit, identities)
+            with patch.object(trusted, '_read_stable', side_effect=read), patch.object(
+                    trusted, '__file__', trusted.P + '/trusted_interfaces_v4.py'):
+                snapshot = trusted.load_trusted_snapshot_v4()
+                executions = trusted.registered_executions_v4(snapshot, 'dev-proof', 'A', ['case-one'], 'group-one')
+                self.assertEqual(['one', 'two'], [row['checkerId'] for row in executions])
+                self.assertEqual(2, len(snapshot.executionRegistry['entries']))
+                self.assertEqual('PASS', trusted.require_authority_v4(snapshot, 'current-source-review')['state'])
+                self.assertTrue(all(entry['scope']['prompt']['path'] in reads for entry in registry['entries']))
+                self.assertTrue(all(entry[field]['path'] in reads for entry in registry['entries'] for field in
+                                    ('execution', 'invocation', 'result', 'events', 'stderr', 'emittedSchema')))
+                # Fresh source bytes invalidate the same snapshot immediately.
+                Path(physical[trusted.P + '/author.py']).write_bytes(b'# changed source')
+                with self.assertRaisesRegex(ValueError, 'input changed'):
+                    trusted.registered_executions_v4(snapshot, 'dev-proof', 'A', ['case-one'], 'group-one')
+        for mutation in ('missing-prompt', 'wrong-path', 'top-level-prompt'):
+            bad = copy.deepcopy(registry)
+            entry = bad['entries'][0]
+            if mutation == 'missing-prompt': entry['scope'].pop('prompt')
+            if mutation == 'wrong-path': entry['scope']['prompt']['path'] += '.alias'
+            if mutation == 'top-level-prompt': entry['prompt'] = entry['scope']['prompt']
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                trusted._prevalidate_registry_paths(f.root, bad)
+
+    def test_fixed_proof_schema_role_and_bytes_after_rehashed_logical_mutations(self):
+        for mutation in ('missing', 'duplicate', 'wrong-path', 'wrong-category', 'different-valid-schema'):
+            root, runtime, _, artifacts = fixture()
+            designated = next(entry for entry in runtime['entries'] if entry['role'] == 'proof-output-schema')
+            if mutation == 'missing': runtime['entries'].remove(designated)
+            if mutation == 'duplicate':
+                extra = copy.deepcopy(designated); extra['artifact']['path'] = '/synthetic/second-proof-schema.json'
+                artifacts[extra['artifact']['path']] = artifacts[designated['artifact']['path']]
+                runtime['entries'].insert(0, extra)
+            if mutation == 'wrong-path':
+                old = designated['artifact']['path']; designated['artifact']['path'] = '/synthetic/substitute-schema.json'
+                artifacts[designated['artifact']['path']] = artifacts[old]
+            if mutation == 'wrong-category': designated['category'] = 'dependency'
+            if mutation == 'different-valid-schema':
+                data = b'{"type":"object","additionalProperties":false}'
+                artifacts[designated['artifact']['path']] = data
+                designated['artifact']['sha256'] = trusted._hash(data)
+            _rehash_runtime(root, runtime, artifacts)
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(ValueError, 'proof output schema|Proof output schema|closed RuntimeManifest'):
+                trusted._validate_runtime_manifest(root, runtime, artifacts)
+
+    def test_label_permission_requires_complete_prior_stop_prefix_without_future_cycle(self):
+        from trusted_custody_v4 import _validate_label_authorization_prefix_v4
+        f, registry = _complete_proof_snapshot_fixture(self)
+        _install_review(f, 'integration-canary')
+        f.termination = f.evidence('builder terminated before permission')
+        inventory = f.put(trusted.T + '/worker-inventory.json', {**common('trusted-v4-worker-inventory'),
+            'supervisorTask': f.root['supervisorTask'], 'workers': [{'taskId': 'builder',
+                'processIdentity': 'builder-process', 'startedUtc': '2026-10-28T00:00:00Z'}]})
+        selection = f.put(trusted.E + '/selection.json', {'synthetic': 'registered selection; Stage C still required'})
+        denial_ref = ref(trusted.T + '/custodian/0.json', f.artifacts[trusted.T + '/custodian/0.json'])
+        f.freeze = f.put(trusted.E + '/freeze.json', f.envelope('freeze', {'selection': selection,
+            'registration': f.protocol, 'reviews': [f.protocol], 'denialReceipt': denial_ref,
+            'builderTerminationReceipts': [f.termination], 'parentPlan': f.protocol}))
+        accepted = f.observe({'event': 'FREEZE_ACCEPTED', 'freeze': f.freeze, 'selection': selection},
+            [('accept-freeze', f.freeze['path'], 'ACCEPTED')], [selection, denial_ref])
+        binding = next(binding for binding in f.root['authorities'] if binding['node'] == 'selection-freeze')
+        binding.update(state='PASS', acceptedReview=None,
+            observation=ref(trusted.T + '/custodian/1.json', f.artifacts[trusted.T + '/custodian/1.json']),
+            boundInputs=[f.root['runtimeManifest'], f.freeze, selection, accepted['actionRecord']])
+        stopped = f.observe({'event': 'BUILDERS_STOPPED', 'workers': [{'taskId': 'builder',
+            'processIdentity': 'builder-process', 'startedUtc': '2026-10-28T00:00:00Z',
+            'stoppedUtc': '2026-10-29T00:00:01Z', 'exitObserved': True, 'launcherRecord': f.termination}],
+            'completeWorkerSet': ['builder'], 'restartBlockedObserved': True},
+            [('terminate', 'builder', 'TERMINATED', 0, f.termination), ('prevent-restart', 'all', 'BLOCKED')], [inventory])
+        observed_utc = '2026-10-29T00:00:02.500Z'
+        prefix = _validate_label_authorization_prefix_v4(f.root, f.manifest, f.artifacts, observed_utc)
+        prerequisites = [binding for binding in f.root['authorities'] if binding['node'] in
+                         trusted.PERMISSION_PREREQUISITES['LABEL_EXECUTION']]
+        expected = {f.root['runtimeManifest']['path'], f.freeze['path'], f.protocol['path']}
+        for binding in prerequisites:
+            expected |= {item['path'] for item in binding['boundInputs']}
+            expected |= {item['path'] for item in (binding['acceptedReview'], binding['observation']) if item}
+        expected |= {item['path'] for item in prefix}
+        authorization = {**common('trusted-v4-authorization'), 'permission': 'LABEL_EXECUTION',
+            'supervisorTask': f.root['supervisorTask'], 'observedUtc': observed_utc,
+            'runtimeManifest': f.root['runtimeManifest'], 'identity': f.manifest['identity'],
+            'boundInputs': [ref(path, f.artifacts[path]) for path in sorted(expected)], 'prerequisites': prerequisites}
+        trusted._validate_authorization(f.root, f.manifest, authorization, f.artifacts)
+        for mutation in ('before-stopped', 'same-time', 'non-utc', 'missing-inventory', 'missing-stop-action',
+                         'missing-termination', 'extra-input', 'unknown-field'):
+            bad = copy.deepcopy(authorization)
+            if mutation == 'before-stopped': bad['observedUtc'] = '2026-10-29T00:00:01Z'
+            if mutation == 'same-time': bad['observedUtc'] = stopped['observedUtc']
+            if mutation == 'non-utc': bad['observedUtc'] = '2026-10-29T01:00:02.500+01:00'
+            if mutation == 'missing-inventory': bad['boundInputs'] = [item for item in bad['boundInputs'] if item['path'] != inventory['path']]
+            if mutation == 'missing-stop-action': bad['boundInputs'] = [item for item in bad['boundInputs'] if item['path'] != stopped['actionRecord']['path']]
+            if mutation == 'missing-termination': bad['boundInputs'] = [item for item in bad['boundInputs'] if item['path'] != f.termination['path']]
+            if mutation == 'extra-input': bad['boundInputs'].append(ref(trusted.T + '/synthetic-upstream.json', b'{}'))
+            if mutation == 'unknown-field': bad['stopObserved'] = True
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                trusted._validate_authorization(f.root, f.manifest, bad, f.artifacts)
+        # Consistent repinning does not excuse a logically future stop report.
+        altered_root, altered_artifacts, altered_authorization = copy.deepcopy((f.root, f.artifacts, authorization))
+        stop_path = trusted.T + '/custodian/2.json'
+        altered_stop = trusted._parse(altered_artifacts[stop_path])
+        altered_stop['detail']['workers'][0]['stoppedUtc'] = '2026-10-29T00:00:03Z'
+        altered_artifacts[stop_path] = raw(altered_stop)
+        repinned = ref(stop_path, altered_artifacts[stop_path])
+        for slot in altered_root['artifacts']:
+            if slot['artifact']['path'] == stop_path: slot['artifact'] = repinned
+        altered_authorization['boundInputs'] = [repinned if item['path'] == stop_path else item
+                                                for item in altered_authorization['boundInputs']]
+        with self.assertRaises(ValueError):
+            trusted._validate_authorization(altered_root, f.manifest, altered_authorization, altered_artifacts)
+        absent_stop = copy.deepcopy(f.root)
+        absent_stop['artifacts'] = [slot for slot in absent_stop['artifacts'] if slot['artifact']['path'] != stop_path]
+        with self.assertRaises(ValueError):
+            trusted._validate_authorization(absent_stop, f.manifest, authorization, f.artifacts)
+        auth_ref = f.put(trusted.T + '/authorizations/LABEL_EXECUTION.json', authorization)
+        f.observe({'event': 'LABELS_STARTED', 'authorization': auth_ref, 'privateStoreId': 'opaque-store'},
+            [('private-store', 'opaque-store', 'CUSTODIAN_CONTROLLED'), ('labels-start', 'holdout', 'STARTED')], [auth_ref])
+        # The permission remains verifiable after its later consumer is registered,
+        # proving the prefix check does not recurse through LABELS_STARTED.
+        trusted._validate_authorization(f.root, f.manifest, authorization, f.artifacts)
+        for ordinal, slot in enumerate(f.root['artifacts']): slot['slot'] = 'label-' + str(ordinal)
+        trusted._snapshot_from_test_bytes(f.root, f.manifest, registry, f.artifacts)
 
 
 if __name__ == '__main__':

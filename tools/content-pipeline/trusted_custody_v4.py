@@ -6,6 +6,7 @@ private paths are strings compared against independent release bindings only.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -319,7 +320,16 @@ def validate_execution_registry_v4(root, runtime_manifest, registry, artifacts):
         expected_reference = c.D + '/references.json' if purpose in ('dev-proof', 'dev-equivalence') else c.E + '/holdout/references.json'
         if purpose != 'integration-canary':
             _require(scope['reference']['path'] == expected_reference, 'Reference fixed path changed')
-        if purpose in ('dev-equivalence', 'dev-proof', 'holdout-proof'):
+        if purpose in ('dev-proof', 'holdout-proof'):
+            designated = [e for e in runtime_manifest['entries'] if e['role'] == 'proof-output-schema']
+            _require(len(designated) == 1 and designated[0]['category'] == 'schema' and
+                     designated[0]['artifact']['path'] == R + '/tools/content-pipeline/semantic-v4-proof-output.schema.json',
+                     'Unique fixed proof-output-schema runtime input required')
+            schema_bytes = _registered(root, designated[0]['artifact'], artifacts)
+            _require(scope['schema']['sha256'] == designated[0]['artifact']['sha256'] and
+                     artifacts.get(scope['schema']['path']) == schema_bytes,
+                     'Proof emitted schema differs from designated purpose schema')
+        elif purpose == 'dev-equivalence':
             _require(any(e['category'] == 'schema' and e['artifact']['sha256'] == scope['schema']['sha256']
                          for e in runtime_manifest['entries']), 'Static emitted schema not frozen runtime input')
         _require(scope['protocol']['path'] == c.C + '/design/rag-v2-bounded/r4/semantic-protocol.md' and
@@ -495,28 +505,90 @@ def _validate_readiness_scopes(root, manifest, registry, artifacts):
                          'Readiness prompt/projection/schema differs from rebuilt schedule')
 
 
-def _action(root, observation, artifacts):
-    action = _record(_registered(root, observation['actionRecord'], artifacts), 'ExternalAction')
-    for key in ('supervisorTask', 'custodianRunId', 'custodianPrincipal', 'sequence',
-                'runtimeManifest', 'policyHash', 'observedUtc'):
-        _require(action[key] == observation[key], 'Action/observation binding changed: ' + key)
-    _require(action['event'] == observation['detail']['event'], 'Actual action event differs')
-    _require(action['processIdentity'] not in ('unknown', 'self', 'none'), 'Actual process identity required')
-    for ref in action['inputs']:
-        _registered(root, ref, artifacts)
-    _require(observation['runtimeManifest'] in action['inputs'], 'Action lacks runtime input')
-    if observation['freeze'] is not None:
-        _require(observation['freeze'] in action['inputs'], 'Action lacks current freeze')
+def _utc(value):
+    _require(type(value) is str and value == value.strip(), 'Observed UTC timestamp required')
+    try:
+        parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except ValueError as exc:
+        raise ValueError('Observed UTC timestamp required') from exc
+    _require(parsed.tzinfo is not None and parsed.utcoffset() == timezone.utc.utcoffset(parsed),
+             'Observed UTC timestamp required')
+    return parsed
+
+
+def _external_action(root, ref, artifacts, event, expected, required_inputs):
+    """Shared observed identity/evidence checks for lifecycle and private replay."""
+    action = _record(_registered(root, ref, artifacts), 'ExternalAction')
+    _require(action['event'] == event and action['supervisorTask'] == root['supervisorTask'],
+             'Actual action event/supervisor differs')
+    for key, value in expected.items():
+        _require(action[key] == value, 'Action/observation binding changed: ' + key)
+    _require(action['processIdentity'] == action['processIdentity'].strip() and
+             action['processIdentity'].casefold() not in ('unknown', 'self', 'none', 'null', 'pending', 'unavailable', ''),
+             'Actual process identity required')
+    _utc(action['observedUtc'])
+    for item in action['inputs']:
+        _require(item != ref, 'External action cannot be its own input')
+        _registered(root, item, artifacts)
+    _inputs(action, [root['runtimeManifest'], *required_inputs])
     observed = set()
     for outcome in action['outcomes']:
         key = (outcome['operation'], outcome['target'])
         _require(key not in observed, 'Duplicate actual action operation/target')
         observed.add(key)
         transcript = _registered(root, outcome['evidence'], artifacts)
-        _require(bool(transcript.strip()) and outcome['evidence'] != observation['actionRecord'] and
+        _require(bool(transcript.strip()) and outcome['evidence'] != ref and
                  outcome['evidence']['path'] not in [r['path'] for r in action['inputs']],
                  'Separately registered external transcript required')
     return action
+
+
+def _action(root, observation, artifacts):
+    keys = ('supervisorTask', 'custodianRunId', 'custodianPrincipal', 'sequence',
+            'runtimeManifest', 'policyHash', 'observedUtc')
+    required = [] if observation['freeze'] is None else [observation['freeze']]
+    action = _external_action(root, observation['actionRecord'], artifacts, observation['detail']['event'],
+                              {key: observation[key] for key in keys}, required)
+    _exact_outcomes(action, _lifecycle_outcomes(observation))
+    return action
+
+
+def _exact_outcomes(action, expected):
+    _require({(x['operation'], x['target']) for x in action['outcomes']} == set(expected),
+             'Unexpected or missing external action effect')
+    for (operation, target), (result, exit_code) in expected.items():
+        _outcome(action, operation, target, result, exit_code)
+
+
+def _lifecycle_outcomes(observation):
+    detail = observation['detail']
+    event = detail['event']
+    if event == 'DENIAL_OBSERVED':
+        return {(x['capability'], x['targetClass']): ('DENIED', x['exitCode']) for x in detail['attempts']} | {
+            ('tools-disabled', 'all'): ('DISABLED', 0), ('public-log-inspection', 'all'): ('NO_LEAK', 0)}
+    if event == 'FREEZE_ACCEPTED':
+        return {('accept-freeze', detail['freeze']['path']): ('ACCEPTED', 0)}
+    if event == 'BUILDERS_STOPPED':
+        return {('terminate', x['taskId']): ('TERMINATED', 0) for x in detail['workers']} | {
+            ('prevent-restart', 'all'): ('BLOCKED', 0)}
+    if event == 'LABELS_STARTED':
+        return {('private-store', detail['privateStoreId']): ('CUSTODIAN_CONTROLLED', 0),
+                ('labels-start', 'holdout'): ('STARTED', 0)}
+    if event == 'SEALED':
+        return {('private-checks', 'all'): ('ALL_PASS', 0), ('quota', 'holdout'): ('VERIFIED', 0),
+                ('nonce-entropy', 'holdout'): ('VERIFIED', 0)}
+    if event == 'CLAIM_CREATED':
+        path = detail['claimDescriptor']['path']
+        return {('exclusive-create', path): ('CREATED', 0), ('fsync', path): ('DURABLE', 0),
+                ('prior-claim', path): ('ABSENT', 0)}
+    if event == 'UNSEALED':
+        return {('manifest-digest', detail['privateManifestHash']): ('VERIFIED', 0),
+                ('queries-only', 'holdout'): ('RELEASED', 0),
+                ('continuity', detail['claim']['path']): ('UNINTERRUPTED', 0)}
+    if event == 'BURNED':
+        return {('burn', detail['claim']['path']): ('BURNED', 0)}
+    _require(event == 'INVALIDATED', 'Unknown lifecycle action')
+    return {('invalidate', 'holdout'): ('INVALID', 0)}
 
 
 def _outcome(action, operation, target, result, exit_code=0):
@@ -589,6 +661,7 @@ def _validate_custodian_observations_v4(root, runtime_manifest, observations, ar
                                if x['category'] == 'custodian-observation'}
     _require(registered_observations == {f'{c.T}/custodian/{n}.json' for n in range(len(observations))},
              'Missing or extra registered custodian observation')
+    previous_utc = None
     state, previous, identity, freeze, seal, store, claim_observation = 'UNFROZEN', None, None, None, None, None, None
     seen, denial, freeze_value, sealed_observation = set(), None, None, None
     for sequence, obs in enumerate(observations):
@@ -597,6 +670,9 @@ def _validate_custodian_observations_v4(root, runtime_manifest, observations, ar
         _require(c._parse(own_raw) == obs and obs['sequence'] == sequence and obs['previous'] == previous,
                  'Custodian sequence/previous/raw binding changed')
         _require(obs['supervisorTask'] == root['supervisorTask'], 'Custodian supervisor mismatch')
+        observed_utc = _utc(obs['observedUtc'])
+        _require(previous_utc is None or observed_utc > previous_utc, 'Custody observations must be chronological')
+        previous_utc = observed_utc
         _manifest_ref(root, obs['runtimeManifest'])
         current = tuple(obs[k] if not isinstance(obs[k], dict) else canonical(obs[k]) for k in
                         ('custodianRunId', 'custodianPrincipal', 'policyHash', 'runtimeManifest'))
@@ -649,7 +725,8 @@ def _validate_custodian_observations_v4(root, runtime_manifest, observations, ar
             _inputs(action, [inventory_ref])
             for task, worker in workers.items():
                 _require(all(worker[k] == expected[task][k] for k in ('taskId', 'processIdentity', 'startedUtc')) and
-                         worker['exitObserved'] is True and worker['stoppedUtc'] >= worker['startedUtc'],
+                         worker['exitObserved'] is True and
+                         _utc(worker['startedUtc']) < _utc(worker['stoppedUtc']) <= observed_utc,
                          'Worker process/start/termination changed')
                 _require(worker['launcherRecord'] in freeze_value['builderTerminationReceipts'],
                          'Termination report not frozen before observation')
@@ -657,7 +734,12 @@ def _validate_custodian_observations_v4(root, runtime_manifest, observations, ar
                 _require(outcome['evidence'] == worker['launcherRecord'], 'Termination lacks external report')
             _outcome(action, 'prevent-restart', 'all', 'BLOCKED')
         elif event == 'LABELS_STARTED':
-            _authorization(root, runtime_manifest, detail['authorization'], artifacts, 'LABEL_EXECUTION')
+            authorization = _authorization(root, runtime_manifest, detail['authorization'], artifacts, 'LABEL_EXECUTION')
+            prefix_inputs = _validate_label_authorization_prefix_v4(root, runtime_manifest, artifacts, authorization['observedUtc'])
+            _require(all(ref in authorization['boundInputs'] for ref in prefix_inputs),
+                     'Label permission omits completed builder-stop prefix evidence')
+            _require(observed_utc > _utc(authorization['observedUtc']),
+                     'Labels must start after existing label permission')
             _inputs(action, [detail['authorization']])
             store = detail['privateStoreId']
             _require('/' not in store, 'Public privateStoreId must be opaque')
@@ -723,7 +805,53 @@ def _validate_custodian_observations_v4(root, runtime_manifest, observations, ar
                       or x['artifact']['path'] in (c.E + '/holdout/released-seal.json', c.E + '/holdout/references.json')]
     if 'UNSEALED' not in seen:
         _require(not released_paths, 'Private release admitted before witnessed durable unseal')
+    elif released_paths:
+        _require(state == 'UNSEALED', 'Invalidated/burned custody cannot admit released replay')
     return tuple(observations)
+
+
+def _validate_label_authorization_prefix_v4(root, runtime, artifacts, observed_utc):
+    """Consume the completed pre-label prefix; never follow a later permission."""
+    cutoff = _utc(observed_utc)
+    observations, refs = [], []
+    for sequence in range(len(root['artifacts']) + 1):
+        path = f'{T}/custodian/{sequence}.json'
+        ref, raw = _fixed(root, path, artifacts)
+        obs = _record(raw, 'CustodianObservation')
+        observations.append(obs); refs.append(ref)
+        if obs['detail']['event'] == 'BUILDERS_STOPPED':
+            break
+        _require(obs['detail']['event'] in ('DENIAL_OBSERVED', 'FREEZE_ACCEPTED'),
+                 'Completed BUILDERS_STOPPED prefix required before label authorization')
+    _require(observations and observations[-1]['detail']['event'] == 'BUILDERS_STOPPED',
+             'Completed BUILDERS_STOPPED prefix required before label authorization')
+    prefix_paths = {ref['path'] for ref in refs}
+    def retain(slot):
+        path = slot['artifact']['path']
+        return (slot['category'] != 'custodian-observation' or path in prefix_paths) and not (
+            path.startswith(E + '/holdout/seal-evidence/') or
+            path in (E + '/holdout/released-seal.json', E + '/holdout/references.json'))
+    prefix_root = {**root, 'artifacts': [slot for slot in root['artifacts'] if retain(slot)]}
+    _validate_custodian_observations_v4(prefix_root, runtime, observations, artifacts)
+    required = {canonical(ref): ref for ref in refs}
+    forbidden = {T + '/authorizations/LABEL_EXECUTION.json', E + '/seal-receipt.json',
+                 T + '/claim-descriptor.json', E + '/claim.json', E + '/unseal.json'}
+    for obs in observations:
+        _require(_utc(obs['observedUtc']) < cutoff, 'Builder-stop prefix must predate label permission')
+        action = _action(prefix_root, obs, artifacts)
+        _require(_utc(action['observedUtc']) < cutoff, 'Builder-stop action must predate label permission')
+        _check_no_future_inputs(action, forbidden)
+        for ref in [obs['actionRecord'], *action['inputs'], *(x['evidence'] for x in action['outcomes'])]:
+            _require(ref['path'] not in forbidden and not ref['path'].startswith(E + '/holdout/'),
+                     'Label authorization prefix contains downstream input')
+            required[canonical(ref)] = ref
+        if obs['detail']['event'] == 'BUILDERS_STOPPED':
+            for worker in obs['detail']['workers']:
+                _require(_utc(worker['startedUtc']) < _utc(worker['stoppedUtc']) <= _utc(obs['observedUtc']) < cutoff,
+                         'Worker termination must predate label permission')
+    inventory_ref, _ = _fixed(prefix_root, T + '/worker-inventory.json', artifacts)
+    required[canonical(inventory_ref)] = inventory_ref
+    return sorted(required.values(), key=lambda ref: ref['path'])
 
 
 def validate_custodian_chain_v4(root, runtime_manifest, observations, artifacts):
@@ -791,7 +919,13 @@ def _released_executions(root, manifest, released, artifacts, unsealed):
     used_calls = {x['callId'] for x in public}
     used_workspaces = {x['workspaceId'] for x in public}
     batches = {}
-    for execution in released['executions']:
+    unseal_action = _action(root, unsealed, artifacts)
+    _require(unseal_action['source'] == 'custodian', 'Actual custodian unseal action required for released replay')
+    prior_utc = _utc(unseal_action['observedUtc'])
+    roles = {'author': 0, 'checker': 1, 'novelty': 2}
+    ordered = sorted(released['executions'], key=lambda x: (roles[x['role']], x['batchOrdinal']))
+    _require(released['executions'] == ordered, 'Released executions must be in canonical role/batch order')
+    for release_index, execution in enumerate(ordered):
         c._validate_record(execution, 'ReleasedExecution')
         role, ordinal = execution['role'], execution['batchOrdinal']
         _require(execution['purpose'] == {'author': 'label-author', 'checker': 'label-check',
@@ -801,7 +935,7 @@ def _released_executions(root, manifest, released, artifacts, unsealed):
         binding = _record(binding_raw, 'ReleaseBinding')
         for key in ('role', 'batchOrdinal', 'originalControlRoot', 'originalOutputDirectory',
                     'originalWorkspaceId', 'callId', 'expectedFileHashes', 'runtime', 'prompt',
-                    'projectionHash', 'custodianReplayAction'):
+                    'projectionHash', 'custodianReplayAction', 'releasedFiles'):
             _require(execution[key] == binding[key], 'Supervisor original release binding changed: ' + key)
         _require(binding['runtime'] == manifest['runtime'] and binding['prompt']['path'] == directory + '/prompt.txt',
                  'Released runtime/prompt fixed path changed')
@@ -810,12 +944,23 @@ def _released_executions(root, manifest, released, artifacts, unsealed):
         prompt_raw = _registered(root, binding['prompt'], artifacts)
         _require(binding['custodianReplayAction']['path'] == directory + '/custodian-replay.json',
                  'Fixed custodian replay action required')
-        action = _record(_registered(root, binding['custodianReplayAction'], artifacts), 'ExternalAction')
-        _require(action['event'] == 'PRIVATE_REPLAY' and all(action[k] == unsealed[k] for k in
-                 ('supervisorTask', 'custodianRunId', 'custodianPrincipal', 'policyHash', 'runtimeManifest')),
-                 'Private replay actual custodian binding changed')
-        _inputs(action, [binding['prompt'], released['freeze'], released['sealReceipt'],
-                         root['runtimeManifest'], *execution['releasedFiles'].values()])
+        _require(binding['claim'] == released['claim'] and binding['unseal'] == released['unseal'],
+                 'Release binding claim/unseal changed')
+        expected = {key: unsealed[key] for key in
+                    ('supervisorTask', 'custodianRunId', 'custodianPrincipal', 'policyHash', 'runtimeManifest')}
+        expected.update(processIdentity=unseal_action['processIdentity'],
+                        sequence=unsealed['sequence'] + 1 + release_index)
+        action = _external_action(root, binding['custodianReplayAction'], artifacts, 'PRIVATE_REPLAY', expected,
+            [binding['prompt'], released['freeze'], released['sealReceipt'], released['claim'], released['unseal'],
+             *execution['releasedFiles'].values()])
+        expected_inputs = [root['runtimeManifest'], binding['prompt'], released['freeze'], released['sealReceipt'],
+                           released['claim'], released['unseal'], *execution['releasedFiles'].values()]
+        _require(action['source'] == 'custodian' and {canonical(ref) for ref in action['inputs']} ==
+                 {canonical(ref) for ref in expected_inputs}, 'Private replay exact input/source binding changed')
+        observed_utc = _utc(action['observedUtc'])
+        _require(observed_utc > prior_utc, 'Private replay must follow unseal in strictly increasing observed order')
+        prior_utc = observed_utc
+        _exact_outcomes(action, {(key, f'{role}/{ordinal}'): ('VERIFIED', 0) for key in CHECKS})
         _require(set(binding['checksEvidence']) == set(CHECKS), 'Exact private replay evidence checks required')
         for key in CHECKS:
             evidence = _registered(root, binding['checksEvidence'][key], artifacts)

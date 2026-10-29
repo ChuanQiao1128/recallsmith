@@ -73,9 +73,13 @@ class Fixture:
                         ('SYNTHETIC observed external transcript: ' + name).encode())
 
     def auth(self, permission, inputs):
+        observed = '2026-10-29T00:00:02.500000Z' if permission == 'LABEL_EXECUTION' else '2026-10-29T00:00:00Z'
+        if permission == 'LABEL_EXECUTION':
+            prefix = custody._validate_label_authorization_prefix_v4(self.root, self.manifest, self.artifacts, observed)
+            inputs = list({custody.canonical(ref): ref for ref in [*inputs, *prefix]}.values())
         return self.put(core.T + '/authorizations/' + permission + '.json',
             base('trusted-v4-authorization', permission=permission, supervisorTask=self.root['supervisorTask'],
-                 observedUtc='2026-10-29T00:00:00Z', runtimeManifest=self.root['runtimeManifest'],
+                 observedUtc=observed, runtimeManifest=self.root['runtimeManifest'],
                  identity=self.manifest['identity'], boundInputs=inputs, prerequisites=[x for x in self.root['authorities']
                     if x['node'] in custody.PERMISSION_PREREQUISITES[permission]]))
 
@@ -93,7 +97,7 @@ class Fixture:
         action_inputs = [self.root['runtimeManifest'], *inputs]
         if self.freeze is not None and self.freeze not in action_inputs:
             action_inputs.append(self.freeze)
-        action = base('trusted-v4-external-action', event=detail['event'], source='launcher',
+        action = base('trusted-v4-external-action', event=detail['event'], source='custodian' if detail['event'] == 'UNSEALED' else 'launcher',
                       processIdentity='synthetic-process-42', inputs=action_inputs, outcomes=values, **shared)
         action_ref = self.put(core.T + f'/synthetic-actions/{seq}.json', action)
         previous = None if seq == 0 else {'path': core.T + f'/custodian/{seq-1}.json',
@@ -222,7 +226,7 @@ class Fixture:
                      for k in ('author', 'checker', 'novelty')}}
         self.put(core.E + '/holdout/references.json', self.labels_raw)
         executions = []
-        for role, purpose in (('author', 'label-author'), ('checker', 'label-check'), ('novelty', 'novelty-check')):
+        for index, (role, purpose) in enumerate((('author', 'label-author'), ('checker', 'label-check'), ('novelty', 'novelty-check'))):
             raw_fixture = receipt_fixtures.SyntheticReceiptTests(); raw_fixture.setUp()
             test.addCleanup(raw_fixture.doCleanups)
             raw_fixture.runtime = dict(self.manifest['runtime'])
@@ -238,19 +242,20 @@ class Fixture:
                          'exitCode': 0, 'evidence': evidence[key]} for key in custody.CHECKS]
             action = base('trusted-v4-external-action', event='PRIVATE_REPLAY', source='custodian',
                 supervisorTask=self.root['supervisorTask'], custodianRunId=self.run,
-                custodianPrincipal=obs['custodianPrincipal'], processIdentity='synthetic-replay-process',
-                sequence=7, runtimeManifest=self.root['runtimeManifest'], policyHash=self.policy,
-                inputs=[prompt, self.freeze, self.seal, self.root['runtimeManifest'], *files.values()],
-                outcomes=outcomes, observedUtc='2026-10-29T00:00:07Z')
+                custodianPrincipal=obs['custodianPrincipal'], processIdentity='synthetic-process-42',
+                sequence=7 + index, runtimeManifest=self.root['runtimeManifest'], policyHash=self.policy,
+                inputs=[prompt, self.freeze, self.seal, self.claim_ref, obs['detail']['unseal'], self.root['runtimeManifest'], *files.values()],
+                outcomes=outcomes, observedUtc=f'2026-10-29T00:00:{7 + index:02d}Z')
             replay = self.put(folder + '/custodian-replay.json', action)
             binding = base('trusted-v4-release-binding', role=role, batchOrdinal=0,
                 originalControlRoot=str(raw_fixture.root), originalOutputDirectory=str(raw_fixture.output),
                 originalWorkspaceId=raw_fixture.workspace, callId='synthetic-private-' + role,
                 expectedFileHashes=raw_fixture.pins['expectedFileHashes'], runtime=raw_fixture.runtime,
-                prompt=prompt, projectionHash='d' * 64, custodianReplayAction=replay, checksEvidence=evidence)
+                prompt=prompt, projectionHash='d' * 64, custodianReplayAction=replay, checksEvidence=evidence,
+                claim=self.claim_ref, unseal=obs['detail']['unseal'], releasedFiles=files)
             self.put(folder + '/release-binding.json', binding)
             executions.append({k: v for k, v in binding.items() if k not in
-                ('kind', 'interfaceVersion', 'cycleId', 'releaseAuthorized', 'checksEvidence')} |
+                ('kind', 'interfaceVersion', 'cycleId', 'releaseAuthorized', 'checksEvidence', 'claim', 'unseal', 'releasedFiles')} |
                 {'purpose': purpose, 'releasedFiles': files, 'checks': {key: True for key in custody.CHECKS}})
         released = base('trusted-v4-released-seal', **copies, nonceHex=self.nonce.hex(),
             freeze=self.freeze, sealReceipt=self.seal, claim=self.claim_ref, unseal=obs['detail']['unseal'],
@@ -339,6 +344,72 @@ class CustodyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'downstream'): f.verify()
 
 
+class ExactActionRepairTests(unittest.TestCase):
+    def test_every_lifecycle_action_rejects_extra_missing_duplicate_and_contradictory_effects(self):
+        main = Fixture(); main.through_seal(); main.claim(); main.unseal()
+        burned = Fixture(); burned.through_seal(); burned.claim()
+        burned.observe({'event': 'BURNED', 'reason': 'Synthetic interrupted claim', 'claim': burned.claim_ref},
+                       [('burn', burned.claim_ref['path'], 'BURNED')], [burned.claim_ref, burned.seal])
+        invalid = Fixture(); invalid.observe({'event': 'INVALIDATED', 'reason': 'Synthetic invalidation'},
+                                             [('invalidate', 'holdout', 'INVALID')])
+        events = [(main, obs) for obs in main.observations] + [(burned, burned.observations[-1]),
+                                                              (invalid, invalid.observations[-1])]
+        for original, observation in events:
+            for mutation in ('extra', 'missing', 'duplicate', 'result', 'exit', 'target'):
+                with self.subTest(event=observation['detail']['event'], mutation=mutation):
+                    f = copy.deepcopy(original); obs = copy.deepcopy(observation)
+                    custody._action(f.root, obs, f.artifacts)
+                    action = json.loads(f.artifacts[obs['actionRecord']['path']])
+                    if mutation == 'extra':
+                        action['outcomes'].append({'operation': 'network', 'target': 'unexpected-destination',
+                            'result': 'ALLOWED', 'exitCode': 0, 'evidence': f.evidence('unexpected successful effect')})
+                    elif mutation == 'missing': action['outcomes'].pop()
+                    elif mutation == 'duplicate':
+                        row = {**action['outcomes'][0], 'result': 'ALLOWED', 'evidence': f.evidence('contradiction')}
+                        action['outcomes'].append(row)
+                    elif mutation == 'result': action['outcomes'][0]['result'] = 'ALLOWED'
+                    elif mutation == 'exit': action['outcomes'][0]['exitCode'] += 1
+                    else: action['outcomes'][0]['target'] = 'unexpected-destination'
+                    obs['actionRecord'] = f.put(obs['actionRecord']['path'], action)
+                    f.put(core.T + f"/custodian/{obs['sequence']}.json", obs)
+                    with self.assertRaises(ValueError): custody._action(f.root, obs, f.artifacts)
+
+    def test_review_denial_counterexample_is_rejected_after_consistent_repin(self):
+        f = Fixture(); f.denial(); self.assertEqual(len(f.verify()), 1)
+        obs = f.observations[0]
+        action = json.loads(f.artifacts[obs['actionRecord']['path']])
+        action['outcomes'].append({'operation': 'network', 'target': 'unexpected-destination',
+            'result': 'ALLOWED', 'exitCode': 0, 'evidence': f.evidence('unexpected actual network allowed')})
+        obs['actionRecord'] = f.put(obs['actionRecord']['path'], action)
+        f.put(core.T + '/custodian/0.json', obs)
+        with self.assertRaisesRegex(ValueError, 'Unexpected or missing external action effect'): f.verify()
+
+    def test_label_permission_requires_completed_prior_stop_prefix_without_recursion(self):
+        f = Fixture(); f.through_seal()
+        refs = custody._validate_label_authorization_prefix_v4(f.root, f.manifest, f.artifacts,
+                                                              '2026-10-29T00:00:02.500000Z')
+        paths = {ref['path'] for ref in refs}
+        self.assertIn(core.T + '/worker-inventory.json', paths)
+        self.assertIn(core.T + '/custodian/2.json', paths)
+        self.assertIn(f.termination['path'], paths)
+        self.assertNotIn(core.T + '/authorizations/LABEL_EXECUTION.json', paths)
+        self.assertNotIn(core.T + '/custodian/3.json', paths)
+        for timestamp in ('2026-10-29T00:00:01Z', '2026-10-29T00:00:02Z', 'not-a-timestamp',
+                          '2026-10-29T00:00:03+01:00'):
+            with self.subTest(timestamp=timestamp), self.assertRaises(ValueError):
+                custody._validate_label_authorization_prefix_v4(f.root, f.manifest, f.artifacts, timestamp)
+        auth_ref = f.observations[3]['detail']['authorization']
+        auth = json.loads(f.artifacts[auth_ref['path']]); auth['boundInputs'] = [f.freeze, f.protocol]
+        new_ref = f.put(auth_ref['path'], auth)
+        obs = f.observations[3]; obs['detail']['authorization'] = new_ref
+        action = json.loads(f.artifacts[obs['actionRecord']['path']]); action['inputs'] = [
+            new_ref if item == auth_ref else item for item in action['inputs']]
+        obs['actionRecord'] = f.put(obs['actionRecord']['path'], action)
+        f.put(core.T + '/custodian/3.json', obs)
+        with self.assertRaisesRegex(ValueError, 'omits completed builder-stop'): f.verify()
+
+
+
 class ReleasedCustodyTests(unittest.TestCase):
     def setUp(self):
         self.f = Fixture(); self.f.through_seal(); self.f.claim()
@@ -382,6 +453,84 @@ class ReleasedCustodyTests(unittest.TestCase):
         with self.assertRaises(ValueError): f.verify()
 
 
+class ReleasedActionRepairTests(unittest.TestCase):
+    def setUp(self):
+        self.f = Fixture(); self.f.through_seal(); self.f.claim()
+        self.release = self.f.released(self)
+
+    def repin(self, mutation, index=0):
+        f, release = self.f, self.release
+        execution = release['executions'][index]
+        folder = core.E + '/holdout/seal-evidence/raw/' + execution['role'] + '/0'
+        binding = json.loads(f.artifacts[folder + '/release-binding.json'])
+        action = json.loads(f.artifacts[execution['custodianReplayAction']['path']])
+        mutation(action)
+        ref = f.put(execution['custodianReplayAction']['path'], action)
+        binding['custodianReplayAction'] = execution['custodianReplayAction'] = ref
+        f.put(folder + '/release-binding.json', binding)
+        f.put(core.E + '/holdout/released-seal.json', release)
+
+    def test_valid_ordered_suffix_and_no_original_private_path_reads(self):
+        with patch('execution_receipt_v4._read_files', side_effect=AssertionError('private path read')):
+            self.assertEqual(len(self.f.verify()), 7)
+
+    def test_review_process_and_order_counterexample_rejects_with_rehashed_refs(self):
+        self.repin(lambda action: action.update(processIdentity='unknown', sequence=0,
+                                               observedUtc='2026-10-28T00:00:00Z'))
+        with self.assertRaises(ValueError): self.f.verify()
+
+    def test_every_private_replay_effect_is_exact(self):
+        self.repin(lambda action: action['outcomes'].append({'operation': 'network',
+            'target': 'unexpected-destination', 'result': 'ALLOWED', 'exitCode': 0,
+            'evidence': self.f.evidence('unexpected replay side effect')}))
+        with self.assertRaisesRegex(ValueError, 'Unexpected or missing external action effect'): self.f.verify()
+
+    def test_private_replay_rejects_each_missing_duplicate_or_contradictory_effect(self):
+        baseline_f, baseline_release = copy.deepcopy(self.f), copy.deepcopy(self.release)
+        def change(action, mutation):
+            if mutation == 'missing': action['outcomes'].pop()
+            elif mutation == 'duplicate': action['outcomes'].append({**action['outcomes'][0],
+                'result': 'ALLOWED', 'evidence': self.f.evidence('contradictory replay effect')})
+            elif mutation == 'result': action['outcomes'][0]['result'] = 'ALLOWED'
+            elif mutation == 'exit': action['outcomes'][0]['exitCode'] = 1
+            else: action['outcomes'][0]['target'] = 'checker/0'
+        for mutation in ('missing', 'duplicate', 'result', 'exit', 'target'):
+            self.f, self.release = copy.deepcopy(baseline_f), copy.deepcopy(baseline_release)
+            with self.subTest(mutation=mutation):
+                self.repin(lambda action: change(action, mutation))
+                with self.assertRaises(ValueError): self.f.verify()
+
+    def test_claim_unseal_runtime_and_process_order_are_independently_bound(self):
+        baseline_f, baseline_release = copy.deepcopy(self.f), copy.deepcopy(self.release)
+        mutations = [('process', lambda a: a.update(processIdentity='different-real-process')),
+            ('source', lambda a: a.update(source='launcher')),
+            ('sequence', lambda a: a.update(sequence=6)),
+            ('time', lambda a: a.update(observedUtc='2026-10-29T00:00:06Z')),
+            ('nonutc', lambda a: a.update(observedUtc='2026-10-29T00:00:07+01:00')),
+            ('unknown-input', lambda a: a['inputs'].append(self.f.evidence('extra replay input'))),
+            ('missing-claim', lambda a: a.update(inputs=[x for x in a['inputs'] if x != self.f.claim_ref])),
+            ('missing-unseal', lambda a: a.update(inputs=[x for x in a['inputs'] if x != self.release['unseal']]))]
+        for label, mutation in mutations:
+            self.f, self.release = copy.deepcopy(baseline_f), copy.deepcopy(baseline_release)
+            with self.subTest(label=label):
+                self.repin(mutation)
+                with self.assertRaises(ValueError): self.f.verify()
+        self.f, self.release = copy.deepcopy(baseline_f), copy.deepcopy(baseline_release)
+        self.repin(lambda a: a.update(observedUtc='2026-10-29T00:00:07Z'), index=1)
+        with self.assertRaisesRegex(ValueError, 'strictly increasing'): self.f.verify()
+
+    def test_release_binding_claim_unseal_copies_and_array_order_reject(self):
+        f = self.f
+        path = core.E + '/holdout/seal-evidence/raw/author/0/release-binding.json'
+        binding = json.loads(f.artifacts[path]); binding['claim'] = self.release['sealReceipt']
+        f.put(path, binding)
+        with self.assertRaisesRegex(ValueError, 'claim/unseal'): f.verify()
+        binding['claim'] = self.release['claim']; f.put(path, binding)
+        self.release['executions'].reverse(); f.put(core.E + '/holdout/released-seal.json', self.release)
+        with self.assertRaisesRegex(ValueError, 'canonical role/batch'): f.verify()
+
+
+
 class RegistryTests(unittest.TestCase):
     def setUp(self):
         from test_trusted_interfaces_v4 import fixture
@@ -401,6 +550,14 @@ class RegistryTests(unittest.TestCase):
         self.reference = f.put(core.D + '/references.json', {'queries': [self.case]})
         self.packet = f.put(core.E + '/dev/A/packets/case-one.json',
                             {'query': self.case['queryEn'], 'evidence': self.evidence})
+        self.proof_schema = Path(__file__).with_name('semantic-v4-proof-output.schema.json').read_bytes()
+        fixed_schema = f.put(core.R + '/tools/content-pipeline/semantic-v4-proof-output.schema.json', self.proof_schema)
+        designated = [entry for entry in f.manifest['entries'] if entry['role'] == 'proof-output-schema']
+        if not designated:
+            f.manifest['entries'].append({'artifact': fixed_schema, 'category': 'schema',
+                'role': 'proof-output-schema', 'dependencies': []})
+        else:
+            self.assertEqual(designated[0]['artifact'], fixed_schema)
         self.registry = base('trusted-v4-execution-registry', entries=[])
         self.make_proof('A', 'case-one', 'group-one')
 
@@ -411,13 +568,20 @@ class RegistryTests(unittest.TestCase):
         for role in ('one', 'two'):
             planned = next(x for x in plan['calls'] if x['checkerId'] == role)
             output = f'{core.D}/{config}/raw/{case_id}/{group_id}/{role}/0'
-            entry = self.raw_entry(output, planned['prompt'], role, planned['projectionHash'])
+            entry = self.raw_entry(output, planned['prompt'], role, planned['projectionHash'],
+                                   schema=self.proof_schema, result=self.proof_output(planned))
             entry.update(purpose='dev-proof', scope={'configuration': config, 'caseIds': [case_id],
                 'groupId': group_id, 'packets': [self.packet], 'reference': self.reference,
                 'protocol': f.protocol, 'projectionHash': planned['projectionHash'],
                 'prompt': entry.pop('promptRef'), 'schema': entry['emittedSchema']})
             entry['authorization'] = f.auth('DEV_PROOF_EXECUTION', [self.packet, self.reference, f.protocol])
             self.registry['entries'].append(entry)
+
+    def proof_output(self, call):
+        bit = {cid: 1 << index for index, cid in enumerate(call['chunkIds'])}
+        return {'quotes': [], 'subsets': [{'mask': sum(bit[cid] for cid in member),
+            'verdict': 'UNKNOWN', 'coverage': [], 'deploymentConsistent': 'UNKNOWN',
+            'reason': 'Synthetic unverified'} for member in call['expectedSubsets']]}
 
     def raw_entry(self, output, prompt, role, projection, *, schema=None, result=None, ordinal=0):
         from execution_receipt_v4 import _config
@@ -511,7 +675,8 @@ class RegistryTests(unittest.TestCase):
         for role in ('one', 'two'):
             call = next(x for x in plan['calls'] if x['checkerId'] == role)
             output = f'{core.E}/holdout/raw/proof/case-one/group-one/{role}/0'
-            entry = self.raw_entry(output, call['prompt'], role, call['projectionHash'])
+            entry = self.raw_entry(output, call['prompt'], role, call['projectionHash'],
+                                   schema=self.proof_schema, result=self.proof_output(call))
             entry.update(purpose='holdout-proof', scope={'configuration': 'selected', 'caseIds': ['case-one'],
                 'groupId': 'group-one', 'packets': [self.packet], 'reference': self.reference,
                 'protocol': f.protocol, 'projectionHash': call['projectionHash'],
@@ -636,6 +801,15 @@ class RegistryTests(unittest.TestCase):
         self.registry = copy.deepcopy(original)
         self.registry['entries'][0]['purpose'] = 'label-author'
         with self.assertRaisesRegex(ValueError, 'Private label execution'): self.verify()
+
+    def test_review_mismatched_proof_role_schema_rejects_despite_registered_schema(self):
+        old = self.registry['entries'].pop()
+        new = self.raw_entry(old['outputDirectory'], self.f.artifacts[old['scope']['prompt']['path']].decode(),
+            'two', old['scope']['projectionHash'], schema=b'{"type":"object","additionalProperties":false}', result={})
+        new.pop('promptRef')
+        new.update(purpose=old['purpose'], scope={**old['scope'], 'schema': new['emittedSchema']}, authorization=old['authorization'])
+        self.registry['entries'].append(new)
+        with self.assertRaisesRegex(ValueError, 'designated purpose schema'): self.verify()
 
     def test_original_packet_mutation_even_repinned_reference_rejects(self):
         changed = json.loads(self.f.artifacts[self.packet['path']])

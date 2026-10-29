@@ -254,6 +254,13 @@ def _validate_runtime_manifest(root, manifest, artifacts):
     _require(len(route_entries) == 1 and route_entries[0]['category'] == 'model' and
              route_entries[0]['artifact']['path'] == T + '/requested-model-route.json', 'Exactly one fixed requested-route model contract required')
     _validate_record(_parse(_ref(route_entries[0]['artifact'], artifacts)), 'RequestedModelRoute')
+    proof_schemas = [entry for entry in entries if entry['role'] == 'proof-output-schema']
+    proof_schema_path = P + '/semantic-v4-proof-output.schema.json'
+    _require(len(proof_schemas) == 1 and proof_schemas[0]['category'] == 'schema' and
+             proof_schemas[0]['artifact']['path'] == proof_schema_path, 'Exactly one fixed proof output schema required')
+    _require(_ref(proof_schemas[0]['artifact'], artifacts) ==
+             _read_stable(str(Path(__file__).with_name('semantic-v4-proof-output.schema.json'))),
+             'Proof output schema differs from actual consumer schema bytes')
     for category, field in (('test', 'testsHash'), ('prompt', 'promptsHash'), ('schema', 'schemaHash'),
                             ('algorithm', 'algorithmHash'), ('model', 'modelIdentityHash')):
         refs = [e['artifact'] for e in entries if e['category'] == category]
@@ -397,6 +404,11 @@ def _validate_authorization(root, runtime, authorization, artifacts):
     if permission == 'DEV_EQUIVALENCE_EXECUTION':
         schedule = _validate_adoption_record(_parse(artifacts[D + '/reviews/schedule.json']), 'EquivalenceSchedule')
         fixed |= {D + '/reviews/projections/' + str(row['batchOrdinal']) + '.json' for row in schedule['batches']}
+    if permission == 'LABEL_EXECUTION':
+        from trusted_custody_v4 import _validate_label_authorization_prefix_v4
+        termination_inputs = _validate_label_authorization_prefix_v4(
+            root, runtime, artifacts, authorization['observedUtc'])
+        fixed |= {ref['path'] for ref in termination_inputs}
     paths = {ref['path'] for ref in authorization['boundInputs']}
     _require(fixed == paths, 'Authorization omits required permission inputs')
     forbidden = {T + '/authorizations/' + permission + '.json', D + '/authority.json'}
@@ -520,7 +532,7 @@ def _prevalidate_registry_paths(root, registry):
                      entry[field]['sha256'] == entry['trustedPins']['expectedFileHashes'][filename],
                      'Raw reference differs from derived output/pin')
             paths.add(expected)
-        _require(entry['prompt']['path'] == directory + '/prompt.txt' and
+        _require(entry['scope']['prompt']['path'] == directory + '/prompt.txt' and
                  entry['scope']['schema'] == entry['emittedSchema'], 'Fixed prompt/schema path mismatch')
     for slot in root['artifacts']:
         if slot['category'] == 'raw-execution' and not _released_path(slot['artifact']['path']):
