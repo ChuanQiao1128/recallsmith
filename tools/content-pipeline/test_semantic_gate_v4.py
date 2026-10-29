@@ -140,7 +140,7 @@ class FullSemanticGateTests(unittest.TestCase):
     def test_case_coverage_rejects_even_when_every_remaining_row_is_valid(self):
         f = copy.deepcopy(self.base)
         path = core.E + '/holdout/results.json'; value = json.loads(f.artifacts[path])
-        value['payload']['cases'].pop()
+        value['payload']['cases'][0], value['payload']['cases'][-1] = value['payload']['cases'][-1], value['payload']['cases'][0]
         rebind(f, path, value)
         with self.assertRaisesRegex(ValueError, 'coverage/order'):
             replay_holdout_v4(f.root, f.manifest, f.artifacts, f.registry, 'A', self.private(f))
@@ -208,6 +208,28 @@ class FullSemanticGateTests(unittest.TestCase):
         next(e for e in stale['entries'] if e['artifact']['path'] == refs[0]['path'])['artifact']['sha256'] = core._hash(artifacts[refs[0]['path']])
         with self.assertRaisesRegex(ValueError, 'Actual author schema bytes differ'):
             gate._author_schema_inputs_v4(stale, artifacts)
+
+    def test_registered_metadata_fits_existing_bounds_after_lazy_dependency_imports(self):
+        # Match the existing pipeline test's lazy imports without constructing a model.
+        with patch('fastembed.TextEmbedding'), patch('fastembed.rerank.cross_encoder.TextCrossEncoder'):
+            f = full_fixture()
+        f.finish()
+        entries = {entry['artifact']['path']: entry for entry in f.manifest['entries']}
+        refs = [f.root['runtimeManifest'], f.root['executionRegistry'], *[slot['artifact'] for slot in f.root['artifacts']]]
+        for ref in refs:
+            self.assertLessEqual(len(f.artifacts[ref['path']]), core._registered_read_limit(ref, entries), ref['path'])
+        bindings = {binding['node']: binding for binding in f.root['authorities']}
+        runtime_paths = {entry['artifact']['path'] for entry in f.manifest['entries']}
+        for node in ('current-source-review', 'adoption-implementation-review'):
+            self.assertTrue(runtime_paths <= {ref['path'] for ref in bindings[node]['boundInputs']})
+        contract_paths = {core.P + '/semantic-v4-adoption-contract.json', core.P + '/SEMANTIC_V4_ADOPTION.md'}
+        contract_paths |= {entry['artifact']['path'] for entry in f.manifest['entries'] if entry['role'] in
+            ('equivalence-input-policy', 'equivalence-instructions', 'equivalence-output-schema', 'equivalence-schedule-schema')}
+        self.assertTrue(contract_paths <= {ref['path'] for ref in bindings['contract-review']['boundInputs']})
+        mapping = core._parse(f.artifacts[core.D + '/reference-mapping.json'])
+        equivalence_paths = {core.D + '/' + name + '.json' for name in ('reference-mapping', 'candidate-mapping', 'references')}
+        equivalence_paths |= {review['manifest']['path'] for review in mapping['independentReviews']}
+        self.assertTrue(equivalence_paths <= {ref['path'] for ref in bindings['reference-equivalence']['boundInputs']})
 
     def test_temp_transport_runs_original_receipt_and_card_review_checks(self):
         f = copy.deepcopy(self.base); goal = f.catalogue['goals'][0]

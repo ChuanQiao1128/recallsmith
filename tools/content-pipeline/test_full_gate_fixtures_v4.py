@@ -195,8 +195,14 @@ class FullFixture(Fixture):
         return self.root['runtimeManifest']
 
     def install_reviews(self):
+        contract = core._parse(self.artifacts[core.P + '/semantic-v4-adoption-contract.json'])
+        contract_inputs = [self.root['runtimeManifest'], *contract['x-contract']['parentContracts'],
+            self.ref(core.P + '/semantic-v4-adoption-contract.json'), self.ref(core.P + '/SEMANTIC_V4_ADOPTION.md')]
+        contract_inputs += [entry['artifact'] for entry in self.manifest['entries'] if entry['role'] in
+            ('equivalence-input-policy', 'equivalence-instructions', 'equivalence-output-schema', 'equivalence-schedule-schema')]
         for node in ('contract-review', 'reference-equivalence', 'adoption-implementation-review', 'current-source-review'):
-            _install_review(self, node)
+            inputs = contract_inputs if node == 'contract-review' else [self.root['runtimeManifest']] if node == 'reference-equivalence' else None
+            _install_review(self, node, inputs=inputs)
         denial = self.denial()
         next(b for b in self.root['authorities'] if b['node'] == 'isolation-denial').update(
             state='PASS', acceptedReview=None, observation=ref(core.T + '/custodian/0.json', self.artifacts[core.T + '/custodian/0.json']),

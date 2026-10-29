@@ -487,9 +487,9 @@ def _rehash_runtime(root, runtime, artifacts):
     root['runtimeManifest'] = ref(path, artifacts[path])
 
 
-def _install_review(f, node):
+def _install_review(f, node, inputs=None):
     """Future observed review shape, not a claim of actual review or equivalence."""
-    inputs = list(trusted._runtime_required_inputs(f.root, f.manifest).values())
+    inputs = list(trusted._runtime_required_inputs(f.root, f.manifest).values()) if inputs is None else list(inputs)
     rules = sorted(trusted.SOURCE_RULES) if node == 'current-source-review' else ['synthetic-interface-rule']
     base = trusted.T + '/reviews/' + node
     request = {k: v for k, v in common('trusted-review-request').items() if k != 'releaseAuthorized'}
