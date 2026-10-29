@@ -289,9 +289,13 @@ def populate_holdout(f, mutation=None):
             'objectiveEn': 'SYNTHETIC complete learning objective', 'objectiveZh': '合成测试目标', 'lessonOrdinal': 1}
     f.catalogue = {'goals': [goal]}; f.catalogue['curriculumHash'] = core._digest(f.catalogue)
     f.put(core.C + '/curriculum/catalogue.json', f.catalogue)
+    # Capture the real pure A4 result from temporary in-memory queues; never persist them.
+    goal_evidence, goal_trace = pack([[{'chunkId': f.seed['chunkId'], 'score': 1}]], f.structural, 1)
+    assert goal_evidence == [f.seed] and goal_trace == [{'form': 0, 'seed': f.seed['chunkId'],
+        'outcome': 'added', 'closureIds': [f.seed['chunkId']], 'addedIds': [f.seed['chunkId']]}]
     response = {'schemaVersion': 4, 'cycleId': 'aws-basics-v4-1', 'identity': f.manifest['identity'],
         'plan': plan_query(goal['retrievalQueryEn'], f.ref(core.E + '/profiles/A.json')), 'profile': f.ref(core.E + '/profiles/A.json'),
-        'map': map_ref, 'evidence': [f.seed], 'trace': []}
+        'map': map_ref, 'evidence': goal_evidence, 'trace': goal_trace}
     response['queryPlanHash'] = core._digest(response['plan'])
     retrieval = f.put(core.C + '/authoring/synthetic-goal/v4-retrieval.json', response)
     f.goal_wrapper = {**common('trusted-v4-goal-packet'), 'schemaVersion': 4, 'identity': f.manifest['identity'],
