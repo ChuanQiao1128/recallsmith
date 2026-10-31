@@ -24,7 +24,7 @@ packaging==26.3
 pillow==13.0.0
 protobuf==7.36.2
 py-rust-stemmers==0.1.8
-pypdf==6.21.2
+pypdf==6.21.4
 pyyaml==6.0.3
 referencing==0.37.0
 requests==2.34.2
